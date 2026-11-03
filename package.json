@@ -1,0 +1,20 @@
+{
+  "name": "@devcodex/flowkit",
+  "version": "0.0.0-m0",
+  "private": true,
+  "description": "声明式工作流编译库的 M0 DSL 与契约基础",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "exports": {
+    "./dsl": { "types": "./dist/dsl.d.ts", "import": "./dist/dsl.mjs", "default": "./dist/dsl.mjs" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs",
+    "test:types": "node scripts/test-types.mjs",
+    "verify": "npm run build && npm test && npm run test:types"
+  },
+  "devDependencies": { "typescript": "5.0.4" }
+}

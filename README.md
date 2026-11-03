@@ -1,0 +1,58 @@
+# FlowKit
+
+以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
+
+当前为未发布的 M0 开发包，已实现 DSL 定义与类型引用检查。编译器、运行时和 CLI 将按后续里程碑实现。需求资料位于工作区 `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/`。
+
+## 目录导航
+
+先看本地使用，再查限制与方案材料；开发验证和历史资料在后。
+
+## 本地定义一个流程
+
+使用 Node >=22.13.0，在仓库目录运行 `npm install` 和 `npm run build`。M0 尚未发布到 npm，当前使用工作区内的包自引用。
+
+```js
+import { defineWorkflow, action, terminal } from '@devcodex/flowkit/dsl';
+
+const workflow = defineWorkflow({
+  id: 'save-draft', version: '1.0.0', name: '保存草稿',
+  nodes: [
+    action('save', { name: '保存', action: 'saveDraft', next: 'done' }),
+    terminal('done', { name: '完成', status: 'succeeded' }),
+  ],
+});
+```
+
+结果是复制后递归冻结的流程定义，不会执行保存动作，也不冻结传入的原对象。TypeScript >=5.0 可检查字面量 id 引用，允许先引用后定义；拼错 `next` 等引用会在 `defineWorkflow` 调用时报错。动态字符串、字段合法性和图结构的完整检查由后续静态编译器负责。
+
+当前可用入口为 `@devcodex/flowkit/dsl`；包主入口、`run`、`compile` 和 CLI 尚不可调用。不要将本阶段 DSL 对象当作已执行结果。传入 getter、循环引用或非字面数据会抛 TypeError；若修改定义，应编辑原数据并重新构造。
+
+## 开发验证
+
+在 Node >=22.13.0 下运行 `npm run verify`，依次构建、执行 Node 测试和 TS5.0.4 类型正反例及 500 节点检查。单独运行 `npm test` 或 `npm run test:types` 前先 `npm run build`；包子路径需要构建后的文件。M0 不启动服务。
+
+## 方案材料
+
+- [需求概述](../.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/需求概述.md)：当前开发阅读入口，说明目标、范围、职责、验收和 A03 输入。
+- [使用契约](../.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/使用契约.md)：现行 API、DSL、配置、运行语义与错误码。
+- [交接审阅记录](../.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/交接审阅.md)：原件校验、原型边界和待落实事项。
+- [需求资料索引](../.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/README.md)：完整来源、原始 ZIP 和历史整理材料。
+
+## 定稿来源
+
+2026-11-03 已取得并核验完整需求 v15、使用契约 v4 和最终决策记录原件，均已归入上述需求目录。下列网页保留为接入阶段证据；开发优先使用归档原件及最终 RC 决定。
+
+1. [完整需求 v15（已定稿）](https://flowkit-v15-utfz.pages.grok.bot/)：网页只展示相对 v14 的增量小节，不能替代它引用的 3429 行原始文件。
+2. [使用契约 v4（已定稿、已生效）](https://flowkit-v1-z57x.pages.grok.bot/)：约定对外 API、CLI、宿主职责与输出。
+3. [v14 基线网页](https://flowkit-kklt.pages.grok.bot/)：已还原 3148 行，补齐 DSL、映射规则、编译模板和历史示例。页面仍写“待定稿”，来源所列哈希与 v15 引用的 v14 基线哈希相同；保留此状态差异。
+
+原网页的状态、历史决定及本次建议保持分离。重新整理不等于重新批准需求，也不等于验证了尚未实现的包。
+
+## 当前状态
+
+- 仓库目录：`D:\Worker\flowkit`。
+- 方案接入与可访问网页内容审查：已形成材料。
+- 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
+- DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
+- A03-r2.1 已于2026-11-03由用户整体确认，M0 的 DSL、公共/内部类型与契约基线已实现；验证与审查记录在需求目录 M0-实施/。M1编译器、M2运行时、M3 CLI与完整SDK验收尚未实施。

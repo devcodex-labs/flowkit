@@ -1,0 +1,250 @@
+{
+  "source": "V15/V4 current contract; archived authoritative originals retained",
+  "contractVersion": "V4",
+  "codes": [
+    {
+      "code": "FK_C001",
+      "message": "workflow id 不合法"
+    },
+    {
+      "code": "FK_C002",
+      "message": "version 非法"
+    },
+    {
+      "code": "FK_C003",
+      "message": "workflow name 非法"
+    },
+    {
+      "code": "FK_C004",
+      "message": "nodes 为空"
+    },
+    {
+      "code": "FK_C005",
+      "message": "nodes 超过 500"
+    },
+    {
+      "code": "FK_C006",
+      "message": "workflow 未知字段"
+    },
+    {
+      "code": "FK_C007",
+      "message": "非字面量 DSL / 不可擦除 TS"
+    },
+    {
+      "code": "FK_C010",
+      "message": "node id 格式非法"
+    },
+    {
+      "code": "FK_C011",
+      "message": "node id 重复"
+    },
+    {
+      "code": "FK_C012",
+      "message": "node name 非法"
+    },
+    {
+      "code": "FK_C013",
+      "message": "node name 重复"
+    },
+    {
+      "code": "FK_C014",
+      "message": "type 与构造器不符"
+    },
+    {
+      "code": "FK_C015",
+      "message": "引用 id 不存在"
+    },
+    {
+      "code": "FK_C016",
+      "message": "缺后继"
+    },
+    {
+      "code": "FK_C017",
+      "message": "不可达节点"
+    },
+    {
+      "code": "FK_C018",
+      "message": "node 未知字段"
+    },
+    {
+      "code": "FK_C019",
+      "message": "inputs / writes 为 null 或非数组"
+    },
+    {
+      "code": "FK_C020",
+      "message": "parallel 分支数量非法"
+    },
+    {
+      "code": "FK_C021",
+      "message": "parallel 分支带 next"
+    },
+    {
+      "code": "FK_C022",
+      "message": "parallel 分支类型非法"
+    },
+    {
+      "code": "FK_C023",
+      "message": "join.strategy 非法"
+    },
+    {
+      "code": "FK_C024",
+      "message": "parallel 成员被其他节点引用"
+    },
+    {
+      "code": "FK_C025",
+      "message": "并行 verification 带后继"
+    },
+    {
+      "code": "FK_C026",
+      "message": "声明写入键冲突 / human id 与写入键冲突"
+    },
+    {
+      "code": "FK_C030",
+      "message": "condition 分支数量非法"
+    },
+    {
+      "code": "FK_C031",
+      "message": "缺 true 默认分支"
+    },
+    {
+      "code": "FK_C032",
+      "message": "when 语法错误，带列号"
+    },
+    {
+      "code": "FK_C033",
+      "message": "when 禁止结构"
+    },
+    {
+      "code": "FK_C034",
+      "message": "when 含换行 / 反斜杠"
+    },
+    {
+      "code": "FK_C040",
+      "message": "maxIterations 非 1–100 整数"
+    },
+    {
+      "code": "FK_C041",
+      "message": "loop body 入口不是 verification"
+    },
+    {
+      "code": "FK_C042",
+      "message": "loop 链未回归约定结构"
+    },
+    {
+      "code": "FK_C043",
+      "message": "loop 内 parallel"
+    },
+    {
+      "code": "FK_C044",
+      "message": "体外 action 后继落入 loop 内"
+    },
+    {
+      "code": "FK_C045",
+      "message": "修复链含 loop"
+    },
+    {
+      "code": "FK_C046",
+      "message": "修复链含 human"
+    },
+    {
+      "code": "FK_C047",
+      "message": "非法其他边指向 loop id"
+    },
+    {
+      "code": "FK_C050",
+      "message": "agent / skill 都缺"
+    },
+    {
+      "code": "FK_C051",
+      "message": "编译检查本地 Skill 缺失"
+    },
+    {
+      "code": "FK_C052",
+      "message": "Skill 路径 / URL 非法"
+    },
+    {
+      "code": "FK_C053",
+      "message": "warning：已声明产出的输入键在该节点所有到达路径上均无人写入；全流程无人写入的键视为宿主初始 state，不警告"
+    },
+    {
+      "code": "FK_C054",
+      "message": "output 缺失 / 不是 type:object 字面量 schema"
+    },
+    {
+      "code": "FK_C055",
+      "message": "retries 非 0–10 整数"
+    },
+    {
+      "code": "FK_C056",
+      "message": "inputs / writes 空项或重复"
+    },
+    {
+      "code": "FK_C057",
+      "message": "远程主机未放行"
+    },
+    {
+      "code": "FK_C058",
+      "message": "integrity 格式 / 使用位置非法"
+    },
+    {
+      "code": "FK_C059",
+      "message": "warning：远程 Skill 无 integrity"
+    },
+    {
+      "code": "FK_C060",
+      "message": "驳回链不回本 human"
+    },
+    {
+      "code": "FK_C061",
+      "message": "驳回链含非 agent / action"
+    },
+    {
+      "code": "FK_C070",
+      "message": "terminal status 非法"
+    },
+    {
+      "code": "FK_C080",
+      "message": "非法回边"
+    },
+    {
+      "code": "FK_C090",
+      "message": "Mermaid id 撞名"
+    },
+    {
+      "code": "FK_R001",
+      "message": "AOT 源缺失、source 越界、源 / 正文哈希不符，或 check 已有产物不一致"
+    },
+    {
+      "code": "FK_R002",
+      "message": "when 类型 / 布尔违约、human / verification 返回非法、comment 非法、checkStep 非法返回"
+    },
+    {
+      "code": "FK_R003",
+      "message": "预留，v1 不抛"
+    },
+    {
+      "code": "FK_R004",
+      "message": "agent 重试耗尽，含 reasons、条件性 cause"
+    },
+    {
+      "code": "FK_R010",
+      "message": "本地 Skill 缺失；不承诺稳定的 cause 形状"
+    },
+    {
+      "code": "FK_R011",
+      "message": "Skill 越界、URL 非法、本地使用 integrity 或运行时 integrity 格式非法"
+    },
+    {
+      "code": "FK_R012",
+      "message": "非 HTTPS、主机未放行、跨源重定向"
+    },
+    {
+      "code": "FK_R013",
+      "message": "远程内容与 integrity 不符"
+    },
+    {
+      "code": "FK_R014",
+      "message": "远程读取失败，或本地 / 远程严格 UTF-8 解码失败，cause 必有"
+    }
+  ]
+}
