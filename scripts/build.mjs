@@ -6,6 +6,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // 仅复制本阶段实际存在的模块；不生成编译器、运行时或CLI占位入口。
 const files = [
   ['src/index.mjs', 'dist/index.mjs'],
+  ['src/cli.mjs', 'dist/cli.mjs'],
+  ...['arguments', 'config', 'main'].map(name => [`src/cli/${name}.mjs`, `dist/cli/${name}.mjs`]),
   ['src/dsl.mjs', 'dist/dsl.mjs'],
   ['src/shared/contracts.mjs', 'dist/shared/contracts.mjs'],
   ['src/shared/control.mjs', 'dist/shared/control.mjs'],

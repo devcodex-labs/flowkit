@@ -2,7 +2,7 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-This private development package implements the compiler and runtime through M2-3. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files; the CLI and release acceptance remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+This private development package implements the compiler, runtime, and compile/check CLI through M3-1. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files. Distribution and release acceptance remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
 
 ## 目录导航
 
@@ -26,7 +26,7 @@ export default defineWorkflow({
 
 结果是复制后递归冻结的流程定义，不会执行保存动作，也不冻结传入的原对象。TypeScript >=5.0 可检查字面量 id 引用，允许先引用后定义；拼错 `next` 等引用会在 `defineWorkflow` 调用时报错。动态字符串、字段合法性和图结构的完整检查由后续静态编译器负责。
 
-The DSL entry is `@devcodex/flowkit/dsl`; the package root provides three compiler functions, `run`, and two runtime helpers described below. The CLI remains pending. A DSL object describes a workflow and does not execute it. Getters, cycles, or nonliteral data cause TypeError; edit the input data and construct a new definition when changing a workflow.
+The DSL entry is `@devcodex/flowkit/dsl`; the package root provides three compiler functions, `run`, and two runtime helpers described below. The CLI provides compilation and checks. A DSL object describes a workflow and does not execute it. Getters, cycles, or nonliteral data cause TypeError; edit the input data and construct a new definition when changing a workflow.
 
 ## Compile and check locally
 
@@ -50,6 +50,38 @@ const diagnostics = await check('sample.workflow.ts');
 The default output directory is the source directory. An explicit `outDir` must be that directory or an ancestor. Explicit relative `projectRoot` and `outDir` values use the working directory at invocation; paths are fixed before asynchronous reads. The default project root is the nearest ancestor of the source containing a `package.json` file, falling back to that invocation directory. Local `skillsRoot` and DSL Skill paths are relative to `projectRoot`. Local Skill existence is checked by default; `skillCheck: false` disables that check. APIs accept the eleven confirmed `FlowkitOptions` keys, reject unknown keys or invalid types with TypeError, and ignore legal runtime-only options. Only `compileSource` accepts the additional `filename` key. File I/O failures reject with the original filesystem error.
 
 Output uses same-directory temporary files, flushes them, and replaces each target with a rename. All output text is prepared before replacement; the JS/diagram pair is not a cross-file transaction. Calls writing the same resolved target are serialized within the process. Separate processes or path aliases still depend on filesystem behavior. Failed writes clean only their own temporary files. Package declarations expose the six implemented functions.
+
+## CLI and configuration
+
+After building locally, invoke the real entry with Node:
+
+```sh
+node ./dist/cli.mjs compile ./sample.workflow.ts --trace --no-mermaid
+node ./dist/cli.mjs check ./sample.workflow.ts --trace --no-mermaid
+```
+
+Use the same effective settings when checking an existing artifact. The entry has a Node shebang and is mapped as `bin.flowkit`; installing and consuming a packed distribution will be verified in M3-2. This private working copy has not been published as a usable CLI package.
+
+| Option family | Behavior |
+|---|---|
+| `--out-dir <dir>` | Output directory, subject to the compiler's ancestor rule |
+| `--skills-root <dir\|URL>` | Local or remote Skill root |
+| `--trace` | Enable trace generation |
+| `--mermaid` / `--no-mermaid` | Enable or disable diagram output |
+| `--no-skill-check` | Disable local compile-time Skill existence checks |
+| `--remote-skill-host <host>` | Repeat to set the complete allowed-host array |
+
+Valued options also accept `--name=value`. Boolean switches take no value. The command must be `compile` or `check`, with exactly one `.workflow.ts` or `.workflow.js` file. Unknown options, missing values, or extra positional arguments fail before configuration is loaded. `--` terminates option parsing.
+
+Only the invocation directory's optional `flowkit.config.mjs` default export is loaded:
+
+```js
+export default { trace: true, mermaid: false, remoteSkillHosts: [] };
+```
+
+The configuration must be an options object. Every configured key is validated before merging; a command-line override cannot hide an invalid key or type. Explicit false switches override true configuration. Any `--remote-skill-host` occurrence replaces the configured array, preserving flag order. Missing flags leave configuration values intact. Paths use invocation cwd and the API's project-root rules, including when configuration code changes cwd. `fetch`, `signal`, `runId`, and `dump` remain legal configuration keys but are unused by these two commands. API calls never auto-load configuration.
+
+Diagnostics are written to stdout as one JSON object per line, with no success summary. Exit `0` means no error, including warning-only results; `1` means compiler errors or an artifact mismatch; `2` means invalid arguments/configuration or an invocation/I/O failure. Argument and other invocation failures use one text line. Configuration load, syntax, type, or unknown-key failures use one Diagnostic JSON object with `code: null`, `file: 'flowkit.config.mjs'`, and line/column `1/1`. A broken configuration link is a load error. Configuration is ordinary user-selected JavaScript and can have its own side effects; the CLI itself never executes workflow source or runs the workflow.
 
 ## Run source and verified artifacts
 
@@ -112,7 +144,7 @@ Human repair paths can be entered by normal flow before the first approval. Fold
 
 The public `evalWhen(ctx, when)` delegates to `src/when/evaluate.mjs`. It reads own state paths, short circuits strictly boolean logic, and gives comparison higher precedence than `!`. Parsing and evaluation use explicit stacks, not JavaScript evaluation. Diagnostics attach to the original source field; syntax messages separately report the decoded expression column. Compiler and runtime Skill checks share the same raw-path, host and integrity semantics.
 
-The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Tests cover public source/AOT/dump execution with test hosts; the complete SDK acceptance matrix, CLI and Mermaid renderer verification remain pending. Current runtime batch records are in `M2-3-AOT缓存与dump/` beside the confirmed design.
+The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Tests cover public source/AOT/dump execution and the CLI; distribution, complete golden acceptance and Mermaid renderer verification remain pending. Current CLI batch records are in `M3-1-CLI与配置/` beside the confirmed design.
 
 ## 方案材料
 
@@ -137,4 +169,4 @@ The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` re
 - 方案接入与可访问网页内容审查：已形成材料。
 - 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
 - DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
-- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, M1-4 as `a05b1fc`, M2-1 as `052780c`, and M2-2 as `ae66569`. M2-3 implements public `run`, verified AOT, successful compilation caching, and dump loading. M3 CLI, packaging and complete acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
+- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, M1-4 as `a05b1fc`, M2-1 as `052780c`, M2-2 as `ae66569`, and M2-3 as `ff2dec1`. M3-1 adds the two-command CLI and configuration handling. Packed distribution and complete golden acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
