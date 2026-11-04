@@ -8,5 +8,5 @@
     "moduleResolution": "NodeNext",
     "skipLibCheck": false
   },
-  "files": ["dsl.ts", "public-contract.ts", "../../src/internal.d.ts"]
+  "files": ["dsl.ts", "public-contract.ts", "compiler-api.ts", "../../src/internal.d.ts"]
 }

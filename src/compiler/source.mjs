@@ -18,13 +18,14 @@ export function createSourceSnapshot(source, filename) {
 }
 
 /** A package.json must be a file; its contents are never evaluated or parsed. */
-function nearestProjectRoot(filename) {
+export function resolveProjectRoot(filename, suppliedRoot, cwd = process.cwd()) {
+  if (suppliedRoot !== undefined) return path.resolve(cwd, suppliedRoot);
   let directory = path.dirname(filename);
   for (;;) {
     try { if (statSync(path.join(directory, 'package.json')).isFile()) return directory; }
     catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
     const parent = path.dirname(directory);
-    if (parent === directory) return process.cwd();
+    if (parent === directory) return cwd;
     directory = parent;
   }
 }
@@ -54,7 +55,7 @@ export function normalizeOptions(options = {}) {
 
 export function createCompileContext(snapshot, suppliedOptions = {}) {
   const options = normalizeOptions(suppliedOptions);
-  const projectRoot = options.projectRoot === undefined ? nearestProjectRoot(snapshot.absFilename) : path.resolve(options.projectRoot);
+  const projectRoot = resolveProjectRoot(snapshot.absFilename, options.projectRoot);
   return Object.freeze({ source: snapshot, projectRoot, skillsRoot: options.skillsRoot ?? 'skills',
     skillCheck: options.skillCheck ?? true, remoteSkillHosts: Object.freeze([...(options.remoteSkillHosts ?? [])]),
     trace: options.trace ?? false, options: Object.freeze({ ...options }) });

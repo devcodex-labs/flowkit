@@ -108,9 +108,9 @@ test('不执行getter，拒绝循环、函数与非字面数据', () => {
   }
 });
 
-test('构建后的包入口真实可消费，内部及未实现主入口不公开', async () => {
+test('built DSL and compiler entries are consumable while internal modules stay private', async () => {
   const built = await import('@devcodex/flowkit/dsl');
   assert.equal(built.terminal('ok', { name: '完成', status: 'succeeded' }).type, 'terminal');
   await assert.rejects(import('@devcodex/flowkit/src/shared/contracts.mjs'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
-  await assert.rejects(import('@devcodex/flowkit'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  assert.deepEqual(Object.keys(await import('@devcodex/flowkit')), ['check', 'compile', 'compileSource']);
 });

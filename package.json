@@ -6,6 +6,7 @@
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "exports": {
+    ".": { "types": "./dist/compiler-api.d.ts", "import": "./dist/index.mjs", "default": "./dist/index.mjs" },
     "./dsl": { "types": "./dist/dsl.d.ts", "import": "./dist/dsl.mjs", "default": "./dist/dsl.mjs" },
     "./package.json": "./package.json"
   },

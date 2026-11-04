@@ -33,6 +33,6 @@ test('字段、类型和目录边界固定且不可改写', async () => {
   assert.equal(pkg.private, true);
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.engines.node, '>=22.13.0');
-  assert.deepEqual(Object.keys(pkg.exports), ['./dsl', './package.json']);
+  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './package.json']);
   assert.deepEqual(pkg.dependencies, { acorn: '8.19.0' });
 });

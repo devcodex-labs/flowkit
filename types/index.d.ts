@@ -1,4 +1,4 @@
-/** 已确认完整公共类型契约；M0尚未提供六函数的可调用包主入口。 */
+/** Full confirmed SDK contract; the compiler entry selects only implemented functions for this batch. */
 import type { ObjectSchema } from './dsl.js';
 export interface FlowkitOptions {
   projectRoot?: string;
