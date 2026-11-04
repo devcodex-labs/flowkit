@@ -7,6 +7,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const files = [
   ['src/dsl.mjs', 'dist/dsl.mjs'],
   ['src/shared/contracts.mjs', 'dist/shared/contracts.mjs'],
+  ...['source', 'extract', 'validate', 'skill-check', 'analyze'].map(name =>
+    [`src/compiler/${name}.mjs`, `dist/compiler/${name}.mjs`]),
   ['types/dsl.d.ts', 'dist/dsl.d.ts'],
   ['types/index.d.ts', 'dist/index.d.ts'],
 ];

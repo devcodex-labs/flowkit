@@ -12,9 +12,10 @@
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs",
+    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs",
     "test:types": "node scripts/test-types.mjs",
     "verify": "npm run build && npm test && npm run test:types"
   },
+  "dependencies": { "acorn": "8.19.0" },
   "devDependencies": { "typescript": "5.0.4" }
 }

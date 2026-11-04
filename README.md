@@ -2,7 +2,7 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-当前为未发布的 M0 开发包，已实现 DSL 定义与类型引用检查。编译器、运行时和 CLI 将按后续里程碑实现。需求资料位于工作区 `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/`。
+This private development package implements the DSL, TypeScript reference checks, and the M1-1 compiler front end. The front end extracts static definitions and checks local fields and Skill references without executing workflow source or fetching remote Skills. Graph analysis, code generation, public compile APIs, the runtime, and the CLI are planned for subsequent batches. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
 
 ## 目录导航
 
@@ -30,7 +30,9 @@ const workflow = defineWorkflow({
 
 ## 开发验证
 
-在 Node >=22.13.0 下运行 `npm run verify`，依次构建、执行 Node 测试和 TS5.0.4 类型正反例及 500 节点检查。单独运行 `npm test` 或 `npm run test:types` 前先 `npm run build`；包子路径需要构建后的文件。M0 不启动服务。
+Run `npm run verify` with Node >=22.13.0 to build, run DSL and compiler front-end tests, and check TypeScript 5.0.4 fixtures including 500-node definitions. Build before running tests individually because package self-references use `dist`. Tests require no server. Acorn 8.19.0 is the sole runtime dependency.
+
+The private analysis entry is `src/compiler/analyze.mjs`; it is tested directly and is not a package export. An empty diagnostic list proves only this front-end stage. Reference existence, reachability, graph regions, the full `when` grammar, dataflow, and Mermaid checks belong to later compiler passes. Local Skill checks inspect file existence; runtime realpath containment and UTF-8 decoding remain pending. Process records for this batch are in `M1-1-静态提取与字段检查/` beside the confirmed design.
 
 ## 方案材料
 
@@ -55,4 +57,4 @@ const workflow = defineWorkflow({
 - 方案接入与可访问网页内容审查：已形成材料。
 - 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
 - DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
-- A03-r2.1 已于2026-11-03由用户整体确认，M0 的 DSL、公共/内部类型与契约基线已实现；验证与审查记录在需求目录 M0-实施/。M1编译器、M2运行时、M3 CLI与完整SDK验收尚未实施。
+- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`. M1-1 implements the private compiler front end; the rest of M1, M2 runtime, M3 CLI, and complete SDK acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
