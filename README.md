@@ -2,7 +2,7 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-This private development package implements the compiler, runtime, and compile/check CLI through M3-1. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files. Distribution and release acceptance remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+This private development package implements the compiler, runtime, and compile/check CLI, with package checks and real tarball consumer validation. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files. Complete golden acceptance and publication remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
 
 ## 目录导航
 
@@ -60,7 +60,7 @@ node ./dist/cli.mjs compile ./sample.workflow.ts --trace --no-mermaid
 node ./dist/cli.mjs check ./sample.workflow.ts --trace --no-mermaid
 ```
 
-Use the same effective settings when checking an existing artifact. The entry has a Node shebang and is mapped as `bin.flowkit`; installing and consuming a packed distribution will be verified in M3-2. This private working copy has not been published as a usable CLI package.
+Use the same effective settings when checking an existing artifact. The entry has a Node shebang and is mapped as `bin.flowkit`. A local tarball installs that command into the consumer's `node_modules/.bin`; use `npx --no-install flowkit` from the consumer project. This private working copy has not been published to the registry.
 
 | Option family | Behavior |
 |---|---|
@@ -82,6 +82,23 @@ export default { trace: true, mermaid: false, remoteSkillHosts: [] };
 The configuration must be an options object. Every configured key is validated before merging; a command-line override cannot hide an invalid key or type. Explicit false switches override true configuration. Any `--remote-skill-host` occurrence replaces the configured array, preserving flag order. Missing flags leave configuration values intact. Paths use invocation cwd and the API's project-root rules, including when configuration code changes cwd. `fetch`, `signal`, `runId`, and `dump` remain legal configuration keys but are unused by these two commands. API calls never auto-load configuration.
 
 Diagnostics are written to stdout as one JSON object per line, with no success summary. Exit `0` means no error, including warning-only results; `1` means compiler errors or an artifact mismatch; `2` means invalid arguments/configuration or an invocation/I/O failure. Argument and other invocation failures use one text line. Configuration load, syntax, type, or unknown-key failures use one Diagnostic JSON object with `code: null`, `file: 'flowkit.config.mjs'`, and line/column `1/1`. A broken configuration link is a load error. Configuration is ordinary user-selected JavaScript and can have its own side effects; the CLI itself never executes workflow source or runs the workflow.
+
+## Pack and consume locally
+
+From the repository, using Node >=22.13.0 and npm:
+
+```sh
+npm run build
+npm run check:package
+npm run test:package
+npm pack --ignore-scripts
+```
+
+`build` validates its inputs, replaces this project's derived `dist` tree, and preserves the CLI shebang and executable mode. It rejects a linked `dist`. `check:package` checks metadata, byte-for-byte build freshness, relative import/declaration dependencies, and the actual `npm pack --dry-run` file list. Only the 42 built modules/declarations, `package.json`, and README are currently included. The `LICENSE` whitelist entry permits a future approved license file; no license file has been chosen or added in this batch. Source, tests, scripts, project records, dependency caches, and runtime binaries are excluded.
+
+`test:package` creates a real tarball, installs it into an independent temporary project, checks installed bytes and public/private export boundaries, executes ESM/CJS SDK consumers and the installed CLI command, and compiles positive/negative type consumers. It uses TypeScript 5.7.3 with `@types/node` 22.13.0 and also checks the existing TypeScript 5.0.4 minimum with DOM globals. These extra tools are installed only in the temporary consumer. npm may use the network or an already populated cache. The temporary project is removed on success or failure; this command does not publish anything.
+
+After `npm pack`, install `devcodex-flowkit-0.0.0-m0.tgz` into another project with `npm install <path-to-tarball>`. Save the DSL example as `sample.workflow.ts`, then run `npx --no-install flowkit compile ./sample.workflow.ts` and `npx --no-install flowkit check ./sample.workflow.ts` there. ESM imports use `@devcodex/flowkit` and `@devcodex/flowkit/dsl`; CommonJS callers can use dynamic `import()`. TypeScript consumers use NodeNext/moduleResolution NodeNext; the Node consumer fixture supplies Node globals without DOM. Internal subpaths, including `dist`, CLI internals, and `testing`, are not package exports.
 
 ## Run source and verified artifacts
 
@@ -136,7 +153,7 @@ Remote defaults require HTTPS, an exact allowed host and effective port, and a v
 
 ## 开发验证
 
-Run `npm run verify` with Node >=22.13.0 to build, run DSL/compiler/runtime tests, execute generated modules with test hosts, and check TypeScript 5.0.4 fixtures including 500-node definitions. Build before running tests individually because package self-references use `dist`. Tests require no server; loader probes run in isolated child processes. Acorn 8.19.0 is the sole runtime dependency.
+Run `npm run verify` with Node >=22.13.0 to build, run DSL/compiler/runtime/CLI/package tests, execute generated modules with test hosts, check TypeScript 5.0.4 fixtures including 500-node definitions, check package contents, and run the real tarball consumer. Build before running tests individually because package self-references use `dist`. Tests require no server; loader probes run in isolated child processes. Acorn 8.19.0 is the sole runtime dependency.
 
 The private analysis entry is `src/compiler/analyze.mjs`; it is tested directly and is not a package export. It returns literal data, role-aware graph edges, region ownership, dominators, forward graphs with postdominators and joins, parsed conditions, and may-written dataflow sets. A `FK_C053` warning concerns a declared input with no writer on any reaching path; keys without a workflow writer remain host initial state. Parallel joins conservatively union branch writes, including `any`, without promising that every output has completed.
 
@@ -144,9 +161,11 @@ Human repair paths can be entered by normal flow before the first approval. Fold
 
 The public `evalWhen(ctx, when)` delegates to `src/when/evaluate.mjs`. It reads own state paths, short circuits strictly boolean logic, and gives comparison higher precedence than `!`. Parsing and evaluation use explicit stacks, not JavaScript evaluation. Diagnostics attach to the original source field; syntax messages separately report the decoded expression column. Compiler and runtime Skill checks share the same raw-path, host and integrity semantics.
 
-The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Tests cover public source/AOT/dump execution and the CLI; distribution, complete golden acceptance and Mermaid renderer verification remain pending. Current CLI batch records are in `M3-1-CLI与配置/` beside the confirmed design.
+The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Tests cover public source/AOT/dump execution, the CLI, and real tarball consumers; complete golden acceptance and Mermaid renderer verification remain pending. Package batch records are in `M3-2-分发与消费/` beside the confirmed design.
 
 ## 方案材料
+
+The following links refer to maintainer workspace records. They are not included in the npm tarball; installed-package users can use the SDK, CLI, and local consumption instructions above.
 
 - [需求概述](../.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/需求概述.md)：当前开发阅读入口，说明目标、范围、职责、验收和 A03 输入。
 - [使用契约](../.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/使用契约.md)：现行 API、DSL、配置、运行语义与错误码。
@@ -169,4 +188,4 @@ The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` re
 - 方案接入与可访问网页内容审查：已形成材料。
 - 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
 - DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
-- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, M1-4 as `a05b1fc`, M2-1 as `052780c`, M2-2 as `ae66569`, and M2-3 as `ff2dec1`. M3-1 adds the two-command CLI and configuration handling. Packed distribution and complete golden acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
+- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, M1-4 as `a05b1fc`, M2-1 as `052780c`, M2-2 as `ae66569`, M2-3 as `ff2dec1`, and M3-1 as `715df00`. M3-2 adds clean builds, package checks, and real tarball consumers. Complete golden acceptance and publication remain pending. Verification and review records are kept in the corresponding batch directories.

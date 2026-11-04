@@ -11,12 +11,14 @@
     "./dsl": { "types": "./dist/dsl.d.ts", "import": "./dist/dsl.mjs", "default": "./dist/dsl.mjs" },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs tests/when/*.test.mjs tests/runtime/*.test.mjs tests/cli/*.test.mjs",
+    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs tests/when/*.test.mjs tests/runtime/*.test.mjs tests/cli/*.test.mjs tests/package/*.test.mjs",
     "test:types": "node scripts/test-types.mjs",
-    "verify": "npm run build && npm test && npm run test:types"
+    "check:package": "node scripts/check-package.mjs",
+    "test:package": "node scripts/test-package.mjs",
+    "verify": "npm run build && npm test && npm run test:types && npm run check:package && npm run test:package"
   },
   "dependencies": { "acorn": "8.19.0" },
   "devDependencies": { "typescript": "5.0.4" }
