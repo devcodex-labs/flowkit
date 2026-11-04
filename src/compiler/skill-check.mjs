@@ -1,31 +1,8 @@
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { diagnostic } from './source.mjs';
-
-const localPath = value => typeof value === 'string' && value.endsWith('.md') &&
-  value.split('/').every(segment => segment.length > 0 && !/[^A-Za-z0-9_.-]/.test(segment) && segment !== '.' && segment !== '..');
-
-/** Inspect raw segments before URL parsing can normalize dot segments or backslashes. */
-function remoteURL(value) {
-  if (typeof value !== 'string' || /[\\?#\s]/.test(value)) return null;
-  const match = /^https:\/\/([^/]+)\/(.+)$/i.exec(value);
-  if (!match || match[1].includes('@') || !localPath(match[2])) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash ? url : null;
-  } catch { return null; }
-}
-
-/** Accept a single canonical digest, with correct terminal padding or no padding. */
-export function validIntegrity(value) {
-  if (typeof value !== 'string') return false;
-  const match = /^(sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(value);
-  if (!match || match[0] !== value) return false;
-  const bytes = Buffer.from(match[2], 'base64');
-  const canonical = bytes.toString('base64');
-  return bytes.length === { sha256: 32, sha384: 48, sha512: 64 }[match[1]] &&
-    (match[2] === canonical || match[2] === canonical.replace(/=+$/, ''));
-}
+import { localSkillPath as localPath, remoteSkillURL as remoteURL, validIntegrity, allowedSkillHost, validAgentPath } from '../shared/skill-ref.mjs';
+export { validIntegrity } from '../shared/skill-ref.mjs';
 
 /** Static reference checks never fetch or read Skill content. */
 export async function checkSkills(literal, context) {
@@ -43,7 +20,7 @@ export async function checkSkills(literal, context) {
     if (explicit) reference = node.skill;
     else if (typeof node.agent === 'string' && node.agent.length) {
       // Validate the agent's raw segments before joining; never normalize away traversal.
-      if (!localPath(`${node.agent}.md`)) { report('FK_C052', 'Invalid mapped agent path'); continue; }
+      if (!validAgentPath(node.agent)) { report('FK_C052', 'Invalid mapped agent path'); continue; }
       reference = `${context.skillsRoot.replace(/\/$/, '')}/${node.agent}.md`;
     } else {
       if (hasIntegrity) report('FK_C058', 'Integrity requires an explicit HTTPS skill', 'integrity');
@@ -55,8 +32,7 @@ export async function checkSkills(literal, context) {
     if (remote) {
       const url = remoteURL(reference);
       if (!url) report('FK_C052', 'Invalid HTTPS Skill URL');
-      else if (!context.remoteSkillHosts.includes(url.host) &&
-        !(!url.port && context.remoteSkillHosts.includes(`${url.hostname}:443`))) report('FK_C057', 'Remote Skill host is not allowed');
+      else if (!allowedSkillHost(url, context.remoteSkillHosts)) report('FK_C057', 'Remote Skill host is not allowed');
       if (hasIntegrity) {
         if (!explicit || !url || !validIntegrity(node.integrity)) report('FK_C058', 'Invalid integrity or use location', 'integrity');
       } else if (url) report('FK_C059', 'Remote Skill has no integrity');

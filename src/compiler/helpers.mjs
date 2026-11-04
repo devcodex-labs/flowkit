@@ -110,7 +110,9 @@ export function emitHelpers(nodes, trace, actionCatches) {
   if (nodes.some(node => node.type === 'condition')) methods.add('evalWhen');
   if (agent || tracing || actionCatches || nodes.some(node => node.type === 'parallel' && node.join.strategy === 'any')) methods.add('isControlSignal');
   const lines = methods.size || agent ? ['const runtime = ctx.runtime;'] : [];
-  for (const method of methods) lines.push(`const ${method} = (...args) => runtime.${method}(...args);`);
+  for (const method of methods) lines.push(['loadSkill', 'loadSkillByAgent'].includes(method)
+    ? `const ${method} = (...args) => runtime.${method} === undefined ? ctx.skillLoader.${method}(...args) : runtime.${method}(...args);`
+    : `const ${method} = (...args) => runtime.${method}(...args);`);
   if (agent || human || actionCatches || nodes.some(node => node.type === 'verification' && node.onSuccess === undefined)) lines.push(body(ownTemplate));
   if (human || verification) lines.push(body(booleanTemplate));
   if (tracing) lines.push(body(traceTemplate));

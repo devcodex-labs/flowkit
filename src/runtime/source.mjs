@@ -6,7 +6,7 @@ import { executionOptions, validateExecutionArguments } from './context.mjs';
 import { executeWorkflow } from './execute.mjs';
 import { loadWorkflowText } from './load.mjs';
 
-/** Internal DSL-only execution path; public routing, default Skills, AOT, cache and dump are assembled later. */
+/** Internal DSL execution with default Skills; public AOT/cache/dump routing is assembled later. */
 export async function executeSource(file, runtime, state, suppliedOptions) {
   const cwd = process.cwd();
   const options = executionOptions(suppliedOptions);
@@ -21,5 +21,5 @@ export async function executeSource(file, runtime, state, suppliedOptions) {
   if (first) throw Object.assign(new Error(`${first.code} Compilation failed: ${compiled.diagnostics.filter(item => item.severity === 'error').length} error(s); first: ${first.message}`),
     { phase: 'compile', code: first.code, diagnostics: compiled.diagnostics });
   const workflow = await loadWorkflowText(compiled.code);
-  return executeWorkflow(workflow, runtime, state, options);
+  return executeWorkflow(workflow, runtime, state, { ...options, projectRoot });
 }

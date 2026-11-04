@@ -83,6 +83,8 @@ test('rejects raw URL traversal, credentials, queries, fragments and non-HTTPS r
     assert.ok((await codes({ skill }, { remoteSkillHosts: ['example.test'] })).includes('FK_C052'), skill);
   }
   assert.ok((await codes({ agent: 'writer' }, { skillsRoot: 'https://example.test/x/../skills', remoteSkillHosts: ['example.test'] })).includes('FK_C052'));
+  for (const agent of ['.', '..', 'x/..', 'x/.']) assert.ok((await codes({ agent })).includes('FK_C052'));
+  assert.deepEqual(await codes({ skill: 'https://EXAMPLE.TEST:443/a.md', integrity: digest() }, { remoteSkillHosts: ['EXAMPLE.TEST:443'] }), []);
 });
 
 test('validates SRI algorithms, digest lengths, exact padding and use location', async () => {

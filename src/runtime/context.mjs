@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeOptions } from '../compiler/source.mjs';
+import { createSkillLoader } from './skills.mjs';
 
 export function executionOptions(supplied) {
   const options = normalizeOptions(supplied);
@@ -23,6 +24,8 @@ export function cloneOwnData(source) {
 }
 
 export function createRunContext(runtime, state, options) {
-  return { runtime, state: cloneOwnData(state === undefined ? {} : state), signal: options.signal,
+  const ctx = { runtime, state: cloneOwnData(state === undefined ? {} : state), signal: options.signal,
     runId: options.runId === undefined ? randomUUID() : options.runId };
+  Object.defineProperty(ctx, 'skillLoader', { value: createSkillLoader(options) });
+  return ctx;
 }
