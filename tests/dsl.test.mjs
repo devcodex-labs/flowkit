@@ -112,5 +112,5 @@ test('built DSL and compiler entries are consumable while internal modules stay 
   const built = await import('@devcodex/flowkit/dsl');
   assert.equal(built.terminal('ok', { name: '完成', status: 'succeeded' }).type, 'terminal');
   await assert.rejects(import('@devcodex/flowkit/src/shared/contracts.mjs'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
-  assert.deepEqual(Object.keys(await import('@devcodex/flowkit')), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal']);
+  assert.deepEqual(Object.keys(await import('@devcodex/flowkit')), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
 });

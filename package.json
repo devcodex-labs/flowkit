@@ -2,7 +2,7 @@
   "name": "@devcodex/flowkit",
   "version": "0.0.0-m0",
   "private": true,
-  "description": "声明式工作流编译库的 M0 DSL 与契约基础",
+  "description": "Compile declarative workflows into readable JavaScript and execute them with a host Runtime",
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "exports": {

@@ -14,7 +14,7 @@ const files = [
     'values', 'paths', 'mermaid', 'emit-plan', 'helpers', 'emit', 'compile', 'api', 'output'].map(name =>
     [`src/compiler/${name}.mjs`, `dist/compiler/${name}.mjs`]),
   ...['parser', 'evaluate'].map(name => [`src/when/${name}.mjs`, `dist/when/${name}.mjs`]),
-  ...['context', 'execute', 'load', 'source', 'skills', 'skill-remote'].map(name => [`src/runtime/${name}.mjs`, `dist/runtime/${name}.mjs`]),
+  ...['context', 'execute', 'load', 'source', 'skills', 'skill-remote', 'run', 'aot', 'dump', 'dump-channel', 'dump-hook'].map(name => [`src/runtime/${name}.mjs`, `dist/runtime/${name}.mjs`]),
   ['types/dsl.d.ts', 'dist/dsl.d.ts'],
   ['types/index.d.ts', 'dist/index.d.ts'],
   ['types/compiler-api.d.ts', 'dist/compiler-api.d.ts'],

@@ -1,4 +1,4 @@
-import { compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex/flowkit';
 import type { CompileResult, Diagnostic, FlowkitOptions, Ctx } from '@devcodex/flowkit';
 
 const options: FlowkitOptions = { trace: false, mermaid: true, skillCheck: false };
@@ -6,8 +6,10 @@ const compiled: Promise<CompileResult> = compile('sample.workflow.ts', options);
 const virtual: Promise<CompileResult> = compileSource('', { filename: 'sample.workflow.js' });
 const diagnostics: Promise<Diagnostic[]> = check('sample.workflow.ts');
 void [compiled, virtual, diagnostics];
-// @ts-expect-error Runtime entry is not implemented or exported in this compiler batch.
-import { run } from '@devcodex/flowkit';
+const running = run('sample.workflow.ts', { isControlSignal });
+void running;
+// @ts-expect-error A control predicate is required on the host Runtime.
+run('sample.workflow.ts', {});
 declare const ctx: Ctx;
 const boolean: boolean = evalWhen(ctx, 'true');
 const control: boolean = isControlSignal(null);

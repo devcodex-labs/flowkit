@@ -16,10 +16,16 @@ export async function executeSource(file, runtime, state, suppliedOptions) {
   const projectRoot = resolveProjectRoot(filename, options.projectRoot, cwd);
   const compileOptions = { ...options, projectRoot, outDir: path.dirname(filename), mermaid: false };
   const snapshot = createSourceSnapshot(await readFile(filename), filename);
-  const compiled = await compileToText(snapshot, compileOptions);
+  const code = await compileSourceText(snapshot, compileOptions);
+  const workflow = await loadWorkflowText(code);
+  return executeWorkflow(workflow, runtime, state, { ...options, projectRoot });
+}
+
+/** Shared diagnostics boundary for cached public run and the uncached internal source path. */
+export async function compileSourceText(snapshot, options) {
+  const compiled = await compileToText(snapshot, options);
   const first = compiled.diagnostics.find(item => item.severity === 'error');
   if (first) throw Object.assign(new Error(`${first.code} Compilation failed: ${compiled.diagnostics.filter(item => item.severity === 'error').length} error(s); first: ${first.message}`),
     { phase: 'compile', code: first.code, diagnostics: compiled.diagnostics });
-  const workflow = await loadWorkflowText(compiled.code);
-  return executeWorkflow(workflow, runtime, state, { ...options, projectRoot });
+  return compiled.code;
 }

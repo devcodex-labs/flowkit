@@ -6,9 +6,13 @@ const writers = new Map();
 
 /** Windows may reject overlapping replacements; serialize the same resolved output pair in this process. */
 export function writeArtifacts(entries) {
-  const target = path.resolve(entries[0][0]);
+  return serializeOutput(entries[0][0], () => replaceArtifacts(entries));
+}
+
+/** Share the complete inspect/replace critical section with dump writers. */
+export function serializeOutput(filename, publish) {
+  const target = path.resolve(filename);
   const key = process.platform === 'win32' ? target.toLowerCase() : target;
-  const publish = () => replaceArtifacts(entries);
   const current = (writers.get(key) ?? Promise.resolve()).then(publish, publish);
   writers.set(key, current);
   const release = () => { if (writers.get(key) === current) writers.delete(key); };
@@ -17,7 +21,7 @@ export function writeArtifacts(entries) {
 }
 
 /** Prepare every file before replacing any target; each rename is atomic, the pair is not a transaction. */
-async function replaceArtifacts(entries) {
+export async function replaceArtifacts(entries) {
   const pending = new Set();
   let primary;
   try {

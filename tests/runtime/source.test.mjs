@@ -12,7 +12,7 @@ import { loadWorkflowText } from '../../src/runtime/load.mjs';
 import { fixture, source, end, host, settled } from './support.mjs';
 
 test('public helpers expose strict own-state evaluation and the control marker without a kind whitelist', async () => {
-  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal']);
+  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
   for (const value of [undefined, null, 0, 'control', { control: 1 }, { control: false }]) assert.equal(api.isControlSignal(value), false);
   assert.equal(api.isControlSignal({ control: true, kind: 'host-defined' }), true);
   assert.equal(api.evalWhen({ state: { a: 1, b: true } }, '!a === 2 && b'), true);

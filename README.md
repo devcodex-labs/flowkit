@@ -2,7 +2,7 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-This private development package implements the compiler through M1-4 and the internal execution core with default Skill loading through M2-2. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Public `run`, AOT/cache/dump routing, and the CLI remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+This private development package implements the compiler and runtime through M2-3. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files; the CLI and release acceptance remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
 
 ## 目录导航
 
@@ -26,7 +26,7 @@ export default defineWorkflow({
 
 结果是复制后递归冻结的流程定义，不会执行保存动作，也不冻结传入的原对象。TypeScript >=5.0 可检查字面量 id 引用，允许先引用后定义；拼错 `next` 等引用会在 `defineWorkflow` 调用时报错。动态字符串、字段合法性和图结构的完整检查由后续静态编译器负责。
 
-The DSL entry is `@devcodex/flowkit/dsl`; the package root provides three compiler functions and two runtime helpers described below. Public `run` and the CLI remain pending. A DSL object describes a workflow and does not execute it. Getters, cycles, or nonliteral data cause TypeError; edit the input data and construct a new definition when changing a workflow.
+The DSL entry is `@devcodex/flowkit/dsl`; the package root provides three compiler functions, `run`, and two runtime helpers described below. The CLI remains pending. A DSL object describes a workflow and does not execute it. Getters, cycles, or nonliteral data cause TypeError; edit the input data and construct a new definition when changing a workflow.
 
 ## Compile and check locally
 
@@ -49,9 +49,38 @@ const diagnostics = await check('sample.workflow.ts');
 
 The default output directory is the source directory. An explicit `outDir` must be that directory or an ancestor. Explicit relative `projectRoot` and `outDir` values use the working directory at invocation; paths are fixed before asynchronous reads. The default project root is the nearest ancestor of the source containing a `package.json` file, falling back to that invocation directory. Local `skillsRoot` and DSL Skill paths are relative to `projectRoot`. Local Skill existence is checked by default; `skillCheck: false` disables that check. APIs accept the eleven confirmed `FlowkitOptions` keys, reject unknown keys or invalid types with TypeError, and ignore legal runtime-only options. Only `compileSource` accepts the additional `filename` key. File I/O failures reject with the original filesystem error.
 
-Output uses same-directory temporary files, flushes them, and replaces each target with a rename. All output text is prepared before replacement; the JS/diagram pair is not a cross-file transaction. Calls writing the same resolved target are serialized within the process. Separate processes or path aliases still depend on filesystem behavior. Failed writes clean only their own temporary files. Package declarations expose only the five implemented functions; the final six-function SDK is still in progress.
+Output uses same-directory temporary files, flushes them, and replaces each target with a rename. All output text is prepared before replacement; the JS/diagram pair is not a cross-file transaction. Calls writing the same resolved target are serialized within the process. Separate processes or path aliases still depend on filesystem behavior. Failed writes clean only their own temporary files. Package declarations expose the six implemented functions.
 
-## Runtime helpers and execution development
+## Run source and verified artifacts
+
+With the `save-draft` example saved as `sample.workflow.js`, run it with a host action:
+
+```js
+import { run, isControlSignal } from '@devcodex/flowkit';
+
+const runtime = {
+  isControlSignal,
+  async runAction(action, _name, ctx) {
+    if (action !== 'saveDraft') throw new TypeError('Unknown action');
+    ctx.state.saved = true;
+  },
+};
+const result = await run('sample.workflow.js', runtime, { draft: 'Example' });
+console.log(result.status, result.state.saved); // succeeded true
+// After compile('sample.workflow.js'), the same host can run('sample.compiled.mjs', runtime).
+```
+
+`run` accepts `.workflow.ts`, `.workflow.js`, or `.compiled.mjs`. Other extensions and invalid options reject with TypeError. It reads the supplied file on every call. Successful DSL compilation/loading is cached in process by source hash, absolute filename, effective project/Skill settings, ordered remote hosts, trace, and dump directory. Every execution still gets fresh state, context and default Skill caches. Compiler and loading failures are not entered into that success cache; simultaneous first calls may compile more than once. `compile` and `check` always perform their own current checks. No cache switch or eviction policy is exposed; changing sources and registered dump URLs can accumulate in a long-lived Node process.
+
+Default `run` writes no artifacts. `outDir` and `mermaid` do not affect it, and it never reads a configuration module. DSL compile errors reject with `phase: 'compile'`, the first error code and all diagnostics; warnings permit execution. Runtime failures retain their original rejection value instead of becoming a failed terminal result.
+
+Ahead-of-time runs reread the artifact and verify the fixed ten-line header, original source bytes and complete body hash on every call. Deploy the source at the header's encoded relative path. Absolute or escaping source paths, missing sources and mismatched hashes reject with `FK_R001`, without `phase`; other filesystem failures remain unchanged. Source paths may follow ordinary filesystem symlinks. Execution imports the saved verified snapshot, so replacing the file after that read cannot substitute different business code. AOT is a trusted deployment format, not a sandbox or signature scheme.
+
+Set `dump: './debug'` to write and load `<name>.<whole-text-sha256-first-12>.run.mjs` from that directory. Relative paths are fixed at invocation. Manual edits are restored before the next run; a real digest prefix collision rejects without replacing the other artifact. Dump files persist for inspection, while failed writes clean only their own temporary files. The dump loader registers one process-level Node hook on first use, intercepts only its registered exact file URLs, and leaves unrelated imports alone. Host loaders must preserve its generated function text; incompatible transformations reject before business calls. Failed loads use a new internal attempt URL on retry to avoid Node-version-dependent negative caching. Idle loader ports permit normal process exit.
+
+A broken or closed dump-loader communication channel rejects pending operations and further dump calls in that process; restart the process to reinitialize it. Normal transient file or host-loading failures can retry with the internal attempt URL. The library does not silently bypass a failed verification channel.
+
+## Runtime helpers and context
 
 ```js
 import { evalWhen, isControlSignal } from '@devcodex/flowkit';
@@ -63,9 +92,9 @@ isControlSignal({ control: true, kind: 'cancel' }); // true
 
 `evalWhen` reads own state paths and returns a strict boolean; invalid syntax or runtime operand types retain the confirmed diagnostic codes. `isControlSignal` checks only `error?.control === true`, including host-defined kinds. These helpers can be supplied to a host Runtime; the execution core does not automatically fill business methods.
 
-The private `src/runtime/source.mjs` compiles DSL source into the same text service, loads its snapshot from memory, verifies the loaded function text, and delegates to `executeWorkflow`. It creates a fresh context, copies own enumerable string state keys as data, preserves nested aliases, and returns terminal status with the actual final state. An `error` key is attached only when the context owns it, including `undefined` or other falsy values. Business errors and control signals keep their original rejection identity. Runtime methods retain the host object as `this`; signal is passed through and an omitted runId receives a UUID.
+`run` creates a fresh context, copies own enumerable string state keys as data, preserves nested aliases, and returns terminal status with the actual final state. An `error` key is attached only when the context owns it, including `undefined` or other falsy values. Business errors and control signals keep their original rejection identity. Runtime methods retain the host object as `this`; signal is passed through and an omitted runId receives a UUID.
 
-This internal path provides a fresh default Skill loader for every execution and is not a package export. A host's `loadSkill` or `loadSkillByAgent` overrides only that method; other methods keep the original host as `this`, including private class fields. The library leaves the host object unchanged. Public `run` will be assembled with AOT/cache/dump routing in M2-3. It is not available as a partial placeholder. Generated-function verification rejects incompatible loader transformations before business calls; it is not a sandbox for malicious host code. The source core creates no artifacts or long-running services. Node's own ESM module cache remains process-wide, without a constant-memory guarantee.
+Every execution provides a fresh default Skill loader. A host's `loadSkill` or `loadSkillByAgent` overrides only that method; other methods keep the original host as `this`, including private class fields. The library leaves the host object unchanged and does not fill model, schema, approval or action methods. Generated-function verification rejects incompatible loader transformations before business calls; it is not a sandbox for malicious host code. Internal runtime modules are not package exports. Node's own ESM module cache remains process-wide, without a constant-memory guarantee.
 
 Default local Skills use project-relative `.md` paths, realpath containment for the root and target, and strict UTF-8 decoding. Missing files produce `FK_R010`, invalid paths or escapes `FK_R011`, and malformed UTF-8 `FK_R014` with a cause; other filesystem failures retain their identity. Distinct legal aliases keep separate cache entries, while an explicit reference and an agent mapping to that same reference share their pending read. Each new execution reads again. Containment follows the confirmed filesystem boundary; it does not promise atomic isolation from concurrent hostile filesystem mutation.
 
@@ -83,7 +112,7 @@ Human repair paths can be entered by normal flow before the first approval. Fold
 
 The public `evalWhen(ctx, when)` delegates to `src/when/evaluate.mjs`. It reads own state paths, short circuits strictly boolean logic, and gives comparison higher precedence than `!`. Parsing and evaluation use explicit stacks, not JavaScript evaluation. Diagnostics attach to the original source field; syntax messages separately report the decoded expression column. Compiler and runtime Skill checks share the same raw-path, host and integrity semantics.
 
-The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Generated-module tests use injected hosts; full SDK execution and Mermaid rendering acceptance remain pending. Batch records are in `M1-4-公开编译与检查/` beside the confirmed design.
+The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Tests cover public source/AOT/dump execution with test hosts; the complete SDK acceptance matrix, CLI and Mermaid renderer verification remain pending. Current runtime batch records are in `M2-3-AOT缓存与dump/` beside the confirmed design.
 
 ## 方案材料
 
@@ -108,4 +137,4 @@ The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` re
 - 方案接入与可访问网页内容审查：已形成材料。
 - 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
 - DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
-- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, and M1-4 as `a05b1fc`. M2-1 adds the internal execution core and two public helpers. Default Skills and AOT/cache/dump assembly, M3 CLI, and complete SDK acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
+- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, M1-4 as `a05b1fc`, M2-1 as `052780c`, and M2-2 as `ae66569`. M2-3 implements public `run`, verified AOT, successful compilation caching, and dump loading. M3 CLI, packaging and complete acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
