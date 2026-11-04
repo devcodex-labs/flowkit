@@ -2,7 +2,7 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-This private development package implements the DSL, TypeScript reference checks, and the M1-1 compiler front end. The front end extracts static definitions and checks local fields and Skill references without executing workflow source or fetching remote Skills. Graph analysis, code generation, public compile APIs, the runtime, and the CLI are planned for subsequent batches. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+This private development package implements the DSL, TypeScript reference checks, and compiler analysis through M1-2. It extracts static definitions and checks fields, Skill references, graph regions, dataflow, and the restricted `when` grammar without executing workflow source or fetching remote Skills. Code generation, public compile APIs, the workflow runtime, and the CLI are planned for subsequent batches. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
 
 ## 目录导航
 
@@ -32,7 +32,11 @@ const workflow = defineWorkflow({
 
 Run `npm run verify` with Node >=22.13.0 to build, run DSL and compiler front-end tests, and check TypeScript 5.0.4 fixtures including 500-node definitions. Build before running tests individually because package self-references use `dist`. Tests require no server. Acorn 8.19.0 is the sole runtime dependency.
 
-The private analysis entry is `src/compiler/analyze.mjs`; it is tested directly and is not a package export. An empty diagnostic list proves only this front-end stage. Reference existence, reachability, graph regions, the full `when` grammar, dataflow, and Mermaid checks belong to later compiler passes. Local Skill checks inspect file existence; runtime realpath containment and UTF-8 decoding remain pending. Process records for this batch are in `M1-1-静态提取与字段检查/` beside the confirmed design.
+The private analysis entry is `src/compiler/analyze.mjs`; it is tested directly and is not a package export. It returns literal data, role-aware graph edges, region ownership, dominators, forward graphs with postdominators and joins, parsed conditions, and may-written dataflow sets. A `FK_C053` warning concerns a declared input with no writer on any reaching path; keys without a workflow writer remain host initial state. Parallel joins conservatively union branch writes, including `any`, without promising that every output has completed.
+
+Human repair paths can be entered by normal flow before the first approval. Folded edges preserve their actual `sourceNode` and `targetNode`; regions provide `entryTargets` and an `entryForwards` analysis for each entry. The root `entryTarget` retains the first declared node. Future emission must honor those entry targets rather than skip an initial repair prefix. Normal approval and loop success/exhaustion may not re-enter their own repair region.
+
+The private `src/when/evaluate.mjs` implements `evalWhen(ctx, when)` for later API integration. It reads own state paths, short circuits strictly boolean logic, and gives comparison higher precedence than `!`. Parsing and evaluation use explicit stacks, not JavaScript evaluation. Diagnostics attach to the original source field; syntax messages separately report the decoded expression column. An empty diagnostic list does not establish code-generation, Mermaid, or full SDK runtime acceptance. Local Skill realpath containment and UTF-8 loading remain pending. Batch records are in `M1-2-图数据流与when分析/` beside the confirmed design.
 
 ## 方案材料
 
@@ -57,4 +61,4 @@ The private analysis entry is `src/compiler/analyze.mjs`; it is tested directly 
 - 方案接入与可访问网页内容审查：已形成材料。
 - 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
 - DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
-- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`. M1-1 implements the private compiler front end; the rest of M1, M2 runtime, M3 CLI, and complete SDK acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
+- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, and M1-1 as `37d4578`. M1-2 implements private graph, dataflow, and expression analysis. M1-3/4, M2 runtime, M3 CLI, and complete SDK acceptance remain pending. Verification and review records are kept in the corresponding batch directories.

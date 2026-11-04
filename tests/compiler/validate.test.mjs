@@ -1,14 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeSource } from '../../src/compiler/analyze.mjs';
-import { isSemVer } from '../../src/compiler/validate.mjs';
+import { createSourceSnapshot, createCompileContext, sortDiagnostics } from '../../src/compiler/source.mjs';
+import { extractWorkflow } from '../../src/compiler/extract.mjs';
+import { isSemVer, validateFields } from '../../src/compiler/validate.mjs';
 import { ERROR_CATALOG } from '../../src/shared/contracts.mjs';
 
 const header = "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\n";
 const terminal = "terminal('done',{name:'Done',status:'succeeded'})";
 const definition = (nodes = terminal, fields = "id:'demo',version:'1.0.0',name:'Demo'") =>
   `${header}export default defineWorkflow({${fields},nodes:[${nodes}]});`;
-const analyze = source => analyzeSource(source, { filename: 'demo.workflow.js', skillCheck: false });
+const analyze = async source => {
+  const snapshot = createSourceSnapshot(source, 'demo.workflow.js');
+  const context = createCompileContext(snapshot, { skillCheck: false });
+  const {literal, diagnostics} = extractWorkflow(snapshot);
+  if(literal) diagnostics.push(...validateFields(literal, context));
+  return {snapshot, diagnostics:sortDiagnostics(diagnostics)};
+};
 const codes = async source => (await analyze(source)).diagnostics.map(d => d.code);
 
 test('accepts all eight node kinds and context-sensitive parallel member successors', async () => {
@@ -101,7 +108,7 @@ test('enforces field boundaries, nested exact fields, optional nulls and missing
   assert.deepEqual(await codes(definition(fiveHundred)), []);
 });
 
-test('leaves graph references, reachability and full when grammar for the next compiler pass', async () => {
+test('field validation stays independent from graph references and when grammar', async () => {
   assert.deepEqual(await codes(definition("action('a',{name:'A',action:'save',next:'missing'})")), []);
   assert.deepEqual(await codes(definition("condition('c',{name:'C',branches:[{when:'unsupported()',next:'a'},{when:'true',next:'a'}]})")), []);
 });
