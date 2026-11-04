@@ -1,4 +1,4 @@
-/** Full confirmed SDK contract; the compiler entry selects only implemented functions for this batch. */
+/** Full confirmed SDK contract; the package entry selects only implemented functions for this batch. */
 import type { ObjectSchema } from './dsl.js';
 export interface FlowkitOptions {
   projectRoot?: string;

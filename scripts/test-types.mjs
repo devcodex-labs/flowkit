@@ -27,7 +27,7 @@ run('8类上下文/前向引用/正反例/公共与内部契约', ['-p', 'tests/
 run('500节点合法前向链', [...compilerArgs, '.tmp/types/500-valid.ts']);
 run('500节点末端错拼引用拒绝', [...compilerArgs, '.tmp/types/500-invalid.ts'], true);
 const record = { runId: 'flowkit-declarations', node: process.version, typescript: compilerVersion, runs,
-  scope: 'DSL/reference/full planned contract and implemented public compiler declarations; no runtime acceptance', exitCode: runs.every(r => r.passed) ? 0 : 1 };
+  scope: 'DSL/reference/full planned contract and implemented compiler/helper declarations; no public run acceptance', exitCode: runs.every(r => r.passed) ? 0 : 1 };
 await writeFile(path.join(scratch, 'results.json'), JSON.stringify(record, null, 2) + '\n');
 process.stdout.write(JSON.stringify({ runId: record.runId, node: record.node, typescript: compilerVersion,
   runs: runs.map(({ output, ...summary }) => summary), exitCode: record.exitCode }, null, 2) + '\n');

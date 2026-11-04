@@ -1,4 +1,5 @@
 import type { Diagnostic, FlowkitOptions } from '../types/index.js';
+import type { Ctx, WorkflowResult } from '../types/index.js';
 import type { DslNode } from '../types/dsl.js';
 
 /** 原始字节摘要不受换行规范化、类型擦除或打印影响。 */
@@ -9,6 +10,7 @@ export interface SourceSnapshot {
   readonly sourceHash: string;
 }
 export interface SourceLocation { readonly line: number; readonly column: number }
+export type ExecutableWorkflow = (ctx: Ctx) => Promise<WorkflowResult>;
 export type LiteralValue = string | number | boolean | null | readonly LiteralValue[] | { readonly [key: string]: LiteralValue };
 export interface LiteralWorkflow {
   /** Values are still unvalidated at this stage. */

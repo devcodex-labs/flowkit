@@ -36,8 +36,8 @@ async function snapshot(directory) {
   return records;
 }
 
-test('package root exposes only the three implemented compiler functions and blocks deep imports', async () => {
-  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource']);
+test('package root exposes implemented compiler functions and runtime helpers while blocking deep imports', async () => {
+  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal']);
   await assert.rejects(import('@devcodex/flowkit/compiler/api'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 });
 
@@ -223,7 +223,7 @@ test('check compares the ancestor outDir and carries compile warnings alongside 
 test('API argument and option types reject before I/O; filename is exclusive to compileSource', async t => {
   const directory = await workspace(t);
   const file = path.join(directory, 'missing.workflow.js');
-  for (const key of Object.keys(api)) {
+  for (const key of ['compile', 'compileSource', 'check']) {
     const call = options => key === 'compileSource' ? api[key](source(), options) : api[key](file, options);
     for (const options of [null, [], { unknown: true }, { trace: null }, { signal: {} }, { fetch: false }, { remoteSkillHosts: ['ok', 1] }]) await assert.rejects(call(options), TypeError);
   }

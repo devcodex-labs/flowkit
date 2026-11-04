@@ -1,3 +1,3 @@
-/** Only implemented compiler functions are callable at this development stage. */
-export { compile, compileSource, check } from './index.js';
-export type { FlowkitOptions, Diagnostic, CompileResult } from './index.js';
+/** Only implemented functions are exposed; public run awaits the remaining runtime dependencies. */
+export { compile, compileSource, check, evalWhen, isControlSignal } from './index.js';
+export type { FlowkitOptions, Diagnostic, CompileResult, Ctx, Runtime, AgentStep, WorkflowResult, RunResult } from './index.js';

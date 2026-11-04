@@ -30,6 +30,11 @@ function traceTemplate() {
 
 function agentTemplate() {
   let stepNo = 0;
+  // Diagnostic text must not change retry behavior or replace the original rejection cause.
+  const rejectionText = (error) => {
+    try { return String(error?.message ?? error); }
+    catch { return "<unprintable rejection>"; }
+  };
   const mergeOwn = (target, source) => { for (const key of Object.keys(source)) writeOwn(target, key, source[key]); return target; };
   const runStep = async (s) => {
     // Allocate before any await: parallel declarations keep deterministic overview numbers.
@@ -54,7 +59,7 @@ function agentTemplate() {
         if (isControlSignal(error)) throw error;
         threw = true;
         cause = error;
-        reasons = [`runAgent threw: ${error?.message ?? String(error)}`];
+        reasons = [`runAgent threw: ${rejectionText(error)}`];
         continue;
       }
       reasons = validateResult(s.output, result);

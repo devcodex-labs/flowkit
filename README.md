@@ -2,7 +2,7 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-This private development package implements the DSL, TypeScript reference checks, and the compiler through M1-4. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `compile`, `compileSource`, and `check`. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. The workflow runtime and CLI are planned for subsequent batches. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+This private development package implements the compiler through M1-4 and the internal execution core through M2-1. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Public `run`, default Skill loading, AOT/cache/dump routing, and the CLI remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
 
 ## 目录导航
 
@@ -26,7 +26,7 @@ export default defineWorkflow({
 
 结果是复制后递归冻结的流程定义，不会执行保存动作，也不冻结传入的原对象。TypeScript >=5.0 可检查字面量 id 引用，允许先引用后定义；拼错 `next` 等引用会在 `defineWorkflow` 调用时报错。动态字符串、字段合法性和图结构的完整检查由后续静态编译器负责。
 
-The DSL entry is `@devcodex/flowkit/dsl`; the package root provides the three compiler functions described below. `run`, public runtime helpers, and the CLI remain pending. A DSL object describes a workflow and does not execute it. Getters, cycles, or nonliteral data cause TypeError; edit the input data and construct a new definition when changing a workflow.
+The DSL entry is `@devcodex/flowkit/dsl`; the package root provides three compiler functions and two runtime helpers described below. Public `run` and the CLI remain pending. A DSL object describes a workflow and does not execute it. Getters, cycles, or nonliteral data cause TypeError; edit the input data and construct a new definition when changing a workflow.
 
 ## Compile and check locally
 
@@ -49,17 +49,33 @@ const diagnostics = await check('sample.workflow.ts');
 
 The default output directory is the source directory. An explicit `outDir` must be that directory or an ancestor. Explicit relative `projectRoot` and `outDir` values use the working directory at invocation; paths are fixed before asynchronous reads. The default project root is the nearest ancestor of the source containing a `package.json` file, falling back to that invocation directory. Local `skillsRoot` and DSL Skill paths are relative to `projectRoot`. Local Skill existence is checked by default; `skillCheck: false` disables that check. APIs accept the eleven confirmed `FlowkitOptions` keys, reject unknown keys or invalid types with TypeError, and ignore legal runtime-only options. Only `compileSource` accepts the additional `filename` key. File I/O failures reject with the original filesystem error.
 
-Output uses same-directory temporary files, flushes them, and replaces each target with a rename. All output text is prepared before replacement; the JS/diagram pair is not a cross-file transaction. Calls writing the same resolved target are serialized within the process. Separate processes or path aliases still depend on filesystem behavior. Failed writes clean only their own temporary files. The private development package currently exposes only the implemented compiler functions and matching compiler declarations; the final six-function SDK is still in progress.
+Output uses same-directory temporary files, flushes them, and replaces each target with a rename. All output text is prepared before replacement; the JS/diagram pair is not a cross-file transaction. Calls writing the same resolved target are serialized within the process. Separate processes or path aliases still depend on filesystem behavior. Failed writes clean only their own temporary files. Package declarations expose only the five implemented functions; the final six-function SDK is still in progress.
+
+## Runtime helpers and execution development
+
+```js
+import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+
+const runtime = { isControlSignal };
+evalWhen({ runtime, state: { ready: true } }, 'ready'); // true
+isControlSignal({ control: true, kind: 'cancel' }); // true
+```
+
+`evalWhen` reads own state paths and returns a strict boolean; invalid syntax or runtime operand types retain the confirmed diagnostic codes. `isControlSignal` checks only `error?.control === true`, including host-defined kinds. These helpers can be supplied to a host Runtime; the execution core does not automatically fill business methods.
+
+The private `src/runtime/source.mjs` compiles DSL source into the same text service, loads its snapshot from memory, verifies the loaded function text, and delegates to `executeWorkflow`. It creates a fresh context, copies own enumerable string state keys as data, preserves nested aliases, and returns terminal status with the actual final state. An `error` key is attached only when the context owns it, including `undefined` or other falsy values. Business errors and control signals keep their original rejection identity. Runtime methods retain the host object as `this`; signal is passed through and an omitted runId receives a UUID.
+
+This internal path is exercised with injected host Skill methods and is not a package export. Public `run` will be assembled with default Skills and the AOT/cache/dump paths in the remaining M2 batches. It is not available as a partial placeholder. Generated-function verification rejects incompatible loader transformations before business calls; it is not a sandbox for malicious host code. The source core creates no artifacts or long-running services. Node's own ESM module cache remains process-wide, without a constant-memory guarantee.
 
 ## 开发验证
 
-Run `npm run verify` with Node >=22.13.0 to build, run DSL and compiler tests, execute generated modules with test hosts, and check TypeScript 5.0.4 fixtures including 500-node definitions. Build before running tests individually because package self-references use `dist`. Tests require no server. Acorn 8.19.0 is the sole runtime dependency.
+Run `npm run verify` with Node >=22.13.0 to build, run DSL/compiler/runtime tests, execute generated modules with test hosts, and check TypeScript 5.0.4 fixtures including 500-node definitions. Build before running tests individually because package self-references use `dist`. Tests require no server; loader probes run in isolated child processes. Acorn 8.19.0 is the sole runtime dependency.
 
 The private analysis entry is `src/compiler/analyze.mjs`; it is tested directly and is not a package export. It returns literal data, role-aware graph edges, region ownership, dominators, forward graphs with postdominators and joins, parsed conditions, and may-written dataflow sets. A `FK_C053` warning concerns a declared input with no writer on any reaching path; keys without a workflow writer remain host initial state. Parallel joins conservatively union branch writes, including `any`, without promising that every output has completed.
 
 Human repair paths can be entered by normal flow before the first approval. Folded edges preserve their actual `sourceNode` and `targetNode`; regions provide `entryTargets` and an `entryForwards` analysis for each entry. The root `entryTarget` retains the first declared node. Emission honors those entry targets and preserves initial repair prefixes. Normal approval and loop success/exhaustion may not re-enter their own repair region.
 
-The private `src/when/evaluate.mjs` implements `evalWhen(ctx, when)` for later API integration. It reads own state paths, short circuits strictly boolean logic, and gives comparison higher precedence than `!`. Parsing and evaluation use explicit stacks, not JavaScript evaluation. Diagnostics attach to the original source field; syntax messages separately report the decoded expression column. Local Skill realpath containment and UTF-8 loading remain pending.
+The public `evalWhen(ctx, when)` delegates to `src/when/evaluate.mjs`. It reads own state paths, short circuits strictly boolean logic, and gives comparison higher precedence than `!`. Parsing and evaluation use explicit stacks, not JavaScript evaluation. Diagnostics attach to the original source field; syntax messages separately report the decoded expression column. Local Skill realpath containment and UTF-8 loading remain pending.
 
 The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` returns code, Mermaid, and diagnostics without writing files. Create its snapshot with `createSourceSnapshot(bytes, filename)`. Public compiler functions share this text service. Generated modules export one `async function workflow(ctx)` and use native control flow with host-supplied `ctx.runtime` methods. A static emission plan prints shared joins once and expands only crossing regions into fixed boolean blocks; it emits no runtime graph dispatcher. Headers have ten lines and include raw-source and body hashes. `mermaid: false` returns empty diagram text; PascalCase id collisions remain compile errors. The output directory must be the source directory or an ancestor. Internal modules are not package exports. Generated-module tests use injected hosts; full SDK execution and Mermaid rendering acceptance remain pending. Batch records are in `M1-4-公开编译与检查/` beside the confirmed design.
 
@@ -86,4 +102,4 @@ The internal `compileToText(snapshot, options)` in `src/compiler/compile.mjs` re
 - 方案接入与可访问网页内容审查：已形成材料。
 - 原始需求全文、最终决策记录和最新示例目录：已取得并校验；示例中含本地替身 / 原型，不是正式库实现。
 - DevCodex MCP 项目上下文与会话记忆：已绑定 flowkit，活动根为工作区 `.devcodex/flowkit`，规范记忆目录为 `.memory/clients/codex/`。Codex 应用侧栏目前仍归属 Worker；它与 MCP 项目绑定是两个状态。
-- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, and M1-3 as `947e9e3`. M1-4 adds public compiler APIs and artifact output. M2 runtime, M3 CLI, and complete SDK acceptance remain pending. Verification and review records are kept in the corresponding batch directories.
+- A03-r2.1 was confirmed on 2026-11-03. M0 is committed as `60a8bc8`, M1-1 as `37d4578`, M1-2 as `9204577`, M1-3 as `947e9e3`, and M1-4 as `a05b1fc`. M2-1 adds the internal execution core and two public helpers. Default Skills and AOT/cache/dump assembly, M3 CLI, and complete SDK acceptance remain pending. Verification and review records are kept in the corresponding batch directories.

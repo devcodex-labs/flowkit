@@ -8,10 +8,12 @@ const files = [
   ['src/index.mjs', 'dist/index.mjs'],
   ['src/dsl.mjs', 'dist/dsl.mjs'],
   ['src/shared/contracts.mjs', 'dist/shared/contracts.mjs'],
+  ['src/shared/control.mjs', 'dist/shared/control.mjs'],
   ...['source', 'extract', 'validate', 'skill-check', 'analyze', 'graph-algorithms', 'graph', 'dataflow',
     'values', 'paths', 'mermaid', 'emit-plan', 'helpers', 'emit', 'compile', 'api', 'output'].map(name =>
     [`src/compiler/${name}.mjs`, `dist/compiler/${name}.mjs`]),
   ...['parser', 'evaluate'].map(name => [`src/when/${name}.mjs`, `dist/when/${name}.mjs`]),
+  ...['context', 'execute', 'load', 'source'].map(name => [`src/runtime/${name}.mjs`, `dist/runtime/${name}.mjs`]),
   ['types/dsl.d.ts', 'dist/dsl.d.ts'],
   ['types/index.d.ts', 'dist/index.d.ts'],
   ['types/compiler-api.d.ts', 'dist/compiler-api.d.ts'],
