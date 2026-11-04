@@ -98,3 +98,34 @@ export interface DataflowAnalysis {
   readonly diagnostics: readonly Diagnostic[];
 }
 export interface CompiledText { readonly code: string; readonly mermaid: string; readonly diagnostics: readonly Diagnostic[] }
+export interface CompilationPaths {
+  readonly source: string;
+  readonly outDir: string;
+  readonly codeFile: string;
+  readonly mermaidFile: string;
+}
+export type EmitStep = { readonly kind: 'enter'; readonly target: string }
+  | { readonly kind: 'node'; readonly id: string }
+  | { readonly kind: 'decision'; readonly id: string; readonly branches: readonly EmitSequence[] }
+  | { readonly kind: 'crossing'; readonly context: EmitContext };
+export interface EmitSequence { readonly kind: 'sequence'; readonly steps: readonly EmitStep[] }
+export interface EmitContext {
+  readonly key: string;
+  readonly mode: 'structured' | 'topological';
+  readonly entry: string;
+  readonly ids: readonly string[];
+  readonly body?: EmitSequence;
+  readonly order?: readonly string[];
+  readonly resolve: (target: string | symbol | undefined) => string | symbol;
+}
+export interface EmitPlan {
+  readonly root: EmitContext;
+  readonly contexts: ReadonlyMap<string, EmitContext>;
+  readonly layouts: readonly { readonly key: string; readonly mode: EmitContext['mode'] }[];
+}
+/** Text generation stays internal; filesystem output belongs to the later public compiler API. */
+export interface InternalCompilation extends CompiledText {
+  readonly analysis: FrontendAnalysis;
+  readonly plan: EmitPlan | null;
+  readonly paths: CompilationPaths;
+}
