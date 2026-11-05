@@ -1,0 +1,12 @@
+{
+  "code": "FK_C005",
+  "kind": "compile",
+  "invalid": {
+    "chainLength": 501,
+    "options": {}
+  },
+  "valid": {
+    "chainLength": 500,
+    "options": {}
+  }
+}

@@ -1,0 +1,15 @@
+flowchart TD
+  subgraph Reviews["Remote review · all_succeeded"]
+    _Flowkit0Start(("并行"))
+    Style["Remote style"]
+    Fact["Remote facts"]
+    _Flowkit0Join(("汇合"))
+  end
+  Done("Reviewed")
+  _Flowkit0Start --> Style
+  _Flowkit0Start --> Fact
+  Style --> _Flowkit0Join
+  Fact --> _Flowkit0Join
+  _Flowkit0Join --> Done
+  _Flowkit0Join -. "控制信号（最先拒绝者）" .-> _FlowkitException
+  _FlowkitException("异常结束")

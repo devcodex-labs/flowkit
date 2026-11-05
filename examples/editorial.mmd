@@ -1,0 +1,38 @@
+flowchart TD
+  Prepare["Prepare evidence"]
+  Draft["Write article"]
+  subgraph Reviews["Review article · all_succeeded"]
+    _Flowkit2Start(("并行"))
+    Style["Style review"]
+    Fact["Fact review"]
+    _Flowkit2Join(("汇合"))
+  end
+  Route{"Choose review path"}
+  subgraph Quality["Improve article · 最多 3 次"]
+    QualityCheck["Check article"]
+    Repair["Repair review findings"]
+  end
+  Approval{"Approve article"}
+  Revise["Apply human feedback"]
+  Publish["Publish approved article"]
+  Done("Published")
+  Failed("Quality limit reached")
+  Prepare --> Draft
+  Draft --> _Flowkit2Start
+  _Flowkit2Start --> Style
+  _Flowkit2Start --> Fact
+  Route -- "styleOk #38;#38; factOk" --> Approval
+  Route -- "true" --> QualityCheck
+  QualityCheck -- "成功" --> Approval
+  QualityCheck -- "失败（第1–2次）" --> Repair
+  QualityCheck -. "超过次数（第3次失败不再修复）" .-> Failed
+  Repair --> QualityCheck
+  Approval -- "批准" --> Publish
+  Approval -- "拒绝" --> Revise
+  Revise --> Approval
+  Publish --> Done
+  Style --> _Flowkit2Join
+  Fact --> _Flowkit2Join
+  _Flowkit2Join --> Route
+  _Flowkit2Join -. "控制信号（最先拒绝者）" .-> _FlowkitException
+  _FlowkitException("异常结束")

@@ -1,0 +1,24 @@
+{
+  "code": "FK_R004",
+  "kind": "runtime",
+  "invalid": {
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "mode": "agent-schema",
+    "options": {
+      "skillCheck": false,
+      "remoteSkillHosts": [
+        "skills.example.test"
+      ]
+    }
+  },
+  "valid": {
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "mode": "agent-schema",
+    "options": {
+      "skillCheck": false,
+      "remoteSkillHosts": [
+        "skills.example.test"
+      ]
+    }
+  }
+}

@@ -1,0 +1,2 @@
+# Golden hashes and SRI use raw bytes and must survive Windows checkout.
+examples/** text eol=lf

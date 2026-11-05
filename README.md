@@ -2,7 +2,20 @@
 
 以 TypeScript / JavaScript 声明式 DSL 定义工作流，编译成可阅读、可执行的 JavaScript 控制流，由宿主运行。
 
-This private development package implements the compiler, runtime, and compile/check CLI, with package checks and real tarball consumer validation. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files. Complete golden acceptance and publication remain pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+This private development package implements the compiler, runtime, and compile/check CLI, with package checks and real tarball consumer validation. It checks static definitions, Skills, graph regions, dataflow, and restricted `when` expressions, then produces deterministic JavaScript and Mermaid text. The package root exposes `run`, `compile`, `compileSource`, `check`, `evalWhen`, and `isControlSignal`. Runtime supports source compilation, verified ahead-of-time artifacts, and optional dump files. Publication remains pending. The compiler does not execute workflow source, load API configuration, or fetch remote Skills. Project records live in `.devcodex/flowkit/requirements/flowkit-需求与使用契约整理/` under the workspace.
+
+## Golden examples and integration
+
+From a checkout on Node >=22.13.0, run `npm ci`, `npm run build`, then
+`node examples/demo.mjs` (editorial approval) or `node examples/demo.mjs --remote`
+(pinned remote Skill bytes through an in-memory transport). Both use deterministic
+adapters. They do not call a model or publish content.
+
+Repository guides: [golden examples and byte manifests](https://github.com/devcodex-labs/flowkit/tree/main/examples),
+[host Runtime integration](https://github.com/devcodex-labs/flowkit/blob/main/docs/host-integration.md),
+and [troubleshooting](https://github.com/devcodex-labs/flowkit/blob/main/docs/troubleshooting.md).
+These assets stay in Git; they are not included in the private npm tarball. The
+remaining README provides the SDK/CLI contract within the installed package.
 
 ## 目录导航
 

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "options": {
+    "trace": false,
+    "mermaid": true,
+    "projectRoot": "examples",
+    "remoteSkillHosts": [
+      "skills.example.test"
+    ]
+  },
+  "workflows": [
+    {
+      "source": "editorial.workflow.js",
+      "code": "editorial.compiled.mjs",
+      "mermaid": "editorial.mmd"
+    },
+    {
+      "source": "shared-join.workflow.ts",
+      "code": "shared-join.compiled.mjs",
+      "mermaid": "shared-join.mmd"
+    },
+    {
+      "source": "remote.workflow.js",
+      "code": "remote.compiled.mjs",
+      "mermaid": "remote.mmd"
+    }
+  ],
+  "remoteSkills": [
+    {
+      "url": "https://skills.example.test/style.md",
+      "local": "skills/style.md",
+      "integrity": "sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4="
+    },
+    {
+      "url": "https://skills.example.test/fact.md",
+      "local": "skills/fact.md",
+      "integrity": "sha256-fV11WZrr2/bGq4tr8OR83tj29m/FKwzao9ga6FHx7wg="
+    }
+  ],
+  "files": [
+    {
+      "path": "editorial.workflow.js",
+      "bytes": 2318,
+      "sha256": "bf1015cfd71b940a9dea9bc15743a67d716e7225ed900f9f1b16fdc722b2b74c"
+    },
+    {
+      "path": "editorial.compiled.mjs",
+      "bytes": 8624,
+      "sha256": "5de5bed28e820b0f558c032375d9ab37e125ac3cca3b1bedaf2389f36320ab37"
+    },
+    {
+      "path": "editorial.mmd",
+      "bytes": 1236,
+      "sha256": "849333d9a497a80ead3d0a1fe5ee012f66848a5daeef08b7d2e6490e2d1ddc3b"
+    },
+    {
+      "path": "shared-join.workflow.ts",
+      "bytes": 637,
+      "sha256": "c208b7f933ae599486e4f873fbc55816dd725b4175444966a87cf60c919fcfd6"
+    },
+    {
+      "path": "shared-join.compiled.mjs",
+      "bytes": 1305,
+      "sha256": "b84fc95397a5cb4408bdc6d73e3e9a7407c646a013e46db1a096b9eaaeda4fb0"
+    },
+    {
+      "path": "shared-join.mmd",
+      "bytes": 227,
+      "sha256": "f13d32dbaf453d96c0fb192b60c87fa936ce7ae77f2304e71458a729374c70b3"
+    },
+    {
+      "path": "remote.workflow.js",
+      "bytes": 1138,
+      "sha256": "853eec8cc993addc97832a401c246ee9984ed5b103af4fa53155eed94e5a57bc"
+    },
+    {
+      "path": "remote.compiled.mjs",
+      "bytes": 5570,
+      "sha256": "f4762e29e877b4faa08b27162e9896387092efdf3844dfb01bd7a2f3328d3d27"
+    },
+    {
+      "path": "remote.mmd",
+      "bytes": 445,
+      "sha256": "53dd3de750fcd94a0d6fe60161ef11f282c42c92f943a86e9e53c0d01425bf75"
+    },
+    {
+      "path": "skills/writer.md",
+      "bytes": 168,
+      "sha256": "3d22014307125861ecbf11efc03078716e30ddc7c582049d8f0292e17a115aa3"
+    },
+    {
+      "path": "skills/style.md",
+      "bytes": 183,
+      "sha256": "19574448888719401d814c05f30921dc7997e5d78c94d04e52d657256553696e"
+    },
+    {
+      "path": "skills/fact.md",
+      "bytes": 177,
+      "sha256": "7d5d75599aebdbf6c6ab8b6bf0e47cded8f6f66fc52b0cdaa3d81ae851f1ef08"
+    },
+    {
+      "path": "host.mjs",
+      "bytes": 2068,
+      "sha256": "15edb0ff001ce0bfe6e923456b7f3500e7a0a7929f6293d89eefd49363cd4ebc"
+    },
+    {
+      "path": "demo.mjs",
+      "bytes": 2382,
+      "sha256": "68b20b032e0fea0e2c16b5a18c01f93991925fb15fb2510bc8110d803667652f"
+    },
+    {
+      "path": "agent.mjs",
+      "bytes": 1098,
+      "sha256": "0842d28095cc1d57801bb0a9d1e566c5f95b60d3a719f25fddf4d84c8aef9742"
+    }
+  ]
+}

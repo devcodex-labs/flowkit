@@ -1,0 +1,11 @@
+flowchart TD
+  Choose{"Choose path"}
+  Fast["Fast path"]
+  Normal["Normal path"]
+  Save["Save once"]
+  Done("Saved")
+  Choose -- "urgent" --> Fast
+  Choose -- "true" --> Normal
+  Fast --> Save
+  Normal --> Save
+  Save --> Done

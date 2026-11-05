@@ -1,0 +1,12 @@
+{
+  "code": "FK_C053",
+  "kind": "compile",
+  "invalid": {
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'write'},{when:'true',next:'read'}]}),action('write',{name:'write',action:'save',next:'done',writes:['x']}),node('read',{name:'N',agent:'writer',output:{type:'object'},next:'done',inputs:['x']}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "options": {}
+  },
+  "valid": {
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'write'},{when:'true',next:'write'}]}),action('write',{name:'write',action:'save',next:'read',writes:['x']}),node('read',{name:'N',agent:'writer',output:{type:'object'},next:'done',inputs:['x']}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "options": {}
+  }
+}

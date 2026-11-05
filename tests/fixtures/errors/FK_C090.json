@@ -1,0 +1,12 @@
+{
+  "code": "FK_C090",
+  "kind": "compile",
+  "invalid": {
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a-0',{name:'a-0',action:'save',next:'a0'}),action('a0',{name:'a0',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "options": {}
+  },
+  "valid": {
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a-0',{name:'a-0',action:'save',next:'b0'}),action('b0',{name:'b0',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "options": {}
+  }
+}
