@@ -8,7 +8,7 @@ import { validatePackage } from './check-package.mjs';
 import { runProcess } from './validation-process.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const base = path.resolve(tmpdir()), temporary = await mkdtemp(path.join(base, 'flowkit-consumer-'));
+const base = await realpath(tmpdir()), temporary = await mkdtemp(path.join(base, 'flowkit-consumer-'));
 const records = [];
 async function execute(name, args, cwd, expected = 0, executable = process.execPath, env = process.env) {
   const result = await runProcess(executable, args, { cwd, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env });
