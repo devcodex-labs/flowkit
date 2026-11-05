@@ -36,7 +36,10 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build, test, types and real tarball consumption
-        run: npm run verify
+        run: |
+          # Type rejection fixtures retain diagnostics in JSON evidence.
+          echo "::remove-matcher owner=tsc::"
+          npm run verify
       - name: Keep declaration evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
