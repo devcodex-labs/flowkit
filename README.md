@@ -6,6 +6,11 @@ This private development package implements the compiler, runtime, and compile/c
 
 ## Golden examples and integration
 
+The repository includes [four-environment CI and release preparation](https://github.com/devcodex-labs/flowkit/blob/main/docs/releasing.md).
+The package remains private until its release metadata is explicitly completed.
+`npm run release:check -- --tag vVERSION` reports readiness without publishing;
+authorized `v*` tags use the checked-tarball workflow after all CI jobs pass.
+
 From a checkout on Node >=22.13.0, run `npm ci`, `npm run build`, then
 `node examples/demo.mjs` (editorial approval) or `node examples/demo.mjs --remote`
 (pinned remote Skill bytes through an in-memory transport). Both use deterministic

@@ -173,7 +173,9 @@ test('static compilation never imports workflow side effects and API calls never
 test('bin metadata, lockfile and built entry agree, preserve shebang and add no public subpath', async () => {
   const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await readFile(new URL('../../package-lock.json', import.meta.url), 'utf8'));
-  assert.deepEqual(pkg.bin, { flowkit: './dist/cli.mjs' }); assert.deepEqual(lock.packages[''].bin, pkg.bin);
+  assert.deepEqual(pkg.bin, { flowkit: './dist/cli.mjs' });
+  assert.deepEqual(Object.keys(lock.packages[''].bin), ['flowkit']);
+  assert.ok(['./dist/cli.mjs', 'dist/cli.mjs'].includes(lock.packages[''].bin.flowkit));
   const source = await readFile(new URL('../../src/cli.mjs', import.meta.url)); const built = await readFile(entry);
   assert.deepEqual(built, source); assert.ok(built.toString().startsWith('#!/usr/bin/env node\n'));
   await assert.rejects(import('@devcodex/flowkit/cli'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });

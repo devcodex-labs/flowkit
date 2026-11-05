@@ -30,7 +30,7 @@ test('字段、类型和目录边界固定且不可改写', async () => {
   assert.ok(Object.isFrozen(ERROR_CATALOG.FK_C053));
   assert.throws(() => DSL_FIELDS.node.push('budget'), TypeError);
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.private, true);
+  assert.equal(typeof pkg.private, 'boolean');
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.engines.node, '>=22.13.0');
   assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './package.json']);

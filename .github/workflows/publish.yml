@@ -1,0 +1,96 @@
+name: Publish npm
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check explicit release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:check -- --tag "$RELEASE_TAG"
+
+  checks:
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+
+  pack:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - name: Pack exactly one checked artifact
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:pack -- --tag "$RELEASE_TAG"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: npm-release
+          path: |
+            .tmp/release/*.tgz
+            .tmp/release/release.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Select the documented OIDC-capable npm CLI
+        run: npm install --global npm@11.5.1 --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: npm-release
+          path: .tmp/release
+      - name: Verify downloaded bytes against the tag and source
+        id: artifact
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release.mjs verify --tag "$RELEASE_TAG"
+          node --input-type=module -e 'import {readFileSync,appendFileSync} from "node:fs"; const m=JSON.parse(readFileSync(".tmp/release/release.json","utf8")); appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${m.npmTag}\n`);'
+      - name: Publish the verified tarball through npm trusted publishing
+        env:
+          NPM_DIST_TAG: ${{ steps.artifact.outputs.dist_tag }}
+        run: npm publish .tmp/release/*.tgz --access public --registry=https://registry.npmjs.org/ --tag "$NPM_DIST_TAG"

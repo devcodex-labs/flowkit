@@ -39,6 +39,12 @@ They can be inspected without running them.
 
 ## Reproduce
 
+After an approved compiler version or example change, run `npm run build` then
+`npm run update:goldens` and review the generated JS, Mermaid and manifest diff.
+The compiler version belongs to the fixed headers, so a version change requires
+this explicit refresh. The command preserves DSL and Skill text; changed remote
+Skill bytes require reviewing and updating their DSL integrity first.
+
 Use the existing SDK in a Node ESM script at the repository root:
 
 ```js
