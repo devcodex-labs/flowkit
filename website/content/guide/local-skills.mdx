@@ -1,0 +1,61 @@
+# 本地 Skill
+
+Skill 是提供给 Agent 的 UTF-8 Markdown 说明文本。它由宿主或默认 loader 读取后成为 step.instruction。FlowKit 不把 Markdown 中的命令自动执行为工具，也不为内容注入权限。
+
+## 两种定位方式
+
+| DSL 写法 | 默认读取位置 |
+|---|---|
+| `agent: 'writer'` | projectRoot/skillsRoot/writer.md，skillsRoot默认skills |
+| `skill: 'skills/writer.md'` | projectRoot/skills/writer.md |
+| 同时声明 agent 与 skill | 显式 skill 优先；不会同时拼接两份文本 |
+
+默认 projectRoot 从工作流文件所在位置向上寻找最近 package.json；没有找到时使用调用时工作目录。显式 projectRoot 相对于调用时工作目录解析。skillsRoot 影响 agent 映射，不能把它误当成显式 skill 的额外前缀。
+
+```text
+demo/
+  package.json
+  sample.workflow.js
+  host.mjs
+  skills/
+    writer.md
+```
+
+完整文件与运行命令见[接入自己的宿主](/guide/host-integration)。从上述目录执行 compile 时，默认检查本地 Skill 存在；运行时还会实际读取内容。
+
+## 路径和编码边界
+
+本地 skill 必须是相对路径并以 `.md` 结尾，路径段使用字母、数字、下划线、连字符和点。使用 `/` 分隔，不使用绝对盘符、反斜杠、空段、`.` 或 `..` 跳转。agent 名同样遵守可映射路径规则，可以包含受允许的子目录。
+
+默认 loader 会解析真实路径，防止符号链接把读取引到项目根外。这里的包含边界是 projectRoot，不是独立的 skillsRoot 沙箱。内容按严格 UTF-8 解码；乱码不会被静默替换后继续交给 Agent。路径越界通常是 FK_R011，缺文件是 FK_R010，解码失败是 FK_R014，其他本地文件系统错误可能原样传播。
+
+## 关闭编译检查意味着什么
+
+```sh
+npx --no-install flowkit compile sample.workflow.js --no-skill-check
+```
+
+这个开关用于编译环境尚未放置本地 Skill 的情况。它只关闭编译阶段的本地存在性检查，不把错误路径变合法，也不让运行时忽略缺文件。部署运行前仍须准备完整 Skill。正常开发建议保留默认检查，尽早得到 FK_C051。
+
+## 自定义 loader
+
+```js
+const runtime = {
+  // 其余方法按工作流需要提供
+  async loadSkill(path, options) {
+    // 从经过授权的存储读取，返回完整的说明字符串。
+    return await mySkillStore.read(path, options?.integrity);
+  },
+  async loadSkillByAgent(agent) {
+    return await mySkillStore.readAgent(agent);
+  },
+};
+```
+
+这是接入形状示意，mySkillStore 需要宿主自行实现，不能直接作为完整可运行例。提供自定义方法后，你需要承担读取范围、编码、远程白名单、完整性、取消和缓存策略；不能假定默认 loader 在你的方法内部再次检查。
+
+## 更新与恢复
+
+每次 run 创建新默认 loader，同一次运行中相同读取可复用缓存；失败缓存会被移除。修改本地 Skill 后开始新 run 就会读取新内容，不需要更改工作流 id。若同进程已有编译缓存，删除 Skill 可能在运行读取时报 FK_R010；独立 check 仍会重新执行编译检查并报 FK_C051。
+
+修复时恢复正确路径和 UTF-8 文件，重新 compile/check/run。部署时把 Skill 与源码一起打包，详见[预编译与部署](/guide/aot)；远程引用见[远程 Skill](/guide/remote-skills)。

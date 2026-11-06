@@ -1,0 +1,1915 @@
+# 编译诊断
+
+这里列出v1.0.0全部52个编译诊断。C053和C059为warning，其余为error；编号不连续，不应把空缺编号当作功能。先看code，再结合file/line/column/nodeId定位。
+
+## 如何复现与复验
+
+每条的错误与修复源码来自同版本独立诊断用例。把需要的源码保存为case.workflow.js，在已安装FlowKit的ESM目录运行compile/check。涉及agent映射的用例先创建skills/writer.md，写入任意合法UTF-8说明；涉及远程URL只做静态检查，不会联网。条目给出的options需传给SDK，CLI支持的对应参数见命令行页。
+
+```js
+import { compile } from '@devcodex/flowkit';
+const result = await compile('case.workflow.js', { /* 使用条目中的options */ });
+console.log(result.diagnostics);
+```
+
+修复后应没有该诊断，示例的相邻合法输入应为空诊断。不要在业务项目中直接覆盖现有工作流；在单独目录复现。下方长例可横向滚动和复制。
+
+## 工作流定义
+
+### FK_C001 · workflow id 不合法 {#FK_C001}
+
+级别：**error**。触发：workflow id 不合法。
+
+修复：把工作流id改成小写字母开头、最多64字符的kebab-case；不要带空格、大写或连续连字符。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'Bad',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C001:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+### FK_C002 · version 非法 {#FK_C002}
+
+级别：**error**。触发：version 非法。
+
+修复：使用完整SemVer，例如1.0.0，去掉v前缀和非法前导零。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'01.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C002:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+### FK_C003 · workflow name 非法 {#FK_C003}
+
+级别：**error**。触发：workflow name 非法。
+
+修复：工作流name使用1–80字符单行文本，去掉注释终止符。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'bad*/',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C003:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+### FK_C004 · nodes 为空 {#FK_C004}
+
+级别：**error**。触发：nodes 为空。
+
+修复：nodes恢复为非空数组，最小可只放一个terminal。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C004:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+### FK_C005 · nodes 超过 500 {#FK_C005}
+
+级别：**error**。触发：nodes 超过 500。
+
+修复：减少到最多500个节点，超过规模的任务拆为多个由宿主管理的流程。
+
+非法输入：包含501项的顺序节点链。相邻合法输入：同样结构减为500项。无需手工粘贴501个节点；仓库的acceptance FK_C005用例构造并验证这两个真实边界。
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C005:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+### FK_C006 · workflow 未知字段 {#FK_C006}
+
+级别：**error**。触发：workflow 未知字段。
+
+修复：删除defineWorkflow未支持的字段；业务数据放入初始state。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',extra:1,nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C006:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+### FK_C007 · 非字面量 DSL / 不可擦除 TS {#FK_C007}
+
+级别：**error**。触发：非字面量 DSL / 不可擦除 TS。
+
+修复：将动态值、变量、函数、展开或不可擦除TS改为可静态提取字面量，并核对字段类型。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[...[]]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C007:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流定义](/dsl/define-workflow)。
+
+## 节点与图结构
+
+### FK_C010 · node id 格式非法 {#FK_C010}
+
+级别：**error**。触发：node id 格式非法。
+
+修复：节点id使用合法kebab-case，最多64字符，同时更新所有后继引用。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('Bad',{name:'Done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C010:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C011 · node id 重复 {#FK_C011}
+
+级别：**error**。触发：node id 重复。
+
+修复：为重复节点分配唯一id并修正引用。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C011:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C012 · node name 非法 {#FK_C012}
+
+级别：**error**。触发：node name 非法。
+
+修复：节点name使用1–40字符，去掉换行、引号、反引号、反斜杠或注释终止符。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'bad*/',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C012:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C013 · node name 重复 {#FK_C013}
+
+级别：**error**。触发：node name 重复。
+
+修复：为两个节点使用不同显示名称，便于跟踪识别。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'}),terminal('other',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C013:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C014 · type 与构造器不符 {#FK_C014}
+
+级别：**error**。触发：type 与构造器不符。
+
+修复：删除手填type，让构造器确定节点类型；需要Agent就使用node。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'Done',type:'agent',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C014:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C015 · 引用 id 不存在 {#FK_C015}
+
+级别：**error**。触发：引用 id 不存在。
+
+修复：把后继引用改为实际定义的id，注意id与name不同。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'missing'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C015:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C016 · 缺后继 {#FK_C016}
+
+级别：**error**。触发：缺后继。
+
+修复：补齐当前上下文需要的后继；普通Agent/action需要next，verification需要两条分支。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C016:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C017 · 不可达节点 {#FK_C017}
+
+级别：**error**。触发：不可达节点。
+
+修复：将孤立节点连接到入口可达路径，或移除不使用节点。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'}),terminal('unused',{name:'unused',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C017:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C018 · node 未知字段 {#FK_C018}
+
+级别：**error**。触发：node 未知字段。
+
+修复：删除节点或嵌套join/branch的未知字段，按对应DSL表填写。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'Done',status:'succeeded',extra:1})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C018:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+### FK_C019 · inputs / writes 为 null 或非数组 {#FK_C019}
+
+级别：**error**。触发：inputs / writes 为 null 或非数组。
+
+修复：inputs/writes使用数组或省略，不要传null、字符串或对象。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:null}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:[]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C019:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[公共节点与后继规则](/dsl/index#node-rules)。
+
+## 并行与写入冲突
+
+### FK_C020 · parallel 分支数量非法 {#FK_C020}
+
+级别：**error**。触发：parallel 分支数量非法。
+
+修复：parallel列出2–16个合法成员id。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C020:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+### FK_C021 · parallel 分支带 next {#FK_C021}
+
+级别：**error**。触发：parallel 分支带 next。
+
+修复：删除并行Agent/action成员的next，用join.next统一汇合。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save',next:'done'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C021:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+### FK_C022 · parallel 分支类型非法 {#FK_C022}
+
+级别：**error**。触发：parallel 分支类型非法。
+
+修复：parallel成员只使用Agent/action/verification，将复合控制节点移到区域外。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),terminal('a',{name:'a',status:'succeeded'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C022:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+### FK_C023 · join.strategy 非法 {#FK_C023}
+
+级别：**error**。触发：join.strategy 非法。
+
+修复：join.strategy改为all_succeeded或any，按Promise语义选择。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'all',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C023:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+### FK_C024 · parallel 成员被其他节点引用 {#FK_C024}
+
+级别：**error**。触发：parallel 成员被其他节点引用。
+
+修复：移除外部直接指向并行成员的边，改为进入parallel或其汇合后节点。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'a'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C024:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+### FK_C025 · 并行 verification 带后继 {#FK_C025}
+
+级别：**error**。触发：并行 verification 带后继。
+
+修复：并行verification删除onSuccess/onFailure，由join决定下一步。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check',onSuccess:'done',onFailure:'done'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C025:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+### FK_C026 · 声明写入键冲突 / human id 与写入键冲突 {#FK_C026}
+
+级别：**error**。触发：声明写入键冲突 / human id 与写入键冲突。
+
+修复：拆分并行写入键；human的id也不能与其他声明输出键冲突，改id或数据键并更新引用。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save',writes:['x']}),action('b',{name:'b',action:'save',writes:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save',writes:['x']}),action('b',{name:'b',action:'save',writes:['y']}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C026:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[并行节点与共享状态](/dsl/parallel)。
+
+## 条件表达式
+
+### FK_C030 · condition 分支数量非法 {#FK_C030}
+
+级别：**error**。触发：condition 分支数量非法。
+
+修复：condition保留1–20个分支。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C030:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[条件表达式与恢复](/guide/conditions)。
+
+### FK_C031 · 缺 true 默认分支 {#FK_C031}
+
+级别：**error**。触发：缺 true 默认分支。
+
+修复：最后一项必须写when字符串true作为默认分支。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C031:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[条件表达式与恢复](/guide/conditions)。
+
+### FK_C032 · when 语法错误，带列号 {#FK_C032}
+
+级别：**error**。触发：when 语法错误，带列号。
+
+修复：按表达式列号修正括号、字符和运算符，使用支持的表达式语法。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag &&",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C032:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[条件表达式与恢复](/guide/conditions)。
+
+### FK_C033 · when 禁止结构 {#FK_C033}
+
+级别：**error**。触发：when 禁止结构。
+
+修复：去掉调用、赋值、方括号和受禁止标识符，把计算放到宿主动作。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"fn()",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C033:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[条件表达式与恢复](/guide/conditions)。
+
+### FK_C034 · when 含换行 / 反斜杠 {#FK_C034}
+
+级别：**error**。触发：when 含换行 / 反斜杠。
+
+修复：when保持单行且不含反斜杠，字符串不能依赖转义语法。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"true\n",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C034:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[条件表达式与恢复](/guide/conditions)。
+
+## 循环修复
+
+### FK_C040 · maxIterations 非 1–100 整数 {#FK_C040}
+
+级别：**error**。触发：maxIterations 非 1–100 整数。
+
+修复：maxIterations改成1–100的整数字面量。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:0,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C040:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C041 · loop body 入口不是 verification {#FK_C041}
+
+级别：**error**。触发：loop body 入口不是 verification。
+
+修复：body指向verification入口，再将失败路线连接到修复链。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),action('v',{name:'v',action:'save',next:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C041:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C042 · loop 链未回归约定结构 {#FK_C042}
+
+级别：**error**。触发：loop 链未回归约定结构。
+
+修复：校验成功边回本loop控制点，失败修复链最终回入口verification。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C042:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C043 · loop 内 parallel {#FK_C043}
+
+级别：**error**。触发：loop 内 parallel。
+
+修复：将parallel移出loop内部，先并行生成再进入检查修复。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),parallel('repair',{name:'Repair',branches:['a','b'],join:{strategy:'any',next:'v'}}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C043:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C044 · 体外 action 后继落入 loop 内 {#FK_C044}
+
+级别：**error**。触发：体外 action 后继落入 loop 内。
+
+修复：外部action进入loop控制点，不能直接进入内部节点。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'v'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'l'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C044:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C045 · 修复链含 loop {#FK_C045}
+
+级别：**error**。触发：修复链含 loop。
+
+修复：修复链中移除嵌套loop，重新设计有界外部流程。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),loop('repair',{name:'Repair',maxIterations:2,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C045:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C046 · 修复链含 human {#FK_C046}
+
+级别：**error**。触发：修复链含 human。
+
+修复：将human放到循环外，修复链保持支持的节点。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),human('repair',{name:'Repair',onApprove:'v',onReject:'repair'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C046:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+### FK_C047 · 非法其他边指向 loop id {#FK_C047}
+
+级别：**error**。触发：非法其他边指向 loop id。
+
+修复：删除区域成员指向loop容器的非法返回边。合法的体内返回是该loop入口verification的onSuccess；修复链应回到入口verification，而不是直接回loop id。位于区域外的普通节点可以把loop容器作为正常入口，不要误删这样的体外进入边。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'l'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C047:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[loop结构与次数](/dsl/loop)。
+
+## Agent、Skill与数据
+
+### FK_C050 · agent / skill 都缺 {#FK_C050}
+
+级别：**error**。触发：agent / skill 都缺。
+
+修复：至少填写agent或显式skill；两者都有时skill优先。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C050:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[本地Skill定位与恢复](/guide/local-skills)。
+
+### FK_C051 · 编译检查本地 Skill 缺失 {#FK_C051}
+
+级别：**error**。触发：编译检查本地 Skill 缺失。
+
+修复：在projectRoot内创建对应UTF-8 Markdown文件，或修正引用到已有文件。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/missing.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C051:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[本地Skill定位与恢复](/guide/local-skills)。
+
+### FK_C052 · Skill 路径 / URL 非法 {#FK_C052}
+
+级别：**error**。触发：Skill 路径 / URL 非法。
+
+修复：本地用合法相对.md路径；远程用无查询/片段/认证的HTTPS .md URL；agent映射也须合法。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills\\writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C052:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[本地Skill定位与恢复](/guide/local-skills)。
+
+### FK_C053 · 已声明产出的输入键在该节点所有到达路径上均无人写入；全流程无人写入的键视为宿主初始 state，不警告 {#FK_C053}
+
+级别：**warning**。触发：已声明产出的输入键在该节点所有到达路径上均无人写入；全流程无人写入的键视为宿主初始 state，不警告。
+
+修复：把生产节点放到消费节点之前的实际路径，或修正错误输入声明；不是把warning一律忽略。全流程无人写入的键视作宿主初始输入。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'write'},{when:'true',next:'read'}]}),action('write',{name:'write',action:'save',next:'done',writes:['x']}),node('read',{name:'N',agent:'writer',output:{type:'object'},next:'done',inputs:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'write'},{when:'true',next:'write'}]}),action('write',{name:'write',action:'save',next:'read',writes:['x']}),node('read',{name:'N',agent:'writer',output:{type:'object'},next:'done',inputs:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入仍可生成代码且CLI退出0；修复后warning应消失。仓库可运行 `node --test --test-name-pattern="acceptance FK_C053:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[状态、输入与数据流](/guide/state-data)。
+
+### FK_C054 · output 缺失 / 不是 type:object 字面量 schema {#FK_C054}
+
+级别：**error**。触发：output 缺失 / 不是 type:object 字面量 schema。
+
+修复：output使用type:object的字面量Schema，properties若存在也必须是对象。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'array'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C054:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[Agent字段与校验](/dsl/agent)。
+
+### FK_C055 · retries 非 0–10 整数 {#FK_C055}
+
+级别：**error**。触发：retries 非 0–10 整数。
+
+修复：retries改为0–10整数；总尝试数是该值加1。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done',retries:11}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C055:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[Agent字段与校验](/dsl/agent)。
+
+### FK_C056 · inputs / writes 空项或重复 {#FK_C056}
+
+级别：**error**。触发：inputs / writes 空项或重复。
+
+修复：删除inputs/writes中的空项、非字符串和重复键。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:['x','x']}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C056:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[Agent字段与校验](/dsl/agent)。
+
+### FK_C057 · 远程主机未放行 {#FK_C057}
+
+级别：**error**。触发：远程主机未放行。
+
+修复：明确审核远程主机/端口后加入remoteSkillHosts，并在编译和运行两端使用同一设置。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{
+  "remoteSkillHosts": [
+    "skills.example.test"
+  ]
+}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C057:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[远程Skill与完整性](/guide/remote-skills)。
+
+### FK_C058 · integrity 格式 / 使用位置非法 {#FK_C058}
+
+级别：**error**。触发：integrity 格式 / 使用位置非法。
+
+修复：仅对显式HTTPS skill使用一个合法sha256/384/512-Base64摘要，本地或agent映射不支持此字段。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{
+  "remoteSkillHosts": [
+    "skills.example.test"
+  ]
+}
+```
+
+修复输入options：
+
+```json
+{
+  "remoteSkillHosts": [
+    "skills.example.test"
+  ]
+}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C058:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[远程Skill与完整性](/guide/remote-skills)。
+
+### FK_C059 · 远程 Skill 无 integrity {#FK_C059}
+
+级别：**warning**。触发：远程 Skill 无 integrity。
+
+修复：审核远程文件原始字节并计算摘要，写入显式skill的integrity。warning不阻止编译，但缺少内容固定。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{
+  "remoteSkillHosts": [
+    "skills.example.test"
+  ]
+}
+```
+
+修复输入options：
+
+```json
+{
+  "remoteSkillHosts": [
+    "skills.example.test"
+  ]
+}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入仍可生成代码且CLI退出0；修复后warning应消失。仓库可运行 `node --test --test-name-pattern="acceptance FK_C059:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[远程Skill与完整性](/guide/remote-skills)。
+
+## 审批与终点
+
+### FK_C060 · 驳回链不回本 human {#FK_C060}
+
+级别：**error**。触发：驳回链不回本 human。
+
+修复：让拒绝修订链最终回到同一个human，不能永久跳到终点。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'h'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C060:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[人工审批与修订](/dsl/human)。
+
+### FK_C061 · 驳回链含非 agent / action {#FK_C061}
+
+级别：**error**。触发：驳回链含非 agent / action。
+
+修复：拒绝链只用Agent/action，移除condition/verification/loop/human等其他类型。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),condition('repair',{name:'Repair',branches:[{when:'true',next:'h'}]}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'h'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C061:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[人工审批与修订](/dsl/human)。
+
+### FK_C070 · terminal status 非法 {#FK_C070}
+
+级别：**error**。触发：terminal status 非法。
+
+修复：status改为succeeded或failed，不使用success/cancelled。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'Done',status:'ok'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C070:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[终点与运行结果](/dsl/terminal)。
+
+## 回边与生成图
+
+### FK_C080 · 非法回边 {#FK_C080}
+
+级别：**error**。触发：非法回边。
+
+修复：去掉普通节点的任意回跳，使用受支持loop或human结构。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'a'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C080:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[工作流模型与受限回路](/guide/workflow-model)。
+
+### FK_C090 · Mermaid id 撞名 {#FK_C090}
+
+级别：**error**。触发：Mermaid id 撞名。
+
+修复：重命名归一后冲突的节点，例如a-0与a0改为不同标识，并更新所有引用。
+
+错误源码（保存为case.workflow.js）：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a-0',{name:'a-0',action:'save',next:'a0'}),action('a0',{name:'a0',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+修复后的完整源码：
+
+```js
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a-0',{name:'a-0',action:'save',next:'b0'}),action('b0',{name:'b0',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
+```
+
+错误输入options：
+
+```json
+{}
+```
+
+修复输入options：
+
+```json
+{}
+```
+
+复验：使用修复源码和修复options重新compile，然后check。原错误输入应出现该code并阻止新产物写入；修复后确认diagnostics无error。仓库可运行 `node --test --test-name-pattern="acceptance FK_C090:" tests/compiler/acceptance-errors.test.mjs` 验证该反例及相邻合法输入（先npm run build）。
+
+关联说明：[编译产物与流程图](/guide/compile-artifacts)。
+
+## 下一步
+
+编译通过后仍需运行宿主并验证外部数据。继续查[运行时错误](/troubleshooting/runtime)，或按[问题定位](/troubleshooting/index)准备最小复现。

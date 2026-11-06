@@ -1,0 +1,62 @@
+# 命令行
+
+安装 `@devcodex/flowkit@1.0.0` 后得到flowkit命令。v1.0.0只有compile和check；运行工作流请创建宿主并调用SDK run，没有flowkit run子命令。
+
+## 两个命令
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+```
+
+compile写生成代码和默认Mermaid源码；check不写文件，只重新检查并比较已有compiled。文件必须以.workflow.js或.workflow.ts结尾。成功且没有诊断时通常没有标准输出，退出码0。
+
+## 六组参数
+
+| 参数 | 对应配置 | 用法 |
+|---|---|---|
+| --out-dir PATH | outDir | 仅源目录或祖先，基于cwd |
+| --skills-root PATH | skillsRoot | agent映射根 |
+| --remote-skill-host HOST | remoteSkillHosts | 可重复，形成整组白名单 |
+| --trace | trace | 开启生成钩子 |
+| --mermaid / --no-mermaid | mermaid | 开启/关闭图产物 |
+| --no-skill-check | skillCheck | 关闭编译阶段本地存在检查 |
+
+有值参数支持独立值或等号形式；布尔开关不带值。`--`结束选项解析，可以用于需要明确分隔的位置参数。重复单值或布尔参数以后一次为准，remote-skill-host则累计成数组。未知参数、缺值、多个文件或未知子命令属于调用失败。没有--project-root；如需指定，放在配置或SDK options中。
+
+```sh
+npx --no-install flowkit compile sample.workflow.js --trace --no-mermaid
+npx --no-install flowkit check sample.workflow.js --trace --no-mermaid
+npx --no-install flowkit compile sample.workflow.js --remote-skill-host=skills.example.test
+```
+
+## 配置文件
+
+在执行命令的当前目录创建flowkit.config.mjs。只读取这个位置，不向上搜索配置文件。默认导出对象，支持[配置参考](/reference/options)中的键；编译命令只消费适用项。
+
+```js file="../../../examples/docs/sdk-options/flowkit.config.mjs" title="flowkit.config.mjs"
+```
+
+配置先完整校验，再用CLI覆盖。配置trace:true配合--no-mermaid只改变mermaid；显式布尔false由配置/SDK可表达，--trace是开启开关。CLI远程主机列表整组替换配置数组，不与原列表追加。
+
+如果配置写了`trace: 'yes'`，即使CLI提供--trace也仍退出2；先把配置改成boolean，再运行。配置是本地JavaScript模块，应只加载你信任的文件。
+
+## 输出与退出码
+
+| 退出码 | 意义 | 输出形状 |
+|---|---|---|
+| 0 | 无error，可包含warning | 每条诊断一行JSON；无诊断则空 |
+| 1 | 编译/检查得到error诊断 | NDJSON，含code/file/line/column/severity等 |
+| 2 | 调用、配置、参数或I/O异常 | 调用/I/O通常单行普通文本；配置错误是code:null的JSON诊断 |
+
+这些消息写到stdout，不能只看stderr是否为空来判断成功。程序化消费先看退出码，再按类别解析输出；不要把整个stdout假定成一个JSON数组。
+
+```json
+{"code":"FK_C015","message":"引用的节点不存在","nodeId":"save","file":"/project/sample.workflow.js","line":4,"column":10,"severity":"error"}
+```
+
+这是诊断形状示意，实际message、路径和位置以命令输出为准。line/column从1开始；when错误还可在message中给出表达式内部列号。
+
+## 复制和检查退出码
+
+PowerShell紧接命令执行`$LASTEXITCODE`；Bash执行`echo $?`。CI应让非0退出中止后续发布，不因旧compiled存在继续使用它。详细排错见[问题定位](/troubleshooting/index)，副作用与产物边界见[编译与检查](/guide/compile-artifacts)。

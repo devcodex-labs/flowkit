@@ -1,0 +1,46 @@
+# 参与贡献
+
+FlowKit是采用MIT许可证的开源项目。欢迎提交可复现的问题、改进中文说明、补充真实使用例和修复实现。先说明要解决的具体用户问题，避免仅因个人风格重写大量无关代码。
+
+## 本地准备
+
+克隆[仓库](https://github.com/devcodex-labs/flowkit)，进入根目录。SDK支持Node >=22.13.0；同时开发文档站时使用Node >=24。根包和website各有独立锁文件，分别安装。
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm --prefix website ci --ignore-scripts --no-audit --no-fund
+npm run verify
+npm run docs:check
+npm run docs:examples
+npm run docs:build
+```
+
+verify依次构建、测试、类型检查、包内容检查和真实tarball消费。docs:examples在临时目录真实安装候选包，不使用仓库软链接。失败时先保留命令与输出，再修复影响区域。
+
+## 开发文档
+
+```sh
+npm run docs:dev
+```
+
+正文位于website/content，导航和覆盖清单位于website/navigation.ts与coverage.json。示例主源在examples/docs；页面通过file代码块包含，README最小例由docs:sync同步。修改主源后运行：
+
+```sh
+npm run docs:sync
+npm run docs:check
+npm run docs:examples
+npm run docs:build
+npm run docs:preview -- --host 127.0.0.1 --port 4173
+```
+
+生产预览从/flowkit/打开。检查实际页面、搜索、锚点、复制代码、窄屏表格和图，而不只看Markdown源文件。不要提交node_modules、doc_build、临时日志或本机路径。
+
+## 修改实现或类型
+
+先核对公开API与DSL契约，再修改src/types和有意义的测试。版本或生成逻辑改变后，用`npm run build`、`npm run update:goldens`重建示例产物，审阅差异；不要手改生成header。普通文档改字无需反复更新golden。
+
+## 提交问题与PR
+
+问题报告参考[排错模板](/troubleshooting/index)。PR描述用户触发条件、修复后的行为、涉及的公开边界和实际验证命令；若有未验证环境明确列出。界面/文档布局变化附桌面和窄屏截图，示例变化同时给成功、失败与恢复结果。
+
+不要把模型密钥、用户数据或内部流程记录放进公开文件。对暂不支持的新能力先讨论契约和范围，再改实现。兼容范围见[兼容与支持范围](/community/compatibility)，发布操作由维护者按[发布维护](/maintainers/releasing)执行。

@@ -1,0 +1,20 @@
+:root { --rp-c-brand: #365cf5; --rp-c-brand-light: #647fff; --rp-c-brand-dark: #2947cc; }
+.rp-doc { line-height: 1.85; }
+.rp-doc h2 { margin-top: 2.2rem; }
+.rp-doc a[id] { scroll-margin-top: 100px; }
+.flowkit-theme-switch { cursor: pointer; font-size: 20px; color: inherit; }
+.flowkit-theme-switch:focus-visible { outline: 3px solid #647fff; outline-offset: 3px; }
+.flowkit-home-content { max-width: 960px; padding: 36px 24px 64px; margin: 0 auto; }
+.rp-doc table { display: block; overflow-x: auto; }
+.flowkit-figure { margin: 1.6rem 0; }
+.flowkit-diagram { overflow-x: auto; background: #fff; color: #162033; border: 1px solid #dce2ef; border-radius: 12px; padding: 24px; }
+.flowkit-diagram:focus-visible { outline: 3px solid #365cf5; outline-offset: 3px; }
+.flowkit-diagram [data-flowkit-diagram] { min-width: 600px; }
+.flowkit-diagram svg { display: block; margin: auto; }
+.flowkit-figure figcaption { margin-top: 12px; font-size: 0.95rem; }
+.flowkit-figure details { margin-top: 10px; }
+.flowkit-figure pre { overflow-x: auto; }
+.flowkit-not-found-search .rp-search-button { display: flex; }
+.flowkit-not-found-search .rp-search-button--mobile { display: none; }
+.flowkit-not-found-search .rp-search-button:focus-visible { outline: 3px solid #647fff; outline-offset: 3px; }
+@media (max-width: 640px) { .flowkit-diagram { padding: 16px; } }

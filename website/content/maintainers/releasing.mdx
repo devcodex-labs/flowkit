@@ -1,0 +1,87 @@
+# 发布维护
+
+本页面向维护者，说明v1.0.0候选、npm发布、公开消费与文档站部署的顺序。普通用户只需按[安装](/guide/installation)使用包，不需要运行发布命令。
+
+## 不可跳过的顺序
+
+候选包与站点检查通过 → 发布同一候选tarball → 验证公开npm精确版本 → 独立安装运行全部教程 → 构建对应提交的站点 → GitHub Pages部署 → 线上复验。构建或dry run成功不等于发布成功。
+
+首个正式版本为1.0.0。package.json、package-lock、LICENSE、CHANGELOG、README和生成示例必须一致。SDK与站点有独立锁文件，发布候选不能依赖移动的main或未记录的本机缓存。
+
+## 准备可审阅的候选
+
+在仓库根目录、Node >=24环境执行：
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm --prefix website ci --ignore-scripts --no-audit --no-fund
+npm run verify
+npm run docs:check
+npm run docs:examples -- --evidence .tmp/docs/candidate.json
+npm run docs:build
+npm run docs:preview -- --host 127.0.0.1 --port 4173
+```
+
+在/flowkit/实际检查首页、教程、参考、搜索、错误深链、代码复制、移动布局和404。示例主源变化时先docs:sync；版本/生成逻辑变化时才build及update:goldens，审阅生成差异后重跑对应检查。
+
+## 固定最终包字节
+
+```sh
+npm run release:check -- --tag v1.0.0
+npm run release:pack -- --tag v1.0.0
+node scripts/release.mjs verify --tag v1.0.0
+npm run docs:examples -- --package .tmp/release/devcodex-flowkit-1.0.0.tgz --manifest .tmp/release/release.json --evidence .tmp/docs/release-candidate.json
+```
+
+release目录必须恰有tgz和release.json两个文件。脚本将tarball的SHA256、成员列表及每个文件字节与源码绑定。有旧候选时先记录和移出原证据，不覆盖不明文件，也不在下载后重新pack替换字节。最后消费的必须是实际待发布tarball。
+
+## CI和npm发布
+
+ci.yml保留Ubuntu/Windows×Node22.13.0/24.22.1四环境原验证，追加教程消费者；独立网站任务进行类型、内容、检查器测试和生产构建。publish.yml在tag触发后先preflight和CI，再pack一次、消费同一包、下载核对，然后使用npm trusted publishing发布。
+
+GitHub仓库的npm OIDC、Pages来源、github-pages环境保护和所需权限须由维护者在真正发布前核实。workflow文件存在不代表这些远端设置已经生效。发布tag/push、npm写入与Pages部署需要项目维护者明确批准。
+
+## 发布后验证公开包
+
+```sh
+npm run docs:public-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
+npm run docs:examples -- --registry-version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-consumer.json
+```
+
+第一个命令从registry读取精确版本元数据、下载实际tgz，核对name/version/dist.integrity和候选SHA256。只有版本尚不可见的E404会有限重试，最多5次、间隔15秒；完整测试失败不被当作传播延迟掩盖。
+
+第二个命令使用新的临时安装目录/cache，精确安装公开1.0.0，核对安装文件和下载tarball字节，并运行12组教程和TS检查。只看npm view、latest或版本字符串不够。任一失败都阻止文档部署。
+
+## 双提交与原发布身份
+
+docs.yml的自动和手动入口都需要五个输入：packageReleaseCommit、docsCommit、version、releaseRunId、releaseRunAttempt。两个commit必须是40位SHA；version为1.0.0。正常首发两个commit相同，手动重试也不默认取main。
+
+原pack任务上传两份按attempt区分的artifact：`npm-release-<attempt>`包含原tgz和release.json；`release-identity-<attempt>`包含release-record.json。记录绑定仓库、publish.yml、run/attempt、tag/version、原包commit、npm artifact ID/digest、manifest/tgz SHA256。attempt后缀避免同一run重跑覆盖原身份。
+
+文档任务通过Actions API核对原run的仓库、工作流、tag、head_sha、attempt和pack/publish已成功的job，再下载具体artifact ID。自动调用时run尚未结束，所以不要求整个run成功；手动可恢复“npm成功而文档失败”的run。缺失、过期、错run/commit或替换manifest均拒绝部署。
+
+两份artifact请求保留90天，实际期限受仓库策略限制。发布交付时同时归档原字节、hash和实际到期时间。过期后不能重新pack冒充原候选；需要项目方提供原归档并确认来源，准备单独的恢复步骤。当前入口会保持失败，不自动猜测来源。
+
+## npm已成功但文档需修复
+
+保留packageReleaseCommit、v1.0.0 tag及原tgz不变，指定经过审阅且获准部署的后继docsCommit。差异只允许website/、docs/、examples/docs/、scripts/docs/及.github/workflows/docs.yml；README、包元数据、LICENSE、src/types和其他包构建源不得变化。
+
+原包在原提交的隔离checkout核验，文档在docsCommit构建；修复后的教程仍消费原公开包。通过祖先关系/路径白名单/原包字节校验后，重新检查受影响读者任务和站点，再部署。超出白名单需重新评估变更范围，不能移动旧tag或重发不可变1.0.0。
+
+## 部署证据与失败处理
+
+站点产物名称为 `github-pages-<docsRunId>-<buildAttempt>`。build作业输出实际名称，deploy沿用该输出选择唯一产物。原包的releaseRunId/releaseRunAttempt保持原发布身份，不跟随站点重跑改变。
+
+恢复时区分三条路径：
+
+- 新建workflow_dispatch：新的docs run生成新名称；仍须通过原包身份、公开消费和文档提交检查。
+- 同一个docs run重新执行build/upload：新build attempt生成不同名称，不覆盖前次产物；deploy使用这次build的输出。
+- 仅重试deploy：沿用已成功build的输出名称，不能按当前deploy attempt重新计算。要求原站点产物仍存在且未过期；当前上传动作默认保留1天。产物过期或被删除时，重新构建，或新建dispatch；原包证据也必须仍满足上文的身份和期限要求。
+
+这些配置描述支持的恢复流程；维护者仍须在真实Actions中核对每次选中的artifact名称、来源和部署结果。
+
+仅deploy job拥有pages:write/id-token:write，使用github-pages环境；构建和PR不部署。site-build.json绑定两个commit、包hash和website锁hash。上传并部署后实查首页、快速开始、SDK、错误锚点、资源、中文lang、canonical/sitemap及搜索，再在新消费者目录跑公开包关键路径。
+
+npm失败或公开包不可用：停止站点，先查registry实际状态，避免盲目重复发布。站点失败：保留npm事实，按同提交重试或允许的文档修复通道处理。首发没有上一版本可回退时，准备修复候选；不伪称已经回退成功。线上故障的下线、回退和重新部署按维护者实际授权执行。
+
+工作流依赖使用固定commit SHA。Pages动作和Actions身份读取方式依据[upload-pages-artifact](https://github.com/actions/upload-pages-artifact)、[deploy-pages](https://github.com/actions/deploy-pages)及[Actions API](https://docs.github.com/en/rest/actions/workflow-runs)维护；升级时重新核对第一方契约并运行身份正反例。

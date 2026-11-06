@@ -1,0 +1,60 @@
+# 条件表达式
+
+condition 的 when 是一段受限表达式字符串，用来读取 state 并返回 boolean。它不执行 JavaScript，也不调用宿主函数。Runtime 中显式提供公开的 `evalWhen`，即可采用 FlowKit 的默认语义。
+
+```js
+import { run, evalWhen, isControlSignal } from '@devcodex/flowkit';
+const runtime = { evalWhen, isControlSignal /* 以及工作流需要的业务方法 */ };
+```
+
+## 支持的语法
+
+| 内容 | 示例 | 规则 |
+|---|---|---|
+| 状态路径 | `review.approved` | 从 state 开始，只读取对象自己的属性 |
+| 字面量 | `true`、`false`、`null`、`12`、`-1.5`、`'ready'` | 字符串用单引号；数字必须有限 |
+| 严格相等 | `status === 'ready'`、`count !== 0` | 不做隐式类型转换 |
+| 大小比较 | `score >= 80` | 两边都为 number 或都为 string |
+| 布尔运算 | `ready && approved`、`failed || retryable`、`!blocked` | 操作数和最终值都必须是真正 boolean |
+| 括号 | `(a || b) && c` | 用于明确组合顺序 |
+
+禁止函数调用、方括号索引、赋值、模板字符串、换行、反斜杠，以及 this/globalThis/constructor/__proto__/prototype 等标识符。不支持任意数学计算；预先在 action 中算出命名状态再比较。
+
+## 优先级与括号
+
+从高到低依次为：括号与状态路径/字面量 → 比较（`===`、`!==`、`>`、`>=`、`<`、`<=`）→ `!` → `&&` → `||`。同层的 `&&` / `||` 从左到右结合；一次比较的左右两侧是基本值或括号表达式，不支持 `a < b < 3` 这样的链式比较。
+
+**比较运算先于取反，不能照搬 JavaScript 的 `!` 优先级。** `!a === b` 在这里表示 `!(a === b)`。当 state 为 `{ a: 1, b: 2 }` 时，两者都返回 true；写成 `(!a) === b` 则会因为数字不是 boolean 而抛出 `FK_R002`。建议把需要取反的整个条件放进括号：
+
+```js
+import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+const ctx = { runtime: { isControlSignal }, state: { a: 1, b: 2 } };
+console.log(evalWhen(ctx, '!(a === b)')); // true
+```
+
+比较右侧若需要取反，也使用括号，例如 boolean 数据的 `a === (!b)`；直接写 `a === !b` 是语法错误。先确定比较条件，再用括号显式组合，方便代码审查和排错。
+
+## 缺失属性与短路
+
+路径不存在时得到 undefined。直接把缺失值或字符串当成条件会抛 `FK_R002`，而不是转换成 false。相等比较沿用严格比较，因此 `missing === null` 为 false；两个都缺失的路径做 `===` 会为 true，不能把它当成“字段均已存在”。
+
+`&&` 和 `||` 短路。例如 `false && score > 0` 不求值右侧，`true || score > 0` 同理。推荐使用明确的存在性布尔键，或者由宿主把可选输入归一成可比较类型；表达式没有通用的 typeof/可选链/函数调用机制。
+
+```js
+import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+const ctx = { runtime: { isControlSignal }, state: { ready: true, score: 90 } };
+console.log(evalWhen(ctx, 'ready && score >= 80')); // true
+```
+
+## 分支按顺序匹配
+
+```js file="../../../examples/docs/conditional-routing/sample.workflow.js" title="sample.workflow.js"
+```
+
+把更具体的条件放前面，最后放 `when: 'true'` 的默认分支。condition 选择第一个命中者，不会执行所有符合条件的分支。本例 urgent 为 true 走快速处理，为 false 走普通处理；完整运行宿主见[条件分流与汇合](/examples/conditional-routing)。
+
+## 从报错恢复
+
+语法错误 `FK_C032` 带表达式列号，从1开始，帮助定位缺括号或不支持的字符；禁止结构是 `FK_C033`，换行或反斜杠是 `FK_C034`。编译器还会提供源文件位置，二者分别指向 DSL 文件和 when 字符串内部。
+
+如果 compile 已通过却在运行时得到 `FK_R002`，检查实际 state 类型：将 `urgent: 'yes'` 改为 `urgent: true`，或将表达式改成明确的字符串比较。恢复后分别运行 true、false 和缺失输入，确认路径符合业务预期。字段与分支限制见 [condition 参考](/dsl/condition)。

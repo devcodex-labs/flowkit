@@ -1,0 +1,59 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 人工审批与修订
+
+先生成草稿，再演示直接批准和拒绝一次、使用反馈修订、再次批准。固定决策序列让示例无需UI就能验证完整控制流。
+
+## 流程与执行顺序
+
+<Mermaid source={"flowchart LR\n draft[准备第一版稿件] --> approval{人工审批}\n approval -->|批准| done[成功终点]\n approval -->|拒绝并保留comment| revise[补充说明]\n revise --> approval"} title="批准或按意见修订" description="先生成稿件，再请求审批；直接批准即完成，拒绝则把comment交给修订动作，之后回到同一个审批节点。" />
+
+## 环境与文件
+
+需要Node >=22.13.0和ESM项目。建立新的演示目录，按下列文件名保存完整内容；子目录也要保留。然后在该目录运行安装，依赖固定为1.0.0。下面文件可直接复制，不需要源码仓库的私有模块。
+
+```sh
+npm install --ignore-scripts --no-audit --no-fund
+```
+
+### package.json
+
+```json file="../../../examples/docs/human-approval/package.json" title="package.json"
+```
+
+### sample.workflow.js
+
+```js file="../../../examples/docs/human-approval/sample.workflow.js" title="sample.workflow.js"
+```
+
+### host.mjs
+
+```js file="../../../examples/docs/human-approval/host.mjs" title="host.mjs"
+```
+
+## 按顺序运行
+
+命令在本例根目录逐行执行，cd之后按命令进入目标目录。带故意失败参数的命令是独立验证步骤，记录错误后继续恢复操作。
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+node host.mjs approve
+node host.mjs
+```
+
+## 对照预期结果
+
+approve只有一次审批事件，草稿仍为第一版。默认模式第一次拒绝并给出请补充说明，修订事件读取该反馈，第二次批准；最终draft为第一版，已补充说明，approval.approved为true、comment为通过。两种模式均succeeded/done。
+
+## 失败与恢复
+
+将runHuman返回值临时换成字符串yes，运行应得到FK_R002；恢复规范对象再运行。把revise.next改成done而不回approval，会在compile中得到FK_C060；恢复回本审批节点。
+
+## 接入真实业务
+
+将固定序列替换为等待表单/队列响应的Promise，携带runId关联请求并校验身份。展示草稿和既有反馈，取消时清理等待。审批历史、权限和重启恢复由宿主实现；state只保留该节点最近决策。
+
+## 完成标准
+
+你应能运行成功路径、观察上述反例并恢复成功，解释状态字段及对应控制流。PowerShell用$LASTEXITCODE、Bash用echo $?查看上一条命令退出码。源码修改后重新compile/check，不继续使用不匹配的旧产物。继续阅读[相关契约](/dsl/human)，或回到[选择示例](/examples/index)。

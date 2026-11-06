@@ -2,7 +2,7 @@
 // workflow: shared-join@1.0.0（Shared join）
 // source: shared-join.workflow.ts
 // sourceHash: sha256:c208b7f933ae599486e4f873fbc55816dd725b4175444966a87cf60c919fcfd6 · bodyHash: sha256:06e6a5c5409b2ade96f890af93f2d3346e2f3525ac7d8fbce920d8f8d758d173
-// compiler: flowkit@0.0.0-m0 · options: trace=off
+// compiler: flowkit@1.0.0 · options: trace=off
 // evalWhen reads own ctx.state paths; strict booleans and short circuit; ! has lower precedence than comparison.
 // runAction resolve means success; other errors reject; control signals are rethrown.
 // State is supplied by the host.

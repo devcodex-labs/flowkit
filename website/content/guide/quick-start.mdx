@@ -1,0 +1,95 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 第一个工作流
+
+本教程完成一个不需要模型密钥的流程：宿主生成问候，FlowKit 进入成功终点，返回最终状态。你会依次创建两个文件、编译、检查并运行；所有命令均在消费者项目根目录执行。
+
+## 1. 准备环境
+
+先按[安装与环境](/guide/installation)安装 `@devcodex/flowkit@1.0.0`。确认 Node >=22.13.0，package.json 包含 `"type": "module"`。开始时无需 Skill 文件或额外环境变量。
+
+```text
+flowkit-demo/
+  package.json
+  sample.workflow.js
+  host.mjs
+```
+
+## 2. 创建工作流文件
+
+把下面完整代码保存为 **sample.workflow.js**。名称中的 `.workflow` 必须保留。
+
+```js file="../../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
+```
+
+`writes: ['message']` 声明这个动作会写哪些键，供静态检查使用；实际写入在宿主完成。`next: 'done'` 指向终点的 id。`version` 表示这个业务流程的版本。
+
+<Mermaid source={'flowchart LR\n greet[生成问候] --> done[成功完成]'} title="执行顺序" description="先调用宿主的 greet 动作，写入 message，再返回 succeeded 和 done。" />
+
+## 3. 创建宿主文件
+
+把下面完整代码保存为 **host.mjs**。这个最小 Runtime 只实现当前动作需要的 `runAction` 和始终必需的 `isControlSignal`。
+
+```js file="../../../examples/docs/quick-start/host.mjs" title="host.mjs"
+```
+
+`runAction` 的三个参数分别是业务动作标识、显示名称和上下文。这里读取 `ctx.state.name`，写入 `ctx.state.message`。宿主用相对自身文件的 URL 定位工作流，即使调用宿主时的当前目录不同，也不会把文件路径指向别处。
+
+## 4. 编译与检查
+
+在 `flowkit-demo` 目录逐行执行：
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+```
+
+两条命令成功时退出码为0，通常不打印内容。PowerShell可紧接命令查看 `$LASTEXITCODE`，Bash可查看 `$?`。编译后目录多出：
+
+```text
+sample.compiled.mjs   # 生成的可执行控制流
+sample.mmd            # Mermaid 流程图源码
+```
+
+用编辑器打开这两个文件，确认它们实际存在且可读。不要修改生成代码。`check` 会重新编译并比较已有的 compiled 文件，但不会创建产物；只有 `check` 成功不足以证明两个文件已经生成。
+
+## 5. 执行并理解结果
+
+```sh
+node host.mjs
+```
+
+预期得到：
+
+```json
+{
+  "status": "succeeded",
+  "terminal": "done",
+  "state": {
+    "name": "FlowKit",
+    "message": "你好，FlowKit！"
+  }
+}
+```
+
+`status` 表示流程进入成功终点；`terminal` 是该终点的 id；`state` 包含初始姓名和动作实际写入的问候。本例 `run` 读取工作流源码，自己编译后执行；第4步是单独演示显式产物生成与一致性检查。
+
+## 6. 尝试修改
+
+将宿主初始状态中的姓名改为自己的名字，再运行 `node host.mjs`，观察 message。再把工作流中 `next: 'done'` 临时改为不存在的 id，执行 compile：会出现 `FK_C015` 诊断且退出码为1。恢复 `done`，重新 compile、check、run，确认回到成功状态。
+
+编译失败不会替你删除旧产物，所以失败后不要误把旧 compiled 文件当成刚生成的结果。先看退出码与诊断，再使用产物。
+
+## 无法成功时
+
+| 现象 | 原因与修复 |
+|---|---|
+| 提示文件后缀错误 | 必须叫 sample.workflow.js，而不是 sample.js 或 workflow.js |
+| 缺少 `runtime.isControlSignal` | 复制完整 host.mjs，保留导入和 Runtime 中的属性 |
+| 找不到工作流或包 | 检查文件名、宿主所在项目及已安装的node_modules |
+| check 报 `FK_R001` | 产物与当前源码/选项不一致；先用相同设置重新 compile，再 check |
+| 运行没有 message | 确认实际执行的 runAction 写入ctx.state；writes只声明，不代替赋值 |
+
+## 完成标准与下一步
+
+你应能看到安装版本1.0.0、编译和检查退出0、两个产物文件以及上面的运行结果，并完成一次错误修复。接下来从[项目介绍](/guide/introduction)回顾宿主分工，把 `greet` 替换为自己的业务函数；新增能力时再选择对应节点。

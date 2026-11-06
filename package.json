@@ -1,7 +1,9 @@
 {
   "name": "@devcodex/flowkit",
-  "version": "0.0.0-m0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
+  "license": "MIT",
+  "homepage": "https://devcodex-labs.github.io/flowkit/",
   "description": "Compile declarative workflows into readable JavaScript and execute them with a host Runtime",
   "repository": { "type": "git", "url": "git+https://github.com/devcodex-labs/flowkit.git" },
   "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
@@ -23,7 +25,14 @@
     "release:check": "node scripts/release.mjs check",
     "release:pack": "node scripts/release.mjs pack",
     "update:goldens": "node scripts/update-goldens.mjs",
-    "verify": "npm run build && npm test && npm run test:types && npm run check:package && npm run test:package"
+    "verify": "npm run build && npm test && npm run test:types && npm run check:package && npm run test:package",
+    "docs:dev": "npm --prefix website run dev --",
+    "docs:preview": "npm --prefix website run preview --",
+    "docs:build": "npm --prefix website run build",
+    "docs:check": "npm --prefix website run check",
+    "docs:sync": "node scripts/docs/sync-readme.mjs",
+    "docs:examples": "node scripts/docs/verify-examples.mjs",
+    "docs:public-package": "node scripts/docs/check-public-package.mjs"
   },
   "dependencies": { "acorn": "8.19.0" },
   "devDependencies": { "typescript": "5.0.4", "tar": "7.5.22" }

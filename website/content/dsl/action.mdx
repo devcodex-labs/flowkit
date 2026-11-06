@@ -1,0 +1,38 @@
+# action
+
+`action(id, options)` 调用宿主的确定性业务操作，例如保存、转换、计数或调用已有服务。FlowKit 等待 runAction 完成，再继续后继；返回值本身不会作为结果合并。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 节点显示名称 |
+| `action` | 必需非空string | 传给runtime.runAction的业务标识 |
+| `writes` | 可选string[]，默认[] | 声明可能写入的state顶层键，条目非空且唯一 |
+| `next` | 节点id | 普通上下文必需，parallel成员禁止 |
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 声明和实际执行
+
+```js file="../../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
+```
+
+```js file="../../../examples/docs/quick-start/host.mjs" title="host.mjs"
+```
+
+宿主在 runAction(action, name, ctx) 中检查业务标识，读取 ctx.state，直接写入 message。writes 仅供静态数据流/冲突检查使用，不会自动赋值、过滤写入或回滚副作用。新增业务写入时，同步更新 writes。
+
+按[安装](/guide/installation)准备后运行 compile/check 和 node host.mjs，预期 done/succeeded，state.message 为问候。把宿主赋值删掉会失去message，编译器不能通过writes推断真实函数已正确执行。
+
+## 错误的两种传播
+
+一般 action 的普通异常会沿 Promise 向外拒绝。若图结构中 action 直接连接合适的普通 verification，编译器可为该动作生成异常捕获：保存 ctx.error，跳过正常校验并走该 verification 的 onFailure。控制信号始终继续抛出，不当成普通业务失败。
+
+这不是所有 action 都有的隐式重试或统一失败路由；检查实际图结构与生成代码，并运行成功和异常路径。action 不使用 Agent 的 retries，想要有界修复应显式使用 loop。
+
+## 非法例与恢复
+
+`writes: null` 得到 [FK_C019](/troubleshooting/compiler#FK_C019)，改为数组或省略；`writes: ['draft', 'draft']` 得到 [FK_C056](/troubleshooting/compiler#FK_C056)，删除重复；两个并行分支都声明写draft得到[FK_C026](/troubleshooting/compiler#FK_C026)，应改为各自结果键并在汇合后合并。并行成员不能带next。
+
+重试外部操作时由宿主提供幂等性；不能仅依赖 state 状态判断数据库事务是否提交。相关状态边界见[状态与数据传递](/guide/state-data)，修复场景见[校验与循环修复](/examples/verification-repair)。
+
+相关宿主方法：[runAction](/reference/runtime#runAction)。

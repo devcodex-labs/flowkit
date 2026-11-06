@@ -1,0 +1,41 @@
+# defineWorkflow
+
+`defineWorkflow(definition)` 定义一份工作流，并作为 `.workflow.js/.ts` 文件的默认导出。它不启动运行、不调用宿主、不读取 Skill。运行使用根入口的 run。
+
+## 字段
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `id` | string，必需 | kebab-case，最多64字符，小写字母开头 |
+| `version` | string，必需 | SemVer 2.0，例如1.0.0；表示业务工作流版本 |
+| `name` | string，必需 | 1–80字符，不能包含换行或注释终止符 |
+| `nodes` | 节点数组，必需 | 1–500项，第一项为入口；每项由受支持构造器创建 |
+
+工作流 version 与安装的 FlowKit 包版本分开管理。文档中的包版本是1.0.0；你自己的业务工作流可以按其变更历史独立递增。
+
+## 完整例子
+
+```js file="../../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
+```
+
+先按[快速开始](/guide/quick-start)创建配套 host.mjs 并安装依赖，执行：
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+node host.mjs
+```
+
+预期没有 error，运行到 done，state.message 包含问候。nodes 中 done 放在后面不代表“数组依次执行”；入口 greet 的 next 引用决定路线。
+
+## 引用与图检查
+
+每个节点 id 必须唯一，name 也必须唯一。引用字段必须指向存在节点；不能保留永远不可达的备用节点。共享后继允许，多条路线可以汇合到同一节点。任意循环禁止，使用 loop/human 的明确结构表达。
+
+类型声明保留节点字面量，并对可知的引用提供静态约束。动态文件解析、节点上限、复杂图区域和 Skill 检查仍由编译器完成。
+
+## 非法例与恢复
+
+将 version 改为 `v1.0.0` 会触发 FK_C002；恢复为不带v前缀的 `1.0.0`。将 nodes 改为 `[]` 会触发 FK_C004；恢复至少一个 terminal 或完整流程。添加未使用的节点可能得到 FK_C017，应连接到合理路线或删除它。
+
+修复后重新 compile/check；不要只改诊断文字或生成产物。下一步按 [DSL 总览](/dsl/index)选择节点，复杂路线先阅读[工作流模型](/guide/workflow-model)。

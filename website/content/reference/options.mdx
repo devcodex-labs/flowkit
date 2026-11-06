@@ -1,0 +1,73 @@
+# 配置参考
+
+所有SDK options都经过类型和未知字段检查。支持以下11项；某阶段接受但不消费的选项仍要具有正确类型。undefined按未提供处理，null不是通用的“使用默认值”。
+
+## 调用适用性矩阵
+
+下表的“生效”指该调用实际读取此选项；“仅校验”表示接受正确类型但不改变此阶段行为。AOT中的编译设置已经固化在产物，运行选项不能重写它。
+
+| 选项 | compile | compileSource | check | run DSL | run AOT |
+|---|---|---|---|---|---|
+| projectRoot | 生效：Skill检查 | 生效：Skill检查 | 生效：Skill检查 | 生效：编译/默认loader | 生效：默认loader |
+| outDir | 生效：输出 | 生效：输出 | 生效：比较位置 | 仅校验 | 仅校验 |
+| skillsRoot | 生效：agent映射 | 生效：agent映射 | 生效：agent映射 | 生效：编译/loader | 生效：默认agent loader |
+| skillCheck | 生效：本地存在检查 | 生效：本地存在检查 | 生效：本地存在检查 | 生效：编译，缓存命中不重做 | 仅校验 |
+| remoteSkillHosts | 生效：静态白名单 | 生效：静态白名单 | 生效：静态白名单 | 生效：编译/远程读取 | 生效：远程读取 |
+| trace | 生效：插入钩子 | 生效：插入钩子 | 生效：代码比较 | 生效：生成钩子 | 仅校验，不补插钩子 |
+| mermaid | 生效：图产物 | 生效：图产物 | 仅校验，不写/比较图 | 仅校验 | 仅校验 |
+| fetch | 仅校验，不联网 | 仅校验，不联网 | 仅校验，不联网 | 生效：默认远程loader | 生效：默认远程loader |
+| signal | 仅校验 | 仅校验 | 仅校验 | 生效：Ctx/Step/loader | 生效：Ctx/Step/loader |
+| runId | 仅校验 | 仅校验 | 仅校验 | 生效：执行上下文 | 生效：执行上下文 |
+| dump | 仅校验 | 仅校验 | 仅校验 | 生效：运行代码落盘 | 生效：运行代码落盘 |
+
+check仍会构造内部编译结果，但公开行为只返回诊断并比较compiled，不检查mmd。所有直接SDK调用都不读取CLI配置文件。
+
+## projectRoot：项目根目录 {#projectRoot}
+
+string。默认从输入文件目录向上找到最近的package.json文件；找不到则用调用时cwd。显式相对路径以调用时cwd解析。影响本地Skill包含边界和agent/skill路径，不改变源码文件参数自己的解析基准。
+
+## outDir：产物目录 {#outDir}
+
+string。compile/compileSource/check默认源目录；相对值基于cwd。必须为源目录或祖先，否则TypeError。输出文件用源码基础名，多个同名源码输出到同一祖先目录可能相互覆盖，需要你组织唯一名称。run接受类型但不消费此输出位置。
+
+## skillsRoot：Agent说明根目录 {#skillsRoot}
+
+string，默认skills。agent映射时使用，显式skill不受它影响。相对本地根基于projectRoot；宿主可以给绝对本地根，但默认运行loader仍要求最终真实文件位于projectRoot内。也可以使用合法HTTPS前缀映射agent，需白名单；固定远程内容建议直接显式skill加integrity，映射模式不接受integrity绑定。
+
+## skillCheck：本地存在检查 {#skillCheck}
+
+boolean，默认true。控制编译阶段的本地文件存在性检查。false不关闭路径合法性、远程主机检查或运行读取，也不允许运行时缺文件。CLI提供--no-skill-check。
+
+## remoteSkillHosts：远程主机白名单 {#remoteSkillHosts}
+
+string[]，默认[]。精确主机/端口白名单；不带端口的域名对应443，不支持通配符。SDK复制数组，CLI覆盖配置时用整组替换，不追加。元素顺序参与run的编译缓存键。格式或白名单约束由使用该主机的Skill检查执行，类型正确不代表任意字符串都能放行。
+
+## trace：节点跟踪 {#trace}
+
+boolean，默认false。编译生成节点钩子调用，需要Runtime.trace配合。AOT须在构建时启用；compile/check使用相同值。SDK可显式传入 `trace:false`。CLI的 `--trace` 只能开启；要关闭配置文件里的 `trace:true`，请修改该配置文件。当前没有 `--no-trace` 或 `--trace=false` 关闭写法；不要将其他布尔选项的关闭参数套用到trace。
+
+## mermaid：流程图产物 {#mermaid}
+
+boolean，compile/compileSource默认生成mmd，false不写图文件但不会删除旧图。run不通过此开关写mmd，check不比较mmd。CLI支持--mermaid和--no-mermaid。
+
+## fetch：网络适配 {#fetch}
+
+函数，默认使用环境fetch。仅默认远程Skill读取消费，用于宿主网络适配或确定性测试。应满足标准fetch/Response语义，处理传入信号。自定义loader不会自动使用此函数。
+
+## signal：取消信号 {#signal}
+
+AbortSignal实例，默认未提供。传入Ctx/AgentStep和默认loader；业务方法必须自行配合取消。不会强制停止所有Promise，也不自动回滚副作用。
+
+## runId：运行标识 {#runId}
+
+string，省略时每次run生成UUID。用于日志和请求关联，不是去重、缓存或持久化恢复键。空字符串满足当前类型检查，但建议使用业务可追踪的非空标识。
+
+## dump：运行代码目录 {#dump}
+
+string，默认关闭。相对路径基于调用时cwd，保存生成的运行代码，如.run.mjs；不是state或event日志。编译缓存键包含解析后的dump路径。
+
+## filename 与配置合并
+
+filename仅为compileSource专用必需字段，不属于上面11项。其他调用和flowkit.config.mjs拒绝它。未知键、Symbol键或不符类型会直接拒绝，不静默忽略。
+
+CLI只加载当前调用目录的flowkit.config.mjs，先校验完整配置，再将命令行覆盖项浅合并。配置本身错误时，即使同名参数会覆盖它仍失败。布尔false能覆盖true，remoteSkillHosts按整数组替换。示例配置与命令见[命令行](/reference/cli)。

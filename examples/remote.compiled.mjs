@@ -2,7 +2,7 @@
 // workflow: remote-review@1.0.0（Remote object reviewers）
 // source: remote.workflow.js
 // sourceHash: sha256:853eec8cc993addc97832a401c246ee9984ed5b103af4fa53155eed94e5a57bc · bodyHash: sha256:123461a67a8d0a1c27e9848021c9799d2e5c3dbf90a694cd042582c8f67cb70d
-// compiler: flowkit@0.0.0-m0 · options: trace=off
+// compiler: flowkit@1.0.0 · options: trace=off
 // runAgent receives one step; schema -> checkStep -> verify; own-key commit only after success; retries share reasons and control signals are rethrown. Remote Skills: https://skills.example.test/style.md (integrity: sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=); https://skills.example.test/fact.md (integrity: sha256-fV11WZrr2/bGq4tr8OR83tj29m/FKwzao9ga6FHx7wg=).
 // all uses Promise.all first rejection; late results are not cancelled.
 // State is supplied by the host.

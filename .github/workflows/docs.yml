@@ -1,0 +1,137 @@
+name: Publish Chinese documentation
+
+on:
+  workflow_call:
+    inputs:
+      packageReleaseCommit: { required: true, type: string }
+      docsCommit: { required: true, type: string }
+      version: { required: true, type: string }
+      releaseRunId: { required: true, type: string }
+      releaseRunAttempt: { required: true, type: string }
+  workflow_dispatch:
+    inputs:
+      packageReleaseCommit: { description: 'Original v1.0.0 package commit (40 hex)', required: true, type: string }
+      docsCommit: { description: 'Reviewed documentation commit (40 hex)', required: true, type: string }
+      version: { description: 'Exact public version', default: '1.0.0', required: true, type: string }
+      releaseRunId: { description: 'Original publish workflow run ID', required: true, type: string }
+      releaseRunAttempt: { description: 'Original pack/publish attempt', required: true, type: string }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flowkit-pages
+  cancel-in-progress: false
+
+env:
+  PACKAGE_COMMIT: ${{ inputs.packageReleaseCommit }}
+  DOCS_COMMIT: ${{ inputs.docsCommit }}
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_RUN_ID: ${{ inputs.releaseRunId }}
+  RELEASE_RUN_ATTEMPT: ${{ inputs.releaseRunAttempt }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      pagesArtifactName: ${{ steps.pages-name.outputs.name }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout original package source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.packageReleaseCommit }}
+          path: package-source
+          persist-credentials: false
+      - name: Checkout exact documentation source and history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.docsCommit }}
+          fetch-depth: 0
+          path: docs-source
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Check exact original checkout
+        working-directory: package-source
+        run: node --input-type=module -e 'import{execFileSync}from"node:child_process";import assert from"node:assert/strict";assert.match(process.env.PACKAGE_COMMIT,/^[a-f0-9]{40}$/);assert.equal(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),process.env.PACKAGE_COMMIT);'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: package-source
+      - name: Validate original run and completed package jobs
+        id: source
+        working-directory: package-source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/docs/release-identity.mjs metadata --out .tmp/source-metadata.json
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.source.outputs.npm_id }}
+          path: package-source/.tmp/release
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: devcodex-labs/flowkit
+          run-id: ${{ inputs.releaseRunId }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.source.outputs.identity_id }}
+          path: package-source/.tmp/identity
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: devcodex-labs/flowkit
+          run-id: ${{ inputs.releaseRunId }}
+      - name: Verify immutable candidate and allowed docs repair
+        working-directory: package-source
+        run: |
+          node scripts/docs/release-identity.mjs verify --metadata .tmp/source-metadata.json --record .tmp/identity/release-record.json --release-dir .tmp/release --docs-root ../docs-source --out .tmp/docs/deployment-identity.json
+          node scripts/release.mjs verify --tag v1.0.0
+          npm run docs:public-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: docs-source
+      - run: npm --prefix website ci --ignore-scripts --no-audit --no-fund
+        working-directory: docs-source
+      - name: Verify repaired tutorials against original public package and build site
+        working-directory: docs-source
+        run: |
+          npm run build
+          npm run docs:check
+          npm run docs:examples -- --registry-version 1.0.0 --manifest ../package-source/.tmp/release/release.json --evidence .tmp/docs/public-consumer.json
+          npm run docs:build
+          node --input-type=module -e 'import{readFileSync,writeFileSync}from"node:fs";import{createHash}from"node:crypto";const i=JSON.parse(readFileSync("../package-source/.tmp/docs/deployment-identity.json"));i.websiteLockSha256=createHash("sha256").update(readFileSync("website/package-lock.json")).digest("hex");writeFileSync(".tmp/docs/site-build.json",JSON.stringify(i,null,2));'
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: site-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            package-source/.tmp/docs/*.json
+            docs-source/.tmp/docs/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Identify this site build
+        id: pages-name
+        run: echo "name=github-pages-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          name: ${{ steps.pages-name.outputs.name }}
+          path: docs-source/website/doc_build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the verified site
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+        with:
+          artifact_name: ${{ needs.build.outputs.pagesArtifactName }}

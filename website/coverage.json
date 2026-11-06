@@ -1,0 +1,462 @@
+[
+  {
+    "id": "P01",
+    "route": "/",
+    "title": "首页",
+    "file": "index.mdx",
+    "group": "开始使用",
+    "status": "drafted",
+    "scope": "定位、版本、开源和三步编排；首页按钮/图",
+    "validation": "RT01/07，V-SITE"
+  },
+  {
+    "id": "P02",
+    "route": "/guide/introduction",
+    "title": "项目介绍",
+    "file": "guide/introduction.mdx",
+    "group": "开始使用",
+    "status": "drafted",
+    "scope": "FlowKit/宿主分工、术语和读者路径",
+    "validation": "RT03/07，V-CONTENT"
+  },
+  {
+    "id": "P03",
+    "route": "/guide/installation",
+    "title": "安装与环境",
+    "file": "guide/installation.mdx",
+    "group": "开始使用",
+    "status": "drafted",
+    "scope": "精确安装、ESM、CLI、实际包版本",
+    "validation": "RT01，E01"
+  },
+  {
+    "id": "P04",
+    "route": "/guide/quick-start",
+    "title": "第一个工作流",
+    "file": "guide/quick-start.mdx",
+    "group": "开始使用",
+    "status": "drafted",
+    "scope": "完整两文件、编译/检查/输出；README 同源",
+    "validation": "RT01，E01"
+  },
+  {
+    "id": "P05",
+    "route": "/guide/javascript-typescript",
+    "title": "JavaScript 与 TypeScript",
+    "file": "guide/javascript-typescript.mdx",
+    "group": "开始使用",
+    "status": "drafted",
+    "scope": "JS/TS 等价、公共类型、非法动态 DSL",
+    "validation": "E03/E12，V-TYPES"
+  },
+  {
+    "id": "P06",
+    "route": "/guide/workflow-model",
+    "title": "工作流模型",
+    "file": "guide/workflow-model.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "图的入口/共享汇合/受限回路与图解",
+    "validation": "E03/E05，V-CONTRACT"
+  },
+  {
+    "id": "P07",
+    "route": "/guide/state-data",
+    "title": "状态与数据传递",
+    "file": "guide/state-data.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "own enumerable string keys/浅复制、输入缺失、提交时机、并行共享状态",
+    "validation": "E02/E04/E09，V-STATE"
+  },
+  {
+    "id": "P08",
+    "route": "/guide/conditions",
+    "title": "条件表达式",
+    "file": "guide/conditions.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "evalWhen、短路、类型/undefined、列号及修复",
+    "validation": "E03/E12，V-WHEN"
+  },
+  {
+    "id": "P09",
+    "route": "/guide/validation-retries",
+    "title": "结果校验与重试",
+    "file": "guide/validation-retries.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "validateResult→checkStep→verify→commit；attempt/reasons",
+    "validation": "RT02/03，E09"
+  },
+  {
+    "id": "P10",
+    "route": "/guide/host-integration",
+    "title": "接入自己的宿主",
+    "file": "guide/host-integration.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "Agent+Skill+Schema+human 完整宿主，方法责任，缓存入口",
+    "validation": "RT03，E02/E11"
+  },
+  {
+    "id": "P11",
+    "route": "/guide/local-skills",
+    "title": "本地 Skill",
+    "file": "guide/local-skills.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "agent映射/显式skill/realpath/UTF8/关闭编译检查及自定义 loader",
+    "validation": "RT04，E02/E08，V-SKILL"
+  },
+  {
+    "id": "P12",
+    "route": "/guide/remote-skills",
+    "title": "远程 Skill",
+    "file": "guide/remote-skills.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "HTTPS/主机端口/SRI/重定向/体积/10s/取消/缓存/自定义loader责任",
+    "validation": "RT02，E07，V-SKILL"
+  },
+  {
+    "id": "P13",
+    "route": "/guide/compile-artifacts",
+    "title": "编译与检查",
+    "file": "guide/compile-artifacts.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "三接口副作用；源码目录/祖先 outDir、非法 sibling dist；缺产物 check",
+    "validation": "E01/E12，V-FILES"
+  },
+  {
+    "id": "P14",
+    "route": "/guide/aot",
+    "title": "预编译与部署",
+    "file": "guide/aot.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "源码/产物/Skill布局、hash与信任边界、恢复",
+    "validation": "RT06，E08"
+  },
+  {
+    "id": "P15",
+    "route": "/guide/observability",
+    "title": "跟踪与运行记录",
+    "file": "guide/observability.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "trace日志、runId、overview；dump是生成代码而非state/event日志",
+    "validation": "E12，V-TRACE"
+  },
+  {
+    "id": "P16",
+    "route": "/guide/cancellation",
+    "title": "取消与错误传播",
+    "file": "guide/cancellation.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "signal、isControlSignal、普通异常、failed终点及清理",
+    "validation": "E10，V-CANCEL"
+  },
+  {
+    "id": "P17",
+    "route": "/dsl/index",
+    "title": "DSL 总览",
+    "file": "dsl/index.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "9构造器/8类节点与选择表、字面量及图约束",
+    "validation": "RT07，V-CONTRACT"
+  },
+  {
+    "id": "P18",
+    "route": "/dsl/define-workflow",
+    "title": "defineWorkflow",
+    "file": "dsl/define-workflow.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "全字段、节点/引用/入口、非法定义和修复",
+    "validation": "E01，V-CONTRACT"
+  },
+  {
+    "id": "P19",
+    "route": "/dsl/agent",
+    "title": "node（Agent 节点）",
+    "file": "dsl/agent.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "全字段和嵌套Schema、skill优先级、retries及并行后继",
+    "validation": "RT02，E02/E09，V-CONTRACT"
+  },
+  {
+    "id": "P20",
+    "route": "/dsl/action",
+    "title": "action",
+    "file": "dsl/action.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "writes声明与真实副作用，结构异常捕获与普通拒绝",
+    "validation": "E01/E05，V-CONTRACT"
+  },
+  {
+    "id": "P21",
+    "route": "/dsl/verification",
+    "title": "verification",
+    "file": "dsl/verification.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "boolean严格返回、分支/并行/loop三上下文",
+    "validation": "RT04/05，E04/E05，V-CONTRACT"
+  },
+  {
+    "id": "P22",
+    "route": "/dsl/parallel",
+    "title": "parallel",
+    "file": "dsl/parallel.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "branches/join全字段、共享state、写冲突、any不取消",
+    "validation": "E04，V-CONTRACT"
+  },
+  {
+    "id": "P23",
+    "route": "/dsl/condition",
+    "title": "condition",
+    "file": "dsl/condition.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "branches.when/next、顺序/默认/共享后继及非法例",
+    "validation": "E03，V-CONTRACT"
+  },
+  {
+    "id": "P24",
+    "route": "/dsl/loop",
+    "title": "loop",
+    "file": "dsl/loop.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "body/onSuccess/onMaxExceeded、检查修复次数、max=1",
+    "validation": "RT05，E05，V-CONTRACT"
+  },
+  {
+    "id": "P25",
+    "route": "/dsl/human",
+    "title": "human",
+    "file": "dsl/human.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "决策返回/state/comment、拒绝链回本节点、非法返回",
+    "validation": "RT05，E06，V-CONTRACT"
+  },
+  {
+    "id": "P26",
+    "route": "/dsl/terminal",
+    "title": "terminal",
+    "file": "dsl/terminal.mdx",
+    "group": "DSL 参考",
+    "status": "drafted",
+    "scope": "succeeded/failed与抛异常区别、result.error条件",
+    "validation": "E01/E10，V-CONTRACT"
+  },
+  {
+    "id": "P27",
+    "route": "/reference/sdk",
+    "title": "SDK API",
+    "file": "reference/sdk.mdx",
+    "group": "SDK 与工具",
+    "status": "drafted",
+    "scope": "六API逐项签名/副作用；run缓存完整语义及无公开淘汰边界",
+    "validation": "RT03，E11/E12，V-CACHE"
+  },
+  {
+    "id": "P28",
+    "route": "/reference/runtime",
+    "title": "Runtime 契约",
+    "file": "reference/runtime.mdx",
+    "group": "SDK 与工具",
+    "status": "drafted",
+    "scope": "10方法+2钩子，Ctx/AgentStep/this/同步异步/返回约束",
+    "validation": "RT03/04，E02/E12，V-CONTRACT"
+  },
+  {
+    "id": "P29",
+    "route": "/reference/options",
+    "title": "配置参考",
+    "file": "reference/options.mdx",
+    "group": "SDK 与工具",
+    "status": "drafted",
+    "scope": "11项 ×5调用适用性、路径基准、数组替换/false覆盖",
+    "validation": "RT02，E12，V-OPTIONS"
+  },
+  {
+    "id": "P30",
+    "route": "/reference/cli",
+    "title": "命令行",
+    "file": "reference/cli.mdx",
+    "group": "SDK 与工具",
+    "status": "drafted",
+    "scope": "compile/check、6参数组、配置先校验再合并、NDJSON/普通文本/exit",
+    "validation": "RT01/04，E12，V-CLI"
+  },
+  {
+    "id": "P31",
+    "route": "/reference/types",
+    "title": "TypeScript 类型",
+    "file": "reference/types.mdx",
+    "group": "SDK 与工具",
+    "status": "drafted",
+    "scope": "两份公开声明所有导出及字段；无私有导入",
+    "validation": "RT03，E03/E12，V-TYPES"
+  },
+  {
+    "id": "P32",
+    "route": "/examples/index",
+    "title": "选择示例",
+    "file": "examples/index.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "所有完整示例入口、选择和依赖，固定响应/真实接入边界",
+    "validation": "RT07，V-CONTENT"
+  },
+  {
+    "id": "P33",
+    "route": "/examples/conditional-routing",
+    "title": "条件分流与汇合",
+    "file": "examples/conditional-routing.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "JS/TS全部文件、两种输入、非法条件修复",
+    "validation": "E03，V-WHEN"
+  },
+  {
+    "id": "P34",
+    "route": "/examples/parallel-review",
+    "title": "并行处理与汇合",
+    "file": "examples/parallel-review.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "all/any、失败及延迟分支，精确状态与顺序边界",
+    "validation": "E04，V-STATE"
+  },
+  {
+    "id": "P35",
+    "route": "/examples/verification-repair",
+    "title": "校验与循环修复",
+    "file": "examples/verification-repair.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "成功/耗尽完整操作，计数与变体复原",
+    "validation": "RT05，E05"
+  },
+  {
+    "id": "P36",
+    "route": "/examples/human-approval",
+    "title": "人工审批与修订",
+    "file": "examples/human-approval.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "直接批准/拒绝修订再批准，真实UI替换步骤",
+    "validation": "RT05，E06"
+  },
+  {
+    "id": "P37",
+    "route": "/examples/remote-skills",
+    "title": "远程 Skill 加载",
+    "file": "examples/remote-skills.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "固定fetch完整例、白名单/SRI失败恢复、真实HTTPS配置步骤",
+    "validation": "RT02/04，E07"
+  },
+  {
+    "id": "P38",
+    "route": "/examples/aot",
+    "title": "构建并部署工作流",
+    "file": "examples/aot.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "独立目录部署、改源失败、重新编译部署恢复、缺源失败",
+    "validation": "RT06，E08"
+  },
+  {
+    "id": "P39",
+    "route": "/troubleshooting/index",
+    "title": "问题定位",
+    "file": "troubleshooting/index.mdx",
+    "group": "排错",
+    "status": "drafted",
+    "scope": "症状入口和异常类别、问题报告模板与脱敏",
+    "validation": "RT04/07，V-CONTENT"
+  },
+  {
+    "id": "P40",
+    "route": "/troubleshooting/compiler",
+    "title": "编译诊断",
+    "file": "troubleshooting/compiler.mdx",
+    "group": "排错",
+    "status": "drafted",
+    "scope": "52码逐条现象/触发/非法例/修复/复验，C053/C059 warning",
+    "validation": "RT04/07，V-DIAG"
+  },
+  {
+    "id": "P41",
+    "route": "/troubleshooting/runtime",
+    "title": "运行时错误",
+    "file": "troubleshooting/runtime.mdx",
+    "group": "排错",
+    "status": "drafted",
+    "scope": "9码逐条，R001多个来源、R003预留无触发、cause/reasons",
+    "validation": "RT04/06/07，V-DIAG"
+  },
+  {
+    "id": "P42",
+    "route": "/community/contributing",
+    "title": "参与贡献",
+    "file": "community/contributing.mdx",
+    "group": "开源项目",
+    "status": "drafted",
+    "scope": "实际scripts、本地docs修改和示例更新、PR说明",
+    "validation": "V-MAINT，V-CONTENT"
+  },
+  {
+    "id": "P43",
+    "route": "/community/compatibility",
+    "title": "兼容与支持范围",
+    "file": "community/compatibility.mdx",
+    "group": "开源项目",
+    "status": "drafted",
+    "scope": "SDK与站点环境分别说明，平台证据不扩大",
+    "validation": "V-TYPES，V-MAINT"
+  },
+  {
+    "id": "P44",
+    "route": "/community/changelog",
+    "title": "v1.0.0 发布记录",
+    "file": "community/changelog.mdx",
+    "group": "开源项目",
+    "status": "drafted",
+    "scope": "与根CHANGELOG逐项对齐，仅首个正式发行",
+    "validation": "V-RELEASE，V-CONTENT"
+  },
+  {
+    "id": "P45",
+    "route": "/community/license",
+    "title": "开源许可证",
+    "file": "community/license.mdx",
+    "group": "开源项目",
+    "status": "drafted",
+    "scope": "MIT、2026 devcodex-labs与根LICENSE/包声明一致",
+    "validation": "V-RELEASE"
+  },
+  {
+    "id": "P46",
+    "route": "/maintainers/releasing",
+    "title": "发布维护",
+    "file": "maintainers/releasing.mdx",
+    "group": "发布维护",
+    "status": "drafted",
+    "scope": "候选→公开包消费→站点、确切commit、失败与回退",
+    "validation": "V-RELEASE，V-MAINT"
+  }
+]

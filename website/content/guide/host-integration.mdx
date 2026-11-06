@@ -1,0 +1,52 @@
+# 接入自己的宿主
+
+Runtime 是 FlowKit 与模型、审批界面、业务函数之间的接缝。本页把 Agent、Skill、输出 Schema、业务检查和人工审批放在一个完整例子里。示例使用固定响应，便于先确认编排正确，再替换真实服务。
+
+## 准备完整目录
+
+按[安装与环境](/guide/installation)建立 ESM 消费者项目。在项目根目录创建 sample.workflow.js、host.mjs 和 skills/writer.md。package.json 所在目录也是默认项目根目录。
+
+```js file="../../../examples/docs/host-integration/sample.workflow.js" title="sample.workflow.js"
+```
+
+```md file="../../../examples/docs/host-integration/skills/writer.md" title="skills/writer.md"
+```
+
+```js file="../../../examples/docs/host-integration/host.mjs" title="host.mjs"
+```
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+node host.mjs
+```
+
+## 按事件观察数据流
+
+输出的 result.status 是 succeeded，terminal 是 done，state 包含 topic、draft 和 approval。events 的顺序是 agent → validate → checkStep → verify → human。checkStep 的 committed 为 false；verify 能读取候选 draft；human 能读取已经提交的 draft。
+
+这个顺序解释了各层职责：Schema 检查结构，checkStep 检查业务限制，verify 检查候选结果，human 决定是否接受。三者不要都写成同一段无意义的“成功”判断。
+
+## 替换真实 Agent
+
+保留 runAgent 的参数结构，将固定返回值替换为你的模型调用。把 instruction 作为任务说明，把 input 作为业务输入，把 resultSchema 用于结构化输出或结果校验。使用 attempt 和 reasons 指导重试；把 signal 传给支持取消的网络客户端，把 runId 记入业务日志。
+
+不要返回模型 SDK 的整个响应包装对象，应提取匹配 Schema 的业务对象。validateResult 必须同步返回 string[]；异步远程验证放在 checkStep 或 verify。示例校验器仅支持 draft 一个字段，增加 Schema 后必须同步升级校验器。
+
+## 替换真实审批界面
+
+runHuman 返回的 Promise 可以等待 Web 表单、桌面交互或队列响应。显示当前 draft，关联 runId，校验响应来自正确业务请求，再返回 boolean 或含 approved/comment 的对象。拒绝后 FlowKit 走 revise 动作，然后重新进入同一审批节点。
+
+示例自动批准只用于演示。FlowKit 不提供账号权限、审批持久化、通知、跨进程等待或恢复服务；这些需要你的宿主负责。运行中等待 Promise 与可重启的持久化工作流是不同能力。
+
+## 方法按实际节点提供
+
+isControlSignal 始终必需。Agent 需要 runAgent 和 validateResult；action 需要 runAction；verification/Agent verify 需要 runVerification；human 需要 runHuman；condition 需要 evalWhen。默认 Skill loader 可直接使用，不必重新实现；自定义 loader 会接管其安全与缓存责任。
+
+方法按 Runtime 对象调用，保留宿主 this 语义；不要在包装时随意丢失对象绑定。业务返回值不符合契约时，先修宿主，不要修改工作流绕过校验。完整签名和同步/异步边界见 [Runtime 契约](/reference/runtime)。
+
+## 重复运行与排错
+
+同一文件可多次调用 run。每次都有新 state/Ctx/默认 Skill loader；成功编译和加载的 DSL 可能命中进程内缓存，业务结果不会被缓存。Skill 文件改变会在下一次运行重新读取。完整缓存键、失败分类和长期进程边界见 [run](/reference/sdk#run)。
+
+遇到本地 Skill 缺失先核对 projectRoot 和实际文件；输出不合 Schema 看 reasons；审批返回字符串会触发 FK_R002。修复后依次复验 compile、check、run，并确认事件顺序和结果状态。

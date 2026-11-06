@@ -1,0 +1,107 @@
+# 运行时错误
+
+v1.0.0登记9个运行时代码，其中FK_R003预留、不抛。代码可以出现在run拒绝中，FK_R001也会出现在check诊断数组里。普通宿主/I/O异常不保证拥有这些代码。
+
+## 如何读取错误
+
+```js
+try {
+  const result = await run(file, runtime, state, options);
+  console.log(result.status, result.terminal, result.state);
+} catch (error) {
+  console.error({ code: error?.code, message: error?.message,
+    reasons: error?.reasons, cause: error?.cause });
+}
+```
+
+这是嵌入已有宿主的处理片段，file/runtime/state/options由调用方提供。保留原始错误供排查；不要假定每个错误都有reasons或cause，也不要记录敏感输入。下面逐项给出触发和修复复验。
+
+## FK_R001 · 产物与源码不一致 {#FK_R001}
+
+级别：**error**。触发包括：check发现已有compiled与当前编译结果不同；AOT缺少/损坏header；source路径编码非法或词法越界；源码缺失；源码或生成正文hash不符。
+
+最小触发：按[AOT示例](/examples/aot)编译并成功运行后，只在部署源码末尾加一行注释，保留旧compiled，再运行host。源码原始字节已变化，应得到FK_R001。将源码临时改名也会因缺源失败。check场景可以在compiled末尾追加注释后运行check。
+
+修复：从可信源码用相同FlowKit版本和选项重新compile，复制整组源码/产物/Skill；不要手改header/hash。若只想恢复演示，重新执行deploy.mjs覆盖为匹配文件。outDir必须为源码目录或祖先。
+
+复验：compile/check后确认产物存在；在独立部署目录安装依赖并运行到succeeded。若缺compiled时check成功，仍须先compile。这个检查不是恶意代码沙箱。
+
+## FK_R002 · 布尔或返回契约不符 {#FK_R002}
+
+级别：**error**。触发：when最终值/布尔操作数不是boolean，大小比较不是同类型number/string；human或verification返回非法值；human.comment非string/null；checkStep返回非string/null/undefined。
+
+最小触发：在[审批示例](/examples/human-approval)中把runHuman改为`return 'yes'`。另一个例子是在条件流程中用`urgent: 'yes'`配合`when: 'urgent'`。两者都不做隐式真假值转换。
+
+修复：审批返回`{ approved: true, comment: null }`或boolean；verification严格返回boolean；checkStep通过用null而不是true/false；条件输入规范成boolean或使用明确比较。
+
+复验：分别运行批准/拒绝、条件true/false和业务检查通过/失败，确认合法输入正常走路由。语法错误仍可能是FK_C032/033/034，不与运行值类型错误混淆。
+
+## FK_R003 · 预留 {#FK_R003}
+
+级别登记：**error**；当前状态为预留，v1.0.0不抛此代码。没有可声明为真实触发的运行场景，也不应为了凑反例伪造抛错。
+
+如果日志出现此值，先核对实际安装版本、宿主是否自行复用了代码，以及是否混入旧产物。仓库保留不生成/不抛出该码的检查。
+
+## FK_R004 · Agent尝试耗尽 {#FK_R004}
+
+级别：**error**。触发：runAgent普通拒绝，或结果未通过结构校验/checkStep/verify，经过retries+1次仍失败。错误带reasons；cause只有相应异常失败条件下才存在。
+
+最小触发：运行[重试例](/guide/validation-retries)的`node host.mjs exhaust`，每次返回数字answer而Schema要求字符串，默认三次后耗尽。
+
+修复：检查真实返回形状和reasons，修正生成器、Schema或业务规则。把answer改成字符串后重试；不能单纯增加retries掩盖永远不可能满足的约束。
+
+复验：默认模式第一次失败第二次成功；exhaust三次后仍给出清晰原因，初始state不被失败输出提交。Skill加载错误发生在重试之前，保留其原代码，不应全部期待R004。
+
+## FK_R010 · 本地Skill缺失 {#FK_R010}
+
+级别：**error**。触发：默认loader运行读取的文件或中间目录不存在。编译关闭skillCheck，或同进程已有成功编译缓存后删除文件，都可能在运行时看到此码。
+
+最小触发：使用[宿主示例](/guide/host-integration)，临时重命名skills/writer.md，以`skillCheck:false`运行；编译不会检查存在性，运行读取会失败。保留原文件备份且勿覆盖已有备份。
+
+修复：恢复UTF-8文件和正确目录，核对projectRoot、agent映射和显式skill优先级。不能用skillCheck:false让实际运行忽略缺失。
+
+复验：恢复文件后compile/check/run均成功。cause可能存在，但不承诺稳定结构，处理逻辑以code和文件布局为主。
+
+## FK_R011 · Skill引用或读取边界非法 {#FK_R011}
+
+级别：**error**。触发：默认loader读到projectRoot之外的真实路径，非法URL/本地路径，本地使用integrity或运行时integrity格式不合法。编译通过不代表符号链接真实目标一定在界内。
+
+最小触发：在隔离测试目录把skills链接到项目根以外，保持DSL使用合法skills/writer.md；运行默认loader会拒绝真实路径越界。这个反例涉及链接操作，普通读者可先用仓库对应自动化用例验证，无需修改业务目录的链接。
+
+修复：把真实文件放回项目根内，或通过明确的宿主存储适配重新设计边界；不要用路径绕行隐藏越界。仅为显式HTTPS Skill配置合法integrity。
+
+复验：恢复普通文件目录后成功；仓库`node --test --test-name-pattern="acceptance FK_R011:" tests/compiler/acceptance-errors.test.mjs`验证越界与恢复（先build）。AOT的词法source边界与这里的realpath检查不同。
+
+## FK_R012 · 远程来源被拒绝 {#FK_R012}
+
+级别：**error**。触发：运行默认loader遇到非HTTPS、主机未放行或跨源重定向。直接run DSL可能更早在编译阶段报C052/C057，而尚未进入此运行时检查。
+
+最小触发：在[远程示例](/examples/remote-skills)的固定fetch中改为返回302，Location指向`https://other.example.test/skill.md`。即使原URL主机已放行，跨源跳转仍拒绝。
+
+修复：使用受审的最终HTTPS地址和精确主机/端口白名单，移除跨源跳转；同源重定向也不能超过默认次数。不要为跳转目标自动扩大白名单。
+
+复验：恢复固定200响应和正确字节后成功；真实服务下检查实际最终URL、证书和端口。协议、主机、端口任一变化都可能改变源。
+
+## FK_R013 · 远程内容摘要不符 {#FK_R013}
+
+级别：**error**。触发：下载原始字节与显式integrity不匹配。换行、编码或服务器内容替换都可能改变摘要。
+
+最小触发：运行[远程示例](/examples/remote-skills)的`node host.mjs tampered`，返回不同字节但保留原摘要。
+
+修复：恢复受审原始内容；若内容是有意升级，先审阅，再用integrity.mjs重新计算并更新工作流。不要直接移除摘要绕过失败。
+
+复验：运行默认模式成功，requests为1；再次tampered仍应失败。生产部署检查服务端原始字节，不用渲染后的Markdown文本计算摘要。
+
+## FK_R014 · 读取或UTF-8解码失败 {#FK_R014}
+
+级别：**error**。触发：远程HTTP/网络/读体失败、超时、超限、重定向次数超限，或本地/远程严格UTF-8解码失败。该码带cause，用于进一步区分具体原因。
+
+最小触发：在远程固定fetch示例返回`new Response('unavailable', { status: 503 })`，或在隔离例中把本地Skill写为非法字节0xff。前者触发HTTP读取失败，后者触发严格解码失败。
+
+修复：恢复成功响应和正确UTF-8内容；真实网络核对约10秒整体期限、最大262144字节、最多3次同源重定向。不是每个本地文件系统异常都归一成R014，其他错误可以原样传播。
+
+复验：恢复200响应与原字节，重新运行成功；失败变体保留cause且不误报成功。取消信号的分类还需宿主isControlSignal配合，详见[取消与错误传播](/guide/cancellation)。
+
+## 回到问题定位
+
+保存成功/失败命令、版本和最小输入后再提交问题。仓库tests/fixtures/errors中的61码目录包含60个活动码的反例与相邻合法输入，以及FK_R003不生成/不抛出的预留检查，自动化不替代你对真实业务输入的检查。参见[问题定位](/troubleshooting/index)。

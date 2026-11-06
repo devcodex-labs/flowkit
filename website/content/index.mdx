@@ -1,0 +1,44 @@
+---
+pageType: home
+hero:
+  name: FlowKit
+  text: 把业务步骤写成清晰的工作流
+  tagline: 用 JavaScript / TypeScript 定义流程，通过宿主 Runtime 连接 Agent、业务操作和人工审批。首个正式版本 v1.0.0 · MIT
+  actions:
+    - theme: brand
+      text: 快速开始
+      link: /guide/quick-start
+    - theme: alt
+      text: 查看示例
+      link: /examples/index
+features:
+  - title: 先检查，再执行
+    details: 静态检查引用、分支、循环和数据声明，生成可阅读的 JavaScript 与 Mermaid。
+  - title: 业务能力由你掌握
+    details: 宿主实现模型调用、业务接口、结果校验和人工交互，流程负责连接这些能力。
+  - title: 看清控制流
+    details: 条件、并行、验证修复和审批有明确语义，可从简单动作逐步扩展。
+---
+
+import { Mermaid } from '../components/Mermaid';
+
+## 从定义到执行
+
+<Mermaid source={'flowchart LR\n A[JS / TS 工作流] --> B[静态编译与诊断]\n B --> C[JavaScript 与 Mermaid]\n C --> D[宿主 Runtime 执行]'} title="FlowKit 如何工作" description="先描述节点及连接关系，再检查并生成控制流，最后由你提供的宿主执行具体任务。也可以用 run 直接编译执行工作流源码。" />
+
+## 一个最小工作流
+
+下面的流程生成一条问候，再进入成功终点。`action` 声明要做什么，真正写入状态的代码位于宿主中。
+
+```js file="../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
+```
+
+完整的宿主、安装命令和预期输出见[快速开始](/guide/quick-start)。第一次使用不需要模型密钥。
+
+## 适合你的任务吗
+
+当任务包含多个业务步骤，并需要明确的分支、校验、重试或人工决策时，可以用 FlowKit 组织控制流。你仍需提供实际模型或业务服务，以及适合业务的结果校验器。
+
+FlowKit 是进程内编排工具。它不内置工作流数据库、跨进程恢复、审批界面或模型服务。并行分支共享状态；选择 `any` 汇合不会自动取消其他分支。先从小流程验证业务边界，再增加节点。
+
+[项目介绍](/guide/introduction) · [安装与环境](/guide/installation) · [GitHub](https://github.com/devcodex-labs/flowkit) · [MIT 许可证](https://github.com/devcodex-labs/flowkit/blob/main/LICENSE)

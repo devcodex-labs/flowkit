@@ -1,4 +1,29 @@
-# Golden workflows
+# FlowKit 示例
+
+初次使用请从[中文快速开始](https://devcodex-labs.github.io/flowkit/guide/quick-start.html)进入。用户教程主源位于 [docs/](docs/)，使用公开的 `@devcodex/flowkit@1.0.0` 入口；下面保留原有三个仓库回归示例的命令与说明。
+
+## 用户教程
+
+各目录提供完整工作流、宿主及所需的 Skill 和辅助文件。按[站点示例](https://devcodex-labs.github.io/flowkit/examples/index.html)对应页面的安装、运行与预期结果操作。
+
+| 目录 | 内容 |
+|---|---|
+| [quick-start](docs/quick-start/) | 两文件首次运行 |
+| [host-integration](docs/host-integration/) | Agent、Skill、Schema 校验与审批宿主 |
+| [conditional-routing](docs/conditional-routing/) | JavaScript / TypeScript 条件路由 |
+| [parallel-review](docs/parallel-review/) | all / any 汇合、失败与延迟分支 |
+| [verification-repair](docs/verification-repair/) | 循环检查、修复和耗尽 |
+| [human-approval](docs/human-approval/) | 直接批准、拒绝后修订再批准 |
+| [remote-skills](docs/remote-skills/) | 固定 HTTPS 响应、白名单、SRI 和缓存 |
+| [aot](docs/aot/) | 独立目录部署、一致性检查和恢复 |
+| [validation-retries](docs/validation-retries/) | 结果校验、重试次数和提交时机 |
+| [cancellation](docs/cancellation/) | 取消传播和资源清理 |
+| [run-cache](docs/run-cache/) | 进程内编译缓存和每次运行的状态 |
+| [sdk-options](docs/sdk-options/) | SDK、配置、CLI 和公共类型 |
+
+示例中的 Agent 输出、人工决策与远程响应用于演示编排行为，不调用真实模型或审批 UI。固定远程响应不代表已验证互联网服务。替换真实服务前阅读[宿主接入](https://devcodex-labs.github.io/flowkit/guide/host-integration.html)。
+
+仓库构建后执行 `npm run docs:examples`，验证脚本会在临时项目真实安装候选 tarball 并运行这些教程。公开 npm 包消费与文档站发布步骤见[发布维护](https://devcodex-labs.github.io/flowkit/maintainers/releasing.html)。
 
 ## Contents
 
@@ -75,5 +100,4 @@ validator. Production hosts must bind a complete validator for their schema
 dialect, actual model execution, business actions and an approval service. See
 [host integration](../docs/host-integration.md) and [troubleshooting](../docs/troubleshooting.md).
 
-These files are repository examples; the private npm tarball currently ships
-`dist`, `README.md` and package metadata. It does not ship this directory.
+示例目录不随 npm 包分发。v1.0.0 包包含 `dist`、`README.md`、`LICENSE` 和包元数据；用户可从仓库或文档站获取完整教程文件。

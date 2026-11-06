@@ -2,7 +2,7 @@
 // workflow: editorial@1.0.0（Editorial approval）
 // source: editorial.workflow.js
 // sourceHash: sha256:bf1015cfd71b940a9dea9bc15743a67d716e7225ed900f9f1b16fdc722b2b74c · bodyHash: sha256:a711bb6c2b0b491bf32ea3692a0bff6d64b2d15740eb37bb62e7f0357471f1e4
-// compiler: flowkit@0.0.0-m0 · options: trace=off
+// compiler: flowkit@1.0.0 · options: trace=off
 // evalWhen reads own ctx.state paths; strict booleans and short circuit; ! has lower precedence than comparison.
 // runAgent receives one step; schema -> checkStep -> verify; own-key commit only after success; retries share reasons and control signals are rethrown.
 // runHuman accepts boolean or approved/comment; comment defaults to null. runVerification is strictly boolean (FK_R002).

@@ -2,3 +2,5 @@ node_modules/
 dist/
 .tmp/
 *.tgz
+website/doc_build/
+website/.rspress/

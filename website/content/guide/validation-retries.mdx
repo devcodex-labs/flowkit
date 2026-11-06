@@ -1,0 +1,47 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 结果校验与重试
+
+Agent 的输出不是一返回就进入 state。FlowKit 把生成、结构校验、业务检查和可选 verify 串成一次尝试；只有全部通过才提交结果。这样下游节点不会消费一个尚未验收的顶层输出。
+
+<Mermaid source={'flowchart LR\n skill[加载Skill一次] --> agent[runAgent]\n agent --> schema[validateResult]\n schema --> check[checkStep 可选]\n check --> verify[verify 可选]\n verify --> commit[提交结果]\n schema -->|不通过| retry[带reasons重试]\n check -->|不通过| retry\n verify -->|不通过| retry\n retry --> agent'} title="Agent 结果的提交顺序" description="失败尝试带原因进入下一次调用，Skill加载在重试循环之前。" />
+
+## 四个检查位置
+
+1. `runAgent(step)` 返回结构化对象。step 包含 instruction、input、missing、resultSchema、attempt 和 reasons。
+2. `validateResult(schema, result)` 同步返回错误字符串数组；空数组表示结构正确。FlowKit 不内置 JSON Schema 校验器，宿主负责实现所声明的 Schema 语义。
+3. 可选 `checkStep(step, result, ctx)` 异步返回一个原因字符串，或 null/undefined 表示通过。其他返回类型属于 `FK_R002`。
+4. 节点声明 verify 时，调用 `runVerification` 检查合并了候选结果的状态；需要严格 boolean。通过后才提交。
+
+示例中的手写校验器只覆盖该例的单字段 Schema。生产接入应选用能覆盖实际 Schema 关键词的校验实现，并将完整错误转为字符串数组；不能把“总是返回 []”当成验证。
+
+## retries 计算的是额外重试次数
+
+`retries` 范围0–10，默认2。默认最多3次 runAgent 调用；设为0仍会执行第一次。attempt 从1递增；下一次的 reasons 提供上一次未通过的原因。重试并不自动回退外部写入，所以模型工具调用和业务副作用应具备幂等性。
+
+下面是一组不依赖模型服务的可执行示例。先按[安装](/guide/installation)准备 ESM 项目，建立这些文件；Skill 放在指定子目录。
+
+```js file="../../../examples/docs/validation-retries/sample.workflow.js" title="sample.workflow.js"
+```
+
+```md file="../../../examples/docs/validation-retries/skills/result.md" title="skills/result.md"
+```
+
+```js file="../../../examples/docs/validation-retries/host.mjs" title="host.mjs"
+```
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+node host.mjs
+node host.mjs exhaust
+```
+
+前置observe动作只保存实际ctx.state的引用，不写业务字段。每次调用runAgent前记录stateBefore，结束时复制为stateAtEnd；这样能够观察真正的运行状态，而不是只检查run浅复制前的initial对象。
+
+第一次运行：第一次返回数字而校验失败，第二次返回字符串后成功，attempts长度2；两个stateBefore都是空对象，stateAtEnd为 `{ answer: '已修正' }`。exhaust让每次都返回错误类型，三次后得到 `FK_R004`，含最终reasons；三个stateBefore及stateAtEnd都为空，说明失败结果没有进入运行状态。两种情况下initial仍为空，这是“没有修改调用者顶层对象”的另一项保证。具体输出由完整宿主打印。
+
+## 哪些错误不会按普通生成失败处理
+
+runAgent 的普通拒绝会进入重试；控制信号由 runtime.isControlSignal 判定并原样传播。Skill 加载在重试循环之前，加载失败保留对应 Skill 错误，不包装为重试耗尽。非法宿主返回值需要修复契约，不能靠增加 retries 解决。
+
+耗尽错误的 cause 是有条件提供的：最近一次失败是捕获的异常时可以保留原因；单纯校验不通过不保证有 cause。错误处理优先检查 code/reasons，并允许 cause 缺失。更完整的宿主顺序见[接入自己的宿主](/guide/host-integration)，错误边界见[取消与错误传播](/guide/cancellation)。

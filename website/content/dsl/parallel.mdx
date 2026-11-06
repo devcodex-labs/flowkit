@@ -1,0 +1,44 @@
+# parallel
+
+`parallel(id, options)` 同时启动多个成员，再按join策略决定何时继续。它适合相互独立、写入键互不冲突的工作；各成员仍共享本次运行的Runtime和state。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 并行区域显示名称 |
+| `branches` | 必需节点id数组 | 2–16项；成员只能是Agent/action/verification |
+| `join` | 必需对象 | 仅strategy和next |
+| `join.strategy` | 必需枚举 | all_succeeded或any |
+| `join.next` | 必需节点id | 汇合后的后继 |
+
+成员不能自带后继或被其他路线直接引用。Agent/action成员省略next，verification成员省略onSuccess/onFailure。每个成员是一个节点，不是任意嵌套子图。
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 两种汇合策略
+
+| 策略 | 继续条件 | 拒绝与剩余工作 |
+|---|---|---|
+| all_succeeded | 所有分支Promise正常完成 | 任一拒绝可导致并行区域拒绝；不自动回滚其他分支 |
+| any | 至少一个分支Promise正常完成 | 全部普通拒绝时失败；控制信号单独传播；其余分支不自动取消 |
+
+verification返回false依旧是正常完成。名称all_succeeded描述Promise完成，不保证每个业务判断true；any也不表示“第一个true”。
+
+```js file="../../../examples/docs/parallel-review/all.workflow.js" title="all.workflow.js"
+```
+
+```js file="../../../examples/docs/parallel-review/any.workflow.js" title="any.workflow.js"
+```
+
+完整宿主使用一个立即返回false的校验和一个受控延迟动作，见[并行处理与汇合](/examples/parallel-review)。all会等慢分支，any可先汇合，但慢分支随后仍会写state。宿主等待剩余工作后打印的state可能已经不同于汇合瞬间。
+
+## 数据与副作用
+
+声明的Agent output.properties、action.writes 和并行verification id不能发生写入冲突。[FK_C026](/troubleshooting/compiler#FK_C026)时先拆开结果键，再在汇合后由action合并。不要通过漏写writes绕过冲突检查。
+
+声明检查不能阻止嵌套别名竞争、未声明写入或外部副作用。需要完整稳定的所有结果时使用all_succeeded；需要首个可用结果时设计宿主取消和幂等策略。结果对象包含共享state引用，不代表冻结了any汇合瞬间的快照。
+
+## 非法例与恢复
+
+只有1个分支：[FK_C020](/troubleshooting/compiler#FK_C020)；strategy写race：[FK_C023](/troubleshooting/compiler#FK_C023)；把human放进branches：[FK_C022](/troubleshooting/compiler#FK_C022)；外部节点直接跳入成员：[FK_C024](/troubleshooting/compiler#FK_C024)。按限制修图，再运行正常、普通拒绝、延迟分支三条路径。相关取消责任见[取消与错误传播](/guide/cancellation)。
+
+相关宿主方法：[runAgent](/reference/runtime#runAgent)、[runAction](/reference/runtime#runAction)、[runVerification](/reference/runtime#runVerification)。具体方法取决于成员节点；容器本身不新增宿主方法。

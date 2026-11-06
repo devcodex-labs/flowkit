@@ -1,0 +1,36 @@
+# 选择示例
+
+这些示例围绕具体任务组织。每个场景页都提供完整文件、依赖安装、命令、预期结果和失败恢复；从最接近你的需求的一项开始。示例使用公开包入口，不要求导入源码仓库内部模块。
+
+## 按任务选择
+
+| 你想完成的事 | 示例 | 前置知识 |
+|---|---|---|
+| 第一次安装并得到结果 | [第一个工作流](/guide/quick-start) | Node与ESM |
+| 连接Agent、Schema、Skill和审批 | [接入自己的宿主](/guide/host-integration) | 已跑通最小例 |
+| 按输入分流后汇合 | [条件分流与汇合](/examples/conditional-routing) | state与boolean |
+| 同时处理独立工作 | [并行处理与汇合](/examples/parallel-review) | Promise完成与拒绝 |
+| 检查不通过时有界修复 | [校验与循环修复](/examples/verification-repair) | verification/action |
+| 拒绝后修订再审批 | [人工审批与修订](/examples/human-approval) | human返回形状 |
+| 下载固定版本说明 | [远程Skill加载](/examples/remote-skills) | HTTPS白名单与摘要 |
+| 构建并复制到部署目录 | [构建并部署工作流](/examples/aot) | compile/check |
+| 校验输出并重试 | [结果校验与重试](/guide/validation-retries) | Agent和Schema |
+| 处理取消并清理资源 | [取消与错误传播](/guide/cancellation) | AbortController |
+| 理解多次运行和缓存 | [run的完整例子](/reference/sdk#run) | state浅复制 |
+| 调用全部SDK并观察trace/dump | [跟踪与运行记录](/guide/observability) | SDK与文件产物 |
+
+## 示例的依赖和边界
+
+运行环境为Node >=22.13.0，FlowKit精确版本1.0.0，消费者package.json设置type:module。JavaScript例不需要模型密钥；TS类型演练另装TypeScript 5.0+。每个目录独立保留自己的package.json，避免项目根查找受到仓库上层目录影响。
+
+固定runAgent响应用于证明编排，不表示已接入模型服务。简化validateResult只处理对应例子的Schema；真实业务需要完整校验。远程示例覆盖fetch并返回固定Response，不访问示例域名。人工审批使用确定性决策序列，不提供实际审批界面。
+
+## 文件从哪里来
+
+教程代码与仓库[examples/docs](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)中的主源保持一致。主源的verify.mjs保存成功、失败与恢复断言，manifest列出12组消费者案例。站点构建直接包含主源文件，README最小例从同一来源同步。
+
+## 推荐运行方式
+
+先在空目录按页面复制文件并安装确切版本，避免把已有业务项目改坏。执行成功路径后再尝试页面明确给出的失败变体，每次恢复原设置并复验。只看compile成功还不够：检查产物、运行结果、状态字段、事件顺序和退出码。
+
+维护仓库时可执行`npm run build`及`npm run docs:examples`：它在临时目录真实安装候选tarball，用独立消费者运行所有案例。这个本地候选验证不等于公开npm包或线上站点已经通过验证。遇到差异从[问题定位](/troubleshooting/index)开始。

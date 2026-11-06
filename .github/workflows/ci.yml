@@ -40,6 +40,17 @@ jobs:
           # Type rejection fixtures retain diagnostics in JSON evidence.
           echo "::remove-matcher owner=tsc::"
           npm run verify
+      - name: Consume candidate package through all documentation examples
+        run: npm run docs:examples -- --evidence .tmp/docs/candidate.json
+      - name: Keep documentation consumer evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: docs-consumer-${{ matrix.os }}-${{ matrix.node }}
+          path: .tmp/docs/candidate.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Keep declaration evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -48,4 +59,30 @@ jobs:
           path: .tmp/types/results.json
           include-hidden-files: true
           if-no-files-found: ignore
+          retention-days: 14
+
+  website:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            website/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix website ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - run: npm run docs:check
+      - run: npm run docs:build
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: website-preview
+          path: website/doc_build
+          if-no-files-found: error
           retention-days: 14

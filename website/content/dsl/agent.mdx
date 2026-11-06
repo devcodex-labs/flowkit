@@ -1,0 +1,43 @@
+# node（Agent 节点）
+
+`node(id, options)` 创建 type:agent 节点。它加载说明、提取输入、请求宿主生成结果，完成校验和可选重试后提交状态。它不绑定某个模型供应商。
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 字段
+
+| 字段 | 类型/默认 | 含义与限制 |
+|---|---|---|
+| `name` | 必需string | 显示名称，遵守公共节点规则 |
+| `agent` | string，可选 | 默认映射skillsRoot/agent.md；agent/skill至少一个 |
+| `skill` | string，可选 | 显式本地路径或HTTPS URL；优先于agent |
+| `output` | 必需对象Schema | 顶层type必须为object，properties若存在必须为对象 |
+| `inputs` | string[]，默认[] | 从state选择键；非空且不重复的条目 |
+| `retries` | 整数0–10，默认2 | 额外重试次数，总尝试数为retries+1 |
+| `verify` | 非空string，可选 | 交给runVerification的校验标识，不是节点引用 |
+| `overview` | boolean，默认false | 向AgentStep附加overview.step |
+| `integrity` | string，可选 | 只适用于远程Skill，单个sha256/384/512摘要 |
+| `next` | 节点id | 普通Agent必需；parallel成员必须省略 |
+
+output 可包含 required、additionalProperties、嵌套 properties、items 和其他 JSON Schema 2020-12 扩展关键词，作为 JSON 数据保留。FlowKit 不内置完整 Schema 校验器；validateResult 必须真实实现你的 Schema。静态写入分析主要依据 output.properties 的键，不会约束任意额外运行时字段。
+
+## 完整工作流
+
+```js file="../../../examples/docs/host-integration/sample.workflow.js" title="sample.workflow.js"
+```
+
+本例先生成 draft，再验证候选草稿，最后请求人工批准。Skill 文件和完整宿主见[接入自己的宿主](/guide/host-integration)。保存全部文件后 compile/check/run，预期顺序为 agent、validate、checkStep、verify、human。
+
+## 返回与提交
+
+runAgent 得到 AgentStep，返回对象。validateResult 同步返回 string[]，checkStep 可返回单个原因，verify 读取合并候选结果的临时状态。只有全部通过，输出自己的可枚举字符串键才提交到主 state。Skill 在重试循环外加载一次。
+
+runAgent 普通拒绝可以重试；控制信号原样传播。校验/业务方法自身抛异常与返回失败原因不同，不应假定都自动重试。耗尽是 [FK_R004](/troubleshooting/runtime#FK_R004)，含 reasons，cause 视最近一次失败类型而定。
+
+## 常见非法配置
+
+省略 agent 和 skill：[FK_C050](/troubleshooting/compiler#FK_C050)；output写成字符串或type:array：[FK_C054](/troubleshooting/compiler#FK_C054)；retries:11：[FK_C055](/troubleshooting/compiler#FK_C055)；inputs重复/空项：[FK_C056](/troubleshooting/compiler#FK_C056)；并行成员写next：[FK_C021](/troubleshooting/compiler#FK_C021)。分别恢复说明来源、对象Schema、合法次数、唯一输入键和由join统一后继，再执行 compile/check。
+
+需要完整重试与失败输出时阅读[结果校验与重试](/guide/validation-retries)。Skill约束见[本地 Skill](/guide/local-skills)和[远程 Skill](/guide/remote-skills)。
+
+相关宿主方法：[runAgent](/reference/runtime#runAgent)、[validateResult](/reference/runtime#validateResult)、[checkStep](/reference/runtime#checkStep)、[runVerification](/reference/runtime#runVerification)、[loadSkill](/reference/runtime#loadSkill)、[loadSkillByAgent](/reference/runtime#loadSkillByAgent)。

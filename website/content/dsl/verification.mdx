@@ -1,0 +1,41 @@
+# verification
+
+`verification(id, options)` 请求宿主给出通过/不通过的严格布尔结论。`runVerification(verifier, name, ctx)` 返回 true 或 false；字符串、数字、null 等都不按真假值转换，而是 [FK_R002](/troubleshooting/runtime#FK_R002)。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 显示名称 |
+| `verifier` | 必需非空string | 宿主选择校验逻辑的标识 |
+| `onSuccess` | 节点id | 普通上下文必需；parallel成员禁止 |
+| `onFailure` | 节点id | 普通上下文必需；parallel成员禁止 |
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 三种上下文
+
+| 位置 | true | false | 状态副作用 |
+|---|---|---|---|
+| 普通图分支 | onSuccess | onFailure | 不自动写state[id] |
+| parallel成员 | 该Promise正常完成 | 同样正常完成 | 写state[id]布尔值 |
+| loop的body入口 | 回到loop控制点，走loop.onSuccess | 还有次数则修复，否则耗尽 | 不自动写state[id] |
+
+false 是业务校验结果，不等于 Promise reject。尤其 all_succeeded 等待分支Promise正常完成，不能理解为所有verification都必须true。要按汇总布尔值决定业务结果，可以在汇合后加condition。
+
+## 完整有界修复例
+
+```js file="../../../examples/docs/verification-repair/sample.workflow.js" title="sample.workflow.js"
+```
+
+配套宿主见[校验与循环修复](/examples/verification-repair)。检查score不达标时执行improve，再检查；成功进入done。这里check的onSuccess指向quality这个loop id，这是受支持的专用返回边。
+
+## 返回值与错误
+
+在宿主明确写 `return score >= target`，不要返回 `{ ok: true }` 或 `'true'`。如果校验服务返回对象，先验证对象再提取布尔字段。服务异常会以拒绝传播，和false的正常失败路线分开处理；是否被外层结构处理取决于流程，不能假设自动走onFailure。
+
+## 非法例与恢复
+
+普通verification缺onFailure得到[FK_C016](/troubleshooting/compiler#FK_C016)；并行成员保留后继得到[FK_C025](/troubleshooting/compiler#FK_C025)。将前者补齐，将后者交给join，重新compile/check。若运行报[FK_R002](/troubleshooting/runtime#FK_R002)，修宿主严格返回boolean，再复验true和false两种情况。
+
+Agent节点的verify复用runVerification，但不是独立verification节点，也不自动产生该节点的路由或state记录。参见[Agent参考](/dsl/agent)与[parallel](/dsl/parallel)。
+
+相关宿主方法：[runVerification](/reference/runtime#runVerification)。

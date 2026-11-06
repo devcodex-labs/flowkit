@@ -1,0 +1,45 @@
+# 问题定位
+
+先判断失败发生在安装、编译、运行、Skill读取还是产物验证，再收集最小证据。不要看到旧compiled文件就认为本次编译成功，也不要把failed终点当成一定抛异常。
+
+## 按症状定位
+
+| 现象 | 先检查 | 下一步 |
+|---|---|---|
+| 无法加载包或ESM语法错误 | Node版本、实际安装版本、type:module、工作目录 | [安装](/guide/installation) |
+| CLI打印普通文本且退出2 | 子命令、文件后缀、参数、I/O | [命令行](/reference/cli) |
+| 配置code:null且退出2 | 当前cwd的flowkit.config.mjs及字段类型 | [配置](/reference/options) |
+| FK_C开头诊断 | file/line/column/nodeId和图/字段约束 | [编译诊断](/troubleshooting/compiler) |
+| FK_R002 | 宿主返回类型、when实际值 | [运行时错误](/troubleshooting/runtime#FK_R002) |
+| FK_R004 | attempts、reasons、可选cause | [重试](/guide/validation-retries) |
+| Skill缺失/越界/读取失败 | projectRoot、真实路径、白名单、摘要、编码 | [运行时错误](/troubleshooting/runtime#FK_R010) |
+| check或AOT报FK_R001 | 当前源码、产物正文、源引用、相同编译选项 | [AOT](/guide/aot) |
+| 并行结果与预期不同 | false与reject区别、any后仍执行、共享嵌套数据 | [parallel](/dsl/parallel) |
+| result.status为failed但没有error | 业务失败终点，error字段仅条件性存在 | [terminal](/dsl/terminal) |
+
+## 最小诊断步骤
+
+在消费者目录执行`node --version`和`npm ls @devcodex/flowkit`，记录实际版本。运行compile，保留完整诊断和退出码；若无error，确认compiled/mmd存在，再运行check。最后运行宿主，记录result或原始异常的code/reasons/cause是否存在。
+
+直接SDK中compile/check返回诊断，run编译失败会拒绝并附带phase:compile和diagnostics；调用参数、文件I/O与业务异常不保证具有FK代码。先保留原错误类型，避免统一包装丢失定位信息。
+
+## 常见误判
+
+check在缺少compiled时可以成功，它不生成文件。warning不等于error，C053/C059可以继续生成。writes是声明，不替宿主赋值。run每次有新顶层state，但嵌套对象仍可共享。dump是代码文件，不是运行日志。更多边界见对应参考页。
+
+## 提交问题时提供这些信息
+
+```text
+FlowKit版本：
+Node/npm版本与操作系统：
+调用目录与工作流后缀：
+复现步骤和完整命令：
+期望结果：
+实际结果及退出码：
+完整诊断code/file/line/column/severity：
+最小workflow、host、必要Skill（已脱敏）：
+配置与是否使用自定义loader/fetch：
+成功与失败变体、恢复结果：
+```
+
+在[GitHub Issues](https://github.com/devcodex-labs/flowkit/issues)提交可复现信息。删除模型密钥、凭据、真实用户数据和不必要的业务内容；可以用固定响应替代外部服务，保留同样返回形状。不要只贴截图或一行“运行失败”。贡献过程见[参与贡献](/community/contributing)。

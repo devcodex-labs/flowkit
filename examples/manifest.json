@@ -45,8 +45,8 @@
     },
     {
       "path": "editorial.compiled.mjs",
-      "bytes": 8624,
-      "sha256": "5de5bed28e820b0f558c032375d9ab37e125ac3cca3b1bedaf2389f36320ab37"
+      "bytes": 8621,
+      "sha256": "13dfceb4aa23fcaf9456c2ee0e08b526f9412f57b04046657bcc265330c93a2f"
     },
     {
       "path": "editorial.mmd",
@@ -60,8 +60,8 @@
     },
     {
       "path": "shared-join.compiled.mjs",
-      "bytes": 1305,
-      "sha256": "b84fc95397a5cb4408bdc6d73e3e9a7407c646a013e46db1a096b9eaaeda4fb0"
+      "bytes": 1302,
+      "sha256": "af686de6d35e58dee52e368522e33f3ab515059e23ca7fa6b38f17c86a87167a"
     },
     {
       "path": "shared-join.mmd",
@@ -75,8 +75,8 @@
     },
     {
       "path": "remote.compiled.mjs",
-      "bytes": 5570,
-      "sha256": "f4762e29e877b4faa08b27162e9896387092efdf3844dfb01bd7a2f3328d3d27"
+      "bytes": 5567,
+      "sha256": "a949699d179355995ddc6407bf221f3b18c07a55dabb42530bd8c804ca9def36"
     },
     {
       "path": "remote.mmd",

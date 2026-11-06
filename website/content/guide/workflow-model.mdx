@@ -1,0 +1,45 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 工作流模型
+
+一个工作流是声明节点和引用的有向图。FlowKit 编译这个图，将控制流交给生成代码执行；宿主实现每个节点背后的具体工作。读懂图的入口、后继和回路后，再选择节点类型会更容易。
+
+## 定义、节点与状态
+
+`defineWorkflow` 接收工作流的 `id`、`version`、`name` 和 `nodes`。`nodes` 第一项是执行入口；数组后面的排列顺序不是执行顺序，后继引用才决定下一步。节点的 id 用于引用，name 用于显示和跟踪。id 和 name 各自不能重复。
+
+一次 run 有独立的上下文和顶层 state。Agent 通过 inputs 选择输入并提交输出字段，action 通过宿主直接写 state，并行内的 verification 写入以节点 id 命名的布尔值，human 写入审批决策。普通 verification 的返回值直接控制路线。详见[状态与数据传递](/guide/state-data)。
+
+## 顺序、分流与汇合
+
+```js file="../../../examples/docs/conditional-routing/sample.workflow.js" title="sample.workflow.js"
+```
+
+<Mermaid source={'flowchart LR\n route{urgent?} -->|true| fast[快速处理]\n route -->|默认| normal[普通处理]\n fast --> done[成功终点]\n normal --> done'} title="条件分流后共享终点" description="只执行第一个命中的分支；两个分支引用同一个终点，终点不需要复制。" />
+
+多个分支可以共享后继。共享汇合不等于并发；condition 只选择一个分支，parallel 才启动多个分支。需要并行时要额外声明 join 策略并避免写入冲突。
+
+## 八类节点如何分工
+
+| 需求 | 节点 | 宿主承担的工作 |
+|---|---|---|
+| 根据 Skill 生成结构化结果 | node（Agent） | 调用模型或其他生成器，校验 Schema |
+| 已有确定性业务函数 | action | 执行函数并写 state |
+| 得到通过或不通过结论 | verification | 返回严格 boolean |
+| 同时执行独立工作 | parallel | 各分支复用同一 Runtime 和 state |
+| 按 state 选择路线 | condition | 接入公开 evalWhen |
+| 有上限地检查和修复 | loop | 校验、修复动作或 Agent |
+| 等待人作出决定 | human | 展示内容、等待响应、返回决策 |
+| 返回工作流结果 | terminal | 无需业务方法 |
+
+## 回路有明确形状
+
+普通节点不能任意跳回之前的节点。循环修复必须使用 loop：入口是 verification，失败走修复链并回到该 verification，成功返回 loop 控制点，达到上限走 onMaxExceeded。审批拒绝链只允许 Agent/action，并必须回到同一个 human。
+
+<Mermaid source={'flowchart LR\n loop[循环控制] --> check{检查}\n check -->|通过| loop\n check -->|失败且还有次数| repair[修复]\n repair --> check\n loop -->|通过| done[成功终点]\n loop -->|次数耗尽| failed[失败终点]'} title="有界检查与修复" description="每轮先检查；最后一轮不通过时直接进入耗尽终点，不再做一次无用修复。" />
+
+## 编译前先检查这些关系
+
+每个引用必须指向已定义 id；所有节点都必须从第一项可达；Agent/action 通常要有 next，verification 通常要有两个后继。parallel 内部成员是例外：由 join 统一控制下一步，不允许成员再写自己的后继。
+
+如果出现 `FK_C015`，修正不存在的引用；出现 `FK_C017`，检查孤立节点和入口；出现 `FK_C080`，把任意回跳改成受支持的 loop 或 human 结构。修复后运行 compile 和 check，再运行成功、失败两条业务路径。完整字段见 [DSL 总览](/dsl/index)。

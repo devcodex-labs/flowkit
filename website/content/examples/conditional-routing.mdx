@@ -1,0 +1,67 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 条件分流与汇合
+
+同一个任务根据urgent选择快速或普通路线，最后共享终点。你会运行两种输入、TypeScript等价定义和一次类型错误恢复。
+
+## 流程与执行顺序
+
+<Mermaid source={"flowchart LR\n choose{urgent 是否为 true} -->|是| fast[加急处理]\n choose -->|默认分支| normal[普通处理]\n fast --> done[共同成功终点]\n normal --> done"} title="按输入选择一条路径" description="先判断urgent，只执行首个命中分支；两条路径都写route，再进入同一个done终点。" />
+
+## 环境与文件
+
+需要Node >=22.13.0和ESM项目。建立新的演示目录，按下列文件名保存完整内容；子目录也要保留。然后在该目录运行安装，依赖固定为1.0.0。下面文件可直接复制，不需要源码仓库的私有模块。
+
+```sh
+npm install --ignore-scripts --no-audit --no-fund
+```
+
+### package.json
+
+```json file="../../../examples/docs/conditional-routing/package.json" title="package.json"
+```
+
+### sample.workflow.js
+
+```js file="../../../examples/docs/conditional-routing/sample.workflow.js" title="sample.workflow.js"
+```
+
+### sample.workflow.ts
+
+```ts file="../../../examples/docs/conditional-routing/sample.workflow.ts" title="sample.workflow.ts"
+```
+
+### host.mjs
+
+```js file="../../../examples/docs/conditional-routing/host.mjs" title="host.mjs"
+```
+
+## 按顺序运行
+
+命令在本例根目录逐行执行，cd之后按命令进入目标目录。带故意失败参数的命令是独立验证步骤，记录错误后继续恢复操作。
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+node host.mjs
+node host.mjs urgent
+npx --no-install flowkit compile sample.workflow.ts
+npx --no-install flowkit check sample.workflow.ts
+node host.mjs urgent ts
+```
+
+## 对照预期结果
+
+默认输入urgent:false，state.route为normal；urgent参数得到fast。两者status均为succeeded，terminal为done。TS运行同样得到fast。两个源码同名基础部分会生成同名产物，所以命令按每次compile/check成对执行。
+
+## 失败与恢复
+
+将host中传给run的urgent改成字符串yes，保持when读取urgent，运行得到FK_R002。恢复boolean后再跑普通和urgent两条路径。将默认true分支删掉会在编译时报FK_C031，补回后再compile/check。
+
+## 接入真实业务
+
+把urgent换成业务输入时，在宿主接收入口验证其类型。复杂计算先由action写入命名状态；when只保留可读的比较和布尔组合。
+
+## 完成标准
+
+你应能运行成功路径、观察上述反例并恢复成功，解释状态字段及对应控制流。PowerShell用$LASTEXITCODE、Bash用echo $?查看上一条命令退出码。源码修改后重新compile/check，不继续使用不匹配的旧产物。继续阅读[相关契约](/guide/conditions)，或回到[选择示例](/examples/index)。

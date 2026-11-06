@@ -1,0 +1,49 @@
+# 跟踪与运行记录
+
+FlowKit 将执行上下文交给宿主，由宿主把节点事件关联到自己的日志或监控。先明确需要观察的是节点执行、Agent 尝试还是生成代码，再选择 trace、runId、overview 或 dump。
+
+## runId 关联一次执行
+
+run 默认生成运行标识；也可以通过 `{ runId: 'order-123' }` 显式传入。Ctx 和 AgentStep 都能读到它。宿主应该避免把敏感信息直接编码进标识，也不要把相同 runId 当成自动去重或恢复机制。
+
+## trace 记录节点开始和结束
+
+启用 `{ trace: true }` 后，生成代码在节点边界调用可选的 runtime.trace 钩子。start 收到 nodeId/name，end 额外收到 outcome：ok、error 或 control。钩子是同步方法，应快速且可靠；日志传输可由宿主缓冲到自己的队列。
+
+```js
+const events = [];
+const trace = {
+  start(nodeId, name) { events.push({ nodeId, name, phase: 'start' }); },
+  end(nodeId, name, outcome) { events.push({ nodeId, name, phase: 'end', outcome }); },
+};
+```
+
+trace 的 ok 表示该节点调用正常完成，不等于业务流程最终 succeeded；例如 verification 返回 false 仍是正常返回。并行事件会交错，不能按数组位置推断分支先后依赖。日志输出到控制台、文件或监控系统都需要宿主明确实现。
+
+## overview 描述 Agent 步骤
+
+Agent 节点的 `overview: true` 使 step 带有 `overview: { step: number }`，供宿主展示编排步骤信息。它不是事件流，不替代 attempt，也不承诺估算运行百分比。重试信息应读取 attempt/reasons，而非根据 overview 猜测。
+
+## dump 保存的是生成代码
+
+`dump: 'dump'` 指定运行代码落盘目录。产生 `.run.mjs` 等运行代码文件，用于检查或调试生成控制流；它不自动写 state 快照、模型输入输出或 trace 日志。目录相对于调用 run 时的工作目录解析。
+
+下面的完整示例使用六个 SDK 函数，打印 trace 事件，并启用 dump。配套工作流只包含一个 save 动作。
+
+```js file="../../../examples/docs/sdk-options/sample.workflow.js" title="sample.workflow.js"
+```
+
+```js file="../../../examples/docs/sdk-options/api.mjs" title="api.mjs"
+```
+
+```sh
+node api.mjs
+```
+
+预期 diagnostics 为空，result.status 为 succeeded，state.saved 为 true，condition 为 true，events 含节点开始/结束记录。打开 dump 目录中的 `.run.mjs` 可以看到代码，而不是 JSON 运行记录。
+
+## 已编译产物的 trace
+
+trace 是代码生成选项。直接 run DSL 时可以传 trace:true；使用 AOT 时应在 compile 阶段启用 trace，并使用一致选项 check。只给已生成的 AOT 在运行时传 trace:true，不会为旧代码补插钩子。
+
+如果没有事件，检查生成时是否启用了 trace、Runtime 是否提供 trace.start/end，以及是否实际执行到对应节点。需要取消和错误分类时，继续阅读[取消与错误传播](/guide/cancellation)。

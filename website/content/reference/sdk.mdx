@@ -1,0 +1,98 @@
+# SDK API
+
+FlowKit v1.0.0 根入口 `@devcodex/flowkit` 公开六个函数。构造工作流使用另一个入口 `@devcodex/flowkit/dsl`。直接 SDK 不自动加载 flowkit.config.mjs；请显式传 options。
+
+## run：执行工作流 {#run}
+
+```ts
+run(file: string, runtime: Runtime, state?: Record<string, unknown>, options?: FlowkitOptions): Promise<RunResult>
+```
+
+file接受`.workflow.js`、`.workflow.ts`或`.compiled.mjs`，相对路径以调用时cwd为基准。runtime必须是对象且提供isControlSignal；state默认空对象，不能为null或数组。每次运行创建新Ctx和顶层浅复制state。正常到终点返回status、terminal和state；error仅在ctx实际拥有该属性时附加。未被结构处理的异常使Promise拒绝。
+
+直接运行DSL会读取、编译并加载代码，但不生成同名compiled/mmd；dump可另外保存运行代码。AOT每次读取产物并验证源码/正文哈希，仍需物理源码。示例见[快速开始](/guide/quick-start)和[预编译与部署](/guide/aot)。
+
+### 进程内缓存的精确边界
+
+run每次重新读取指定源码或AOT。仅成功编译并首次加载的DSL代码进入进程内缓存，键包括：源码原始字节SHA256、绝对filename、解析后的projectRoot、skillsRoot（默认skills）、skillCheck（默认true）、**保留顺序的**remoteSkillHosts数组、trace（默认false）和解析后的dump路径或空值。
+
+源码路径相同但字节改变，或上述任意键变化，都会选取另一项。remoteSkillHosts元素相同但顺序不同也不是同一个键。fetch、signal、runId和初始state不属于编译缓存键，它们属于各次执行。outDir/mermaid不影响run的内存编译产物。
+
+编译错误与首次加载失败不会进入缓存；成功加载后业务运行失败不会删除已有编译项。因此重试业务仍使用已编译控制流，但创建新state/Ctx/默认Skill loader。Skill内容不包含在编译键中，下一次run仍读取新内容；同进程删掉Skill后，已有编译缓存可能让错误发生在运行加载阶段，独立check仍重新做编译检查。
+
+这个缓存不是持久化结果缓存，不恢复上次审批/进度，也没有公开淘汰API或容量承诺。长时间进程持续载入大量不同源码/选项时，要评估内存增长，通过宿主进程生命周期管理，而不要依赖内部Map操作。
+
+下面完整例子在同进程运行两次，初始count都是0，两次结果都为1；编译复用不会累计业务状态。
+
+```js file="../../../examples/docs/run-cache/sample.workflow.js" title="sample.workflow.js"
+```
+
+```md file="../../../examples/docs/run-cache/skills/instruction.md" title="skills/instruction.md"
+```
+
+```js file="../../../examples/docs/run-cache/host.mjs" title="host.mjs"
+```
+
+在已安装依赖的ESM目录保存文件，执行`node host.mjs`。第一次和第二次结果各自count为1，initial.count仍为0。修改Skill后重新启动运行可观察新instruction；完整缓存边界断言保存在示例的verify.mjs中。
+
+## compile：编译文件 {#compile}
+
+```ts
+compile(file: string, options?: FlowkitOptions): Promise<CompileResult>
+```
+
+只接受DSL源码后缀，读取原始字节并静态提取，不执行源码中的任意代码。返回code、mermaid和diagnostics；无error时写compiled，默认写mmd。warning仍可写入。编译错误通过diagnostics返回；非法参数、文件I/O等可直接拒绝。已有产物不会因本次编译失败自动删除。
+
+```js
+const result = await compile('sample.workflow.js', { trace: true });
+if (result.diagnostics.some(item => item.severity === 'error')) {
+  throw new Error(JSON.stringify(result.diagnostics));
+}
+```
+
+outDir必须为源目录或其祖先，参见[编译与检查](/guide/compile-artifacts)。不能把任意兄弟dist目录视为合法输出。
+
+## compileSource：编译文本 {#compileSource}
+
+```ts
+compileSource(text: string, options: FlowkitOptions & { filename: string }): Promise<CompileResult>
+```
+
+text必须为字符串，filename必需且满足DSL后缀。filename提供输出路径、诊断位置与项目根查找依据；不要求对应源文件预先存在，但不会替你保存源码。副作用与compile相同。AOT运行仍验证物理源码，因此文本编译后部署必须另存原始文本并保持字节一致。
+
+filename仅在这个函数的options中允许；传给run/compile/check或CLI配置属于未知选项。完整使用见下方api.mjs。
+
+## check：检查源码与产物 {#check}
+
+```ts
+check(file: string, options?: FlowkitOptions): Promise<Diagnostic[]>
+```
+
+每次重新编译源码，不写文件。已有compiled时比较生成代码的完整字节，不一致附加FK_R001，诊断file指向该产物。compiled不存在时可成功返回空数组；mmd不会比较。它可用于源码检查，也可用于已有产物一致性检查，后者需要另外证明产物存在。
+
+compile和check应使用相同的trace/路径/Skill设置。删除产物再check成功，不代表完成构建。
+
+## evalWhen：计算条件 {#evalWhen}
+
+```ts
+evalWhen(ctx: Ctx, when: string): boolean
+```
+
+同步读取ctx.state并计算受限表达式。支持严格比较、布尔短路和自有属性路径；不做真假值转换。非法语法可抛FK_C032/033/034并带表达式列号，运行值类型错误为FK_R002。把此函数显式放入Runtime以支持condition。语法表见[条件表达式](/guide/conditions)。
+
+## isControlSignal：识别控制信号 {#isControlSignal}
+
+```ts
+isControlSignal(err: unknown): boolean
+```
+
+同步判断控制标记，典型值为`{ control: true }`。用作Runtime的必需方法，区分取消等控制流与普通业务失败。不是所有AbortError都会自动变成此标记；宿主可按自己的取消协议扩展判定。控制信号不应被当成普通Agent失败反复重试。
+
+## 六接口完整使用
+
+以下文件需要同目录的[sample.workflow.js](/guide/observability)；已安装依赖后执行`node api.mjs`，检查空诊断、succeeded结果、true条件与trace事件。
+
+```js file="../../../examples/docs/sdk-options/api.mjs" title="api.mjs"
+```
+
+所有options的适用性见[配置参考](/reference/options)，宿主签名见[Runtime契约](/reference/runtime)，返回字段见[类型参考](/reference/types)。

@@ -1,0 +1,34 @@
+# DSL 总览
+
+从 `@devcodex/flowkit/dsl` 导入构造器。v1.0.0 公开9个构造器：defineWorkflow 组织工作流，另外8个创建节点。DSL 描述控制流和数据契约，业务执行位于 Runtime。
+
+| 构造器 | 节点 type | 用途 | 参考 |
+|---|---|---|---|
+| defineWorkflow | 无 | 定义元数据和节点数组 | [工作流定义](/dsl/define-workflow) |
+| node | agent | Skill 驱动的结构化生成 | [Agent](/dsl/agent) |
+| action | action | 确定性操作 | [action](/dsl/action) |
+| verification | verification | 严格布尔检查 | [verification](/dsl/verification) |
+| parallel | parallel | 2–16个并行成员 | [parallel](/dsl/parallel) |
+| condition | condition | 顺序条件分流 | [condition](/dsl/condition) |
+| loop | loop | 1–100轮检查与修复 | [loop](/dsl/loop) |
+| human | human | 人工批准或修订 | [human](/dsl/human) |
+| terminal | terminal | succeeded/failed终点 | [terminal](/dsl/terminal) |
+
+## 所有节点共有的规则 {#node-rules}
+
+构造器采用 `constructor(id, options)`。id 为最多64字符的 kebab-case：小写字母开头，后续小写字母/数字，单个连字符连接非空段；例如 draft、review-2。name 是1–40字符的显示名称，不允许换行、引号、反引号、反斜杠或注释终止符。整个流程的 id 和 name 分别唯一。
+
+构造器决定 type，调用者通常不填写 type 或 id 到 options。未知字段会诊断，不会悄悄忽略。值须为可提取的字面量；不能通过函数和变量动态拼装。TypeScript 的 readonly 类型帮助编辑器提前发现错误，编译器仍是图语义检查的必要步骤。
+
+## 后继由上下文决定 {#successors}
+
+普通 Agent/action 需要 next；普通 verification 需要 onSuccess/onFailure。parallel 成员的后继统一交给 join，因此 Agent/action 成员不能有 next，verification 成员不能有两种后继。condition、loop、human 则通过各自字段表达路线。
+
+节点数组第一项为入口，所有引用必须存在，所有节点应可达。允许共享汇合，禁止任意回边；loop 与 human 提供受约束的回路。每个页面都给出完整工作流引用、字段说明和失败恢复。
+
+## 从完整文件开始
+
+```js file="../../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
+```
+
+配套宿主和执行命令见[第一个工作流](/guide/quick-start)。添加节点后先运行 compile，检查诊断，再 check 和 run。不要仅凭编辑器类型提示判定整个工作流可执行。模型和数据语义见[工作流模型](/guide/workflow-model)。

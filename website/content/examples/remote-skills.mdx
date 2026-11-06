@@ -1,0 +1,74 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 远程 Skill 加载
+
+使用固定fetch响应验证HTTPS引用、精确主机白名单、SRI完整性和同次运行缓存。不会访问示例域名，也不需要外部服务。
+
+## 流程与执行顺序
+
+<Mermaid source={"flowchart LR\n load[编译时检查主机白名单] --> first[开始第一个Agent节点]\n first --> guard[默认loader检查来源约束]\n guard --> fetch[读取固定响应一次]\n fetch --> sri[验证响应字节SRI]\n sri --> cache[本次运行缓存]\n cache --> result1[生成第一份advice]\n result1 --> second[第二个Agent复用缓存]\n second --> done[生成advice并完成]"} title="同次运行复用远程说明" description="先通过编译主机检查，再由默认loader读取并验证响应字节；两个Agent引用相同URL和integrity，同次运行只请求一次。篡改字节或主机未放行时不能进入成功终点。" />
+
+## 环境与文件
+
+需要Node >=22.13.0和ESM项目。建立新的演示目录，按下列文件名保存完整内容；子目录也要保留。然后在该目录运行安装，依赖固定为1.0.0。下面文件可直接复制，不需要源码仓库的私有模块。
+
+```sh
+npm install --ignore-scripts --no-audit --no-fund
+```
+
+### package.json
+
+```json file="../../../examples/docs/remote-skills/package.json" title="package.json"
+```
+
+### skill.md
+
+```md file="../../../examples/docs/remote-skills/skill.md" title="skill.md"
+```
+
+### sample.workflow.js
+
+```js file="../../../examples/docs/remote-skills/sample.workflow.js" title="sample.workflow.js"
+```
+
+### integrity.mjs
+
+```js file="../../../examples/docs/remote-skills/integrity.mjs" title="integrity.mjs"
+```
+
+### host.mjs
+
+```js file="../../../examples/docs/remote-skills/host.mjs" title="host.mjs"
+```
+
+## 按顺序运行
+
+命令在本例根目录逐行执行，cd之后按命令进入目标目录。带故意失败参数的命令是独立验证步骤，记录错误后继续恢复操作。
+
+**先运行第一条 `node integrity.mjs`，把输出的摘要填入 sample.workflow.js 中两个 Agent 的 integrity，再执行其余命令。** 复制文本时编辑器可能改变换行或文件末尾换行，摘要必须以你实际保存的 skill.md 字节为准。仓库原文件中的摘要仅对应仓库原字节。
+
+```sh
+node integrity.mjs
+npx --no-install flowkit compile sample.workflow.js --remote-skill-host skills.example.test
+npx --no-install flowkit check sample.workflow.js --remote-skill-host skills.example.test
+node host.mjs
+node host.mjs tampered
+node host.mjs blocked
+node host.mjs
+```
+
+## 对照预期结果
+
+成功时result为succeeded，advice包含Skill说明，requests为1：两个Agent在同次运行中复用读取。tampered替换响应字节，得到FK_R013并非0退出；blocked不给白名单，在DSL编译阶段得到FK_C057。最后恢复默认模式应重新成功。
+
+## 失败与恢复
+
+不要修改skill.md后继续使用旧摘要；先审阅内容，再运行integrity.mjs，把结果填入两个Agent的integrity，compile/check/run。篡改反例只改变响应，不改原文件，恢复默认参数即可。编译未通过时尚未进入真实网络读取。
+
+## 接入真实业务
+
+将skill.md原字节发布到自己的HTTPS地址，替换DSL URL和白名单，重新计算/核对integrity，移除host的fetch覆盖。保留标准fetch的取消能力，确认端口、同源重定向、10秒期限、256 KiB上限和UTF-8。
+
+## 完成标准
+
+你应能运行成功路径、观察上述反例并恢复成功，解释状态字段及对应控制流。PowerShell用$LASTEXITCODE、Bash用echo $?查看上一条命令退出码。源码修改后重新compile/check，不继续使用不匹配的旧产物。继续阅读[相关契约](/guide/remote-skills)，或回到[选择示例](/examples/index)。

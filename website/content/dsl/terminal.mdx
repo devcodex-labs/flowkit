@@ -1,0 +1,31 @@
+# terminal
+
+`terminal(id, options)` 结束当前工作流，产生明确的业务状态和终点id。它不调用宿主业务方法，也没有后继字段。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 终点显示名称 |
+| `status` | 必需枚举 | 只允许succeeded或failed |
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 最小成功流程
+
+```js file="../../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
+```
+
+动作执行后进入done。公开run返回 `{ status, terminal, state }`，其中terminal是done，state包含实际运行结果。配套宿主见[第一个工作流](/guide/quick-start)。
+
+## failed 是正常结果
+
+failed终点表示工作流选择了业务失败路线，run仍正常resolve。调用方应检查result.status；只写try/catch会漏掉这种业务失败。maxIterations耗尽常被连接到failed终点，示例见[loop](/dsl/loop)。
+
+error字段不是failed的必填字段。只有执行过程中ctx实际拥有error属性，RunResult才包含error；普通业务检查不通过进入failed时可能没有error。反过来，未经结构捕获的异常使run reject，未必有RunResult。
+
+## 非法例与恢复
+
+`status: 'success'`、`'cancelled'`或省略status会得到[FK_C070](/troubleshooting/compiler#FK_C070)。恢复为succeeded/failed，重新compile/check。取消是宿主控制信号传播，不新增terminal状态。
+
+没有next是正常设计；添加多余next会作为未知字段诊断。工作流可有多个终点，但都必须可达。运行每个业务出口，检查terminal id能区分成功、质量不达标等情形。完整结果与错误处理见[SDK API](/reference/sdk#run)和[取消与错误传播](/guide/cancellation)。
+
+terminal本身不调用业务宿主方法；终止返回结构见[run](/reference/sdk#run)，与普通抛错的区别见[取消与错误传播](/guide/cancellation)。

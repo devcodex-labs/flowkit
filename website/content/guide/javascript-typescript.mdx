@@ -1,0 +1,53 @@
+# JavaScript 与 TypeScript
+
+FlowKit v1.0.0 使用同一套 DSL 编译 JavaScript 与 TypeScript。选择你项目已经使用的语言即可；两者生成相同的控制流语义。先完成[安装](/guide/installation)，确保消费者项目是 ESM。
+
+## 文件名与入口
+
+工作流必须以 `.workflow.js` 或 `.workflow.ts` 结尾，并从 `@devcodex/flowkit/dsl` 导入构造器，默认导出 `defineWorkflow(...)`。宿主可以是普通 `.mjs`，从 `@devcodex/flowkit` 调用 SDK。这两个入口都属于公开接口，不需要导入 dist 内部文件。
+
+下面是同一个条件分流流程的两种写法。分别保存到同一消费者目录时，注意它们生成的 `sample.compiled.mjs` 同名；逐个编译验证，或者使用不同基础文件名保存两个产物。
+
+```js file="../../../examples/docs/conditional-routing/sample.workflow.js" title="sample.workflow.js"
+```
+
+```ts file="../../../examples/docs/conditional-routing/sample.workflow.ts" title="sample.workflow.ts"
+```
+
+## TypeScript 检查和执行是两步
+
+类型声明使用 const 类型参数，需要 TypeScript 5.0 或更新版本。可以在独立项目安装 TypeScript，再执行类型检查：
+
+```sh
+npm install --save-dev typescript@5.0.4 @types/node@22.13.0
+npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext sample.workflow.ts
+npx --no-install flowkit compile sample.workflow.ts
+npx --no-install flowkit check sample.workflow.ts
+```
+
+`tsc` 验证 TypeScript 声明和静态引用。FlowKit 编译器另行检查节点数量、可达性、受限回边、Skill 路径等。类型检查成功并不代替 compile/check。FlowKit 不要求你先把 `.workflow.ts` 编译成 JavaScript，也不执行其中任意顶层代码。
+
+## 保持工作流为可静态提取的字面量
+
+可以使用字面量、数组、对象以及可擦除的 TypeScript 类型语法，例如 `as const`。不能用函数调用、变量拼装、展开、运行时分支或模块副作用来生成 DSL。下面是故意非法的片段：
+
+```js
+const nextId = 'done';
+// options中的next必须是可提取字面量；不能引用上面的运行时变量。
+action('save', { name: '保存', action: 'save', next: nextId });
+```
+
+修复为 `next: 'done'`，重新运行 compile，确认不再出现 `FK_C007`。需要动态决定路线时，使用 [condition](/dsl/condition) 和初始 state；需要动态业务行为时，把代码放入宿主方法。
+
+## 给宿主添加类型
+
+`Runtime` 描述宿主方法，`AgentStep` 描述 Agent 一次尝试的输入，`Ctx` 携带共享 state 和取消信号。以下完整文件展示公开导入和类型约束。保存为 consumer.ts 后，在已安装包的 ESM 消费者目录执行下面的类型检查命令；`tsc --noEmit` 不会执行文件。源码本身包含顶层 `await run(...)` 和输出语句，直接运行或导入它会尝试执行工作流，因此还需要当前工作目录中的 sample.workflow.js 及其依赖。
+
+```ts file="../../../examples/docs/sdk-options/consumer.ts" title="consumer.ts"
+```
+
+```sh
+npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext consumer.ts
+```
+
+类型只检查编译时可知的信息。外部模型返回值、审批接口结果和网络数据仍必须在运行时校验。所有类型的字段与关系见 [TypeScript 类型](/reference/types)，可执行宿主见[接入自己的宿主](/guide/host-integration)。

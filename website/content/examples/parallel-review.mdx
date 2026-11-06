@@ -1,0 +1,67 @@
+import { Mermaid } from '../../components/Mermaid';
+
+# 并行处理与汇合
+
+用快校验和慢动作观察all_succeeded与any的差别，确认false不是Promise拒绝、any也不会取消剩余工作。宿主用明确的门闩释放慢分支，便于观察汇合时刻。
+
+## 流程与执行顺序
+
+<Mermaid source={"flowchart LR\n subgraph all[all_succeeded]\n a[启动并行] --> f[快校验]\n a --> s[慢动作]\n f --> j[等待两个Promise正常完成]\n s --> j\n j --> d[done]\n end\n subgraph any[any]\n a2[启动并行] --> f2[快校验]\n a2 --> s2[慢动作仍继续]\n f2 --> j2[首个正常完成]\n j2 --> d2[done]\n s2 -.稍后写入.-> state[共享state]\n end"} title="两种汇合策略" description="校验返回false仍是Promise正常完成。all_succeeded等待两个成员；本例any先由快校验到达done，慢动作不会被取消，释放后继续修改共享状态。" />
+
+## 环境与文件
+
+需要Node >=22.13.0和ESM项目。建立新的演示目录，按下列文件名保存完整内容；子目录也要保留。然后在该目录运行安装，依赖固定为1.0.0。下面文件可直接复制，不需要源码仓库的私有模块。
+
+```sh
+npm install --ignore-scripts --no-audit --no-fund
+```
+
+### package.json
+
+```json file="../../../examples/docs/parallel-review/package.json" title="package.json"
+```
+
+### all.workflow.js
+
+```js file="../../../examples/docs/parallel-review/all.workflow.js" title="all.workflow.js"
+```
+
+### any.workflow.js
+
+```js file="../../../examples/docs/parallel-review/any.workflow.js" title="any.workflow.js"
+```
+
+### host.mjs
+
+```js file="../../../examples/docs/parallel-review/host.mjs" title="host.mjs"
+```
+
+## 按顺序运行
+
+命令在本例根目录逐行执行，cd之后按命令进入目标目录。带故意失败参数的命令是独立验证步骤，记录错误后继续恢复操作。
+
+```sh
+npx --no-install flowkit compile all.workflow.js
+npx --no-install flowkit check all.workflow.js
+npx --no-install flowkit compile any.workflow.js
+npx --no-install flowkit check any.workflow.js
+node host.mjs all
+node host.mjs any
+node host.mjs all reject
+```
+
+## 对照预期结果
+
+all的atJoin包含fast:false与slow:done，state中的fast为false且slowDone为true，仍进入succeeded。any的atJoin只有fast:false，随后events增加slow:done；宿主等待剩余分支后打印，所以最终state也可能已含slowDone。all reject让慢分支普通拒绝，进程非0退出并显示慢分支失败。
+
+## 失败与恢复
+
+reject是故意的普通异常反例，恢复为node host.mjs all后应成功。给两个分支声明相同writes会触发FK_C026；修复为不同结果键，再由汇合后动作合并。不要删除真实writes绕过检查。
+
+## 接入真实业务
+
+真实服务中先决定需要全部完成还是首个正常完成。若any后必须停止其他请求，由宿主共享取消控制器并配合客户端；如果后续要稳定读取所有结果，使用all_succeeded。
+
+## 完成标准
+
+你应能运行成功路径、观察上述反例并恢复成功，解释状态字段及对应控制流。PowerShell用$LASTEXITCODE、Bash用echo $?查看上一条命令退出码。源码修改后重新compile/check，不继续使用不匹配的旧产物。继续阅读[相关契约](/dsl/parallel)，或回到[选择示例](/examples/index)。

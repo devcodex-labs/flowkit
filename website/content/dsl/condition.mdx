@@ -1,0 +1,33 @@
+# condition
+
+`condition(id, options)` 按声明顺序计算when，执行第一个匹配分支。它本身不写state，也不启动并行任务。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 显示名称 |
+| `branches` | 必需对象数组 | 1–20项 |
+| `branches[].when` | 必需非空string | 受限布尔表达式；最后一项必须恰为字符串true |
+| `branches[].next` | 必需节点id | 命中后的后继，可与其他分支共享 |
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 完整分流定义
+
+```js file="../../../examples/docs/conditional-routing/sample.workflow.js" title="sample.workflow.js"
+```
+
+urgent为true走fast，否则走normal；两个分支共享done。完整宿主提供公开evalWhen和runAction，见[条件分流与汇合](/examples/conditional-routing)。只含一个默认true分支时相当于直接选择它。
+
+## 表达式和宿主
+
+默认Runtime不自动替你添加evalWhen。使用根入口导出的函数填入Runtime，以获得文档描述的严格布尔和短路语义。若提供自定义evalWhen，宿主承担其语义和安全责任，不应暗中把字符串当JavaScript执行。
+
+把更具体的条件放前面，默认分支放最后。所有分支next都要存在；分支可汇合但不能构成任意回路。when的路径读取只访问state的自有属性，缺失路径是undefined，不能直接用作布尔值。
+
+## 非法例与恢复
+
+删除默认分支会得到[FK_C031](/troubleshooting/compiler#FK_C031)；branches空数组或超过20项得到[FK_C030](/troubleshooting/compiler#FK_C030)。`when: 'count = 1'` 是禁止赋值结构，不能写成JavaScript赋值；改为 `count === 1`。`when: 'urgent'` 在urgent为字符串时运行报[FK_R002](/troubleshooting/runtime#FK_R002)，应规范输入boolean或显式比较字符串。
+
+修复后compile/check，再分别传入每条条件和默认路线所需state，核对最终route键。语法表、列号与undefined边界见[条件表达式](/guide/conditions)。
+
+相关宿主方法：[evalWhen](/reference/runtime#evalWhen)。

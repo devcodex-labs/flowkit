@@ -1,0 +1,53 @@
+# 预编译与部署
+
+AOT 指预先生成 `.compiled.mjs`，运行时通过公开 run 读取该产物。它适合将编译检查前移到构建阶段，但 v1.0.0 运行时仍需要对应源码用于完整性验证。
+
+## 部署单元
+
+```text
+deployment/
+  package.json
+  sample.workflow.js
+  sample.compiled.mjs
+  sample.mmd
+  host.mjs
+  skills/writer.md
+  node_modules/          # 在目标环境按锁定版本安装
+```
+
+保留产物 header 中 source 指向的相对布局。mmd 供人查看，不参与执行；源码与 compiled 必须保留，Skill 必须可按同样项目根解析。package.json 定义 ESM 和实际依赖，宿主负责安装 FlowKit 1.0.0。
+
+## 构建和执行
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+```
+
+宿主将 run 的参数从源码路径改成 compiled 路径：
+
+```js file="../../../examples/docs/aot/host.mjs" title="host.mjs"
+```
+
+以上宿主与工作流、Skill 的完整组合以及独立复制脚本，见[构建并部署工作流](/examples/aot)。部署目录创建后，在该目录安装确切依赖，再运行 host.mjs。不要依赖开发仓库中碰巧存在的上层 node_modules。
+
+## 每次运行会验证什么
+
+run 重新读取 AOT 文件，验证 header、对应源码和生成正文的哈希。源码缺失、source 相对路径越出允许范围、源码或正文被修改，都会以 FK_R001 拒绝。成功只表示这个产物与记录的源码/正文相符，不表示代码来自可信作者。
+
+产物包含可执行 JavaScript。完整性检查和词法路径边界不构成任意恶意代码沙箱；只运行自己构建或经过信任审核的产物。不要把外部上传的 compiled 文件直接交给具有数据库或系统权限的宿主。
+
+## 修改后必须整组重新部署
+
+1. 在构建目录修改工作流源码，使用同一版本 FlowKit 和既定选项重新 compile。
+2. 重新 check，运行对应业务路径。
+3. 一起复制源码、compiled、Skill 和宿主，保持相对布局。
+4. 在部署目录检查安装版本，运行 host.mjs 并核对结果。
+
+如果只修改部署源码，旧 compiled 会因 hash 不一致失败；只复制 compiled 而遗漏源码也会失败。恢复时回到构建流程，重新生成并复制，不手改 hash 或绕过 run。
+
+## Skill 的变化另行管理
+
+本地 Skill 的内容不是通过工作流 sourceHash 自动冻结的。下一次执行默认 loader 会读取当前 Skill 内容，因此发布时应把 Skill 和工作流作为同一受控版本交付。远程 Skill 则建议使用 integrity 固定原始内容，并保留精确主机白名单。
+
+完整恢复演练见[构建并部署工作流](/examples/aot)；输出目录限制见[编译与检查](/guide/compile-artifacts)，运行缓存和 AOT 行为见 [SDK API](/reference/sdk#run)。

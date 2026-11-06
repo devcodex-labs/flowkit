@@ -1,0 +1,40 @@
+# human
+
+`human(id, options)` 等待宿主取得人的批准或拒绝。拒绝后执行修订链并重新进入同一个审批节点；批准后才继续onApprove。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 交给审批界面显示的名称 |
+| `onApprove` | 必需节点id | 批准后的后继 |
+| `onReject` | 必需节点id | 拒绝修订链入口，最终必须回到本human |
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 返回形状
+
+runHuman(name, ctx)异步返回boolean，或 `{ approved: boolean, comment?: string | null }`。无comment时归一为null。FlowKit在state[human节点id]保存这份决策，修订节点可读取comment。再次审批会覆盖该键，所以需要完整历史时由宿主另外存储。
+
+```js
+return { approved: false, comment: '请补充说明' };
+```
+
+字符串yes、数字1、approved缺失或非字符串comment都不合法，触发[FK_R002](/troubleshooting/runtime#FK_R002)。不要将HTTP状态或表单原始字符串直接作为审批结果。
+
+## 完整工作流
+
+```js file="../../../examples/docs/human-approval/sample.workflow.js" title="sample.workflow.js"
+```
+
+准备草稿后进入approval，拒绝走revise，再回approval。完整宿主见[人工审批与修订](/examples/human-approval)，分别演示直接批准和拒绝一次再批准。
+
+## 拒绝链和等待边界
+
+拒绝链只能包含Agent/action，必须最终回到同一个human。不能跳到另一个human、terminal、condition或loop后永久离开；这种结构分别可能得到[FK_C060](/troubleshooting/compiler#FK_C060)、[FK_C061](/troubleshooting/compiler#FK_C061)。需要结束审批的业务，可在宿主用取消/错误机制明确处理，或者重新设计流程边界，不能偷偷把拒绝当批准。
+
+FlowKit没有为human内建持久化等待、审批权限、通知或跨进程恢复。runHuman的Promise等待多久由宿主决定；服务重启后的恢复也要由宿主设计。它不自动限制拒绝次数，宿主应定义业务时限、取消和响应关联。
+
+## 验证和恢复
+
+先compile/check验证拒绝链，再运行直接批准、拒绝修订再批准两条路径，确认state.approval和修订内容。故意返回 `'yes'` 应得到[FK_R002](/troubleshooting/runtime#FK_R002)；改回boolean或规范对象后复验。真实界面替换步骤与完整文件见对应场景页，取消约定见[取消与错误传播](/guide/cancellation)。
+
+相关宿主方法：[runHuman](/reference/runtime#runHuman)、[runAction](/reference/runtime#runAction)。

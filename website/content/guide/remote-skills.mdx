@@ -1,0 +1,48 @@
+# 远程 Skill
+
+远程 Skill 允许在 Agent 上引用受控 HTTPS Markdown 文件。v1.0.0 默认拒绝未放行主机；建议同时声明 integrity，将工作流绑定到经过审阅的确切内容。
+
+## URL、主机和端口
+
+URL 必须是 HTTPS，路径以 `.md` 结束，不含账号密码、查询、片段、空白或反斜杠，也不能用 `..` 越界。`remoteSkillHosts` 是精确主机列表，不支持通配子域。无端口的主机只放行 HTTPS 默认443；非默认端口必须明确列出，例如 `skills.example.test:8443`。
+
+```js
+const options = { remoteSkillHosts: ['skills.example.test'] };
+```
+
+同一配置必须用于 compile/check 和 run。CLI 可重复 `--remote-skill-host`；直接 SDK 调用不会自动读取 flowkit.config.mjs。缺白名单在编译阶段报 FK_C057；运行时 loader 的协议/白名单/跨源重定向拒绝为 FK_R012。
+
+## 用 integrity 固定内容
+
+支持单个 `sha256-`、`sha384-` 或 `sha512-` 加规范 Base64 摘要，可保留或省略末尾填充。不能使用十六进制摘要、多个摘要拼接，或给本地 Skill 设置 integrity。缺 integrity 会产生 FK_C059 warning，格式错误是 FK_C058，实际内容不匹配是 FK_R013。
+
+对准备发布的原始字节计算摘要，不要先格式化、转码或更换换行。下面的完整脚本读取 skill.md：
+
+```js file="../../../examples/docs/remote-skills/integrity.mjs" title="integrity.mjs"
+```
+
+将计算结果填入 Agent 的 integrity。服务端文件变更后旧摘要应当拒绝新内容；先审阅变更，再重新计算摘要和发布工作流，不能为了通过测试而直接删掉校验。
+
+## 默认网络约束
+
+| 项目 | 行为 |
+|---|---|
+| 重定向 | 最多3次，仅允许同源；协议/主机/端口变化都会影响同源判断 |
+| 响应体 | 最大262144字节（256 KiB），按实际读取限制 |
+| 时间 | 整个远程读取约10秒期限，含重定向和读体 |
+| 编码 | 严格 UTF-8，解码失败拒绝 |
+| 失败 | 网络、HTTP、超时、超限等读取问题为 FK_R014，带 cause |
+| 取消 | 使用传入 signal；宿主自定义 fetch/loader 也需配合 |
+| 缓存 | 同一次运行的默认 loader 内复用；下一次 run 重新建立，失败项移除 |
+
+这些是默认 loader 的边界，不是对任意自定义 fetch/loader 实现的完整安全保证。fetch 替换用于测试或宿主网络适配，返回值应符合标准 Response 接口。
+
+## 先用固定响应跑通，再接真实网络
+
+[远程 Skill 加载示例](/examples/remote-skills)包含全部文件、固定 fetch、摘要计算、篡改失败和恢复。它不访问示例域名；能够确定性验证两次 Agent 读取只发起一次请求。
+
+接真实服务时，把 skill.md 按原字节放到自己的 HTTPS 地址，更新 DSL URL 与白名单，保留正确 integrity，移除示例 fetch 覆盖，重新 compile/check/run。检查证书、端口、重定向和内容长度。不要把示例域名当成可用公共服务。
+
+## 错误定位顺序
+
+先确认编译已通过；C057 表示配置还未放行，不需要先排网络。R012 检查实际跳转目标；R013 比较服务器原始字节和摘要；R014 查看 cause 并核对响应状态、期限、大小与编码。修复后重复同一成功输入，确认有真实的 instruction 输出。默认 loader 与自定义 loader 的责任见[本地 Skill](/guide/local-skills)。

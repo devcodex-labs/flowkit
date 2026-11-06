@@ -51,15 +51,35 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: npm run release:pack -- --tag "$RELEASE_TAG"
+      - name: Consume the exact candidate bytes
+        run: npm run docs:examples -- --package .tmp/release/devcodex-flowkit-1.0.0.tgz --evidence .tmp/docs/release-candidate.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        id: npm-artifact
         with:
-          name: npm-release
+          name: npm-release-${{ github.run_attempt }}
           path: |
             .tmp/release/*.tgz
             .tmp/release/release.json
           if-no-files-found: error
           include-hidden-files: true
-          retention-days: 14
+          retention-days: 90
+      - name: Record immutable package release identity
+        env:
+          PACKAGE_COMMIT: ${{ github.sha }}
+          DOCS_COMMIT: ${{ github.sha }}
+          RELEASE_VERSION: '1.0.0'
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          NPM_ARTIFACT_ID: ${{ steps.npm-artifact.outputs.artifact-id }}
+          NPM_ARTIFACT_DIGEST: ${{ steps.npm-artifact.outputs.artifact-digest }}
+        run: node scripts/docs/release-identity.mjs create --release-dir .tmp/release --out .tmp/release-identity/release-record.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-identity-${{ github.run_attempt }}
+          path: .tmp/release-identity/release-record.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
 
   publish:
     needs: pack
@@ -81,7 +101,7 @@ jobs:
         run: npm install --global npm@11.5.1 --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: npm-release
+          name: npm-release-${{ github.run_attempt }}
           path: .tmp/release
       - name: Verify downloaded bytes against the tag and source
         id: artifact
@@ -94,3 +114,47 @@ jobs:
         env:
           NPM_DIST_TAG: ${{ steps.artifact.outputs.dist_tag }}
         run: npm publish .tmp/release/*.tgz --access public --registry=https://registry.npmjs.org/ --tag "$NPM_DIST_TAG"
+
+  public-consumer:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: npm-release-${{ github.run_attempt }}
+          path: .tmp/release
+      - run: node scripts/release.mjs verify --tag v1.0.0
+      - run: npm run docs:public-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
+      - run: npm run docs:examples -- --registry-version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-consumer.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: public-package-evidence-${{ github.run_attempt }}
+          path: .tmp/docs/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 90
+
+  docs:
+    needs: public-consumer
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs.yml
+    with:
+      packageReleaseCommit: ${{ github.sha }}
+      docsCommit: ${{ github.sha }}
+      version: '1.0.0'
+      releaseRunId: ${{ github.run_id }}
+      releaseRunAttempt: ${{ github.run_attempt }}

@@ -1,0 +1,269 @@
+{
+  "version": "1.0.0",
+  "cases": [
+    {
+      "id": "E01",
+      "directory": "quick-start",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": [],
+          "expected": {
+            "status": "succeeded",
+            "terminal": "done",
+            "state": {
+              "name": "FlowKit",
+              "message": "你好，FlowKit！"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "E02",
+      "directory": "host-integration",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "skills/writer.md",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E03",
+      "directory": "conditional-routing",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "sample.workflow.ts",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js",
+        "sample.workflow.ts"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs",
+      "types": [
+        "sample.workflow.ts"
+      ]
+    },
+    {
+      "id": "E04",
+      "directory": "parallel-review",
+      "files": [
+        "all.workflow.js",
+        "any.workflow.js",
+        "host.mjs",
+        "package.json",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "all.workflow.js",
+        "any.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E05",
+      "directory": "verification-repair",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E06",
+      "directory": "human-approval",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E07",
+      "directory": "remote-skills",
+      "files": [
+        "host.mjs",
+        "integrity.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "skill.md",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs",
+      "cliOptions": [
+        "--remote-skill-host",
+        "skills.example.test"
+      ]
+    },
+    {
+      "id": "E08",
+      "directory": "aot",
+      "files": [
+        "deploy.mjs",
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "skills/writer.md",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E09",
+      "directory": "validation-retries",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "skills/result.md",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E10",
+      "directory": "cancellation",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E11",
+      "directory": "run-cache",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "skills/instruction.md",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E12",
+      "directory": "sdk-options",
+      "files": [
+        "api.mjs",
+        "consumer.ts",
+        "flowkit.config.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "api.mjs",
+          "args": []
+        }
+      ],
+      "verify": "verify.mjs",
+      "types": [
+        "consumer.ts"
+      ]
+    }
+  ]
+}

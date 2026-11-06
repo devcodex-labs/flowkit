@@ -1,0 +1,59 @@
+# 编译与检查
+
+显式编译用于查看生成代码、保存 Mermaid 源码和准备预编译部署。run 也能直接处理 DSL，但它不等同于调用 compile 并写出同名产物。
+
+## 三个接口的文件副作用
+
+| 接口 | 输入 | 成功时写入 | 返回值 |
+|---|---|---|---|
+| compile | `.workflow.js/.ts` 文件 | compiled.mjs；默认还有mmd | code、mermaid、diagnostics |
+| compileSource | 文本及必需filename | 与compile相同；源文件本身不自动保存 | code、mermaid、diagnostics |
+| check | `.workflow.js/.ts` 文件 | 不写文件 | diagnostics数组 |
+
+有 error 时 compile 不写新产物，warning 不阻止写入。失败也不会自动删除此前成功产物。`mermaid: false` 关闭图产物写入，不删除已有 mmd。消费方应先检查 diagnostics/退出码，再使用输出文件。
+
+```sh
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+```
+
+## outDir 不是任意输出文件夹
+
+默认输出到源文件目录。指定 outDir 时，它必须等于源码目录或是源码目录的祖先，这是为了让生成文件中的 source 引用保持在允许范围内。
+
+```text
+demo/
+  src/
+    sample.workflow.js
+  dist/
+```
+
+在 demo 执行下面第一条合法，第二条故意非法：
+
+```sh
+npx --no-install flowkit compile src/sample.workflow.js --out-dir .
+npx --no-install flowkit compile src/sample.workflow.js --out-dir dist
+```
+
+第一条生成 demo/sample.compiled.mjs 和 sample.mmd，源引用保留 src/sample.workflow.js。第二条因 dist 是源码目录的兄弟目录而拒绝。需要部署到另一目录时，先在合法布局内编译，再复制整组源码、产物和 Skill；不要套用普通打包工具的 sibling dist 模式。
+
+## check 到底证明什么
+
+check 每次重新编译源码。若 compiled 文件存在，就逐字节比较当前应生成的代码；不一致返回 FK_R001。若 compiled 不存在，check 仍可能返回空诊断并成功，因此它不是产物存在性检查。它也不比较 mmd。
+
+验证构建产物时，应先 compile，再确认 compiled/mmd 实际存在，再 check。用于只做源码校验时，可直接 check 并检查 error/warning。trace 等影响生成代码的选项必须一致，否则已有产物会被判不匹配。
+
+## 从文本编译
+
+```js
+import { compileSource } from '@devcodex/flowkit';
+const text = "import { defineWorkflow, terminal } from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({ id: 'demo', version: '1.0.0', name: '演示', nodes: [terminal('done', { name: '完成', status: 'succeeded' })] });";
+const result = await compileSource(text, { filename: 'virtual.workflow.js' });
+console.log(result.diagnostics);
+```
+
+filename 决定诊断路径、项目根查找和输出位置；即使没有 virtual.workflow.js，也可以完成编译。但随后执行 virtual.compiled.mjs 会验证物理源文件，因此部署前必须保存与编译时字节一致的源码。不要把虚拟编译成功理解为可脱离源码运行。
+
+## 日常修改流程
+
+修改 DSL → compile → 检查诊断和产物 → check → 运行成功/失败路径。遇到 FK_R001 先核对源码、版本和选项，再重新生成，禁止手工修补 header/hash。完整函数签名见 [SDK API](/reference/sdk)，产物部署见[预编译与部署](/guide/aot)。

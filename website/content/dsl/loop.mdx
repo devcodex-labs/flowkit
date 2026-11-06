@@ -1,0 +1,40 @@
+# loop
+
+`loop(id, options)` 表达有上限的“先检查，不通过再修复”。它避免任意回边，并明确最后一次失败的出口。
+
+| 字段 | 类型/必需性 | 规则 |
+|---|---|---|
+| `name` | 必需string | 显示名称 |
+| `maxIterations` | 必需整数1–100 | 最大检查次数，不是最大修复次数 |
+| `body` | 必需节点id | 必须指向verification入口 |
+| `onSuccess` | 必需节点id | 检查通过后的体外后继 |
+| `onMaxExceeded` | 必需节点id | 检查次数耗尽后的体外后继 |
+
+`id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
+
+## 完整结构
+
+```js file="../../../examples/docs/verification-repair/sample.workflow.js" title="sample.workflow.js"
+```
+
+quality是loop，check是入口verification。check.onSuccess回到quality控制点；check.onFailure进入improve，修复链最终回check。loop自己的onSuccess才是成功离开循环的路线。
+
+## 次数如何计算
+
+maxIterations为3时，最多检查3次、修复2次。第一次就通过则检查1次、修复0次；第三次仍不通过时直接走onMaxExceeded，不再做无法重新验证的修复。maxIterations为1意味着只检查一次，失败就耗尽。
+
+完整宿主以score模拟质量：target为1时顺序check:0→repair:1→check:1后成功；target为9时check:0→repair:1→check:1→repair:2→check:2后failed。执行步骤见[校验与循环修复](/examples/verification-repair)。
+
+## 结构约束
+
+body入口必须是verification；修复链必须回到约定校验结构，不能任意离开或跳进另一个回路。循环内不允许parallel，修复链不能包含loop或human。体外普通节点可以指向loop容器作为正常入口，但体外action不能直接跳进循环内部。区域成员指向loop容器时，仅允许入口verification的onSuccess返回；内部修复链应回到body，不应直接回loop id。
+
+这些约束用于让检查、修复和次数上限有可预测语义。需要人工审批时，将human放在循环外的合适后继；需要并发生成时，先在循环外完成并行，再用循环检查修复汇总结果。
+
+## 非法例与恢复
+
+maxIterations:0得到[FK_C040](/troubleshooting/compiler#FK_C040)；body直接指action得到[FK_C041](/troubleshooting/compiler#FK_C041)；修复链不返回check得到[FK_C042](/troubleshooting/compiler#FK_C042)；包含parallel/loop/human分别可能得到[FK_C043](/troubleshooting/compiler#FK_C043)、[FK_C045](/troubleshooting/compiler#FK_C045)、[FK_C046](/troubleshooting/compiler#FK_C046)。按完整例的图修复后compile/check，再分别运行成功、耗尽和max=1变体。
+
+loop不提供数据库事务回滚。修复动作应能安全重复，已发生副作用由宿主管理。校验返回严格boolean，详见[verification](/dsl/verification)。
+
+相关宿主方法：[runVerification](/reference/runtime#runVerification)、[runAction](/reference/runtime#runAction)、[runAgent](/reference/runtime#runAgent)。具体方法取决于成员节点；容器本身不新增宿主方法。

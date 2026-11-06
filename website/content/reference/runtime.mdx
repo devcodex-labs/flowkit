@@ -1,0 +1,58 @@
+# Runtime 契约
+
+Runtime是宿主提供的对象。isControlSignal始终必需，其余业务方法在工作流实际调用对应节点时需要；缺少方法不会自动得到一个默认模型或审批服务。Skill的两个读取方法有内建回退。
+
+## 十个方法
+
+| 方法 | 同步/异步与返回 | 何时使用 |
+|---|---|---|
+| <a id="runAgent"></a> `runAgent(step)` | Promise，结构化对象 | Agent生成；step含input、instruction、attempt、reasons等 |
+| <a id="validateResult"></a> `validateResult(schema, result)` | 同步string[] | Agent结构校验，[]通过；不得返回Promise |
+| <a id="checkStep"></a> `checkStep(step, result, ctx)` | Promise，string/null/undefined | 可选Agent业务检查；string为失败原因 |
+| <a id="runHuman"></a> `runHuman(name, ctx)` | Promise，boolean或approved/comment对象 | 人工审批；approved必须boolean |
+| <a id="runVerification"></a> `runVerification(verifier, name, ctx)` | Promise，boolean | verification或Agent verify |
+| <a id="runAction"></a> `runAction(action, name, ctx)` | Promise，void | action，通过ctx.state写数据 |
+| <a id="loadSkill"></a> `loadSkill(path, options?)` | Promise，string | 显式skill；options可含integrity |
+| <a id="loadSkillByAgent"></a> `loadSkillByAgent(agent)` | Promise，string | agent映射读取；显式skill存在时不调用 |
+| <a id="evalWhen"></a> `evalWhen(ctx, when)` | 同步boolean | condition；建议传入公开evalWhen |
+| <a id="isControlSignal"></a> `isControlSignal(err)` | 同步boolean，必需 | 所有run参数校验及错误分类 |
+
+“异步”表示返回Promise的公开契约；请使用async实现或显式Promise。validateResult/evalWhen/isControlSignal必须同步。调用业务方法时保留Runtime对象作为this；trace方法的this为trace对象。
+
+## AgentStep 的字段
+
+| 字段 | 含义 |
+|---|---|
+| id / name | 当前Agent节点标识和显示名称 |
+| instruction | 已加载的完整Skill文本 |
+| input | inputs声明的键；缺失键仍以undefined值提供 |
+| missing | 原state没有的输入键列表 |
+| resultSchema | 工作流声明的对象Schema |
+| attempt | 从1开始，本次是第几次尝试 |
+| reasons | 上一次生成/校验不通过原因；首次为空数组 |
+| overview? | 节点启用时有step编号，在等待前分配 |
+| signal? / runId? | 当前执行的取消信号与关联标识 |
+
+输入在该Agent的重试循环前提取，Skill也在重试前加载。不要假定一次重试会重新读取所有外部内容。runAgent返回值通过validateResult、可选checkStep、可选verify后才提交。
+
+## Ctx 的字段
+
+Ctx包含runtime、state、可选signal/runId/error。公开run实际提供默认生成的runId，类型保留可选以表达其他构造场景。state是本次顶层浅复制；嵌套引用共享。error仅在执行过程中写入时存在，不代表每个failed终点都有异常。
+
+checkStep只得到id/name/attempt这一较小的step对象，而不是完整AgentStep。它读取提交前ctx.state；Agent verify得到合并候选结果的临时state。普通verification和并行verification都要求boolean，但只有并行成员自动把结果写入state[id]。
+
+## 两个跟踪钩子
+
+`trace.start(nodeId, name): void` 和 `trace.end(nodeId, name, outcome): void` 为同步可选钩子。outcome为ok/error/control。生成时trace:true才插入调用；钩子同步抛错会被忽略，不替代原业务结果。异步日志发送应由宿主自行处理，钩子契约本身不等待Promise。
+
+## 最小实现和完整实现
+
+只含action的流程实现runAction/isControlSignal即可，见[快速开始](/guide/quick-start)。包含Agent和审批的完整示例见[接入自己的宿主](/guide/host-integration)。有condition时补evalWhen；使用默认Skill读取时可以省略loadSkill/loadSkillByAgent。
+
+自定义loader会接管读取安全、完整性、缓存和取消责任。示例中的固定响应及简化Schema校验只是演示实现，不构成模型适配器或通用Schema服务。
+
+## 排错顺序
+
+方法缺失或返回类型错误，先核对上表与公开类型。checkStep返回false不是“通过”，应改为null；runHuman返回字符串不是批准，应改为boolean或规范对象；verification返回对象应提取真正boolean。validateResult错误形状不保证被包装为统一FK错误，宿主必须遵守契约。
+
+完整声明与所有字段见[TypeScript类型](/reference/types)，重试与传播细节见[结果校验与重试](/guide/validation-retries)。

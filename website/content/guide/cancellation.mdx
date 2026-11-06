@@ -1,0 +1,56 @@
+# 取消与错误传播
+
+取消需要 FlowKit 与宿主共同配合。run 的 signal 会进入 Ctx/AgentStep，默认网络读取使用它；宿主业务方法还必须把信号传给自身调用并清理监听器。传一个 AbortSignal 不会强制停止任意用户代码。
+
+## 控制信号与普通异常
+
+Runtime 必须提供 `isControlSignal(err)`。公开同名函数识别带 `control: true` 的控制标记；宿主也可以按自身约定扩展判定。控制信号与普通失败分开传播，避免把主动取消误当成 Agent 可重试的生成失败。
+
+```js
+import { isControlSignal } from '@devcodex/flowkit';
+console.log(isControlSignal({ control: true, kind: 'cancel' })); // true
+console.log(isControlSignal(new Error('网络失败')));             // false
+```
+
+并不是所有 AbortError 都天然满足这个标记。宿主如果使用不同 SDK 的取消异常，应在适当边界映射为自己的控制信号，或者提供能识别这些异常的判定函数。不要把所有 Error 都判为控制信号。
+
+## 完整取消例子
+
+以下例子在 action 内创建监听器，再发出取消，最后移除监听器。保存两个文件并按[安装](/guide/installation)准备依赖。
+
+```js file="../../../examples/docs/cancellation/sample.workflow.js" title="sample.workflow.js"
+```
+
+```js file="../../../examples/docs/cancellation/host.mjs" title="host.mjs"
+```
+
+```sh
+node host.mjs cancel
+node host.mjs error
+node host.mjs ok
+```
+
+cancel 输出 cancelled 并显示 cleaned:true；error 展示普通异常分类；ok 返回 succeeded。这些分类是示例宿主的输出形状，不是 RunResult 新增的 status 枚举。
+
+## failed 终点与 Promise 拒绝
+
+进入 `terminal(..., { status: 'failed' })` 时，run 正常 resolve 一个 status:failed 的结果。没有被生成结构处理的宿主异常会让 run reject；调用方应同时处理这两条路径。结构化控制流捕获了普通错误时可能把它放入 ctx.error，最终结果只有在该属性实际存在时才带 error。
+
+```js
+try {
+  const result = await run(file, runtime, initialState, { signal });
+  if (result.status === 'failed') handleBusinessFailure(result);
+  else handleSuccess(result);
+} catch (error) {
+  if (runtime.isControlSignal(error)) handleCancellation(error);
+  else handleUnexpectedError(error);
+}
+```
+
+这是业务处理框架，file/runtime/initialState/signal 和处理函数由宿主提供。不要假设每个失败终点都有 error，也不要将每次 reject 都改写成业务失败后继续执行。
+
+## 并行取消的额外责任
+
+`join.strategy: 'any'` 不会自动取消其余分支。若业务需要停止其他请求，使用宿主控制器和可取消客户端，并考虑已发生的副作用。取消不回滚数据库写入；清理监听器、释放连接、处理幂等性都由宿主保证。
+
+验证时同时覆盖取消、普通错误和正常完成，确认没有遗留监听器或后台任务。Agent 重试的错误分类见[结果校验与重试](/guide/validation-retries)，结果类型见 [TypeScript 类型](/reference/types)。
