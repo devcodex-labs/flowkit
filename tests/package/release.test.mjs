@@ -23,7 +23,7 @@ async function fixture(t) {
     await mkdir(path.dirname(path.join(root, file)), {recursive:true}); await copyFile(path.join(repository, file), path.join(root, file));
   }
   const pkg = JSON.parse(await readFile(path.join(root,'package.json')));
-  Object.assign(pkg, {private:false,version:tag.slice(1),license:'MIT'});
+  Object.assign(pkg, {private:false,version:tag.slice(1),license:'SEE LICENSE IN LICENSE'});
   const lock = JSON.parse(await readFile(path.join(root,'package-lock.json'))); lock.version=pkg.version; lock.packages[''].version=pkg.version;
   await writeFile(path.join(root,'package.json'),JSON.stringify(pkg,null,2)); await writeFile(path.join(root,'package-lock.json'),JSON.stringify(lock));
   await writeFile(path.join(root,'LICENSE'),'Synthetic fixture license, not a project license decision.');

@@ -96,6 +96,8 @@ jobs:
         with:
           node-version: '24.22.1'
           package-manager-cache: false
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@devcodex-labs'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -131,18 +133,20 @@ jobs:
         with:
           node-version: '24.22.1'
           package-manager-cache: false
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@devcodex-labs'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: npm-release-${{ github.run_attempt }}
           path: .tmp/release
       - run: node scripts/release.mjs verify --tag v1.0.0
-      - run: npm run docs:public-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
+      - run: npm run docs:private-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/private-package.json
       - run: npm run docs:examples -- --registry-version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/private-consumer.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
-          name: public-package-evidence-${{ github.run_attempt }}
+          name: private-package-evidence-${{ github.run_attempt }}
           path: .tmp/docs/*.json
           include-hidden-files: true
           if-no-files-found: ignore

@@ -58,7 +58,7 @@
     "docs:check": "npm --prefix website run check",
     "docs:sync": "node scripts/docs/sync-readme.mjs",
     "docs:examples": "node scripts/docs/verify-examples.mjs",
-    "docs:public-package": "node scripts/docs/check-public-package.mjs"
+    "docs:private-package": "node scripts/docs/check-public-package.mjs"
   },
   "dependencies": {
     "acorn": "8.19.0"

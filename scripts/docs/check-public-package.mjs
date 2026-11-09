@@ -6,13 +6,13 @@ import { runProcess } from '../validation-process.mjs';
 import { verifyRegistryBytes, archiveFiles, sha256 } from './package-proof.mjs';
 const args = {};
 for (let i = 2; i < process.argv.length; i += 2) { const key = process.argv[i]; assert.ok(['--version', '--manifest', '--evidence'].includes(key) && process.argv[i + 1] && !args[key]); args[key] = process.argv[i + 1]; }
-assert.ok(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(args['--version'] ?? '')); assert.ok(args['--manifest']); assert.ok(process.env.npm_execpath, 'Use npm run docs:public-package');
+assert.ok(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(args['--version'] ?? '')); assert.ok(args['--manifest']); assert.ok(process.env.npm_execpath, 'Use npm run docs:private-package');
 const manifest = JSON.parse(await readFile(args['--manifest'], 'utf8')); assert.equal(manifest.version, args['--version']);
 const base = await realpath(tmpdir()), temporary = await mkdtemp(path.join(base, 'flowkit-private-'));
 let evidence;
-if (!process.env.NODE_AUTH_TOKEN) throw new Error('Private package verification requires NODE_AUTH_TOKEN');
 async function npm(parameters) { const r = await runProcess(process.execPath, [process.env.npm_execpath, ...parameters, '--registry=https://npm.pkg.github.com/', '--cache', path.join(temporary, 'cache')], { cwd: temporary, timeout: 120000, maxBuffer: 2 * 1024 * 1024 }); if (r.error) throw r.error; return r; }
 try {
+  if (!process.env.NODE_AUTH_TOKEN) throw new Error('Private package verification requires NODE_AUTH_TOKEN');
   const spec = `@devcodex-labs/flowkit@${args['--version']}`;
   let metadata;
   for (let attempt = 1; attempt <= 5; attempt++) {
