@@ -5,7 +5,7 @@ import { extractWorkflow } from '../../src/compiler/extract.mjs';
 import { isSemVer, validateFields } from '../../src/compiler/validate.mjs';
 import { ERROR_CATALOG } from '../../src/shared/contracts.mjs';
 
-const header = "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\n";
+const header = "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\n";
 const terminal = "terminal('done',{name:'Done',status:'succeeded'})";
 const definition = (nodes = terminal, fields = "id:'demo',version:'1.0.0',name:'Demo'") =>
   `${header}export default defineWorkflow({${fields},nodes:[${nodes}]});`;
