@@ -2,11 +2,11 @@
   "code": "FK_C044",
   "kind": "compile",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'v'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'v'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});\n",
     "options": {}
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'l'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'l'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});\n",
     "options": {}
   }
 }
