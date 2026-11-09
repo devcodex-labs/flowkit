@@ -138,8 +138,8 @@ export function extractWorkflow(snapshot) {
     let exported;
     for (const statement of program.body) {
       if (statement.type === 'ImportDeclaration') {
-        if (statement.source.value !== '@devcodex/flowkit/dsl' || statement.specifiers.length === 0 || statement.attributes?.length) {
-          fail('Only named imports from @devcodex/flowkit/dsl are supported', statement);
+        if (statement.source.value !== '@devcodex-labs/flowkit/dsl' || statement.specifiers.length === 0 || statement.attributes?.length) {
+          fail('Only named imports from @devcodex-labs/flowkit/dsl are supported', statement);
         }
         for (const specifier of statement.specifiers) {
           const name = specifier.imported?.name;
