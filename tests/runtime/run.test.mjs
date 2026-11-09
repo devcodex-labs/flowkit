@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import * as api from '@devcodex/flowkit';
+import * as api from '@devcodex-labs/flowkit';
 import { fixture, source, end, host, settled } from './support.mjs';
 
 const codeIs = code => error => error.code === code;
@@ -94,7 +94,7 @@ test('run rejects invalid extensions and options before filesystem work or busin
 
 test('public run fixes source, inferred root and relative dump before an asynchronous cwd change', async t => {
   const f = await fixture(t, [act, end()]); const other = path.join(f.directory, 'other'); await mkdir(other);
-  const code = "import assert from 'node:assert/strict';import fs from 'node:fs/promises';import path from 'node:path';import {run,isControlSignal} from '@devcodex/flowkit';" +
+  const code = "import assert from 'node:assert/strict';import fs from 'node:fs/promises';import path from 'node:path';import {run,isControlSignal} from '@devcodex-labs/flowkit';" +
     "const directory=process.argv[1];process.chdir(directory);const running=run('./source.workflow.js',{isControlSignal,runAction:async()=>{}},{},{dump:'debug'});process.chdir(path.join(directory,'other'));assert.equal((await running).terminal,'done');assert.equal((await fs.readdir(path.join(directory,'debug'))).length,1);assert.deepEqual(await fs.readdir(process.cwd()),[]);";
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code, f.directory], { cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8', timeout: 10000 });
   assert.equal(child.error, undefined); assert.equal(child.status, 0, child.stderr);

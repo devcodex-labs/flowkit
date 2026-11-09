@@ -4,7 +4,7 @@ import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { compile, run, check, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { compile, run, check, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 import { demo } from '../../examples/demo.mjs';
 import { createRuntime, validateExample } from '../../examples/host.mjs';
 import { exampleAgent } from '../../examples/agent.mjs';

@@ -1,5 +1,5 @@
-import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex/flowkit';
-import type { CompileResult, Diagnostic, FlowkitOptions, Ctx } from '@devcodex/flowkit';
+import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
+import type { CompileResult, Diagnostic, FlowkitOptions, Ctx } from '@devcodex-labs/flowkit';
 
 const options: FlowkitOptions = { trace: false, mermaid: true, skillCheck: false };
 const compiled: Promise<CompileResult> = compile('sample.workflow.ts', options);
@@ -15,7 +15,7 @@ const boolean: boolean = evalWhen(ctx, 'true');
 const control: boolean = isControlSignal(null);
 void [boolean, control];
 // @ts-expect-error Internal modules are not public subpaths.
-import { writeArtifacts } from '@devcodex/flowkit/compiler/output';
+import { writeArtifacts } from '@devcodex-labs/flowkit/compiler/output';
 // @ts-expect-error compileSource requires a filename.
 compileSource('', {});
 // @ts-expect-error filename is not a compile option.

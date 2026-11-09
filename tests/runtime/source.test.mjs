@@ -6,7 +6,7 @@ import fsSync from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import * as api from '@devcodex/flowkit';
+import * as api from '@devcodex-labs/flowkit';
 import { executeSource } from '../../src/runtime/source.mjs';
 import { loadWorkflowText } from '../../src/runtime/load.mjs';
 import { fixture, source, end, host, settled } from './support.mjs';
@@ -19,7 +19,7 @@ test('public helpers expose strict own-state evaluation and the control marker w
   assert.equal(api.evalWhen({ state: Object.create({ inherited: true }) }, 'inherited === null'), false);
   assert.throws(() => api.evalWhen({ state: { value: 1 } }, 'value'), { code: 'FK_R002' });
   assert.throws(() => api.evalWhen({ state: {} }, 'call()'), { code: 'FK_C033' });
-  await assert.rejects(import('@devcodex/flowkit/runtime/source'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  await assert.rejects(import('@devcodex-labs/flowkit/runtime/source'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 });
 
 test('compile errors select the first error after warnings and precede state cloning or business calls', async t => {
