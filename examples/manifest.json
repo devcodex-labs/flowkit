@@ -40,13 +40,13 @@
   "files": [
     {
       "path": "editorial.workflow.js",
-      "bytes": 2318,
-      "sha256": "bf1015cfd71b940a9dea9bc15743a67d716e7225ed900f9f1b16fdc722b2b74c"
+      "bytes": 2323,
+      "sha256": "d85d218e0363c96af76a3c432c83113224b1bf4aaea292c93451521a91f11e8c"
     },
     {
       "path": "editorial.compiled.mjs",
       "bytes": 8621,
-      "sha256": "13dfceb4aa23fcaf9456c2ee0e08b526f9412f57b04046657bcc265330c93a2f"
+      "sha256": "9bcd7649e7b8287d06fc12a8dd5229756d09950778223b557673facbf7d93611"
     },
     {
       "path": "editorial.mmd",
@@ -55,13 +55,13 @@
     },
     {
       "path": "shared-join.workflow.ts",
-      "bytes": 637,
-      "sha256": "c208b7f933ae599486e4f873fbc55816dd725b4175444966a87cf60c919fcfd6"
+      "bytes": 642,
+      "sha256": "0d0edeba0f6efba74eac863bbeb99068362a66f26c66464e11a3ef2064277547"
     },
     {
       "path": "shared-join.compiled.mjs",
       "bytes": 1302,
-      "sha256": "af686de6d35e58dee52e368522e33f3ab515059e23ca7fa6b38f17c86a87167a"
+      "sha256": "efe191558ea98c5a5b38c9e4479ab80e942e9fc6739663d8eabbb3307de836b5"
     },
     {
       "path": "shared-join.mmd",
@@ -70,13 +70,13 @@
     },
     {
       "path": "remote.workflow.js",
-      "bytes": 1138,
-      "sha256": "853eec8cc993addc97832a401c246ee9984ed5b103af4fa53155eed94e5a57bc"
+      "bytes": 1143,
+      "sha256": "a5a5f874342752d1afed9a7c0c3c2584be89210cf38170eb7ed2dfc717431d37"
     },
     {
       "path": "remote.compiled.mjs",
       "bytes": 5567,
-      "sha256": "a949699d179355995ddc6407bf221f3b18c07a55dabb42530bd8c804ca9def36"
+      "sha256": "9765a4a0b710eced7277618fd153e3f506451808c78c51a108e1795dfbc1ad78"
     },
     {
       "path": "remote.mmd",
@@ -100,13 +100,13 @@
     },
     {
       "path": "host.mjs",
-      "bytes": 2068,
-      "sha256": "15edb0ff001ce0bfe6e923456b7f3500e7a0a7929f6293d89eefd49363cd4ebc"
+      "bytes": 2073,
+      "sha256": "4c586c45dbb73dcd4a191eaaaade402a66f2f37b22b5c8503241d4f6db978d74"
     },
     {
       "path": "demo.mjs",
-      "bytes": 2382,
-      "sha256": "68b20b032e0fea0e2c16b5a18c01f93991925fb15fb2510bc8110d803667652f"
+      "bytes": 2387,
+      "sha256": "772152a04456daa760cdfbf35c273c68363ce34dba13b135314747aeb5389772"
     },
     {
       "path": "agent.mjs",
