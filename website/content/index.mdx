@@ -6,8 +6,8 @@ hero:
   tagline: 用 JavaScript / TypeScript 定义流程，通过宿主 Runtime 连接 Agent、业务操作和人工审批。v1.0.0 · 专有授权 · 私有分发
   actions:
     - theme: brand
-      text: 快速开始
-      link: /guide/quick-start
+      text: 了解 FlowKit
+      link: /guide/introduction
     - theme: alt
       text: 查看示例
       link: /examples/index
@@ -33,7 +33,7 @@ import { Mermaid } from '../components/Mermaid';
 ```js file="../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"
 ```
 
-完整的宿主、安装命令和预期输出见[快速开始](/guide/quick-start)。第一次使用不需要模型密钥。
+完整的宿主实现和预期输出见[内部开发示例](/guide/quick-start)。该示例供技术说明与内部验证使用，公开读者不需要安装包或模型密钥。
 
 ## 适合你的任务吗
 
@@ -45,4 +45,8 @@ FlowKit 是进程内编排工具。它不内置工作流数据库、跨进程恢
 
 需要能力发现或跨 Provider 依赖判断时，可选用[FlowKit Provider 声明](/guide/capability-provider)与[capability-graph 宿主示例](/examples/capability-graph)；它们不改变现有 DSL 的控制流执行契约。
 
-本站文档允许公开阅读；FlowKit 源代码和安装包仍为私有，实际安装与使用需要项目所有者授权。公开站点不等于开源授权。
+## 对外服务方向
+
+FlowKit 是私有工作流基础设施，拟通过 **MCP 服务、托管 API 或付费工作流设计产品** 对外提供工作流能力，而不是向付费客户交付 npm 包。以上是计划中的商业化方向，**目前未提供可直接购买或调用的正式服务**。
+
+本站文档允许公开阅读；FlowKit 源代码、软件包和内部部署环境仍为私有。公开技术示例不等于开放源码，也不授予安装或分发权利。未来客户取得的生成工作流产物使用权，将由单独的产品服务条款明确。

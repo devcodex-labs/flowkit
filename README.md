@@ -4,15 +4,19 @@
 
 用 JavaScript / TypeScript DSL 定义工作流，静态检查流程结构，生成可读 JavaScript 与 Mermaid，并通过你提供的宿主 Runtime 执行 Agent、业务动作、验证和人工审批。
 
-[中文文档](https://devcodex-labs.github.io/flowkit/) · [快速开始](https://devcodex-labs.github.io/flowkit/guide/quick-start.html) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples)
+[公开文档](https://devcodex-labs.github.io/flowkit/) · [工作流示例](https://devcodex-labs.github.io/flowkit/examples/index.html) · [内部示例源码](https://github.com/devcodex-labs/flowkit/tree/main/examples)
 
 ## 适用场景
 
 适合需要条件分支、并行处理、校验重试、循环修复或人工决策的多步骤任务。模型调用、业务接口、Schema 校验器及人工交互由宿主提供。FlowKit 不内置持久化审批服务或跨进程恢复；并行分支共享状态，any 汇合不会取消其他分支。
 
-## 安装
+## 运营定位
 
-仅限已获授权的消费者。先为 GitHub Packages 配置 `@devcodex-labs` Registry，使用具备 `read:packages` 权限的 GitHub PAT (classic)，由环境变量 `NODE_AUTH_TOKEN` 提供，不把真实令牌提交到仓库。创建项目中的 `.npmrc`：
+FlowKit 是 **私有、内部部署的商业产品基础设施**。未来可通过 MCP 服务、托管 API 或付费工作流设计产品向客户提供能力，**不向客户分发 FlowKit npm 安装包或源码**。目前这些商业服务属于规划方向，尚未作为本仓库的现成服务发布。客户使用服务和取得生成工作流的权利，应由单独的服务条款约定。
+
+## 内部安装（仅维护者）
+
+以下命令仅供拥有仓库或内部部署权限的维护者使用；公开文档读者和未来付费客户**无需安装 FlowKit**。先为 GitHub Packages 配置 `@devcodex-labs` Registry，使用具备 `read:packages` 权限的 GitHub PAT (classic)，由环境变量 `NODE_AUTH_TOKEN` 提供，不把真实令牌提交到仓库。创建项目中的 `.npmrc`：
 
 ```ini
 @devcodex-labs:registry=https://npm.pkg.github.com
@@ -27,9 +31,9 @@ npm pkg set type=module
 npm install --save-exact @devcodex-labs/flowkit@1.0.0
 ```
 
-## 第一个工作流
+## 内部开发示例：第一个工作流
 
-创建以下两个文件。示例不需要模型密钥，也不依赖源码仓库。
+以下是供内部开发与审查使用的最小示例，公开读者可以阅读其流程，但不获得安装包或源码访问权。示例不需要模型密钥，也不依赖源码仓库。创建以下两个文件。
 
 <!-- flowkit:quick-start:start -->
 **sample.workflow.js**
@@ -99,4 +103,4 @@ SDK 根入口提供 `run`、`compile`、`compileSource`、`check`、`evalWhen`�
 
 从仓库开发：`npm ci`，再运行 `npm run verify`。文档站位于 `website/`，其开发环境为 Node >=24，依赖与 SDK 分开安装。贡献入口见[贡献说明](https://github.com/devcodex-labs/flowkit/blob/main/CONTRIBUTING.md)。
 
-FlowKit 是私有专有软件，当前使用 [专有授权协议](https://github.com/devcodex-labs/flowkit/blob/main/LICENSE)，Copyright (c) 2026 devcodex-labs。仓库当前版本为 v1.0.0，实际包发行以 GitHub Packages 记录为准；[更新记录](https://github.com/devcodex-labs/flowkit/blob/main/CHANGELOG.md)说明能力与限制。
+FlowKit 是仅供内部部署的私有专有软件，公开文档并不授予安装权；当前使用 [专有授权协议](https://github.com/devcodex-labs/flowkit/blob/main/LICENSE)，Copyright (c) 2026 devcodex-labs。仓库当前版本为 v1.0.0，实际包发行以 GitHub Packages 记录为准；[更新记录](https://github.com/devcodex-labs/flowkit/blob/main/CHANGELOG.md)说明能力与限制。

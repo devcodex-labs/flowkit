@@ -6,7 +6,7 @@
     "file": "index.mdx",
     "group": "开始使用",
     "status": "drafted",
-    "scope": "定位、版本、开源和三步编排；首页按钮/图",
+    "scope": "私有产品定位、公开文档、未来托管服务方向和工作流介绍",
     "validation": "RT01/07，V-SITE"
   },
   {
@@ -22,11 +22,11 @@
   {
     "id": "P03",
     "route": "/guide/installation",
-    "title": "安装与环境",
+    "title": "内部安装与环境",
     "file": "guide/installation.mdx",
     "group": "开始使用",
     "status": "drafted",
-    "scope": "精确安装、ESM、CLI、实际包版本",
+    "scope": "仅维护者的私有包安装、ESM、CLI 和内部部署权限",
     "validation": "RT01，E01"
   },
   {
@@ -36,7 +36,7 @@
     "file": "guide/quick-start.mdx",
     "group": "开始使用",
     "status": "drafted",
-    "scope": "完整两文件、编译/检查/输出；README 同源",
+    "scope": "内部维护者的完整两文件工作流编译、检查和运行",
     "validation": "RT01，E01"
   },
   {

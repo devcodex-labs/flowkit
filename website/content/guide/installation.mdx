@@ -1,6 +1,8 @@
-# 安装与环境
+# 内部安装与环境
 
-本页从一个空目录安装 FlowKit v1.0.0，确认导入和命令行可用。使用 SDK 不需要克隆 FlowKit 仓库，也不需要安装文档站依赖。
+**本页只针对 FlowKit 项目维护者及内部部署人员，不是面向客户的产品安装教程。** FlowKit 不向未来付费用户分发软件包；他们将通过计划中的 MCP、托管 API 或工作流设计服务使用能力。公开读者无需创建令牌或安装包。
+
+下面从一个空目录安装内部私有 FlowKit v1.0.0，验证 SDK 与 CLI。实际在 GitHub Packages 中是否已经发布该版本，须以 Registry 记录为准。
 
 ## 前置条件
 
@@ -19,7 +21,7 @@ Node 版本低于最低要求时，先升级并确认终端正在使用新版本
 
 ## 创建项目并精确安装
 
-FlowKit 仅通过 **GitHub Packages 私有 npm Registry** 分发。用户须具备该包的读取权限，并使用具有 `read:packages` 的 GitHub Personal Access Token（classic）。在消费者目录创建 `.npmrc`（不要提交凭据），内容如下：
+FlowKit 只在内部通过 **GitHub Packages 私有 npm Registry** 管理安装包。维护者须具备该包的读取权限，并使用具有 `read:packages` 的 GitHub Personal Access Token（classic）。在消费者目录创建 `.npmrc`（不要提交凭据），内容如下：
 
 ```ini
 @devcodex-labs:registry=https://npm.pkg.github.com
@@ -38,7 +40,7 @@ npm pkg set type=module
 npm install --save-exact @devcodex-labs/flowkit@1.0.0
 ```
 
-`@devcodex-labs/flowkit` 为私有包，未经授权的账户不能直接下载安装。`--save-exact` 让 package.json 保存明确版本。保留 npm 生成的 package-lock.json，在其他机器上用 `npm ci` 安装一致的依赖。
+`@devcodex-labs/flowkit` 是内部私有包，不对外提供安装。`--save-exact` 让 package.json 保存明确版本。保留 npm 生成的 package-lock.json，在其他机器上用 `npm ci` 安装一致的依赖。
 
 确认包身份：
 
