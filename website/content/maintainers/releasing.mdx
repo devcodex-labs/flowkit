@@ -28,7 +28,7 @@ node scripts/release.mjs verify --tag v1.0.0
 
 ## GitHub Packages 权限和发布
 
-发布工作流只允许使用 `packages:write` 的 `GITHUB_TOKEN` 与正确的组织 Scope，配置 `actions/setup-node` 的 `registry-url: https://npm.pkg.github.com`。发布命令不得出现 `--access public` 或 `registry.npmjs.org`。首次发布后核实包的 **Private** 可见性及 Actions 访问授权；GitHub 仓库 Private 并不自动证明包权限正确。
+发布必须先经授权确认 LICENSE 草案和具体发布版本，再将仓库变量 `FLOWKIT_ENABLE_PACKAGE_PUBLISH` 设置为 `true`；默认关闭以防误发布。发布工作流只允许使用 `packages:write` 的 `GITHUB_TOKEN` 与正确的组织 Scope，配置 `actions/setup-node` 的 `registry-url: https://npm.pkg.github.com`。发布命令不得出现 `--access public` 或 `registry.npmjs.org`。首次发布后通过 `scripts/docs/check-package-privacy.mjs` 核实包的 **Private** 可见性及 Actions 访问授权；GitHub 仓库 Private 并不自动证明包权限正确。
 
 消费方配置 scoped `.npmrc`，令牌由环境变量注入。仓库外消费者通常需要有 `read:packages` 的 PAT (classic)；Actions 从本仓库读取私有包可在适当授权下使用 `GITHUB_TOKEN`。不要在 GitHub Pages、日志或 GitHub Actions Artifact 中保存 Token。完整配置见[安装](/guide/installation)。
 

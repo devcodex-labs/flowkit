@@ -90,6 +90,8 @@ jobs:
           retention-days: 90
 
   publish:
+    # Publishing requires explicit owner approval of the proprietary license.
+    if: ${{ vars.FLOWKIT_ENABLE_PACKAGE_PUBLISH == 'true' }}
     needs: pack
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -148,6 +150,10 @@ jobs:
         with:
           name: npm-release-${{ github.run_attempt }}
           path: .tmp/release
+      - name: Verify published GitHub Package stays private
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/docs/check-package-privacy.mjs
       - name: Verify original package and private registry
         env:
           RELEASE_TAG: ${{ github.ref_name }}
