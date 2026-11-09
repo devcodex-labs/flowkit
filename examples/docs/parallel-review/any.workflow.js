@@ -1,4 +1,4 @@
-import { defineWorkflow, parallel, action, verification, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, parallel, action, verification, terminal } from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({
   id: 'parallel-any', version: '1.0.0', name: '等待一个完成',
   nodes: [

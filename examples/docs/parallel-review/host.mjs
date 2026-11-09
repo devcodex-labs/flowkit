@@ -1,4 +1,4 @@
-import { run, isControlSignal } from '@devcodex/flowkit';
+import { run, isControlSignal } from '@devcodex-labs/flowkit';
 import { fileURLToPath } from 'node:url';
 export async function scenario(strategy = 'all', reject = false) {
   const events = []; let release;
