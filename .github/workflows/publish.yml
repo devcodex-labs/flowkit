@@ -35,6 +35,8 @@ jobs:
 
   pack:
     needs: checks
+    outputs:
+      version: ${{ steps.release_meta.outputs.version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -52,7 +54,9 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: npm run release:pack -- --tag "$RELEASE_TAG"
       - name: Consume the exact candidate bytes
-        run: npm run docs:examples -- --package .tmp/release/devcodex-labs-flowkit-1.0.0.tgz --evidence .tmp/docs/release-candidate.json
+        run: |
+          TARBALL="$(node --input-type=module -e 'import{readFileSync}from"node:fs";console.log(".tmp/release/"+JSON.parse(readFileSync(".tmp/release/release.json","utf8")).filename)')"
+          npm run docs:examples -- --package "$TARBALL" --evidence .tmp/docs/release-candidate.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: npm-artifact
         with:
@@ -64,15 +68,19 @@ jobs:
           include-hidden-files: true
           retention-days: 90
       - name: Record immutable package release identity
+        id: release_meta
         env:
+          RELEASE_TAG: ${{ github.ref_name }}
           PACKAGE_COMMIT: ${{ github.sha }}
           DOCS_COMMIT: ${{ github.sha }}
-          RELEASE_VERSION: '1.0.0'
           RELEASE_RUN_ID: ${{ github.run_id }}
           RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
           NPM_ARTIFACT_ID: ${{ steps.npm-artifact.outputs.artifact-id }}
           NPM_ARTIFACT_DIGEST: ${{ steps.npm-artifact.outputs.artifact-digest }}
-        run: node scripts/docs/release-identity.mjs create --release-dir .tmp/release --out .tmp/release-identity/release-record.json
+        run: |
+          export RELEASE_VERSION="${RELEASE_TAG#v}"
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          node scripts/docs/release-identity.mjs create --release-dir .tmp/release --out .tmp/release-identity/release-record.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-identity-${{ github.run_attempt }}
@@ -140,9 +148,19 @@ jobs:
         with:
           name: npm-release-${{ github.run_attempt }}
           path: .tmp/release
-      - run: node scripts/release.mjs verify --tag v1.0.0
-      - run: npm run docs:private-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/private-package.json
-      - run: npm run docs:examples -- --registry-version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/private-consumer.json
+      - name: Verify original package and private registry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          node scripts/release.mjs verify --tag "$RELEASE_TAG"
+          npm run docs:private-package -- --version "$VERSION" --manifest .tmp/release/release.json --evidence .tmp/docs/private-package.json
+      - name: Run consumer examples against the exact private version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          npm run docs:examples -- --registry-version "$VERSION" --manifest .tmp/release/release.json --evidence .tmp/docs/private-consumer.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -155,7 +173,7 @@ jobs:
   docs:
     # The documentation site remains opt-in until its visibility policy is approved.
     if: ${{ vars.FLOWKIT_ENABLE_PAGES_DEPLOY == 'true' }}
-    needs: private-consumer
+    needs: [pack, private-consumer]
     permissions:
       contents: read
       actions: read
@@ -166,6 +184,6 @@ jobs:
     with:
       packageReleaseCommit: ${{ github.sha }}
       docsCommit: ${{ github.sha }}
-      version: '1.0.0'
+      version: ${{ needs.pack.outputs.version }}
       releaseRunId: ${{ github.run_id }}
       releaseRunAttempt: ${{ github.run_attempt }}
