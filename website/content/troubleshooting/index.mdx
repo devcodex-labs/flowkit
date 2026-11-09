@@ -43,3 +43,9 @@ Node/npm版本与操作系统：
 ```
 
 在[GitHub Issues](https://github.com/devcodex-labs/flowkit/issues)提交可复现信息。删除模型密钥、凭据、真实用户数据和不必要的业务内容；可以用固定响应替代外部服务，保留同样返回形状。不要只贴截图或一行“运行失败”。贡献过程见[参与贡献](/community/contributing)。
+
+## 私有 Registry 与图谱集成排错
+
+安装返回 401/403/404 时，先检查 `@devcodex-labs` Registry、PAT (classic) 的 `read:packages`、SSO 授权与包的读取权限，不要自动改用公共 npm 或换回旧包名。
+
+Graph 适配器的 `FK_CG_BINDING_MISSING` 表示宿主没有注册动作，`FK_CG_NOT_APPLICABLE` 表示环境事实缺失/不匹配，`FK_CG_DEPENDENCIES_INCOMPLETE` 表示解析不完整。原始 `CG_*` GraphError（如权限拒绝）由 SDK 抛出，不属于 FlowKit 已有的 61 个编译/运行错误码。参见[能力图谱示例](/examples/capability-graph)。

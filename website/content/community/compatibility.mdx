@@ -10,7 +10,7 @@
 | TypeScript声明 | TypeScript 5.0+，使用const类型参数 |
 | 文档站开发 | Node >=24，website独立依赖与锁文件 |
 | 文档语言 | 简体中文；当前没有英文翻译版本 |
-| 许可证 | MIT |
+| 授权 | 专有授权；详见 LICENSE，包由 GitHub Packages 私有分发 |
 
 ## 自动检查的环境
 
@@ -26,6 +26,12 @@ FlowKit提供静态DSL编译、图和数据声明检查、可读生成代码、M
 
 ## 版本与升级
 
-首个正式开源版本为1.0.0。消费者建议精确安装并提交锁文件，先在独立环境运行自己的关键流程，再升级生产。工作流自己的version与包版本独立。升级后重新compile/check，旧产物的版本、生成逻辑或选项可能不同，不应直接继续手工拼接使用。
+仓库当前版本为1.0.0，实际发布状态须核对 Git Tag 与 GitHub Packages。消费者建议精确安装并提交锁文件，先在独立环境运行自己的关键流程，再升级生产。工作流自己的version与包版本独立。升级后重新compile/check，旧产物的版本、生成逻辑或选项可能不同，不应直接继续手工拼接使用。
 
 报告兼容问题时提供实际Node/npm/系统版本、包版本和最小复现，见[问题定位](/troubleshooting/index)。当前能力清单见[发布记录](/community/changelog)。
+
+## capability-graph 兼容性
+
+可选 Provider 与宿主动作适配使用独立的 `@devcodex/capability-graph` v2.1.1 SDK 契约。核心六个 SDK 与八类 DSL 节点不变；Graph 的 Provider schemaVersion、声明版本、结果 revision 不等于 FlowKit 版本。Graph 可能与 Node 20 兼容，但 FlowKit 仍要求 Node >=22.13.0；消费者按两者要求取交集。
+
+站点是否公开仍由项目负责人决定，不得以仓库 Private 代替对 GitHub Pages 访问的检查。

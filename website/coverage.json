@@ -456,7 +456,7 @@
     "file": "maintainers/releasing.mdx",
     "group": "发布维护",
     "status": "drafted",
-    "scope": "候选→公开包消费→站点、确切commit、失败与回退",
+    "scope": "候选→GitHub Packages 私有包消费→文档站、确切 Commit 与失败恢复",
     "validation": "V-RELEASE，V-MAINT"
   },
   {
