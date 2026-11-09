@@ -55,6 +55,8 @@ try {
   const installedProof = await verifyInstalledArchive(installed, await readFile(tarball));
   const selected = manifest.cases.filter(item => !options['--case'] || item.id === options['--case']);
   assert.ok(selected.length, 'Unknown or empty case selection');
+  const extra = [...new Set(selected.flatMap(item => item.dependencies ?? []))];
+  if (extra.length) await execute('install-optional-graph', [npm, 'install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org/', ...extra], consumer);
   for (const item of selected) {
     assert.match(item.directory, /^[a-z][a-z-]*$/);
     const directory = path.join(consumer, item.directory); await mkdir(directory);

@@ -264,6 +264,37 @@
       "types": [
         "consumer.ts"
       ]
+    },
+    {
+      "id": "E13",
+      "directory": "capability-graph",
+      "files": [
+        "host.mjs",
+        "package.json",
+        "sample.workflow.js",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "host.mjs",
+          "args": [],
+          "expected": {
+            "status": "succeeded",
+            "terminal": "done",
+            "state": {
+              "name": "FlowKit",
+              "message": "你好，FlowKit！"
+            }
+          }
+        }
+      ],
+      "verify": "verify.mjs",
+      "dependencies": [
+        "@devcodex/capability-graph@2.1.1"
+      ]
     }
   ]
 }

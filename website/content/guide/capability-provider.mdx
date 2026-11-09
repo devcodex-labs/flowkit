@@ -1,0 +1,38 @@
+# 向 capability-graph 声明 FlowKit 能力
+
+FlowKit 通过 `@devcodex-labs/flowkit/capability-graph` 导出 `flowkitProvider`。它是一份满足 `capability-graph` Provider Schema v1 的**静态能力声明**，不是额外的执行器。
+
+## 已声明的能力
+
+| ID | 含义 |
+|---|---|
+| `flowkit::define-workflow` | 使用静态 JS/TS DSL 定义工作流 |
+| `flowkit::compile-workflow` | 编译生成可执行 JS 与 Mermaid |
+| `flowkit::check-workflow` | 检查定义及已有编译产物 |
+| `flowkit::run-workflow` | 由显式提供的宿主 Runtime 执行 |
+| `flowkit::render-mermaid` | 生成工作流可视化 |
+
+## 用 Graph 查询
+
+```js
+import { CapabilityGraph } from '@devcodex/capability-graph';
+import { flowkitProvider } from '@devcodex-labs/flowkit/capability-graph';
+
+const graph = await CapabilityGraph.open({ providers: [{ definition: flowkitProvider }] });
+try {
+  const catalog = await graph.listCatalog();
+  const details = await graph.getCapabilities({ ids: ['flowkit::run-workflow'] });
+  const result = await graph.resolve({ ids: ['flowkit::render-mermaid'] });
+  console.log(catalog.items.length, details.items.length, result.meta.completeness);
+} finally {
+  await graph.close();
+}
+```
+
+Graph 的 `requires` 表示能力前置关系（例如 `render-mermaid` 需要 `compile-workflow`），**不决定工作流执行顺序**。FlowKit 自己的 `src/compiler/graph.mjs` 负责控制流图检查，与 Capability Graph 能力声明系统不是同一种图。
+
+## 版本、权限与限制
+
+此 Provider 声明版本随 FlowKit 包版本维护，不等于 Graph SDK 版本，也不等于 Graph 的结果 `revision`。`allowedProviders` 限定可见来源；`getCapabilities`、`resolve` 只读声明，不执行业务动作。FlowKit 的 `agent` 参数仍表示 Skill 映射，而非 Graph 能力 ID。
+
+如需将已解析能力绑定到业务操作，参见[宿主消费示例](/examples/capability-graph)。所有模型、动作权限和外部 IO 均由宿主提供。
