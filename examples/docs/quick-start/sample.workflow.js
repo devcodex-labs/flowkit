@@ -1,4 +1,4 @@
-import { defineWorkflow, action, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, action, terminal } from '@devcodex-labs/flowkit/dsl';
 
 export default defineWorkflow({
   id: 'hello-flowkit', version: '1.0.0', name: '第一个工作流',
