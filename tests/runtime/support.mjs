@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 import { executeSource } from '../../src/runtime/source.mjs';
 
-const imports = "import {defineWorkflow,node,action,condition,verification,loop,human,parallel,terminal} from '@devcodex/flowkit/dsl';";
+const imports = "import {defineWorkflow,node,action,condition,verification,loop,human,parallel,terminal} from '@devcodex-labs/flowkit/dsl';";
 export const end = (id = 'done', status = 'succeeded') => `terminal('${id}',{name:'${id}',status:'${status}'})`;
 export const source = nodes => `${imports}\nexport default defineWorkflow({id:'runtime',version:'1.0.0',name:'Runtime',nodes:[${nodes.join(',')}]});\n`;
 export const host = methods => ({ isControlSignal, evalWhen, ...methods });

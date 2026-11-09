@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { compile } from '@devcodex/flowkit';
+import { compile } from '@devcodex-labs/flowkit';
 import { scenario } from './host.mjs';
 assert.equal((await scenario()).requests, 1); // 同一次执行两个节点共享默认 loader 的成功缓存。
 assert.equal((await scenario()).requests, 1); // 新运行重新建立 loader。

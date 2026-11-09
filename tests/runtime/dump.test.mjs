@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import * as api from '@devcodex/flowkit';
+import * as api from '@devcodex-labs/flowkit';
 import { hashPrefixCollision, loadDumpWorkflow } from '../../src/runtime/dump.mjs';
 import { fixture, end, host, settled } from './support.mjs';
 
@@ -21,7 +21,7 @@ function probe(operation, config) {
     "import assert from 'node:assert/strict'; import fs from 'node:fs/promises'; import path from 'node:path';",
     "import {register,syncBuiltinESMExports} from 'node:module'; import module from 'node:module';",
     "import {MessageChannel,MessagePort,Worker} from 'node:worker_threads'; import {pathToFileURL} from 'node:url';",
-    "import * as api from '@devcodex/flowkit';",
+    "import * as api from '@devcodex-labs/flowkit';",
     'import {dumpChannel} from ' + JSON.stringify(new URL('../../dist/runtime/dump-channel.mjs', import.meta.url).href) + ';',
     'const operation = ' + operation.toString() + '; await operation(' + JSON.stringify(config) + ');',
   ].join('\n');

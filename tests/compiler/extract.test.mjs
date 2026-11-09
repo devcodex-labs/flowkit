@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { createSourceSnapshot, createCompileContext } from '../../src/compiler/source.mjs';
 import { extractWorkflow } from '../../src/compiler/extract.mjs';
 
-const imports = "import {defineWorkflow as wf, node, action, verification, parallel, condition, loop, human, terminal as end} from '@devcodex/flowkit/dsl';\n";
+const imports = "import {defineWorkflow as wf, node, action, verification, parallel, condition, loop, human, terminal as end} from '@devcodex-labs/flowkit/dsl';\n";
 const source = (nodes, extras = '') => `${imports}export default wf({id:'demo',version:'1.0.0',name:'示例',nodes:[${nodes}]${extras}});`;
 const extract = (text, ext = 'js') => extractWorkflow(createSourceSnapshot(text, `fixtures/demo.workflow.${ext}`));
 
@@ -48,9 +48,9 @@ test('rejects executable and nonliteral syntax without executing side effects', 
     source("end('done',{name:'End',status:'succeeded'})").replace('export default', 'const x = 1; export default'),
     source("{id:'done',name:'End',type:'terminal',status:'succeeded'}"),
     source("end('done',{name:'End',status:'succeeded'})", ',extra:{nested:node(\'x\',{})}'),
-    "import * as dsl from '@devcodex/flowkit/dsl'; export default dsl.defineWorkflow({});",
-    "import dsl from '@devcodex/flowkit/dsl'; export default dsl({});",
-    source("end('done',{name:'End',status:'succeeded'})").replace('@devcodex/flowkit/dsl', 'node:fs'),
+    "import * as dsl from '@devcodex-labs/flowkit/dsl'; export default dsl.defineWorkflow({});",
+    "import dsl from '@devcodex-labs/flowkit/dsl'; export default dsl({});",
+    source("end('done',{name:'End',status:'succeeded'})").replace('@devcodex-labs/flowkit/dsl', 'node:fs'),
     source("end('done',{name:'End',status:'succeeded'}),,"),
   ];
   for (const text of bad) {

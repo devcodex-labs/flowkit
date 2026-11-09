@@ -8,9 +8,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import * as api from '@devcodex/flowkit';
+import * as api from '@devcodex-labs/flowkit';
 
-const source = name => `import {defineWorkflow,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'${name ?? 'Demo'}',nodes:[terminal('done',{name:'Done',status:'succeeded'})]});\n`;
+const source = name => `import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'${name ?? 'Demo'}',nodes:[terminal('done',{name:'Done',status:'succeeded'})]});\n`;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 async function workspace(t) {
   const base = path.resolve(tmpdir());
@@ -38,7 +38,7 @@ async function snapshot(directory) {
 
 test('package root exposes implemented compiler functions and runtime helpers while blocking deep imports', async () => {
   assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
-  await assert.rejects(import('@devcodex/flowkit/compiler/api'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  await assert.rejects(import('@devcodex-labs/flowkit/compiler/api'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 });
 
 test('the README quick-start module compiles unchanged through the public API', async t => {
@@ -59,7 +59,7 @@ import fsSync from 'node:fs';
 import {syncBuiltinESMExports} from 'node:module';
 import {mkdir,writeFile,readFile,stat} from 'node:fs/promises';
 import path from 'node:path';
-const api=await import(${JSON.stringify(import.meta.resolve('@devcodex/flowkit'))});
+const api=await import(${JSON.stringify(import.meta.resolve('@devcodex-labs/flowkit'))});
 const base=process.argv[1],project=path.join(base,'project');
 await mkdir(path.join(project,'nested'),{recursive:true});
 await mkdir(path.join(project,'skills'));await writeFile(path.join(project,'skills/a.md'),'instruction');
@@ -71,7 +71,7 @@ await assert.rejects(stat(path.join(base,'source.compiled.mjs')),{code:'ENOENT'}
 await writeFile(artifact,first.code+' ');
 process.chdir(project);const checking=api.check('nested/source.workflow.js',{outDir:'.'});process.chdir(base);
 const differences=await checking;assert.deepEqual(differences.map(d=>d.code),['FK_R001']);assert.equal(differences[0].file,artifact);
-const agent="import {defineWorkflow,node,terminal} from '@devcodex/flowkit/dsl';export default defineWorkflow({id:'agent',version:'1.0.0',name:'Agent',nodes:[node('n',{name:'N',skill:'skills/a.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
+const agent="import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';export default defineWorkflow({id:'agent',version:'1.0.0',name:'Agent',nodes:[node('n',{name:'N',skill:'skills/a.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
 await writeFile(path.join(project,'nested/agent.workflow.js'),agent);
 // Simulate no package.json ancestors so the fallback is independent of the test machine.
 const originalStat=fsSync.statSync;
@@ -141,7 +141,7 @@ test('warnings permit writing without fetching remote Skills or running source/c
   const directory = await workspace(t);
   const filename = path.join(directory, 'remote.workflow.js');
   await writeFile(path.join(directory, 'flowkit.config.mjs'), "throw new Error('API must not execute configuration');");
-  const remote = "import {defineWorkflow,node,terminal} from '@devcodex/flowkit/dsl';export default defineWorkflow({id:'remote',version:'1.0.0',name:'Remote',nodes:[node('n',{name:'N',skill:'https://example.test/skill.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
+  const remote = "import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';export default defineWorkflow({id:'remote',version:'1.0.0',name:'Remote',nodes:[node('n',{name:'N',skill:'https://example.test/skill.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
   const result = await api.compileSource(remote, { filename, remoteSkillHosts: ['example.test'], fetch: () => assert.fail('No network') });
   assert.deepEqual(result.diagnostics.map(item => item.code), ['FK_C059']);
   assert.ok(result.code.length); assert.ok((await stat(path.join(directory, 'remote.compiled.mjs'))).isFile());
@@ -215,7 +215,7 @@ test('check compares the ancestor outDir and carries compile warnings alongside 
   await api.compile(file, { outDir: directory });
   assert.deepEqual(await api.check(file, { outDir: directory }), []);
   assert.deepEqual(await api.check(file), []);
-  const remote = "import {defineWorkflow,node,terminal} from '@devcodex/flowkit/dsl';export default defineWorkflow({id:'remote',version:'1.0.0',name:'Remote',nodes:[node('n',{name:'N',skill:'https://example.test/skill.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
+  const remote = "import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';export default defineWorkflow({id:'remote',version:'1.0.0',name:'Remote',nodes:[node('n',{name:'N',skill:'https://example.test/skill.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
   await writeFile(file, remote);
   assert.deepEqual((await api.check(file, { outDir: directory, remoteSkillHosts: ['example.test'] })).map(item => item.code), ['FK_C059', 'FK_R001']);
 });

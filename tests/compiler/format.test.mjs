@@ -7,7 +7,7 @@ import { compilationPaths } from '../../src/compiler/paths.mjs';
 import { analyzeSource } from '../../src/compiler/analyze.mjs';
 import { checkMermaidIds, renderMermaid } from '../../src/compiler/mermaid.mjs';
 
-const analyze = nodes => analyzeSource(`import {defineWorkflow,node,action,parallel,verification,loop,human,terminal,condition} from '@devcodex/flowkit/dsl';export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[${nodes.join(',')}]});`,
+const analyze = nodes => analyzeSource(`import {defineWorkflow,node,action,parallel,verification,loop,human,terminal,condition} from '@devcodex-labs/flowkit/dsl';export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[${nodes.join(',')}]});`,
   { filename:'format.workflow.js', skillCheck:false });
 const end="terminal('done',{name:'Done',status:'succeeded'})";
 

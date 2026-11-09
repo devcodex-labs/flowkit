@@ -1,4 +1,4 @@
-import { defineWorkflow, action, condition, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, action, condition, terminal } from '@devcodex-labs/flowkit/dsl';
 
 export default defineWorkflow({
   id: 'shared-join', version: '1.0.0', name: 'Shared join',

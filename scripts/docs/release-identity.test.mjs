@@ -9,7 +9,7 @@ import { validateRecord, validateSourceMetadata, validateRepairPaths, validateDo
 import { sha256, verifyRegistryBytes } from './package-proof.mjs';
 function fixture() {
   const input = { repository: 'devcodex-labs/flowkit', packageReleaseCommit: 'a'.repeat(40), docsCommit: 'a'.repeat(40), version: '1.0.0', releaseRunId: '100', releaseRunAttempt: '2' };
-  const tarball = Buffer.from('reviewed bytes'), manifest = Buffer.from(JSON.stringify({ name: '@devcodex/flowkit', version: '1.0.0', tag: 'v1.0.0', sha256: sha256(tarball) }));
+  const tarball = Buffer.from('reviewed bytes'), manifest = Buffer.from(JSON.stringify({ name: '@devcodex-labs/flowkit', version: '1.0.0', tag: 'v1.0.0', sha256: sha256(tarball) }));
   const artifact = (name, id) => ({ id, name: `${name}-2`, expired: false, expires_at: new Date(Date.now() + 86400000).toISOString(), digest: `sha256:${'b'.repeat(64)}`, workflow_run: { id: 100, head_sha: input.packageReleaseCommit } });
   const metadata = { run: { id: 100, run_attempt: 2, repository: { full_name: input.repository }, head_repository: { full_name: input.repository }, path: '.github/workflows/publish.yml', event: 'push', head_branch: 'v1.0.0', head_sha: input.packageReleaseCommit, conclusion: null }, jobs: ['pack', 'publish'].map(name => ({ name, conclusion: 'success', run_id: 100, head_sha: input.packageReleaseCommit })), artifacts: [artifact('npm-release', 1), artifact('release-identity', 2)] };
   const record = { schemaVersion: 'FlowkitReleaseIdentityV1', ...input, workflow: metadata.run.path, tag: 'v1.0.0', npmArtifactId: '1', npmArtifactDigest: metadata.artifacts[0].digest, manifestSha256: sha256(manifest), tarballSha256: sha256(tarball) };

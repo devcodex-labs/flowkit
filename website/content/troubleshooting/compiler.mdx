@@ -7,7 +7,7 @@
 每条的错误与修复源码来自同版本独立诊断用例。把需要的源码保存为case.workflow.js，在已安装FlowKit的ESM目录运行compile/check。涉及agent映射的用例先创建skills/writer.md，写入任意合法UTF-8说明；涉及远程URL只做静态检查，不会联网。条目给出的options需传给SDK，CLI支持的对应参数见命令行页。
 
 ```js
-import { compile } from '@devcodex/flowkit';
+import { compile } from '@devcodex-labs/flowkit';
 const result = await compile('case.workflow.js', { /* 使用条目中的options */ });
 console.log(result.diagnostics);
 ```
@@ -25,14 +25,14 @@ console.log(result.diagnostics);
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'Bad',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -61,14 +61,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'01.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -97,14 +97,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'bad*/',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -133,14 +133,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -193,14 +193,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',extra:1,nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -229,14 +229,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[...[]]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -267,14 +267,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('Bad',{name:'Done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -303,14 +303,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -339,14 +339,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'bad*/',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -375,14 +375,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'}),terminal('other',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -411,14 +411,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'Done',type:'agent',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -447,14 +447,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'missing'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -483,14 +483,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -519,14 +519,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'}),terminal('unused',{name:'unused',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -555,14 +555,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'Done',status:'succeeded',extra:1})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -591,14 +591,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:null}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:[]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -629,14 +629,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -665,14 +665,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save',next:'done'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -701,14 +701,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),terminal('a',{name:'a',status:'succeeded'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -737,14 +737,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'all',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -773,14 +773,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'a'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -809,14 +809,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check',onSuccess:'done',onFailure:'done'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -845,14 +845,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save',writes:['x']}),action('b',{name:'b',action:'save',writes:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save',writes:['x']}),action('b',{name:'b',action:'save',writes:['y']}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -883,14 +883,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[para
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -919,14 +919,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[cond
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -955,14 +955,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[cond
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag &&",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -991,14 +991,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[cond
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"fn()",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1027,14 +1027,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[cond
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"true\n",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:"flag",next:'done'},{when:'true',next:'done'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1065,14 +1065,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[cond
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:0,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1101,14 +1101,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),action('v',{name:'v',action:'save',next:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1137,14 +1137,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1173,14 +1173,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),parallel('repair',{name:'Repair',branches:['a','b'],join:{strategy:'any',next:'v'}}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1209,14 +1209,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'v'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('start',{name:'start',action:'save',next:'l'}),loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1245,14 +1245,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),loop('repair',{name:'Repair',maxIterations:2,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1281,14 +1281,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),human('repair',{name:'Repair',onApprove:'v',onReject:'repair'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1317,14 +1317,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'l'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop('l',{name:'L',maxIterations:3,body:'v',onSuccess:'done',onMaxExceeded:'failed'}),verification('v',{name:'V',verifier:'check',onSuccess:'l',onFailure:'repair'}),action('repair',{name:'repair',action:'save',next:'v'}),terminal('done',{name:'done',status:'succeeded'}),terminal('failed',{name:'failed',status:'succeeded'})]});
 ```
 
@@ -1355,14 +1355,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1391,14 +1391,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/missing.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1427,14 +1427,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills\\writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1463,14 +1463,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'write'},{when:'true',next:'read'}]}),action('write',{name:'write',action:'save',next:'done',writes:['x']}),node('read',{name:'N',agent:'writer',output:{type:'object'},next:'done',inputs:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[condition('c',{name:'C',branches:[{when:'flag',next:'write'},{when:'true',next:'write'}]}),action('write',{name:'write',action:'save',next:'read',writes:['x']}),node('read',{name:'N',agent:'writer',output:{type:'object'},next:'done',inputs:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1499,14 +1499,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[cond
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'array'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1535,14 +1535,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done',retries:11}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'skills/writer.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1571,14 +1571,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:['x','x']}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done',writes:['x']}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1607,14 +1607,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1647,14 +1647,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1691,14 +1691,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1737,14 +1737,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'h'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1773,14 +1773,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[huma
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),condition('repair',{name:'Repair',branches:[{when:'true',next:'h'}]}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'h'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1809,14 +1809,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[huma
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'Done',status:'ok'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1847,14 +1847,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'a'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
@@ -1883,14 +1883,14 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
 错误源码（保存为case.workflow.js）：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a-0',{name:'a-0',action:'save',next:'a0'}),action('a0',{name:'a0',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 
 修复后的完整源码：
 
 ```js
-import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';
+import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a-0',{name:'a-0',action:'save',next:'b0'}),action('b0',{name:'b0',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});
 ```
 

@@ -44,8 +44,8 @@ test('missing or duplicate API anchors and incorrect release identity fail', () 
   assertAnchors('## run：执行工作流 {#run}', ['run'], 'SDK');
   assert.throws(() => assertAnchors('<a id="run"></a>', ['run', 'compile'], 'SDK'), /compile/);
   assert.throws(() => assertAnchors('<a id="run"></a><a id="run"></a>', ['run'], 'SDK'), /duplicate/);
-  assertVersion({ version: '1.0.0', license: 'MIT', private: false });
-  assert.throws(() => assertVersion({ version: '0.1.0', license: 'MIT', private: false }));
+  assertVersion({ name: '@devcodex-labs/flowkit', version: '1.0.0', license: 'SEE LICENSE IN LICENSE', private: false, publishConfig: { registry: 'https://npm.pkg.github.com/' } });
+  assert.throws(() => assertVersion({ name: '@devcodex-labs/flowkit', version: 'not-semver', license: 'SEE LICENSE IN LICENSE', private: false, publishConfig: { registry: 'https://npm.pkg.github.com/' } }));
 });
 test('exact heading search hits keep their correct anchor without dropping prose matches', () => {
   const header = { type: 'header', title: 'SDK API', header: 'SDK API > compileSource：编译文本', link: '/reference/sdk#compileSource' };

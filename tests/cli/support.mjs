@@ -7,7 +7,7 @@ import path from 'node:path';
 
 export const entry = fileURLToPath(new URL('../../dist/cli.mjs', import.meta.url));
 export const end = "terminal('done',{name:'Done',status:'succeeded'})";
-export const definition = nodes => "import {defineWorkflow,node,action,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'cli',version:'1.0.0',name:'CLI',nodes:[" + nodes.join(',') + ']});\n';
+export const definition = nodes => "import {defineWorkflow,node,action,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'cli',version:'1.0.0',name:'CLI',nodes:[" + nodes.join(',') + ']});\n';
 export async function workspace(t, nodes = [end]) {
   const base = path.resolve(tmpdir());
   const directory = await mkdtemp(path.join(base, 'flowkit-cli-'));

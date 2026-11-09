@@ -25,7 +25,7 @@ try {
   const tarball = path.join(temporary, packed.filename), consumer = path.join(temporary, 'consumer workspace'); await mkdir(consumer);
   await writeFile(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   await execute('install', [npm, 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', tarball, 'typescript@5.7.3', '@types/node@22.13.0'], consumer);
-  const installed = path.join(consumer, 'node_modules/@devcodex/flowkit');
+  const installed = path.join(consumer, 'node_modules/@devcodex-labs/flowkit');
   assert.ok((await lstat(installed)).isDirectory() && !(await lstat(installed)).isSymbolicLink());
   assert.equal(path.resolve(await realpath(installed)), path.resolve(installed), 'Consumer package must be an installed copy');
   async function files(directory, prefix = '') {

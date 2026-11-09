@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { compileSource, check, run, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { compileSource, check, run, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 import { validateExample } from '../../examples/host.mjs';
 
 const directory = new URL('../fixtures/errors/', import.meta.url);
 const catalog = JSON.parse(await readFile(new URL('../fixtures/contract-codes.json', import.meta.url)));
 const files = (await readdir(directory)).filter(file => file.endsWith('.json')).sort();
-const header = "import {defineWorkflow,action,terminal} from '@devcodex/flowkit/dsl';\n";
+const header = "import {defineWorkflow,action,terminal} from '@devcodex-labs/flowkit/dsl';\n";
 function materialize(spec) {
   if (!spec.chainLength) return spec.source;
   const nodes = Array.from({ length: spec.chainLength - 1 }, (_, i) => `action('n-${i}',{name:'N ${i}',action:'save',next:'${i === spec.chainLength - 2 ? 'done' : `n-${i + 1}`}'})`);

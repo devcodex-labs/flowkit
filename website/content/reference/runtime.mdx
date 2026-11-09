@@ -56,3 +56,7 @@ checkStep只得到id/name/attempt这一较小的step对象，而不是完整Agen
 方法缺失或返回类型错误，先核对上表与公开类型。checkStep返回false不是“通过”，应改为null；runHuman返回字符串不是批准，应改为boolean或规范对象；verification返回对象应提取真正boolean。validateResult错误形状不保证被包装为统一FK错误，宿主必须遵守契约。
 
 完整声明与所有字段见[TypeScript类型](/reference/types)，重试与传播细节见[结果校验与重试](/guide/validation-retries)。
+
+## 可选 Graph 宿主绑定
+
+`createCapabilityGraphActionAdapter({ graph, bindings, getContext })` 返回一个 `runAction`，可由现有 Runtime 显式组合。它在调用业务函数前检查 Graph 的权限（由 Graph SDK 执行）、依赖完整性和所有已解析节点的适用性。其缺少绑定/不完整依赖/不适用错误码分别为 `FK_CG_BINDING_MISSING`、`FK_CG_DEPENDENCIES_INCOMPLETE`、`FK_CG_NOT_APPLICABLE`，不属于内建的 61 个 `FK_C`/`FK_R` 编译运行诊断码。参考[完整示例](/examples/capability-graph)。

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeSource } from '../../src/compiler/analyze.mjs';
 
-const imports="import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';";
+const imports="import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';";
 const end="terminal('done',{name:'Done',status:'succeeded'})";
 const agent=(id,next,inputs=[],properties={})=>`node('${id}',{name:'${id}',agent:'writer',inputs:${JSON.stringify(inputs)},output:{type:'object',properties:${JSON.stringify(properties)}},next:'${next}'})`;
 const analyze=nodes=>analyzeSource(`${imports}\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[${nodes.join(',')}]});`,{filename:'data.workflow.js',skillCheck:false});

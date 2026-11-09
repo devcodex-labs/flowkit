@@ -2,11 +2,11 @@
   "code": "FK_C061",
   "kind": "compile",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),condition('repair',{name:'Repair',branches:[{when:'true',next:'h'}]}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),condition('repair',{name:'Repair',branches:[{when:'true',next:'h'}]}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'h'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[human('h',{name:'H',onApprove:'done',onReject:'repair'}),action('repair',{name:'repair',action:'save',next:'h'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   }
 }

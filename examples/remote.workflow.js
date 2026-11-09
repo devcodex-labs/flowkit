@@ -1,4 +1,4 @@
-import { defineWorkflow, parallel, node, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, parallel, node, terminal } from '@devcodex-labs/flowkit/dsl';
 
 export default defineWorkflow({
   id: 'remote-review', version: '1.0.0', name: 'Remote object reviewers',

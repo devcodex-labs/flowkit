@@ -47,7 +47,7 @@ function imports(text, declaration) {
 export async function validatePackage(root, packedPaths) {
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
-  assert.equal(pkg.name, '@devcodex/flowkit'); assert.equal(typeof pkg.private, 'boolean'); assert.equal(pkg.type, 'module');
+  assert.equal(pkg.name, '@devcodex-labs/flowkit'); assert.equal(typeof pkg.private, 'boolean'); assert.equal(pkg.type, 'module');
   assert.equal(pkg.engines.node, '>=22.13.0'); assert.deepEqual(pkg.dependencies, { acorn: '8.19.0' });
   assert.deepEqual(pkg.bin, { flowkit: './dist/cli.mjs' });
   assert.deepEqual(Object.keys(lock.packages[''].bin), ['flowkit']);
@@ -55,8 +55,8 @@ export async function validatePackage(root, packedPaths) {
   assert.deepEqual(lock.packages[''].dependencies, pkg.dependencies); assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].name, pkg.name); assert.equal(lock.packages[''].version, pkg.version);
   assert.deepEqual(pkg.files, ['dist', 'README.md', 'LICENSE']);
-  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './package.json']);
-  for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs']]) {
+  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './package.json']);
+  for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs'], ['./capability-graph', './dist/capability-graph.d.ts', './dist/integrations/capability-graph.mjs']]) {
     assert.deepEqual(Object.keys(pkg.exports[key]), ['types', 'import', 'default']);
     assert.deepEqual(pkg.exports[key], { types, import: module, default: module });
   }

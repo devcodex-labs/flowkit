@@ -2,11 +2,11 @@
   "code": "FK_C025",
   "kind": "compile",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check',onSuccess:'done',onFailure:'done'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check',onSuccess:'done',onFailure:'done'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),verification('a',{name:'a',verifier:'check'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   }
 }

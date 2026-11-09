@@ -2,6 +2,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@devcodex/flowkit": "1.0.0"
+    "@devcodex-labs/flowkit": "1.0.0"
   }
 }

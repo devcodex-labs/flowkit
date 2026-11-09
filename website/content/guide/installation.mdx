@@ -1,11 +1,13 @@
-# 安装与环境
+# 内部安装与环境
 
-本页从一个空目录安装 FlowKit v1.0.0，确认导入和命令行可用。使用 SDK 不需要克隆 FlowKit 仓库，也不需要安装文档站依赖。
+**本页只针对 FlowKit 项目维护者及内部部署人员，不是面向客户的产品安装教程。** FlowKit 不向未来付费用户分发软件包；他们将通过计划中的 MCP、托管 API 或工作流设计服务使用能力。公开读者无需创建令牌或安装包。
+
+下面从一个空目录安装内部私有 FlowKit v1.0.0，验证 SDK 与 CLI。实际在 GitHub Packages 中是否已经发布该版本，须以 Registry 记录为准。
 
 ## 前置条件
 
 - Node.js **22.13.0 或更高版本**，包含 npm。
-- 一个可写的本地目录，以及访问 npm registry 的网络连接。
+- 一个可写的本地目录、可访问 GitHub Packages 的网络连接和项目所有者授予的读取权限。
 - 示例宿主使用 `.mjs`，工作流使用 `.workflow.js`；它们遵循 ESM 导入方式。
 
 先检查实际环境：
@@ -19,6 +21,15 @@ Node 版本低于最低要求时，先升级并确认终端正在使用新版本
 
 ## 创建项目并精确安装
 
+FlowKit 只在内部通过 **GitHub Packages 私有 npm Registry** 管理安装包。维护者须具备该包的读取权限，并使用具有 `read:packages` 的 GitHub Personal Access Token（classic）。在消费者目录创建 `.npmrc`（不要提交凭据），内容如下：
+
+```ini
+@devcodex-labs:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+在 PowerShell 中执行 `$env:NODE_AUTH_TOKEN = "你的令牌"`，在 Bash 中执行 `export NODE_AUTH_TOKEN="你的令牌"`，令牌只应通过安全的本地环境或密钥管理注入。若组织启用了 SSO，需确认令牌已获授权。**不要将真实令牌写入代码、截图或日志。**
+
 以下命令可用于 PowerShell 和常见 POSIX shell；每行分别执行。
 
 ```sh
@@ -26,27 +37,27 @@ mkdir flowkit-demo
 cd flowkit-demo
 npm init -y
 npm pkg set type=module
-npm install --save-exact @devcodex/flowkit@1.0.0
+npm install --save-exact @devcodex-labs/flowkit@1.0.0
 ```
 
-`--save-exact` 让 package.json 保存明确版本。保留 npm 生成的 package-lock.json，在其他机器上用 `npm ci` 安装一致的依赖。
+`@devcodex-labs/flowkit` 是内部私有包，不对外提供安装。`--save-exact` 让 package.json 保存明确版本。保留 npm 生成的 package-lock.json，在其他机器上用 `npm ci` 安装一致的依赖。
 
 确认包身份：
 
 ```sh
-node --input-type=module -e "import p from '@devcodex/flowkit/package.json' with {type:'json'}; console.log(p.name, p.version)"
+node --input-type=module -e "import p from '@devcodex-labs/flowkit/package.json' with {type:'json'}; console.log(p.name, p.version)"
 ```
 
-预期为 `@devcodex/flowkit 1.0.0`。如果显示其他版本，检查当前目录的 package.json、lock 文件和 `npm ls @devcodex/flowkit`，不要仅根据全局安装结果判断。
+预期为 `@devcodex-labs/flowkit 1.0.0`。如果显示其他版本，检查当前目录的 package.json、lock 文件和 `npm ls @devcodex-labs/flowkit`，不要仅根据全局安装结果判断。
 
 ## 公开导入入口
 
 ```js
-import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex/flowkit';
-import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex/flowkit/dsl';
+import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
+import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex-labs/flowkit/dsl';
 ```
 
-根入口提供 SDK，`/dsl` 提供定义构造器。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 可执行命令只有 `compile` 和 `check`；执行工作流由宿主调用 SDK 的 `run`。
+根入口提供 SDK，`/dsl` 提供定义构造器，`/capability-graph` 提供可选 Provider 与宿主绑定适配器（使用时另行安装 `@devcodex/capability-graph`）。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 可执行命令只有 `compile` 和 `check`；执行工作流由宿主调用 SDK 的 `run`。
 
 ## 准备文件目录
 
@@ -66,9 +77,9 @@ flowkit-demo/
 | 现象 | 检查与处理 |
 |---|---|
 | 找不到 `node` / `npm` | 在新终端检查 PATH，确认安装的 Node 版本；先让版本命令可执行 |
-| registry 超时或无法访问 | 检查网络和 `npm config get registry`；公共包地址为 registry.npmjs.org |
+| registry 超时或无法访问 | 检查网络和 `npm config get registry`；FlowKit 的 scoped registry 应为 npm.pkg.github.com；检查令牌、SSO、包权限和组织 Scope |
 | `ERR_MODULE_NOT_FOUND` | 在有 package.json 的消费者目录安装，确认 host 文件位于该项目内 |
-| `ERR_PACKAGE_PATH_NOT_EXPORTED` | 改用上面的三个公开入口，不访问内部文件 |
+| `ERR_PACKAGE_PATH_NOT_EXPORTED` | 改用上面的三个受支持入口，不访问内部文件 |
 | CLI 命令不存在 | 在已安装包的目录使用 `npx --no-install flowkit ...`；此写法不会偷偷下载其他版本 |
 | 版本不存在或安装内容不匹配 | 保留错误与registry信息，核查精确版本；不要把未成功的安装当成可运行环境 |
 

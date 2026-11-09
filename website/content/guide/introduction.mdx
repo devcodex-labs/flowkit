@@ -1,6 +1,6 @@
 # 项目介绍
 
-FlowKit 是面向 Node.js 的工作流编排工具。你用 JavaScript / TypeScript DSL 描述节点和连接关系，编译器检查流程结构，再通过宿主 Runtime 执行 Agent、业务动作、验证和人工审批。
+FlowKit 是供项目所有者内部运营的 Node.js 工作流基础设施。内部开发者使用 JavaScript / TypeScript DSL 描述节点和连接关系，编译器检查流程结构，再通过宿主 Runtime 执行 Agent、业务动作、验证和人工审批。代码、安装包和运行环境不作为面向客户的分发产品。
 
 本文帮助你判断适用场景、理解各部分职责，并选择第一条学习路径。
 
@@ -45,6 +45,16 @@ FlowKit 是面向 Node.js 的工作流编排工具。你用 JavaScript / TypeScr
 
 状态以浅复制开始；嵌套对象仍可能与初始输入共享引用，并行分支使用同一份运行状态。`any` 返回不代表其他分支已停止。审批等待、持久化和重启后的恢复由宿主设计，不能依赖一个未提供的内置服务。
 
+## capability-graph 的两个接入方向
+
+FlowKit 可通过 `@devcodex-labs/flowkit/capability-graph` 提供静态 Provider 声明，供外部宿主发现能力；也能在宿主层使用 Graph SDK 解析能力、检查适用性与前置依赖，再通过显式绑定的动作执行。Graph 不负责工作流步骤排序、执行或持久化。[Provider 声明](/guide/capability-provider)与[真实宿主示例](/examples/capability-graph)分别验证这两条路径。
+
+目前核心实现以 JS/TS DSL 为输入，不提供自然语言直接生成工作流的公共 API。模型若参与生成 DSL，其生成、审查与授权流程由宿主负责，不能把该组合写成 FlowKit 内置能力。
+
+## 商业服务方向与现阶段边界
+
+计划中的对外形式包括 MCP、托管 API 或专门的付费工作流设计服务。FlowKit 会作为运营方掌控的内部引擎，客户不需要安装 FlowKit。这些服务入口、用户认证、计费、输出授权与产品界面**目前尚未在 FlowKit 核心实现中交付**，不得把规划当作可用功能。
+
 ## 从哪里开始
 
-先阅读[安装与环境](/guide/installation)，再按[第一个工作流](/guide/quick-start)完成两个文件的例子。你应先观察到实际成功状态、终点和写入值，再把动作替换为自己的业务函数。
+公开读者可从[工作流模型](/guide/workflow-model)和[示例](/examples/index)了解技术能力。获得内部开发权限的维护者可按[内部安装与环境](/guide/installation)和[第一个工作流](/guide/quick-start)复现代码。

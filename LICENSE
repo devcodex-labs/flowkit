@@ -1,21 +1,48 @@
-MIT License
+FlowKit Proprietary Software License
+Copyright (c) 2026 devcodex-labs. All rights reserved.
 
-Copyright (c) 2026 devcodex-labs
+1. Ownership. FlowKit's source code, software libraries, executable
+distributions, build artifacts, and associated documentation are proprietary
+to devcodex-labs and its licensors. This document grants no open-source
+license and no right to redistribute FlowKit.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+2. Internal authorized use. FlowKit is developed for operation by
+devcodex-labs and its expressly authorized internal contributors,
+contractors, and deployment environments. Any access to the private source
+repository or internal GitHub Packages registry is limited to the scope of
+permission expressly granted by the rights holder. Repository or package
+access alone is not a license to redistribute or offer the software.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+3. Restrictions. Unless the rights holder has given prior written
+permission or applicable law requires otherwise, you may not redistribute,
+publish, sublicense, sell, lease, transfer, or provide copies of FlowKit to
+third parties, or remove its proprietary notices. Modification and
+derivative distribution outside the permitted internal work are prohibited
+except to the extent these restrictions are unenforceable by law.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+4. Hosted services and generated workflows. The rights holder may operate
+FlowKit as the internal engine of a hosted API, MCP service, or paid workflow
+design service without distributing FlowKit to service users. Using such a
+service, reading its public documentation, or receiving a generated workflow
+does not grant any right to install or copy FlowKit. Customer access,
+service fees, and the ownership and usage rights of customer inputs and
+generated workflow definitions, JavaScript, or other outputs are matters
+for separate service terms. This software license does not itself decide
+those output rights or grant access to any hosted service.
+
+5. Third-party components. Dependencies and third-party content remain
+subject to their respective licenses. This document does not supersede
+those licenses.
+
+6. No warranty. To the fullest extent permitted by applicable law,
+FlowKit is provided "AS IS", without warranties of any kind, express or
+implied. The rights holder is not liable for indirect, incidental,
+special, consequential, or punitive damages arising from use of the
+software, to the extent permitted by law.
+
+7. Separate written agreements. Any duly authorized written agreement
+with devcodex-labs expressly governing a recipient's software rights
+takes precedence over this notice where the terms conflict.
+
+For permission to use, develop, or distribute FlowKit outside the
+authorized internal operation, contact the rights holder.

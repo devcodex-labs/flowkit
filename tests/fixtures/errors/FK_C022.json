@@ -2,11 +2,11 @@
   "code": "FK_C022",
   "kind": "compile",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),terminal('a',{name:'a',status:'succeeded'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),terminal('a',{name:'a',status:'succeeded'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[parallel('p',{name:'P',branches:['a','b'],join:{strategy:'any',next:'done'}}),action('a',{name:'a',action:'save'}),action('b',{name:'b',action:'save'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   }
 }

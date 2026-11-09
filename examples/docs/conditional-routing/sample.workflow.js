@@ -1,4 +1,4 @@
-import { defineWorkflow, condition, action, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, condition, action, terminal } from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({
   id: 'routing', version: '1.0.0', name: '条件分流',
   nodes: [

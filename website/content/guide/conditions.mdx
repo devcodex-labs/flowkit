@@ -3,7 +3,7 @@
 condition 的 when 是一段受限表达式字符串，用来读取 state 并返回 boolean。它不执行 JavaScript，也不调用宿主函数。Runtime 中显式提供公开的 `evalWhen`，即可采用 FlowKit 的默认语义。
 
 ```js
-import { run, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { run, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 const runtime = { evalWhen, isControlSignal /* 以及工作流需要的业务方法 */ };
 ```
 
@@ -27,7 +27,7 @@ const runtime = { evalWhen, isControlSignal /* 以及工作流需要的业务方
 **比较运算先于取反，不能照搬 JavaScript 的 `!` 优先级。** `!a === b` 在这里表示 `!(a === b)`。当 state 为 `{ a: 1, b: 2 }` 时，两者都返回 true；写成 `(!a) === b` 则会因为数字不是 boolean 而抛出 `FK_R002`。建议把需要取反的整个条件放进括号：
 
 ```js
-import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 const ctx = { runtime: { isControlSignal }, state: { a: 1, b: 2 } };
 console.log(evalWhen(ctx, '!(a === b)')); // true
 ```
@@ -41,7 +41,7 @@ console.log(evalWhen(ctx, '!(a === b)')); // true
 `&&` 和 `||` 短路。例如 `false && score > 0` 不求值右侧，`true || score > 0` 同理。推荐使用明确的存在性布尔键，或者由宿主把可选输入归一成可比较类型；表达式没有通用的 typeof/可选链/函数调用机制。
 
 ```js
-import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 const ctx = { runtime: { isControlSignal }, state: { ready: true, score: 90 } };
 console.log(evalWhen(ctx, 'ready && score >= 80')); // true
 ```

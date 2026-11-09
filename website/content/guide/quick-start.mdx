@@ -2,11 +2,11 @@ import { Mermaid } from '../../components/Mermaid';
 
 # 第一个工作流
 
-本教程完成一个不需要模型密钥的流程：宿主生成问候，FlowKit 进入成功终点，返回最终状态。你会依次创建两个文件、编译、检查并运行；所有命令均在消费者项目根目录执行。
+本教程是**内部开发验证用例**，公开读者可以阅读流程但不需要获得安装权限。它完成一个不需要模型密钥的流程：宿主生成问候，FlowKit 进入成功终点，返回最终状态。你会依次创建两个文件、编译、检查并运行；所有命令均在消费者项目根目录执行。
 
 ## 1. 准备环境
 
-先按[安装与环境](/guide/installation)安装 `@devcodex/flowkit@1.0.0`。确认 Node >=22.13.0，package.json 包含 `"type": "module"`。开始时无需 Skill 文件或额外环境变量。
+先配置私有 GitHub Packages 访问令牌，再按[安装与环境](/guide/installation)安装 `@devcodex-labs/flowkit@1.0.0`。确认 Node >=22.13.0，package.json 包含 `"type": "module"`。开始时无需 Skill 文件或额外环境变量。
 
 ```text
 flowkit-demo/

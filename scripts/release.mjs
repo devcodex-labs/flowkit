@@ -9,7 +9,7 @@ import { packageFiles } from './package-files.mjs';
 import { validatePackage } from './check-package.mjs';
 import { runProcess } from './validation-process.mjs';
 
-const registry = 'https://registry.npmjs.org/';
+const registry = 'https://npm.pkg.github.com/';
 const repository = 'git+https://github.com/devcodex-labs/flowkit.git';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -21,7 +21,7 @@ export async function assessRelease(root, tag) {
   const issues = [];
   const require = (condition, field, message) => { if (!condition) issues.push({ field, message }); };
   const validVersion = isSemVer(pkg.version) && !pkg.version.includes('+');
-  require(pkg.name === '@devcodex/flowkit', 'name', 'Unexpected package name');
+  require(pkg.name === '@devcodex-labs/flowkit', 'name', 'Unexpected package name');
   require(validVersion, 'version', 'Use a SemVer release version without build metadata');
   require(typeof tag === 'string' && tag === `v${pkg.version}`, 'tag', 'Tag must equal v plus the package version');
   require(pkg.private === false, 'private', 'A release candidate must explicitly set private:false');
@@ -35,7 +35,7 @@ export async function assessRelease(root, tag) {
   const heading = new RegExp(`^## \\[?${String(pkg.version).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]?(?:\\s|$)`, 'm');
   require(validVersion && heading.test(changelog), 'CHANGELOG', 'Add release notes headed by the exact package version');
   require(pkg.repository?.type === 'git' && pkg.repository?.url === repository, 'repository', 'Repository metadata must identify devcodex-labs/flowkit');
-  require(pkg.publishConfig?.access === 'public' && pkg.publishConfig?.registry === registry, 'publishConfig', 'Use public access and the npmjs registry explicitly');
+  require(pkg.publishConfig?.registry === registry && !Object.hasOwn(pkg.publishConfig, 'access'), 'publishConfig', 'Publish only to private GitHub Packages; do not set public access');
   return { schemaVersion: 1, ready: issues.length === 0, name: pkg.name, version: pkg.version, tag,
     npmTag: validVersion && pkg.version.includes('-') ? 'next' : 'latest', issues };
 }
@@ -52,7 +52,7 @@ async function outputDirectory(root, create = false) {
   return path.join(root, '.tmp/release');
 }
 
-const filenameFor = version => `devcodex-flowkit-${version}.tgz`;
+const filenameFor = version => `devcodex-labs-flowkit-${version}.tgz`;
 const members = () => ['package.json', 'README.md', 'LICENSE', ...packageFiles.map(([, output]) => output)].sort();
 async function ready(root, tag) {
   const assessment = await assessRelease(root, tag);

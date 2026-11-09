@@ -1,0 +1,38 @@
+# capability-graph 宿主消费示例
+
+本示例使用 **独立的** `@devcodex/capability-graph@2.1.1`。FlowKit 不内置 Graph 服务或模型客户端，不改变 `agent`（Skill 路径映射）语义。只有宿主显式绑定的 `action` 会执行。
+
+## 完整文件
+
+```js file="../../../examples/docs/capability-graph/sample.workflow.js" title="sample.workflow.js"
+```
+
+```js file="../../../examples/docs/capability-graph/host.mjs" title="host.mjs"
+```
+
+```js file="../../../examples/docs/capability-graph/verify.mjs" title="verify.mjs"
+```
+
+## 运行命令
+
+在有权限访问 FlowKit GitHub Packages 的消费者项目中安装包（见[私有包安装](/guide/installation)），并安装公开的 Graph 依赖：
+
+```sh
+npm install --save-exact @devcodex/capability-graph@2.1.1
+npx --no-install flowkit compile sample.workflow.js
+npx --no-install flowkit check sample.workflow.js
+node host.mjs
+node verify.mjs
+```
+
+`host.mjs` 预期返回 `status: succeeded`、`terminal: done`，状态中包含 `message: "你好，FlowKit！"`。
+
+## 何时允许执行？
+
+宿主先对明确的 `demo::greet` 进行 `resolve({ids, context, relations:['requires']})`，要求 `meta.completeness === 'complete'`，`unresolved` 为空且全部节点 `applicability.status === 'applicable'`，随后才调用宿主显式注册的执行函数。
+
+图谱的 `requires` 仅声明前置能力，**不会自动执行依赖**。本示例的 `tooling::ready` 是宿主事先具备的实现，真正的前置工作和业务授权仍由宿主验证。Graph 对访问控制失败会原样抛出 `GraphError`；FlowKit 适配器在绑定缺失、依赖不全、适用性未知/不适用时分别抛出 `FK_CG_BINDING_MISSING`、`FK_CG_DEPENDENCIES_INCOMPLETE`、`FK_CG_NOT_APPLICABLE`。
+
+`verify.mjs` 覆盖成功、依赖解析、未知环境、不适用、跨 Provider 未授权和缺少绑定。Graph 的 `match()` 需要显式的 `ModelExecutor`，本示例不额外调用模型。
+
+继续阅读[FlowKit Provider 能力声明](/guide/capability-provider)、[宿主接入](/guide/host-integration)和[SDK 参考](/reference/sdk)。

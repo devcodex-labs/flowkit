@@ -23,7 +23,7 @@ async function fixture(t) {
     await mkdir(path.dirname(path.join(root, file)), {recursive:true}); await copyFile(path.join(repository, file), path.join(root, file));
   }
   const pkg = JSON.parse(await readFile(path.join(root,'package.json')));
-  Object.assign(pkg, {private:false,version:tag.slice(1),license:'MIT'});
+  Object.assign(pkg, {private:false,version:tag.slice(1),license:'SEE LICENSE IN LICENSE'});
   const lock = JSON.parse(await readFile(path.join(root,'package-lock.json'))); lock.version=pkg.version; lock.packages[''].version=pkg.version;
   await writeFile(path.join(root,'package.json'),JSON.stringify(pkg,null,2)); await writeFile(path.join(root,'package-lock.json'),JSON.stringify(lock));
   await writeFile(path.join(root,'LICENSE'),'Synthetic fixture license, not a project license decision.');
@@ -34,14 +34,14 @@ async function syntheticArtifact(root) {
   // This fixture builds a real gzip/tar archive; integration separately uses actual npm pack.
   await build(root);
   const directory=path.join(root,'.tmp/release');await mkdir(directory,{recursive:true});
-  const filename=`devcodex-flowkit-${tag.slice(1)}.tgz`;
+  const filename=`devcodex-labs-flowkit-${tag.slice(1)}.tgz`;
   const files=[];for(const member of ['package.json','README.md','LICENSE',...packageFiles.map(([,output])=>output)]){
     const source=packageFiles.find(([,output])=>output===member)?.[0]??member;
     files.push({path:member,sha256:digest(await readFile(path.join(root,source)))});
   }
   await createTar({cwd:root,file:path.join(directory,filename),prefix:'package',gzip:true,portable:true},files.map(file=>file.path));
   const bytes=await readFile(path.join(directory,filename));
-  const manifest={schemaVersion:1,name:'@devcodex/flowkit',version:tag.slice(1),tag,npmTag:'next',filename,sha256:digest(bytes),files};
+  const manifest={schemaVersion:1,name:'@devcodex-labs/flowkit',version:tag.slice(1),tag,npmTag:'next',filename,sha256:digest(bytes),files};
   await writeFile(path.join(directory,'release.json'),JSON.stringify(manifest));
   return {directory,filename,manifest,bytes};
 }

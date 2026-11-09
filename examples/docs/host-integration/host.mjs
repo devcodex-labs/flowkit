@@ -1,4 +1,4 @@
-import { run, isControlSignal } from '@devcodex/flowkit';
+import { run, isControlSignal } from '@devcodex-labs/flowkit';
 import { fileURLToPath } from 'node:url';
 const file = fileURLToPath(new URL('./sample.workflow.js', import.meta.url));
 export async function scenario() {

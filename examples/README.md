@@ -1,6 +1,6 @@
 # FlowKit 示例
 
-初次使用请从[中文快速开始](https://devcodex-labs.github.io/flowkit/guide/quick-start.html)进入。用户教程主源位于 [docs/](docs/)，使用公开的 `@devcodex/flowkit@1.0.0` 入口；下面保留原有三个仓库回归示例的命令与说明。
+初次使用请从[中文快速开始](https://devcodex-labs.github.io/flowkit/guide/quick-start.html)进入。用户教程主源位于 [docs/](docs/)，使用公开的 `@devcodex-labs/flowkit@1.0.0` 入口；下面保留原有三个仓库回归示例的命令与说明。
 
 ## 用户教程
 
@@ -73,7 +73,7 @@ Skill bytes require reviewing and updating their DSL integrity first.
 Use the existing SDK in a Node ESM script at the repository root:
 
 ```js
-import { compile } from '@devcodex/flowkit';
+import { compile } from '@devcodex-labs/flowkit';
 for (const file of ['examples/editorial.workflow.js', 'examples/shared-join.workflow.ts', 'examples/remote.workflow.js']) {
   const result = await compile(file, {
     projectRoot: 'examples', remoteSkillHosts: ['skills.example.test'],

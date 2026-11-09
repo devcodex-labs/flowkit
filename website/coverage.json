@@ -6,7 +6,7 @@
     "file": "index.mdx",
     "group": "开始使用",
     "status": "drafted",
-    "scope": "定位、版本、开源和三步编排；首页按钮/图",
+    "scope": "私有产品定位、公开文档、未来托管服务方向和工作流介绍",
     "validation": "RT01/07，V-SITE"
   },
   {
@@ -22,11 +22,11 @@
   {
     "id": "P03",
     "route": "/guide/installation",
-    "title": "安装与环境",
+    "title": "内部安装与环境",
     "file": "guide/installation.mdx",
     "group": "开始使用",
     "status": "drafted",
-    "scope": "精确安装、ESM、CLI、实际包版本",
+    "scope": "仅维护者的私有包安装、ESM、CLI 和内部部署权限",
     "validation": "RT01，E01"
   },
   {
@@ -36,7 +36,7 @@
     "file": "guide/quick-start.mdx",
     "group": "开始使用",
     "status": "drafted",
-    "scope": "完整两文件、编译/检查/输出；README 同源",
+    "scope": "内部维护者的完整两文件工作流编译、检查和运行",
     "validation": "RT01，E01"
   },
   {
@@ -414,7 +414,7 @@
     "route": "/community/contributing",
     "title": "参与贡献",
     "file": "community/contributing.mdx",
-    "group": "开源项目",
+    "group": "项目维护",
     "status": "drafted",
     "scope": "实际scripts、本地docs修改和示例更新、PR说明",
     "validation": "V-MAINT，V-CONTENT"
@@ -424,7 +424,7 @@
     "route": "/community/compatibility",
     "title": "兼容与支持范围",
     "file": "community/compatibility.mdx",
-    "group": "开源项目",
+    "group": "项目维护",
     "status": "drafted",
     "scope": "SDK与站点环境分别说明，平台证据不扩大",
     "validation": "V-TYPES，V-MAINT"
@@ -434,7 +434,7 @@
     "route": "/community/changelog",
     "title": "v1.0.0 发布记录",
     "file": "community/changelog.mdx",
-    "group": "开源项目",
+    "group": "项目维护",
     "status": "drafted",
     "scope": "与根CHANGELOG逐项对齐，仅首个正式发行",
     "validation": "V-RELEASE，V-CONTENT"
@@ -442,11 +442,11 @@
   {
     "id": "P45",
     "route": "/community/license",
-    "title": "开源许可证",
+    "title": "授权与使用",
     "file": "community/license.mdx",
-    "group": "开源项目",
+    "group": "项目维护",
     "status": "drafted",
-    "scope": "MIT、2026 devcodex-labs与根LICENSE/包声明一致",
+    "scope": "专有授权、包内 LICENSE、第三方依赖与访问权限",
     "validation": "V-RELEASE"
   },
   {
@@ -456,7 +456,27 @@
     "file": "maintainers/releasing.mdx",
     "group": "发布维护",
     "status": "drafted",
-    "scope": "候选→公开包消费→站点、确切commit、失败与回退",
+    "scope": "候选→GitHub Packages 私有包消费→文档站、确切 Commit 与失败恢复",
     "validation": "V-RELEASE，V-MAINT"
+  },
+  {
+    "id": "P47",
+    "route": "/guide/capability-provider",
+    "title": "向 capability-graph 声明 FlowKit 能力",
+    "file": "guide/capability-provider.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "Provider Schema、能力目录、依赖与能力 ID 的声明边界",
+    "validation": "E13，G02-G08"
+  },
+  {
+    "id": "P48",
+    "route": "/examples/capability-graph",
+    "title": "capability-graph 宿主消费示例",
+    "file": "examples/capability-graph.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "Graph 查询、宿主显式绑定、授权/适用性/依赖失败反例",
+    "validation": "E13，G01-G15"
   }
 ]

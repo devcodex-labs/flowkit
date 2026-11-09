@@ -1,5 +1,5 @@
-import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex/flowkit/dsl';
-import type { DslNode } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex-labs/flowkit/dsl';
+import type { DslNode } from '@devcodex-labs/flowkit/dsl';
 
 const flow = defineWorkflow({ id: 'all-nodes', version: '1.0.0', name: '全节点', nodes: [
   node('write', { name: '撰写', agent: 'writer', output: { type: 'object', properties: { text: { type: 'string' } }, $defs: { ok: true } }, next: 'gate' }),

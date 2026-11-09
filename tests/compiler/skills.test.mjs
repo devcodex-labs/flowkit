@@ -8,7 +8,7 @@ import { validIntegrity } from '../../src/compiler/skill-check.mjs';
 
 function source(fields) {
   const entries = Object.entries(fields).map(([key, value]) => `${JSON.stringify(key)}:${JSON.stringify(value)}`).join(',');
-  return `import {defineWorkflow,node,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',output:{type:'object'},next:'done',${entries}}),terminal('done',{name:'Done',status:'succeeded'})]});`;
+  return `import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',output:{type:'object'},next:'done',${entries}}),terminal('done',{name:'Done',status:'succeeded'})]});`;
 }
 const analyze = (fields, options = {}) => analyzeSource(source(fields), {
   filename: 'demo.workflow.js', skillCheck: false, ...options,

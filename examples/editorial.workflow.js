@@ -1,4 +1,4 @@
-import { defineWorkflow, node, action, parallel, condition, loop, verification, human, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, node, action, parallel, condition, loop, verification, human, terminal } from '@devcodex-labs/flowkit/dsl';
 
 export default defineWorkflow({
   id: 'editorial', version: '1.0.0', name: 'Editorial approval',

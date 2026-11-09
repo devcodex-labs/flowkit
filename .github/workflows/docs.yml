@@ -12,7 +12,7 @@ on:
     inputs:
       packageReleaseCommit: { description: 'Original v1.0.0 package commit (40 hex)', required: true, type: string }
       docsCommit: { description: 'Reviewed documentation commit (40 hex)', required: true, type: string }
-      version: { description: 'Exact public version', default: '1.0.0', required: true, type: string }
+      version: { description: 'Exact private package version', default: '1.0.0', required: true, type: string }
       releaseRunId: { description: 'Original publish workflow run ID', required: true, type: string }
       releaseRunAttempt: { description: 'Original pack/publish attempt', required: true, type: string }
 
@@ -39,6 +39,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      packages: read
     steps:
       - name: Checkout original package source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -57,6 +58,8 @@ jobs:
         with:
           node-version: '24.22.1'
           package-manager-cache: false
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@devcodex-labs'
       - name: Check exact original checkout
         working-directory: package-source
         run: node --input-type=module -e 'import{execFileSync}from"node:child_process";import assert from"node:assert/strict";assert.match(process.env.PACKAGE_COMMIT,/^[a-f0-9]{40}$/);assert.equal(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),process.env.PACKAGE_COMMIT);'
@@ -85,21 +88,25 @@ jobs:
           repository: devcodex-labs/flowkit
           run-id: ${{ inputs.releaseRunId }}
       - name: Verify immutable candidate and allowed docs repair
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: package-source
         run: |
           node scripts/docs/release-identity.mjs verify --metadata .tmp/source-metadata.json --record .tmp/identity/release-record.json --release-dir .tmp/release --docs-root ../docs-source --out .tmp/docs/deployment-identity.json
-          node scripts/release.mjs verify --tag v1.0.0
-          npm run docs:public-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
+          node scripts/release.mjs verify --tag "v${RELEASE_VERSION}"
+          npm run docs:private-package -- --version "$RELEASE_VERSION" --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: docs-source
       - run: npm --prefix website ci --ignore-scripts --no-audit --no-fund
         working-directory: docs-source
-      - name: Verify repaired tutorials against original public package and build site
+      - name: Verify repaired tutorials against original private package and build site
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: docs-source
         run: |
           npm run build
           npm run docs:check
-          npm run docs:examples -- --registry-version 1.0.0 --manifest ../package-source/.tmp/release/release.json --evidence .tmp/docs/public-consumer.json
+          npm run docs:examples -- --registry-version "$RELEASE_VERSION" --manifest ../package-source/.tmp/release/release.json --evidence .tmp/docs/public-consumer.json
           npm run docs:build
           node --input-type=module -e 'import{readFileSync,writeFileSync}from"node:fs";import{createHash}from"node:crypto";const i=JSON.parse(readFileSync("../package-source/.tmp/docs/deployment-identity.json"));i.websiteLockSha256=createHash("sha256").update(readFileSync("website/package-lock.json")).digest("hex");writeFileSync(".tmp/docs/site-build.json",JSON.stringify(i,null,2));'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -121,6 +128,8 @@ jobs:
           path: docs-source/website/doc_build
 
   deploy:
+    # The site may be public; keep deployment gated by explicit release authorization.
+    if: ${{ vars.FLOWKIT_ENABLE_PAGES_DEPLOY == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
     permissions:

@@ -46,8 +46,8 @@ check 每次重新编译源码。若 compiled 文件存在，就逐字节比较�
 ## 从文本编译
 
 ```js
-import { compileSource } from '@devcodex/flowkit';
-const text = "import { defineWorkflow, terminal } from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({ id: 'demo', version: '1.0.0', name: '演示', nodes: [terminal('done', { name: '完成', status: 'succeeded' })] });";
+import { compileSource } from '@devcodex-labs/flowkit';
+const text = "import { defineWorkflow, terminal } from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({ id: 'demo', version: '1.0.0', name: '演示', nodes: [terminal('done', { name: '完成', status: 'succeeded' })] });";
 const result = await compileSource(text, { filename: 'virtual.workflow.js' });
 console.log(result.diagnostics);
 ```

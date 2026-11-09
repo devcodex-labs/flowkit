@@ -1,4 +1,4 @@
-import { compile } from '@devcodex/flowkit';
+import { compile } from '@devcodex-labs/flowkit';
 import { mkdir, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';

@@ -2,7 +2,7 @@
 
 # CI与发布维护
 
-FlowKit v1.0.0的详细中文说明已集中到[文档站](https://devcodex-labs.github.io/flowkit/)。此页保留旧链接锚点，避免已有引用失效。
+FlowKit 私有 GitHub Packages 发行的详细中文说明已集中到[文档站](https://devcodex-labs.github.io/flowkit/)。此页保留旧链接锚点，避免已有引用失效。
 
 <a id="contents"></a>
 ## 内容入口
@@ -23,7 +23,7 @@ FlowKit v1.0.0的详细中文说明已集中到[文档站](https://devcodex-labs
 阅读[准备候选](https://devcodex-labs.github.io/flowkit/maintainers/releasing.html)。
 
 <a id="publish"></a>
-### 发布与公开消费
+### 发布与私有包消费
 
 阅读[发布与公开消费](https://devcodex-labs.github.io/flowkit/maintainers/releasing.html)。
 

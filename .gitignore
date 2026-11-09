@@ -4,3 +4,4 @@ dist/
 *.tgz
 website/doc_build/
 website/.rspress/
+.npmrc

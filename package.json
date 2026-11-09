@@ -1,24 +1,50 @@
 {
-  "name": "@devcodex/flowkit",
+  "name": "@devcodex-labs/flowkit",
   "version": "1.0.0",
   "private": false,
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://devcodex-labs.github.io/flowkit/",
   "description": "Compile declarative workflows into readable JavaScript and execute them with a host Runtime",
-  "repository": { "type": "git", "url": "git+https://github.com/devcodex-labs/flowkit.git" },
-  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devcodex-labs/flowkit.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/"
+  },
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
-  "bin": { "flowkit": "./dist/cli.mjs" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "flowkit": "./dist/cli.mjs"
+  },
   "exports": {
-    ".": { "types": "./dist/compiler-api.d.ts", "import": "./dist/index.mjs", "default": "./dist/index.mjs" },
-    "./dsl": { "types": "./dist/dsl.d.ts", "import": "./dist/dsl.mjs", "default": "./dist/dsl.mjs" },
+    ".": {
+      "types": "./dist/compiler-api.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./dsl": {
+      "types": "./dist/dsl.d.ts",
+      "import": "./dist/dsl.mjs",
+      "default": "./dist/dsl.mjs"
+    },
+    "./capability-graph": {
+      "types": "./dist/capability-graph.d.ts",
+      "import": "./dist/integrations/capability-graph.mjs",
+      "default": "./dist/integrations/capability-graph.mjs"
+    },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs tests/when/*.test.mjs tests/runtime/*.test.mjs tests/cli/*.test.mjs tests/package/*.test.mjs",
+    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs tests/when/*.test.mjs tests/runtime/*.test.mjs tests/cli/*.test.mjs tests/integrations/*.test.mjs tests/package/*.test.mjs",
     "test:types": "node scripts/test-types.mjs",
     "check:package": "node scripts/check-package.mjs",
     "test:package": "node scripts/test-package.mjs",
@@ -32,8 +58,13 @@
     "docs:check": "npm --prefix website run check",
     "docs:sync": "node scripts/docs/sync-readme.mjs",
     "docs:examples": "node scripts/docs/verify-examples.mjs",
-    "docs:public-package": "node scripts/docs/check-public-package.mjs"
+    "docs:private-package": "node scripts/docs/check-public-package.mjs"
   },
-  "dependencies": { "acorn": "8.19.0" },
-  "devDependencies": { "typescript": "5.0.4", "tar": "7.5.22" }
+  "dependencies": {
+    "acorn": "8.19.0"
+  },
+  "devDependencies": {
+    "typescript": "5.0.4",
+    "tar": "7.5.22"
+  }
 }

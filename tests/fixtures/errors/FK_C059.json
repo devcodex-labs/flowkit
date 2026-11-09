@@ -2,7 +2,7 @@
   "code": "FK_C059",
   "kind": "compile",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {
       "remoteSkillHosts": [
         "skills.example.test"
@@ -10,7 +10,7 @@
     }
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',skill:'https://skills.example.test/style.md',integrity:'sha256-GVdESIiHGUAdgUwF8wkh3HmX5deMlNBOUtZXJWVTaW4=',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {
       "remoteSkillHosts": [
         "skills.example.test"
