@@ -48,4 +48,4 @@ node scripts/release.mjs verify --tag v1.0.0
 - 文档构建失败：保留原发布身份、tarball 与 Artifact，按允许的文档修复范围重建
 - Artifact 过期：需要找回可验证原始字节，不能重包冒充原已发布产物
 
-可通过 `npm run docs:check` 与 `npm run docs:build` 验证站点；只有通过站点披露审查、权限核对与维护者批准后，才执行实际部署。第三方依赖与其许可证不会因 FlowKit 改为专有软件而改变。
+可通过 `npm run docs:check` 与 `npm run docs:build` 验证站点；只有通过站点披露审查、权限核对与维护者批准后，才将仓库变量 `FLOWKIT_ENABLE_PAGES_DEPLOY` 设为 `true` 并执行实际部署；默认情况下文档发布任务不会部署 Pages。第三方依赖与其许可证不会因 FlowKit 改为专有软件而改变。

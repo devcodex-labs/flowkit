@@ -153,6 +153,8 @@ jobs:
           retention-days: 90
 
   docs:
+    # The documentation site remains opt-in until its visibility policy is approved.
+    if: ${{ vars.FLOWKIT_ENABLE_PAGES_DEPLOY == 'true' }}
     needs: private-consumer
     permissions:
       contents: read

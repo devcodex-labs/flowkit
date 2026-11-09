@@ -12,7 +12,7 @@ on:
     inputs:
       packageReleaseCommit: { description: 'Original v1.0.0 package commit (40 hex)', required: true, type: string }
       docsCommit: { description: 'Reviewed documentation commit (40 hex)', required: true, type: string }
-      version: { description: 'Exact public version', default: '1.0.0', required: true, type: string }
+      version: { description: 'Exact private package version', default: '1.0.0', required: true, type: string }
       releaseRunId: { description: 'Original publish workflow run ID', required: true, type: string }
       releaseRunAttempt: { description: 'Original pack/publish attempt', required: true, type: string }
 
@@ -128,6 +128,8 @@ jobs:
           path: docs-source/website/doc_build
 
   deploy:
+    # Prevent any public deployment until the owner explicitly enables Pages.
+    if: ${{ vars.FLOWKIT_ENABLE_PAGES_DEPLOY == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
     permissions:
