@@ -30,7 +30,7 @@ npm run docs:preview -- --host 127.0.0.1 --port 4173
 npm run release:check -- --tag v1.0.0
 npm run release:pack -- --tag v1.0.0
 node scripts/release.mjs verify --tag v1.0.0
-npm run docs:examples -- --package .tmp/release/devcodex-flowkit-1.0.0.tgz --manifest .tmp/release/release.json --evidence .tmp/docs/release-candidate.json
+npm run docs:examples -- --package .tmp/release/devcodex-labs-flowkit-1.0.0.tgz --manifest .tmp/release/release.json --evidence .tmp/docs/release-candidate.json
 ```
 
 release目录必须恰有tgz和release.json两个文件。脚本将tarball的SHA256、成员列表及每个文件字节与源码绑定。有旧候选时先记录和移出原证据，不覆盖不明文件，也不在下载后重新pack替换字节。最后消费的必须是实际待发布tarball。
