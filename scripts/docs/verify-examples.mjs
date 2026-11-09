@@ -14,6 +14,7 @@ for (let i = 2; i < process.argv.length; i += 2) {
   assert.ok(!Object.hasOwn(options, key), `Duplicate: ${key}`); options[key] = process.argv[i + 1];
 }
 assert.ok(!(options['--package'] && options['--registry-version']), 'Select one package source');
+if (!options['--evidence'] && process.env.FLOWKIT_DOCS_EVIDENCE) options['--evidence'] = process.env.FLOWKIT_DOCS_EVIDENCE;
 const npm = process.env.npm_execpath; assert.ok(npm, 'Use npm run docs:examples');
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const manifest = JSON.parse(await readFile(path.join(root, 'examples/docs/manifest.json'), 'utf8'));
@@ -31,9 +32,9 @@ try {
   let source = options['--package'] ? path.resolve(options['--package']) : undefined;
   let tarball;
   if (options['--registry-version']) {
-    assert.equal(options['--registry-version'], pkg.version, 'Public consumer version must match docs');
-    source = `@devcodex/flowkit@${pkg.version}`;
-    const packed = JSON.parse(await execute('public-pack', [npm, 'pack', source, '--json', '--ignore-scripts', '--registry=https://registry.npmjs.org/', '--cache', path.join(temporary, 'pack-cache'), '--pack-destination', temporary], temporary));
+    assert.equal(options['--registry-version'], pkg.version, 'Private consumer version must match docs');
+    source = `@devcodex-labs/flowkit@${pkg.version}`;
+    const packed = JSON.parse(await execute('private-pack', [npm, 'pack', source, '--json', '--ignore-scripts', '--registry=https://npm.pkg.github.com/', '--cache', path.join(temporary, 'pack-cache'), '--pack-destination', temporary], temporary));
     tarball = path.join(temporary, packed[0].filename);
   } else if (!source) {
     const packed = JSON.parse(await execute('candidate-pack', [npm, 'pack', '--json', '--ignore-scripts', '--pack-destination', temporary], root));
@@ -47,7 +48,7 @@ try {
   const consumer = path.join(temporary, 'consumer'); await mkdir(consumer);
   await writeFile(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   await execute('install', [npm, 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org/', '--cache', path.join(temporary, 'install-cache'), source, 'typescript@5.0.4', '@types/node@22.13.0'], consumer);
-  const installed = path.join(consumer, 'node_modules/@devcodex/flowkit');
+  const installed = path.join(consumer, 'node_modules/@devcodex-labs/flowkit');
   assert.ok(!(await lstat(installed)).isSymbolicLink()); assert.equal(path.resolve(await realpath(installed)), path.resolve(installed));
   const actual = JSON.parse(await readFile(path.join(installed, 'package.json'), 'utf8'));
   assert.equal(actual.name, pkg.name); assert.equal(actual.version, pkg.version);
@@ -82,7 +83,7 @@ try {
       const deployment = path.join(temporary, 'deployment'); await mkdir(path.join(deployment, 'skills'), { recursive: true });
       for (const file of ['package.json', 'host.mjs', 'sample.workflow.js', 'sample.compiled.mjs', 'sample.mmd', 'skills/writer.md']) await copyFile(path.join(directory, 'deployment', file), path.join(deployment, file));
       await execute('E08:independent-install', [npm, 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org/', '--cache', path.join(temporary, 'deployment-cache'), source], deployment);
-      const deployedPackage = path.join(deployment, 'node_modules/@devcodex/flowkit');
+      const deployedPackage = path.join(deployment, 'node_modules/@devcodex-labs/flowkit');
       assert.ok(!(await lstat(deployedPackage)).isSymbolicLink()); await verifyInstalledArchive(deployedPackage, await readFile(tarball));
       await execute('E08:independent-run', ['host.mjs'], deployment);
       const deployedSource = path.join(deployment, 'sample.workflow.js');

@@ -1,4 +1,4 @@
-name: Publish npm
+name: Publish GitHub Packages
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-${{ github.ref }}
+  group: github-packages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: npm run release:pack -- --tag "$RELEASE_TAG"
       - name: Consume the exact candidate bytes
-        run: npm run docs:examples -- --package .tmp/release/devcodex-flowkit-1.0.0.tgz --evidence .tmp/docs/release-candidate.json
+        run: npm run docs:examples -- --package .tmp/release/devcodex-labs-flowkit-1.0.0.tgz --evidence .tmp/docs/release-candidate.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: npm-artifact
         with:
@@ -87,7 +87,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write
+      packages: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -97,8 +97,6 @@ jobs:
           node-version: '24.22.1'
           package-manager-cache: false
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Select the documented OIDC-capable npm CLI
-        run: npm install --global npm@11.5.1 --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: npm-release-${{ github.run_attempt }}
@@ -110,13 +108,19 @@ jobs:
         run: |
           node scripts/release.mjs verify --tag "$RELEASE_TAG"
           node --input-type=module -e 'import {readFileSync,appendFileSync} from "node:fs"; const m=JSON.parse(readFileSync(".tmp/release/release.json","utf8")); appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${m.npmTag}\n`);'
-      - name: Publish the verified tarball through npm trusted publishing
+      - name: Publish verified tarball to private GitHub Packages
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_DIST_TAG: ${{ steps.artifact.outputs.dist_tag }}
-        run: npm publish .tmp/release/*.tgz --access public --registry=https://registry.npmjs.org/ --tag "$NPM_DIST_TAG"
+        run: npm publish .tmp/release/*.tgz --registry=https://npm.pkg.github.com/ --tag "$NPM_DIST_TAG"
 
-  public-consumer:
+  private-consumer:
     needs: publish
+    permissions:
+      contents: read
+      packages: read
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -134,7 +138,7 @@ jobs:
           path: .tmp/release
       - run: node scripts/release.mjs verify --tag v1.0.0
       - run: npm run docs:public-package -- --version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-package.json
-      - run: npm run docs:examples -- --registry-version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/public-consumer.json
+      - run: npm run docs:examples -- --registry-version 1.0.0 --manifest .tmp/release/release.json --evidence .tmp/docs/private-consumer.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -145,10 +149,11 @@ jobs:
           retention-days: 90
 
   docs:
-    needs: public-consumer
+    needs: private-consumer
     permissions:
       contents: read
       actions: read
+      packages: read
       pages: write
       id-token: write
     uses: ./.github/workflows/docs.yml

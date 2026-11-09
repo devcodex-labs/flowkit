@@ -7,7 +7,7 @@ import { sha256 } from './package-proof.mjs';
 export const repository = 'devcodex-labs/flowkit';
 const workflow = '.github/workflows/publish.yml';
 export function validateInputs(input) {
-  assert.equal(input.repository, repository); assert.equal(input.version, '1.0.0');
+  assert.equal(input.repository, repository); assert.match(String(input.version), /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/);
   for (const key of ['packageReleaseCommit', 'docsCommit']) assert.match(input[key], /^[0-9a-f]{40}$/, key);
   for (const key of ['releaseRunId', 'releaseRunAttempt']) assert.match(String(input[key]), /^[1-9]\d*$/, key);
 }
@@ -37,7 +37,7 @@ export function validateRecord(input, metadata, record, manifestBytes, tarballBy
   assert.equal(record.workflow, workflow); assert.equal(record.tag, `v${input.version}`);
   const artifact = selected['npm-release']; assert.equal(String(record.npmArtifactId), String(artifact.id)); assert.equal(record.npmArtifactDigest, artifact.digest);
   assert.equal(record.manifestSha256, sha256(manifestBytes)); assert.equal(record.tarballSha256, sha256(tarballBytes));
-  assert.equal(manifest.sha256, record.tarballSha256); assert.equal(manifest.version, input.version); assert.equal(manifest.tag, record.tag); assert.equal(manifest.name, '@devcodex/flowkit');
+  assert.equal(manifest.sha256, record.tarballSha256); assert.equal(manifest.version, input.version); assert.equal(manifest.tag, record.tag); assert.equal(manifest.name, '@devcodex-labs/flowkit');
   return selected;
 }
 export function validateRepairPaths(files) {
@@ -82,7 +82,7 @@ export async function main(args) {
   } else if (operation === 'verify') {
     const metadata = JSON.parse(await readFile(flags['--metadata'], 'utf8')), record = JSON.parse(await readFile(flags['--record'], 'utf8'));
     const bytes = await readFile(path.join(flags['--release-dir'], 'release.json')), manifest = JSON.parse(bytes);
-    assert.equal(manifest.filename, 'devcodex-flowkit-1.0.0.tgz');
+    assert.equal(manifest.filename, `devcodex-labs-flowkit-${input.version}.tgz`);
     validateRecord(input, metadata, record, bytes, await readFile(path.join(flags['--release-dir'], manifest.filename)));
     const changed = await validateDocsCommit(flags['--docs-root'], input);
     const result = { passed: true, ...input, changed, manifestSha256: sha256(bytes), tarballSha256: manifest.sha256 };
