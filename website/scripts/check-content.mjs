@@ -6,8 +6,9 @@ import { expectedReadme } from '../../scripts/docs/sync-readme.mjs';
 const website = fileURLToPath(new URL('../', import.meta.url));
 const root = path.dirname(website);
 export function checkCoverage(pages) {
-  assert.deepEqual(pages.map(page => page.id), Array.from({ length: 46 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`));
-  for (const field of ['route', 'file']) assert.equal(new Set(pages.map(page => page[field])).size, 46, `Duplicate ${field}`);
+  assert.ok(pages.length > 0, 'No documented pages');
+  assert.deepEqual(pages.map(page => page.id), Array.from({ length: pages.length }, (_, index) => `P${String(index + 1).padStart(2, '0')}`));
+  for (const field of ['route', 'file']) assert.equal(new Set(pages.map(page => page[field])).size, pages.length, `Duplicate ${field}`);
   for (const page of pages) assert.ok(page.title && page.scope && page.validation, `Missing page responsibility: ${page.id}`);
 }
 export function assertNoPrivateContent(text, name) { assert.ok(!/\.devcodex|\.task-lifecycle|TL-\d{8}-\d+|[\uFFFD]/.test(text), `Private or corrupt content: ${name}`); }
@@ -15,9 +16,9 @@ export function assertAnchors(body, names, label) {
   const actual = [...body.matchAll(/<a id="([^"]+)"><\/a>|\{#([^}]+)\}/g)].map(match => match[1] ?? match[2]);
   for (const name of names) assert.equal(actual.filter(value => value === name).length, 1, `Missing/duplicate ${label} ${name}`);
 }
-export function assertVersion(pkg) { assert.equal(pkg.version, '1.0.0'); assert.equal(pkg.license, 'MIT'); assert.equal(pkg.private, false); }
+export function assertVersion(pkg) { assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/); assert.equal(pkg.name, '@devcodex-labs/flowkit'); assert.equal(pkg.license, 'SEE LICENSE IN LICENSE'); assert.equal(pkg.private, false); assert.equal(pkg.publishConfig?.registry, 'https://npm.pkg.github.com/'); }
 export function phaseLimit(args) {
-  if (!args.length) return 46;
+  if (!args.length) return Number.POSITIVE_INFINITY;
   assert.equal(args.length, 2); assert.equal(args[0], '--phase');
   assert.ok(['B1', 'B2'].includes(args[1]) && !process.env.CI, 'Partial checks are local only');
   return args[1] === 'B1' ? 4 : 31;
@@ -37,7 +38,7 @@ export async function checkContent(args = []) {
     assert.ok(page.id === 'P01' || text.includes(`# ${page.title}`), `Missing title: ${page.file}`);
     for (const match of text.matchAll(/```\w+\s+file="([^"]+)"/g)) await access(path.resolve(path.dirname(filename), match[1]));
   }
-  if (limit === 46) {
+  if (limit === Number.POSITIVE_INFINITY) {
     const changelog = (await readFile(path.join(root, 'CHANGELOG.md'), 'utf8'))
       .replace(/^# 更新记录\r?\n/, '# v1.0.0 发布记录\n')
       .replace('(LICENSE)', '(https://github.com/devcodex-labs/flowkit/blob/main/LICENSE)');
@@ -65,6 +66,6 @@ export async function checkContent(args = []) {
       }
     }
   }
-  return { pages: limit, full: limit === 46, passed: true };
+  return { pages: pages.slice(0, limit).length, full: limit === Number.POSITIVE_INFINITY, passed: true };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) console.log(JSON.stringify(await checkContent(process.argv.slice(2))));

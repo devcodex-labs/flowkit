@@ -24,6 +24,6 @@ export default defineConfig({
     nav, sidebar,
     socialLinks: [{ icon: 'github', mode: 'link', content: repository }],
     editLink: { docRepoBaseUrl: `${repository}/edit/main/website/content` },
-    footer: { message: `FlowKit v${version} · MIT · Copyright © 2026 devcodex-labs` },
+    footer: { message: `FlowKit v${version} · 专有授权 · Copyright © 2026 devcodex-labs` },
   },
 });

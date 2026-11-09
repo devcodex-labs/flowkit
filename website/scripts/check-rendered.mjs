@@ -57,6 +57,6 @@ export async function checkRendered(args = []) {
   }
   for (const [file, info] of inspected) for (const href of [...info.links, ...info.assets]) checkLink(href, file, inventory, idsByFile);
   assert.ok(inspected.get('404.html')?.text.includes('页面未找到'), 'Missing Chinese 404');
-  return { pages: pages.length, html: inspected.size, full: limit === 46, passed: true };
+  return { pages: pages.length, html: inspected.size, full: limit === Number.POSITIVE_INFINITY, passed: true };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) console.log(JSON.stringify(await checkRendered(process.argv.slice(2))));

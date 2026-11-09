@@ -17,9 +17,6 @@ export const toolingProvider = {
 };
 
 const entry = fileURLToPath(new URL('./sample.workflow.js', import.meta.url));
-if (process.argv[1] && fileURLToPath(new URL('file://' + process.argv[1].replaceAll('\\', '/'))) !== entry) {
-  // This module is also imported by the negative-case verifier.
-}
 export async function executeDemo({ allowedProviders = ['flowkit', 'demo', 'tooling'], context = { facts: { runtime: 'node' } } } = {}) {
   const graph = await CapabilityGraph.open({ providers: [{ definition: flowkitProvider }, { definition: demoProvider }, { definition: toolingProvider }], allowedProviders });
   try {
