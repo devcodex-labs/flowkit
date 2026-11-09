@@ -1,4 +1,4 @@
-import { evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 
 /** Bind real model, JSON Schema, approval and business services at the host boundary. */
 export function createRuntime({ agent, validate, approve, verify, act, trace }) {

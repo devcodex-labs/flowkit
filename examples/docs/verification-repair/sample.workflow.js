@@ -1,4 +1,4 @@
-import { defineWorkflow, loop, verification, action, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, loop, verification, action, terminal } from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({
   id: 'repair', version: '1.0.0', name: '校验与修复',
   nodes: [

@@ -1,4 +1,4 @@
-import { run, isControlSignal } from '@devcodex/flowkit';
+import { run, isControlSignal } from '@devcodex-labs/flowkit';
 import { fileURLToPath } from 'node:url';
 export async function scenario(target = 1, file = 'sample.workflow.js') {
   const events = [];
