@@ -19,7 +19,7 @@
 
 ## 最小诊断步骤
 
-在消费者目录执行`node --version`和`npm ls @devcodex/flowkit`，记录实际版本。运行compile，保留完整诊断和退出码；若无error，确认compiled/mmd存在，再运行check。最后运行宿主，记录result或原始异常的code/reasons/cause是否存在。
+在消费者目录执行`node --version`和`npm ls @devcodex-labs/flowkit`，记录实际版本。运行compile，保留完整诊断和退出码；若无error，确认compiled/mmd存在，再运行check。最后运行宿主，记录result或原始异常的code/reasons/cause是否存在。
 
 直接SDK中compile/check返回诊断，run编译失败会拒绝并附带phase:compile和diagnostics；调用参数、文件I/O与业务异常不保证具有FK代码。先保留原错误类型，避免统一包装丢失定位信息。
 
