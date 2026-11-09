@@ -2,7 +2,7 @@ import { defineConfig } from '@rspress/core';
 import { pluginSitemap } from '@rspress/plugin-sitemap';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { base, repository, siteUrl, version, publicUrl } from './site';
+import { base, siteUrl, version, publicUrl } from './site';
 import { nav, sidebar } from './navigation';
 import pages from './coverage.json';
 import { alignSearchHeadingBoundaries } from './search-index.mjs';
@@ -22,8 +22,6 @@ export default defineConfig({
   plugins: [sitemap, { name: 'flowkit-search-heading-boundaries', modifySearchIndexData: alignSearchHeadingBoundaries }],
   themeConfig: {
     nav, sidebar,
-    socialLinks: [{ icon: 'github', mode: 'link', content: repository }],
-    editLink: { docRepoBaseUrl: `${repository}/edit/main/website/content` },
     footer: { message: `FlowKit v${version} · 专有授权 · Copyright © 2026 devcodex-labs` },
   },
 });

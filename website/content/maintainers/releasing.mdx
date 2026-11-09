@@ -38,7 +38,7 @@ node scripts/release.mjs verify --tag v1.0.0
 
 从私有 Registry 执行 `docs:private-package`，必须验证确切版本的 `dist.integrity`、tarball 哈希、包名和版本，再运行全部教程消费者用例，不能把无访问权限的 `404` 当作包不存在或发布成功。
 
-站点目前仍指向 GitHub Pages，**公开/私有可见性尚待项目负责人决定**。自动发布前须核对相关 Pages 权限、环境保护与页面内容披露边界；能构建并不代表允许公开部署。
+**公开文档站已获项目负责人批准**，目标地址为 GitHub Pages `/flowkit/`；FlowKit 仓库和 GitHub Packages 仍保持私有。自动部署前须核对实际 Pages 权限、环境保护和公开内容边界。网站的搜索索引和 sitemap 公开，但不得包含凭据、私有源码、内部资料或要求未授权访问者打开私有仓库的无说明链接。
 
 ## 失败与恢复
 
@@ -48,4 +48,4 @@ node scripts/release.mjs verify --tag v1.0.0
 - 文档构建失败：保留原发布身份、tarball 与 Artifact，按允许的文档修复范围重建
 - Artifact 过期：需要找回可验证原始字节，不能重包冒充原已发布产物
 
-可通过 `npm run docs:check` 与 `npm run docs:build` 验证站点；只有通过站点披露审查、权限核对与维护者批准后，才将仓库变量 `FLOWKIT_ENABLE_PAGES_DEPLOY` 设为 `true` 并执行实际部署；默认情况下文档发布任务不会部署 Pages。第三方依赖与其许可证不会因 FlowKit 改为专有软件而改变。
+可通过 `npm run docs:check` 与 `npm run docs:build` 验证站点；站点公开已获确认，但**上线仍是单独的发布动作**：只有通过站点披露审查、权限核对与维护者批准后，才将仓库变量 `FLOWKIT_ENABLE_PAGES_DEPLOY` 设为 `true` 并部署。默认情况下文档发布任务不会部署 Pages。第三方依赖与其许可证不会因 FlowKit 改为专有软件而改变。

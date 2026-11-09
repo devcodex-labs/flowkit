@@ -128,7 +128,7 @@ jobs:
           path: docs-source/website/doc_build
 
   deploy:
-    # Prevent any public deployment until the owner explicitly enables Pages.
+    # The site may be public; keep deployment gated by explicit release authorization.
     if: ${{ vars.FLOWKIT_ENABLE_PAGES_DEPLOY == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
