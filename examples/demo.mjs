@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { run } from '@devcodex/flowkit';
+import { run } from '@devcodex-labs/flowkit';
 import { createRuntime, validateExample } from './host.mjs';
 import { exampleAgent } from './agent.mjs';
 

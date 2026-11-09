@@ -1,4 +1,4 @@
-import { run, isControlSignal } from '@devcodex/flowkit';
+import { run, isControlSignal } from '@devcodex-labs/flowkit';
 import { fileURLToPath } from 'node:url';
 const result = await run(fileURLToPath(new URL('./sample.compiled.mjs', import.meta.url)), {
   isControlSignal,
