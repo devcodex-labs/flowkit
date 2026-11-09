@@ -2,7 +2,7 @@
   "code": "FK_R014",
   "kind": "runtime",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "mode": "invalid-utf8",
     "options": {
       "skillCheck": false,
@@ -12,7 +12,7 @@
     }
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[node('n',{name:'N',agent:'writer',output:{type:'object'},next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "mode": "invalid-utf8",
     "options": {
       "skillCheck": false,
