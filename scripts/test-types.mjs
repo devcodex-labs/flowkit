@@ -10,7 +10,7 @@ const compilerArgs = ['--noEmit', '--strict', '--target', 'ES2022', '--lib', 'ES
 const scratch = path.join(root, '.tmp/types');
 await mkdir(scratch, { recursive: true });
 const nodes = Array.from({ length: 499 }, (_, i) => `action('step-${i}', { name: '动作${i}', action: 'save', next: '${i === 498 ? 'done' : `step-${i + 1}`}' })`);
-const large = `import {defineWorkflow,action,terminal} from '@devcodex/flowkit/dsl';\ndefineWorkflow({id:'large',version:'1.0.0',name:'规模',nodes:[\n${nodes.join(',\n')},\nterminal('done',{name:'完成',status:'succeeded'})]});\n`;
+const large = `import {defineWorkflow,action,terminal} from '@devcodex-labs/flowkit/dsl';\ndefineWorkflow({id:'large',version:'1.0.0',name:'规模',nodes:[\n${nodes.join(',\n')},\nterminal('done',{name:'完成',status:'succeeded'})]});\n`;
 await writeFile(path.join(scratch, '500-valid.ts'), large);
 await writeFile(path.join(scratch, '500-invalid.ts'), large.replace("next: 'done'", "next: 'missing-node'"));
 const runs = [];

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Parser } from 'tar';
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export function verifyRegistryBytes(bytes, metadata, manifest) {
-  assert.equal(metadata.name, '@devcodex/flowkit'); assert.equal(metadata.version, manifest.version);
+  assert.equal(metadata.name, '@devcodex-labs/flowkit'); assert.equal(metadata.version, manifest.version);
   assert.equal(manifest.name, metadata.name); assert.equal(sha256(bytes), manifest.sha256, 'Public tarball differs from reviewed candidate');
   const match = /^(sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(metadata.dist?.integrity ?? '');
   assert.ok(match, 'Missing supported registry dist.integrity');
