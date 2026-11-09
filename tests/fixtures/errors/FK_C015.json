@@ -2,11 +2,11 @@
   "code": "FK_C015",
   "kind": "compile",
   "invalid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'missing'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'missing'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   },
   "valid": {
-    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
+    "source": "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('a',{name:'a',action:'save',next:'done'}),terminal('done',{name:'done',status:'succeeded'})]});\n",
     "options": {}
   }
 }
