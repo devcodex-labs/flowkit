@@ -92,7 +92,7 @@ test('validation timeout terminates a waiting shell and its child before tempora
   if (!stopped && process.platform === 'linux') {
     // A killed child may await reaping by the WSL init process; a zombie cannot run or hold file handles.
     try { stopped = /^State:\s+Z\b/m.test(await readFile(`/proc/${pid}/status`, 'utf8')); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; stopped = true; }
+    catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error; stopped = true; }
   }
   assert.equal(stopped, true, 'The validation child is still running');
   await rm(directory, { recursive: true }); await assert.rejects(access(directory), { code: 'ENOENT' });
