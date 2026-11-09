@@ -3,7 +3,7 @@ import { readFile, writeFile, unlink, readdir, mkdir, stat } from 'node:fs/promi
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { compile, compileSource, check, run, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { compile, compileSource, check, run, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 const source = await readFile('sample.workflow.js', 'utf8');
 await compile('sample.workflow.js'); const before = await stat('sample.compiled.mjs');
 assert.deepEqual(await check('sample.workflow.js'), []); assert.equal((await stat('sample.compiled.mjs')).mtimeMs, before.mtimeMs);
@@ -23,7 +23,7 @@ assert.equal(initial.saved, undefined); assert.equal(initial.nested.value, 2); a
 assert.equal(evalWhen(observed, 'saved && nested.value === 2'), true); assert.equal(isControlSignal({ control: true }), true);
 await assert.rejects(run('sample.workflow.js', runtime, {}, { unknown: true }), TypeError);
 const dumps = (await readdir('dump')).filter(file => file.endsWith('.run.mjs')); assert.ok(dumps.length); assert.ok((await readFile(path.join('dump', dumps[0]), 'utf8')).includes('export'));
-const require = createRequire(import.meta.url), packageFile = require.resolve('@devcodex/flowkit/package.json');
+const require = createRequire(import.meta.url), packageFile = require.resolve('@devcodex-labs/flowkit/package.json');
 const metadata = JSON.parse(await readFile(packageFile, 'utf8')), bin = path.resolve(path.dirname(packageFile), metadata.bin.flowkit);
 function cli(args) { return spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', timeout: 30000 }); }
 assert.equal(cli(['compile', 'sample.workflow.js', '--trace', '--no-mermaid']).status, 0);

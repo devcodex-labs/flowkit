@@ -1,4 +1,4 @@
-import { compile, compileSource, check, run, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { compile, compileSource, check, run, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 import { readFile } from 'node:fs/promises';
 const source = 'sample.workflow.js';
 const compiled = await compile(source, { trace: true });

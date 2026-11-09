@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
-import { run, check } from '@devcodex/flowkit';
+import { run, check } from '@devcodex-labs/flowkit';
 import { file, runtime } from './host.mjs';
 const skill = new URL('./skills/instruction.md', import.meta.url), original = await readFile(skill), source = await readFile(file);
 try {
