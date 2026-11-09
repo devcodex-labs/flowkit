@@ -7,7 +7,7 @@
 Runtime 必须提供 `isControlSignal(err)`。公开同名函数识别带 `control: true` 的控制标记；宿主也可以按自身约定扩展判定。控制信号与普通失败分开传播，避免把主动取消误当成 Agent 可重试的生成失败。
 
 ```js
-import { isControlSignal } from '@devcodex/flowkit';
+import { isControlSignal } from '@devcodex-labs/flowkit';
 console.log(isControlSignal({ control: true, kind: 'cancel' })); // true
 console.log(isControlSignal(new Error('网络失败')));             // false
 ```

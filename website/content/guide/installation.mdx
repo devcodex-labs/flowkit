@@ -26,7 +26,7 @@ mkdir flowkit-demo
 cd flowkit-demo
 npm init -y
 npm pkg set type=module
-npm install --save-exact @devcodex/flowkit@1.0.0
+npm install --save-exact @devcodex-labs/flowkit@1.0.0
 ```
 
 `--save-exact` 让 package.json 保存明确版本。保留 npm 生成的 package-lock.json，在其他机器上用 `npm ci` 安装一致的依赖。
@@ -34,16 +34,16 @@ npm install --save-exact @devcodex/flowkit@1.0.0
 确认包身份：
 
 ```sh
-node --input-type=module -e "import p from '@devcodex/flowkit/package.json' with {type:'json'}; console.log(p.name, p.version)"
+node --input-type=module -e "import p from '@devcodex-labs/flowkit/package.json' with {type:'json'}; console.log(p.name, p.version)"
 ```
 
-预期为 `@devcodex/flowkit 1.0.0`。如果显示其他版本，检查当前目录的 package.json、lock 文件和 `npm ls @devcodex/flowkit`，不要仅根据全局安装结果判断。
+预期为 `@devcodex-labs/flowkit 1.0.0`。如果显示其他版本，检查当前目录的 package.json、lock 文件和 `npm ls @devcodex-labs/flowkit`，不要仅根据全局安装结果判断。
 
 ## 公开导入入口
 
 ```js
-import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex/flowkit';
-import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex/flowkit/dsl';
+import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
+import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex-labs/flowkit/dsl';
 ```
 
 根入口提供 SDK，`/dsl` 提供定义构造器。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 可执行命令只有 `compile` 和 `check`；执行工作流由宿主调用 SDK 的 `run`。

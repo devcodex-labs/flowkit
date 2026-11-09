@@ -4,7 +4,7 @@ FlowKit v1.0.0 使用同一套 DSL 编译 JavaScript 与 TypeScript。选择你�
 
 ## 文件名与入口
 
-工作流必须以 `.workflow.js` 或 `.workflow.ts` 结尾，并从 `@devcodex/flowkit/dsl` 导入构造器，默认导出 `defineWorkflow(...)`。宿主可以是普通 `.mjs`，从 `@devcodex/flowkit` 调用 SDK。这两个入口都属于公开接口，不需要导入 dist 内部文件。
+工作流必须以 `.workflow.js` 或 `.workflow.ts` 结尾，并从 `@devcodex-labs/flowkit/dsl` 导入构造器，默认导出 `defineWorkflow(...)`。宿主可以是普通 `.mjs`，从 `@devcodex-labs/flowkit` 调用 SDK。这两个入口都属于公开接口，不需要导入 dist 内部文件。
 
 下面是同一个条件分流流程的两种写法。分别保存到同一消费者目录时，注意它们生成的 `sample.compiled.mjs` 同名；逐个编译验证，或者使用不同基础文件名保存两个产物。
 
