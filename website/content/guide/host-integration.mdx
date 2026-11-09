@@ -50,3 +50,7 @@ isControlSignal 始终必需。Agent 需要 runAgent 和 validateResult；action
 同一文件可多次调用 run。每次都有新 state/Ctx/默认 Skill loader；成功编译和加载的 DSL 可能命中进程内缓存，业务结果不会被缓存。Skill 文件改变会在下一次运行重新读取。完整缓存键、失败分类和长期进程边界见 [run](/reference/sdk#run)。
 
 遇到本地 Skill 缺失先核对 projectRoot 和实际文件；输出不合 Schema 看 reasons；审批返回字符串会触发 FK_R002。修复后依次复验 compile、check、run，并确认事件顺序和结果状态。
+
+## 使用 capability-graph 检查并绑定能力
+
+若宿主需要 Provider 目录、适用性或跨 Provider 依赖检查，可使用[capability-graph 宿主消费示例](/examples/capability-graph)中的可选动作适配器。FlowKit 自身只负责执行工作流，不会自动执行 Graph 的 `requires` 依赖；宿主必须显式绑定被授权的动作。普通 `runAgent`/Skill 映射规则保持不变。

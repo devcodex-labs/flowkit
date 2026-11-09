@@ -96,3 +96,7 @@ isControlSignal(err: unknown): boolean
 ```
 
 所有options的适用性见[配置参考](/reference/options)，宿主签名见[Runtime契约](/reference/runtime)，返回字段见[类型参考](/reference/types)。
+
+## 可选 capability-graph 子入口
+
+`@devcodex-labs/flowkit/capability-graph` 单独导出 `flowkitProvider` 和 `createCapabilityGraphActionAdapter`。它不是根 SDK 六个公开函数的一部分；不自动安装或启动 capability-graph，也不接管宿主 Runtime。详见[能力声明](/guide/capability-provider)和[宿主集成](/examples/capability-graph)。

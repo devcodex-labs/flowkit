@@ -65,3 +65,7 @@ npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --mod
 ## 遇到类型错误时
 
 先核对入口、TypeScript版本和ESM设置；再查看是否多写字段、后继不存在、并行成员带next或联合类型不满足。避免用any或忽略诊断掩盖真实契约问题。完整JS/TS等价例见[JavaScript与TypeScript](/guide/javascript-typescript)。
+
+## Graph 适配器类型
+
+`@devcodex-labs/flowkit/capability-graph` 另带 `GraphResolver`、`GraphContext`、`GraphResolution`、`GraphActionBinding` 等结构化 TypeScript 类型。Graph 实例由宿主注入，FlowKit 不把 Graph SDK 添加为强制依赖。参见[Provider 说明](/guide/capability-provider)。

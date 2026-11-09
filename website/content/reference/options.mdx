@@ -71,3 +71,7 @@ string，默认关闭。相对路径基于调用时cwd，保存生成的运行�
 filename仅为compileSource专用必需字段，不属于上面11项。其他调用和flowkit.config.mjs拒绝它。未知键、Symbol键或不符类型会直接拒绝，不静默忽略。
 
 CLI只加载当前调用目录的flowkit.config.mjs，先校验完整配置，再将命令行覆盖项浅合并。配置本身错误时，即使同名参数会覆盖它仍失败。布尔false能覆盖true，remoteSkillHosts按整数组替换。示例配置与命令见[命令行](/reference/cli)。
+
+## capability-graph 不占用核心配置项
+
+Graph 的 Provider、`allowedProviders`、`context` 和模型适配由宿主管理，不属于这 11 个 FlowKit SDK 选项；请勿将图谱配置写入 `flowkit.config.mjs` 试图绕过未知键校验。详见[宿主消费示例](/examples/capability-graph)。

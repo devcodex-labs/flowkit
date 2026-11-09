@@ -19,6 +19,8 @@
 | 理解多次运行和缓存 | [run的完整例子](/reference/sdk#run) | state浅复制 |
 | 调用全部SDK并观察trace/dump | [跟踪与运行记录](/guide/observability) | SDK与文件产物 |
 
+[capability-graph 双向集成](/examples/capability-graph) 作为 E13 示例，演示 Provider 声明和宿主明确绑定动作；需要单独安装 Graph SDK。
+
 ## 示例的依赖和边界
 
 运行环境为Node >=22.13.0，FlowKit精确版本1.0.0，消费者package.json设置type:module。JavaScript例不需要模型密钥；TS类型演练另装TypeScript 5.0+。每个目录独立保留自己的package.json，避免项目根查找受到仓库上层目录影响。
@@ -33,4 +35,4 @@
 
 先在空目录按页面复制文件并安装确切版本，避免把已有业务项目改坏。执行成功路径后再尝试页面明确给出的失败变体，每次恢复原设置并复验。只看compile成功还不够：检查产物、运行结果、状态字段、事件顺序和退出码。
 
-维护仓库时可执行`npm run build`及`npm run docs:examples`：它在临时目录真实安装候选tarball，用独立消费者运行所有案例。这个本地候选验证不等于公开npm包或线上站点已经通过验证。遇到差异从[问题定位](/troubleshooting/index)开始。
+维护仓库时可执行`npm run build`及`npm run docs:examples`：它在临时目录真实安装候选tarball，用独立消费者运行所有案例。这个本地候选验证不等于私有 GitHub Packages 包或线上站点已经通过验证。遇到差异从[问题定位](/troubleshooting/index)开始。

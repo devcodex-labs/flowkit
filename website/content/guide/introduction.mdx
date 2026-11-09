@@ -45,6 +45,12 @@ FlowKit 是面向 Node.js 的工作流编排工具。你用 JavaScript / TypeScr
 
 状态以浅复制开始；嵌套对象仍可能与初始输入共享引用，并行分支使用同一份运行状态。`any` 返回不代表其他分支已停止。审批等待、持久化和重启后的恢复由宿主设计，不能依赖一个未提供的内置服务。
 
+## capability-graph 的两个接入方向
+
+FlowKit 可通过 `@devcodex-labs/flowkit/capability-graph` 提供静态 Provider 声明，供外部宿主发现能力；也能在宿主层使用 Graph SDK 解析能力、检查适用性与前置依赖，再通过显式绑定的动作执行。Graph 不负责工作流步骤排序、执行或持久化。[Provider 声明](/guide/capability-provider)与[真实宿主示例](/examples/capability-graph)分别验证这两条路径。
+
+目前核心实现以 JS/TS DSL 为输入，不提供自然语言直接生成工作流的公共 API。模型若参与生成 DSL，其生成、审查与授权流程由宿主负责，不能把该组合写成 FlowKit 内置能力。
+
 ## 从哪里开始
 
 先阅读[安装与环境](/guide/installation)，再按[第一个工作流](/guide/quick-start)完成两个文件的例子。你应先观察到实际成功状态、终点和写入值，再把动作替换为自己的业务函数。
