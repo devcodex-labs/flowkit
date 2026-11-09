@@ -1,4 +1,4 @@
-import { run, evalWhen, isControlSignal } from '@devcodex/flowkit';
+import { run, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 import { fileURLToPath } from 'node:url';
 export async function scenario(urgent = false, extension = 'js') {
   const file = fileURLToPath(new URL(`./sample.workflow.${extension}`, import.meta.url));

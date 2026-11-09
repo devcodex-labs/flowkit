@@ -1,4 +1,4 @@
-import { defineWorkflow, node, action, human, terminal } from '@devcodex/flowkit/dsl';
+import { defineWorkflow, node, action, human, terminal } from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({
   id: 'host-integration', version: '1.0.0', name: '接入宿主',
   nodes: [
