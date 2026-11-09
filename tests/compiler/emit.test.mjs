@@ -5,7 +5,7 @@ import { compileToText } from '../../src/compiler/compile.mjs';
 import { createSourceSnapshot } from '../../src/compiler/source.mjs';
 import { evalWhen } from '../../src/when/evaluate.mjs';
 
-const imports="import {defineWorkflow,node,action,parallel,condition,verification,loop,human,terminal} from '@devcodex/flowkit/dsl';";
+const imports="import {defineWorkflow,node,action,parallel,condition,verification,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';";
 const end=(id='done')=>`terminal('${id}',{name:'${id}',status:'succeeded'})`;
 const action=(id,next)=>`action('${id}',{name:'${id}',action:'${id}',next:'${next}'})`;
 async function compile(nodes,options={}) {

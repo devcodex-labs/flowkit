@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { analyzeSource } from '../../src/compiler/analyze.mjs';
 import { EXIT } from '../../src/compiler/graph-algorithms.mjs';
 
-const imports = "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex/flowkit/dsl';";
+const imports = "import {defineWorkflow,node,action,verification,parallel,condition,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';";
 const end = (id='done') => `terminal('${id}',{name:'${id}',status:'succeeded'})`;
 const action = (id,next,extra='') => `action('${id}',{name:'${id}',action:'save',next:'${next}'${extra}})`;
 const analyze = nodes => analyzeSource(`${imports}\nexport default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[${nodes.join(',')}]});`,
