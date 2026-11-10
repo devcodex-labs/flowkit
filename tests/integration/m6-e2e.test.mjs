@@ -60,7 +60,7 @@ async function fixture(t,{stageBudget=128,ready=true,allowedInputKeys=['message'
   const config={
     namespace:'m6-reference-host',runId:'run-m6-test',
     startKey:'m6-acceptance-start',storePath,programPath,identityPath,
-    privateKeyPath,skillPath,workerPath:workerScript,
+    privateKeyPath,skillPath,sourcePath,skillHash:sha256Bytes(await readFile(skillPath)),workerPath:workerScript,
     state:{ready,message:'hello',secret:privateSentinel},
     allowedInputKeys,stageBudget,osIsolation,
   };
