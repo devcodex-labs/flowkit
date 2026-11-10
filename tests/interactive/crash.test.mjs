@@ -147,3 +147,51 @@ test('M4 real process SIGKILL before/after receipt acceptance, validation and st
     }
   }
 });
+
+
+test('M4 two independent Node processes racing the same complete accept one receipt, not two',async t=>{
+  const {file,compiled,db,api}=await fixture(t);
+  const waiting=await api.start({
+    runId:'real-process-race',programBytes:compiled.bytes,
+    programIdentity:compiled.identity,startKey:'race',
+    state:{preexisting:'constant'},
+  });
+  assert.equal(waiting.status,'waiting');
+  const receipt={
+    runId:waiting.runId,requestId:waiting.pending.requestId,
+    nodeId:'worker',attempt:1,result:{answer:'once'},
+  };
+  const raceScript=[
+    'import {createSqliteCheckpointStore} from '+JSON.stringify(moduleStore)+';',
+    'import {createInteractiveCoordinator} from '+JSON.stringify(moduleCoordinator)+';',
+    'const [file,body]=process.argv.slice(1);',
+    'const db=createSqliteCheckpointStore(file,{namespace:"test-host"});',
+    'try{',
+    'const api=createInteractiveCoordinator({store:db,runtime:{',
+    '  skillResolver:async()=>"Agent instruction",',
+    '  validateResult:(_s,r)=>typeof r?.answer==="string"?[]:["invalid answer"],',
+    '}});',
+    'const result=await api.complete(JSON.parse(body));',
+    'console.log(JSON.stringify({acceptedRevision:result.acceptedRevision,',
+    '  duplicate:result.duplicate,status:result.status}));',
+    '}finally{db.close()};',
+  ].join('\n');
+  const run=()=>new Promise((resolve,reject)=>{
+    const child=spawn(process.execPath,['--input-type=module','-e',raceScript,
+      file,JSON.stringify(receipt)],{stdio:['ignore','pipe','pipe']});
+    let stdout='',stderr='';
+    child.stdout.on('data',b=>{stdout+=b});
+    child.stderr.on('data',b=>{stderr+=b});
+    child.on('error',reject);
+    child.on('close',code=>code===0?resolve(JSON.parse(stdout.trim()))
+      :reject(new Error(stderr)));
+  });
+  const [first,second]=await Promise.all([run(),run()]);
+  assert.equal(first.acceptedRevision,second.acceptedRevision);
+  assert.deepEqual([first.duplicate,second.duplicate].sort(),[false,true]);
+  assert.equal(first.status,'succeeded');
+  assert.equal(second.status,'succeeded');
+  assert.equal(db.load(waiting.runId).receipts.length,1);
+  assert.deepEqual(db.load(waiting.runId).state,
+    {preexisting:'constant',answer:'once'});
+});
