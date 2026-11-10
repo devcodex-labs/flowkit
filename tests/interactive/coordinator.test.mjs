@@ -94,6 +94,7 @@ test('M4 generated Program routes Condition before Agent, publishes immutable Pe
   assert.ok(started.revision>=5);
   assert.equal(started.pending.kind,'agent');
   assert.equal(started.pending.name,'Worker');
+  assert.equal(started.pending.id,'worker');
   assert.equal(started.pending.attempt,1);
   assert.equal(started.pending.instruction,'Write valid JSON for worker');
   assert.deepEqual(started.pending.input,{existing:'hello'});
