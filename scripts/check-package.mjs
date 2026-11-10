@@ -55,8 +55,8 @@ export async function validatePackage(root, packedPaths) {
   assert.deepEqual(lock.packages[''].dependencies, pkg.dependencies); assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].name, pkg.name); assert.equal(lock.packages[''].version, pkg.version);
   assert.deepEqual(pkg.files, ['dist', 'README.md', 'LICENSE']);
-  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './package.json']);
-  for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs'], ['./capability-graph', './dist/capability-graph.d.ts', './dist/integrations/capability-graph.mjs']]) {
+  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './interactive', './package.json']);
+  for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs'], ['./capability-graph', './dist/capability-graph.d.ts', './dist/integrations/capability-graph.mjs'], ['./interactive', './dist/interactive.d.ts', './dist/interactive/index.mjs']]) {
     assert.deepEqual(Object.keys(pkg.exports[key]), ['types', 'import', 'default']);
     assert.deepEqual(pkg.exports[key], { types, import: module, default: module });
   }

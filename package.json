@@ -35,6 +35,11 @@
       "import": "./dist/integrations/capability-graph.mjs",
       "default": "./dist/integrations/capability-graph.mjs"
     },
+    "./interactive": {
+      "types": "./dist/interactive.d.ts",
+      "import": "./dist/interactive/index.mjs",
+      "default": "./dist/interactive/index.mjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
