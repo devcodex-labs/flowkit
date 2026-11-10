@@ -76,6 +76,9 @@ test('IR validator rejects injected edges, events, duplicate blocks and missing 
   const changedPhase = mutated();
   changedPhase.blocks.find(b => b.id === 'worker::validate').phase = 'awaiting';
   assert.equal(validateInteractiveIR(changedPhase).ok, false);
+  const missingBranches = mutated();
+  missingBranches.nodes.gate.metadata.branches = null;
+  assert.equal(validateInteractiveIR(missingBranches).ok, false);
 });
 
 test('source-byte change changes source identity, without changing node block IDs', async () => {

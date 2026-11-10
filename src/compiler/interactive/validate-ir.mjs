@@ -55,7 +55,8 @@ export function expectedBlockTargets(ir, nodeId, phase) {
     if (phase === 'route') return [target(metadata.next, 'enter')];
   }
   if (record.kind === 'condition' && phase === 'route') {
-    return [...new Set(metadata.branches.map(branch => target(branch.next, 'enter')))];
+    if (!Array.isArray(metadata.branches)) return null; // reject corrupt IR without throwing
+    return [...new Set(metadata.branches.map(branch => target(branch?.next, 'enter')))];
   }
   if (record.kind === 'terminal' && phase === 'route') return [];
   return null;

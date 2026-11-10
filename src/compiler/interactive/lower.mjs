@@ -65,7 +65,7 @@ export function lowerInteractive(analysis, options = {}) {
     // source of routing and it is not used to prefill missing Agent inputs.
     dataflow: Object.fromEntries(definitions.map(node => [node.id, {
       reachingKeys: [...(analysis.dataflow.inputs.get(node.id) ?? [])].sort(),
-      possibleOutputKeys: [...(analysis.dataflow.outputs.get(node.id) ?? [])].sort(),
+      reachingKeysAfter: [...(analysis.dataflow.outputs.get(node.id) ?? [])].sort(),
     }])),
     graphEdges: analysis.graph.executionEdges.map(edge => ({
       from: edge.from, to: edge.to, role: edge.role,
