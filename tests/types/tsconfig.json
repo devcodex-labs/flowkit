@@ -16,6 +16,7 @@
     "public-contract.ts",
     "compiler-api.ts",
     "../../src/internal.d.ts",
-    "capability-graph.ts"
+    "capability-graph.ts",
+    "interactive.ts"
   ]
 }
