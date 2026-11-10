@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import * as api from '@devcodex-labs/flowkit';
+import * as interactive from '@devcodex-labs/flowkit/interactive';
 import * as dsl from '@devcodex-labs/flowkit/dsl';
 import pkg from '@devcodex-labs/flowkit/package.json' with { type: 'json' };
 assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
@@ -26,3 +27,28 @@ for (const mode of ['source', 'aot', 'dump']) {
 }
 assert.equal(api.evalWhen({ runtime: {}, state: { ready: true } }, 'ready'), true); assert.equal(api.isControlSignal({ control: true }), true);
 assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
+
+
+assert.deepEqual(Object.keys(interactive),[
+  'compileInteractive','createInteractiveCoordinator','createSqliteCheckpointStore','loadInteractiveProgram',
+]);
+await writeFile('simple.workflow.js',
+  "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
+  "export default defineWorkflow({id:'isolated-interactive',version:'1.0.0',name:'Public M4',nodes:[terminal('done',{name:'Done',status:'succeeded'})]});\n");
+const compiledInteractive=await interactive.compileInteractive('simple.workflow.js',{
+  output:'memory',featureStage:'P0-A',
+});
+assert.ok(compiledInteractive.programIdentity?.artifactHash);
+const store=interactive.createSqliteCheckpointStore('interactive-demo.db',{namespace:'consumer'});
+try {
+  const machine=interactive.createInteractiveCoordinator({store,runtime:{}});
+  const frame=await machine.start({
+    programBytes:Buffer.from(compiledInteractive.code),
+    programIdentity:compiledInteractive.programIdentity,
+    startKey:'consumer-test',
+    state:{installed:true},
+  });
+  assert.equal(frame.status,'succeeded');
+  assert.deepEqual(frame.state,{installed:true});
+  assert.equal((await machine.resume({runId:frame.runId})).revision,frame.revision);
+} finally {store.close();}
