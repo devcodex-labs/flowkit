@@ -352,3 +352,24 @@ test('M5 expired authentic proof re-acks an already accepted identical receipt, 
   const mutated={...receipt,result:{answer:'not previously accepted'}};
   await rejectUnchanged(f,mutated,signed);
 });
+
+
+test('M5 even VALIDLY signed proofs for a wrong tenant, Program, policy, request or result are rejected',async t=>{
+  const f=await waiting(t);
+  const receipt=agentResult(f.frame,{answer:'authoritative'});
+  const run=f.store.load(f.frame.runId);
+  const cases=[
+    proof({...run,namespace:'attacker-tenant'},receipt,f.keys.privateKey),
+    proof({...run,artifactHash:'sha256:'+'a'.repeat(64)},receipt,f.keys.privateKey),
+    proof({...run,policyHash:'sha256:'+'b'.repeat(64)},receipt,f.keys.privateKey),
+    proof(run,{...receipt,requestId:'other-request'},f.keys.privateKey),
+    proof(run,{...receipt,nodeId:'other-node'},f.keys.privateKey),
+    proof(run,{...receipt,attempt:receipt.attempt+1},f.keys.privateKey),
+    proof(run,{...receipt,result:{answer:'different-result'}},f.keys.privateKey),
+  ];
+  for(const attestation of cases) {
+    // All attestations have actual, mathematically valid Host signatures.
+    // They must fail on the expected authoritative run identity/body.
+    await rejectUnchanged(f,receipt,attestation);
+  }
+});
