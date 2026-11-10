@@ -41,6 +41,12 @@ async function fixture(t,{stageBudget=128,ready=true,allowedInputKeys=['message'
   await writeFile(skillPath,'Review and return a JSON answer.',{mode:0o644});
   const sourcePath=path.join(root,'acceptance.workflow.js');
   await writeFile(sourcePath,workflowText,{mode:0o644});
+  // The isolated nobody worker cannot traverse the CI checkout on every
+  // runner. Publish *only* this non-secret scripted worker into a world-
+  // readable temp root, while Host DB/keys remain under privateRoot/0700.
+  const publicWorker=path.join(root,'public-m6-worker.mjs');
+  await writeFile(publicWorker,await readFile(workerScript),{mode:0o644});
+  await chmod(publicWorker,0o644);
   const compiled=await compileInteractive(sourcePath,{
     output:'memory',featureStage:'P0-A',
   });
@@ -60,7 +66,7 @@ async function fixture(t,{stageBudget=128,ready=true,allowedInputKeys=['message'
   const config={
     namespace:'m6-reference-host',runId:'run-m6-test',
     startKey:'m6-acceptance-start',storePath,programPath,identityPath,
-    privateKeyPath,skillPath,sourcePath,skillHash:sha256Bytes(await readFile(skillPath)),workerPath:workerScript,
+    privateKeyPath,skillPath,sourcePath,skillHash:sha256Bytes(await readFile(skillPath)),workerPath:publicWorker,
     state:{ready,message:'hello',secret:privateSentinel},
     allowedInputKeys,stageBudget,osIsolation,
   };
