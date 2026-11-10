@@ -44,7 +44,7 @@ test('a valid Standard Action or Verification is rejected by the P0-A gate', asy
     JSON.stringify(actionAnalysis.diagnostics));
   const actionGate = lowerInteractive(actionAnalysis);
   assert.equal(actionGate.ir, null);
-  assert.ok(actionGate.diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_NODE' && d.nodeId === 'write'));
+  assert.ok(actionGate.diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH' && d.nodeId === 'write'));
   const verificationAnalysis = await analyze(workflow([
     "verification('verify',{name:'Verify',verifier:'check',onSuccess:'done',onFailure:'failed'})",
     done, failed,
@@ -61,7 +61,7 @@ test('P0-A explicitly rejects Agent verify; it must never silently skip the call
     JSON.stringify(a.diagnostics));
   const { ir, diagnostics } = lowerInteractive(a);
   assert.equal(ir, null);
-  assert.ok(diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_BINDING'));
+  assert.ok(diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH'));
 });
 
 test('featureStage is bounded by the built-in implemented stage, not caller options', async () => {
@@ -70,10 +70,10 @@ test('featureStage is bounded by the built-in implemented stage, not caller opti
   for (const stage of ['P0-B', 'P1']) {
     const result = lowerInteractive(a, { featureStage: stage });
     assert.equal(result.ir, null);
-    assert.ok(result.diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_STAGE'));
+    assert.ok(result.diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH'));
   }
   assert.equal(lowerInteractive(a, { featureStage: 'P2' }).diagnostics
-    .some(d => d.code === 'FK_I_INVALID_STAGE'), true);
+    .some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH'), true);
 });
 
 test('invalid Standard Graph is rejected before lowering; original FK_C diagnostics survive', async () => {

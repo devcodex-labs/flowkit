@@ -74,11 +74,11 @@ function sameArray(actual, expected) {
 export function validateInteractiveIR(ir) {
   const errors = [];
   const bad = message => errors.push(Object.freeze({
-    code: 'FK_I_INVALID_IR', severity: 'error', message,
+    code: 'FK_I_INVALID_TRANSITION', severity: 'error', message,
   }));
   if (!ir || typeof ir !== 'object' || ir.schemaVersion !== 1 || ir.featureStage !== 'P0-A'
       || !Array.isArray(ir.blocks) || !ir.nodes || typeof ir.nodes !== 'object') {
-    return { ok: false, diagnostics: Object.freeze([{ code: 'FK_I_INVALID_IR', severity: 'error', message: 'Invalid IR envelope' }]) };
+    return { ok: false, diagnostics: Object.freeze([{ code: 'FK_I_INVALID_TRANSITION', severity: 'error', message: 'Invalid IR envelope' }]) };
   }
   const ids = Object.keys(ir.nodes);
   if (!ids.length || ids.length > 500 || ir.blocks.length > 3500) bad('Invalid P0-A IR size');

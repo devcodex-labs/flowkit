@@ -28,10 +28,10 @@ export function gateInteractiveFeatures(analysis, options = {}) {
   const featureStage = options.featureStage ?? IMPLEMENTED_INTERACTIVE_STAGE;
   const extras = [];
   if (!STAGES.includes(featureStage)) {
-    extras.push(interactiveDiagnostic(analysis, 'FK_I_INVALID_STAGE',
+    extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
       'Unknown Interactive feature stage: ' + String(featureStage)));
   } else if (featureStage !== IMPLEMENTED_INTERACTIVE_STAGE) {
-    extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_STAGE',
+    extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
       'This build implements only P0-A; caller cannot enable ' + featureStage));
   }
 
@@ -41,10 +41,10 @@ export function gateInteractiveFeatures(analysis, options = {}) {
   if (standardValid) {
     analysis.literal.definition.nodes.forEach((node, index) => {
       if (!ENABLED.has(node.type)) {
-        extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_NODE',
+        extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A does not support node type ' + String(node.type), index, node));
       } else if (node.type === 'agent' && node.verify != null) {
-        extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_BINDING',
+        extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A Agent verify requires P0-B; it must not be skipped', index, node));
       }
     });
