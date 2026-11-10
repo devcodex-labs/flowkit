@@ -336,7 +336,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       cp.namespace,cp.runId,cp.artifactHash,frame.nodeId,frame.activation,frame.attempt,
     ]).slice(7);
     return copy({
-      kind:'agent',runId:cp.runId,nodeId:block.nodeId,
+      kind:'agent',runId:cp.runId,nodeId:block.nodeId,id:block.nodeId,
       name:node.metadata.name,requestId,attempt:frame.attempt,
       instruction,input,missing,resultSchema:node.metadata.output,
       reasons:frame.reasons,
