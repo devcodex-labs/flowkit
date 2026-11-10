@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, {after} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -25,11 +25,16 @@ const next = (cp, status = 'running') => ({
   status, phase:'route', blockId:'gate::route',
 });
 
-async function fixture(t) {
+// Module teardown runs after every test-specific DatabaseSync.close() hook.
+// Windows cannot unlink SQLite files while any connection still owns them.
+const temporaryDirectories = [];
+after(async () => {
+  for (const dir of temporaryDirectories) await rm(dir, {recursive:true, force:true});
+});
+async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), 'flowkit-m3-'));
-  const file = path.join(dir, 'checkpoint.db');
-  t.after(() => rm(dir, {recursive:true, force:true}));
-  return file;
+  temporaryDirectories.push(dir);
+  return path.join(dir, 'checkpoint.db');
 }
 
 test('M3 canonical JSON uses stable key order and preserves prototype keys only as data', () => {
