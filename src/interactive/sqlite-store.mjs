@@ -43,7 +43,7 @@ function assertCheckpoint(value, namespace, runId, revision, artifactHash) {
   }
 }
 function immutableIdentity(previous, next) {
-  for (const key of ['namespace', 'runId', 'schemaVersion', 'artifactHash', 'startKey', 'startIntentHash']) {
+  for (const key of ['namespace', 'runId', 'schemaVersion', 'artifactHash', 'startKey', 'startIntentHash', 'policyHash']) {
     if (previous[key] !== next[key]) {
       throw failure('FK_I_INVALID_CHECKPOINT', 'immutable field changed: ' + key);
     }
@@ -69,6 +69,13 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA synchronous = FULL');
+    // Neither a storage driver nor an in-memory database may silently weaken durability.
+    const journalMode = db.prepare('PRAGMA journal_mode').get()?.journal_mode;
+    const synchronous = db.prepare('PRAGMA synchronous').get()?.synchronous;
+    const foreignKeys = db.prepare('PRAGMA foreign_keys').get()?.foreign_keys;
+    if (journalMode !== 'wal' || synchronous !== 2 || foreignKeys !== 1) {
+      throw failure('FK_I_STORE_UNSAFE', 'WAL, synchronous FULL and foreign keys are required');
+    }
     db.exec([
       'CREATE TABLE IF NOT EXISTS fk_i_artifacts (',
       ' namespace TEXT NOT NULL, artifact_hash TEXT NOT NULL, source_hash TEXT NOT NULL,',
@@ -145,6 +152,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
     /** Preserve exact compiler-produced bytes, keyed by their content hash. */
     putArtifact({programIdentity, bytes}) {
       if (!(bytes instanceof Uint8Array)) throw new TypeError('Program bytes must be Uint8Array');
+      if (bytes.byteLength > 4 * 1024 * 1024) {
+        throw failure('FK_I_PROGRAM_MISMATCH', 'Program exceeds 4 MiB');
+      }
       if (!programIdentity || typeof programIdentity !== 'object') throw new TypeError('Program identity required');
       const identity = safeJSONSnapshot(programIdentity);
       assertSHA256(identity.artifactHash);
@@ -174,6 +184,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       return transaction('read', () => {
         const record = artifact.get(namespace, artifactHash);
         if (!record) return null;
+        if (record.program_bytes.byteLength > 4 * 1024 * 1024) {
+          throw failure('FK_I_STORE_CORRUPT', 'artifact exceeds 4 MiB');
+        }
         const copied = Buffer.from(record.program_bytes);
         if (sha256Bytes(copied) !== artifactHash) {
           throw failure('FK_I_STORE_CORRUPT', 'artifact bytes modified');
