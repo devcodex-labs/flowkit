@@ -333,3 +333,22 @@ test('M5 missing-input field names are also covered by explicit public allowlist
   });
   assert.deepEqual(canonicalBytes(f.store.load(pending.runId)),snapshot);
 });
+
+
+test('M5 expired authentic proof re-acks an already accepted identical receipt, never a new one',async t=>{
+  let clock=CLOCK;
+  const f=await waiting(t,{now:()=>clock});
+  const receipt=agentResult(f.frame,{answer:'finished'});
+  const signed=proof(f.store.load(f.frame.runId),receipt,f.keys.privateKey,{
+    issuedAt:CLOCK-1000,expiresAt:CLOCK+10000,
+  });
+  const done=await f.host.accept({receipt,attestation:signed});
+  assert.equal(done.status,'succeeded');
+  clock=CLOCK+3600000; // Much later than the original proof validity.
+  const replay=await f.host.accept({receipt,attestation:signed});
+  assert.equal(replay.duplicate,true);
+  assert.equal(replay.acceptedRevision,done.acceptedRevision);
+  assert.equal(replay.revision,done.revision);
+  const mutated={...receipt,result:{answer:'not previously accepted'}};
+  await rejectUnchanged(f,mutated,signed);
+});
