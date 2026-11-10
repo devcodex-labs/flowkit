@@ -1,7 +1,7 @@
 import {
   createPublicKey, verify as verifySignature, timingSafeEqual,
 } from 'node:crypto';
-import {canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
+import {MAX_CHECKPOINT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {createInteractiveCoordinator} from './coordinator.mjs';
 import {
   createAgentReceiptStatement,encodeAgentReceiptStatement,
@@ -59,7 +59,8 @@ function normalizeKeys(input) {
     keys.set(id,key);
     fingerprints.push({id,publicKeyHash:fingerprint});
   }
-  fingerprints.sort((a,b)=>a.id.localeCompare(b.id,'en'));
+  // Deterministic UTF-16 ordering across Node/OS locale configurations.
+  fingerprints.sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
   return {keys,fingerprints};
 }
 function keysArray(value,label,max) {
@@ -190,20 +191,28 @@ export function createTrustedInteractiveHost({
       input:pending.input,missing:pending.missing,
       resultSchema:pending.resultSchema,reasons:pending.reasons,
       ...(pending.overview?{overview:pending.overview}:{}),
-    },512*1024);
+    },MAX_CHECKPOINT_BYTES);
     let decision;
     try {
       decision=await authorizeDisclosure(
         Object.freeze(safeJSONSnapshot({
           namespace:cp.namespace,runId,requestId:pending.requestId,task,
           disclosurePolicyId,
-        },512*1024)),
+        },MAX_CHECKPOINT_BYTES)),
       );
     } catch {
       // Host-private DLP details must not leak into the model-facing error.
       throw denied('Host did not approve model disclosure');
     }
     if (decision!==true) throw denied('Host did not approve model disclosure');
+    // An async disclosure gate may overlap a successful receipt/commit from a
+    // separate Host process. Never hand the model a superseded Pending.
+    const current=store.load(runId);
+    if (!current || current.status!=='waiting' || current.revision!==cp.revision
+      || current.policyHash!==cp.policyHash
+      || current.pending?.requestId!==pending.requestId) {
+      throw denied('Pending changed during Host authorization');
+    }
     return task;
   }
 
