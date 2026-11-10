@@ -282,3 +282,46 @@ test('M6: model worker with empty inherited environment receives only public tas
   assertModelNeverSawSecret(run);
   assert.equal(f.readStore().cp.status,'succeeded');
 });
+
+
+test('M6 S06: source/Program/Skill bytes changing while waiting fail closed without another Pending',async t=>{
+  const cases=[
+    {kind:'source',mutate:async f=>writeFile(f.sourcePath,
+      workflowText+'\n// unauthorized source edit\n')},
+    {kind:'Program artifact',mutate:async f=>writeFile(f.config.programPath,
+      Buffer.concat([await readFile(f.config.programPath),Buffer.from('\n// unauthorized artifact edit')]))},
+    {kind:'Skill instruction',mutate:async f=>writeFile(f.config.skillPath,
+      'Modified Skill instruction after Agent Pending was published')},
+  ];
+  for(const scenario of cases) {
+    const f=await fixture(t);
+    const crashed=await invoke(f,'start','after-pending');
+    assert.notEqual(crashed.code,0,scenario.kind);
+    const before=f.readStore();
+    assert.equal(before.cp.status,'waiting');
+    const original=canonicalBytes(before.cp);
+    await scenario.mutate(f);
+    const rejected=await invoke(f,'resume');
+    assert.notEqual(rejected.code,0,scenario.kind);
+    assert.equal(rejected.events.some(e=>e.event==='worker-exited'),false,scenario.kind);
+    assert.deepEqual(canonicalBytes(f.readStore().cp),original,scenario.kind);
+    assert.equal(f.readStore().journal.length,before.journal.length,scenario.kind);
+  }
+});
+
+test('M6 S01: missing Condition input yields persistent FK_R002 error, not waiting or a model task',async t=>{
+  const f=await fixture(t);
+  await f.updateConfig({state:{message:'hello',secret:privateSentinel}});
+  const run=await invoke(f);
+  assert.equal(run.code,2,run.stderr);
+  assert.equal(run.events.at(-1)?.status,'errored');
+  assert.equal(run.events.some(x=>x.event==='worker-exited'),false);
+  const persisted=f.readStore();
+  assert.equal(persisted.cp.status,'errored');
+  assert.equal(persisted.cp.terminal.causeCode,'FK_R002');
+  const history=persisted.journal.length;
+  const resume=await invoke(f,'resume');
+  assert.equal(resume.code,2);
+  assert.equal(f.readStore().journal.length,history);
+  await assert.rejects(f.standardResult(),{code:'FK_R002'});
+});
