@@ -232,9 +232,17 @@ export function createTrustedInteractiveHost({
       statement=safeJSONSnapshot(proof.statement,4096);
       encoded=encodeAgentReceiptStatement(statement);
       const current=now();
+      // Re-acknowledging an already accepted byte-identical receipt is safe
+      // after expiry: the original proof was validated before its first CAS.
+      // A NEW receipt must still have a fresh proof; signatures are checked
+      // for both cases, so an expired forged proof can never authenticate.
+      const receiptDigest=sha256Bytes(canonicalBytes(normalized));
+      const alreadyAccepted=Array.isArray(cp.receipts) && cp.receipts.some(r=>
+        r.requestId===normalized.requestId && r.nodeId===normalized.nodeId
+        && r.attempt===normalized.attempt && r.digest===receiptDigest);
       if (!Number.isSafeInteger(current) || current<=0
         || statement.issuedAt>current+clockSkewMs
-        || statement.expiresAt<current-clockSkewMs
+        || (statement.expiresAt<current-clockSkewMs && !alreadyAccepted)
         || statement.expiresAt-statement.issuedAt>maxProofAgeMs) {
         throw invalidProof();
       }
