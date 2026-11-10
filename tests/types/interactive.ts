@@ -33,3 +33,46 @@ const unsupported: InteractiveRuntime={checkStep:()=>null};
 coordinator.start({programBytes:bytes,programIdentity:artifact});
 // @ts-expect-error correct attempt required on complete
 coordinator.complete({runId:'r',requestId:'q',nodeId:'n',result:{}});
+
+
+import {
+  createTrustedInteractiveHost,createAgentReceiptStatement,encodeAgentReceiptStatement,
+  normalizeHostAgentReceipt,
+} from '../../types/interactive.js';
+import type {
+  HostAgentReceipt,HostAgentAttestation,PublicInteractiveAgentTask,
+  TrustedInteractiveHostOptions,
+} from '../../types/interactive.js';
+
+declare const signingPublicKey:unknown;
+const trustedOptions:TrustedInteractiveHostOptions={
+  store,runtime,
+  trustedPublicKeys:{'transport-v1':signingPublicKey},
+  trustedArtifacts:[artifact.artifactHash],
+  disclosurePolicyId:'tenant-approved-fields-v1',
+  allowedInputKeys:['message'],
+  authorizeDisclosure:async evidence=>evidence.task.kind==='agent',
+};
+const trusted=createTrustedInteractiveHost(trustedOptions);
+const publicTask:Promise<PublicInteractiveAgentTask|null>=
+  trusted.getPublicAgentTask({runId:'r'});
+const receipt:HostAgentReceipt={
+  kind:'agent-result',runId:'r',requestId:'q',nodeId:'n',attempt:1,result:{answer:'ok'},
+};
+const statement=createAgentReceiptStatement({
+  run:{namespace:'n',artifactHash:artifact.artifactHash,policyHash:'sha256:'+'a'.repeat(64)},
+  receipt,keyId:'transport-v1',proofId:'receipt-1',issuedAt:1,expiresAt:2,
+});
+const bytesToSign:Uint8Array=encodeAgentReceiptStatement(statement);
+declare const attestation:HostAgentAttestation;
+const verified=trusted.accept({receipt:normalizeHostAgentReceipt(receipt),attestation});
+void [trustedOptions,publicTask,bytesToSign,verified];
+// @ts-expect-error a model string cannot replace the signed Host attestation
+trusted.accept({receipt,attestation:'approval-123'});
+// @ts-expect-error no low-level complete() method on the trusted Host facade
+trusted.complete(receipt);
+// @ts-expect-error Human is not in the M5 P0-A receipt union
+const fakeHuman:HostAgentReceipt={kind:'human',runId:'r',requestId:'q',nodeId:'h',attempt:1,result:{approved:true}};
+// @ts-expect-error proof bytes require canonical attestation field set
+encodeAgentReceiptStatement({domain:'flowkit.host-agent-receipt.v1'});
+void fakeHuman;
