@@ -331,3 +331,42 @@ test('M4 forbids invalid JSON and preserve __proto__ as State data after verifie
   await assert.rejects(api.start({...source,startKey:'accessor',
     state:{ready:true,bad:NaN}}),/canonical JSON number/i);
 });
+
+
+test('M4 malformed Host failure message is rejected before receipt CAS and leaves waiting replayable',async t=>{
+  const {api,store,source,state}=await runAgentFixture(t);
+  const waiting=await api.start({...source,startKey:'malformed-failure',state});
+  const before=canonicalBytes(store.load(waiting.runId));
+  for(const bad of [12,null,{}, {message:12},{message:''},{message:'x',extra:'y'}]){
+    await assert.rejects(api.complete({
+      runId:waiting.runId,requestId:waiting.pending.requestId,
+      nodeId:waiting.pending.nodeId,attempt:waiting.pending.attempt,
+      kind:'agent-call-failed',failure:bad,
+    }),/FK_I_INVALID_RECEIPT|Expected plain JSON/i);
+    assert.deepEqual(canonicalBytes(store.load(waiting.runId)),before);
+  }
+  const good=await api.complete(receipt(waiting));
+  check(good,'succeeded');
+});
+
+test('M4 an overly permissive validator cannot strand a primitive candidate at commit',async t=>{
+  const runtime={...bindings,validateResult:()=>[]};
+  const {api,source,state}=await runAgentFixture(t,{runtime});
+  const waiting=await api.start({...source,startKey:'primitive',state});
+  const retried=await api.complete(receipt(waiting,null));
+  check(retried,'waiting');
+  assert.deepEqual(retried.pending.reasons,['Agent result must be object']);
+  const done=await api.complete(receipt(retried,{answer:'safe'}));
+  check(done,'succeeded');
+  assert.equal(done.state.answer,'safe');
+});
+
+test('M4 a sparse validator reasons array fails closed without committing invalid State',async t=>{
+  const runtime={...bindings,validateResult:()=>Array(1)};
+  const {api,source,state}=await runAgentFixture(t,{runtime});
+  const waiting=await api.start({...source,startKey:'sparse-reasons',state});
+  const result=await api.complete(receipt(waiting));
+  check(result,'errored');
+  assert.equal(result.terminal.causeCode,'FK_I_VALIDATOR_CONTRACT');
+  assert.deepEqual(result.state,state);
+});
