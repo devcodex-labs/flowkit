@@ -162,3 +162,103 @@ export declare function createInteractiveCoordinator(input: {
   policy?: Record<string,unknown>;
   maxStagesPerCall?: number;
 }): InteractiveCoordinator;
+
+
+/** M5 signed Host-only Agent receipt: no Human/Action/Verification spoofing. */
+export type HostAgentReceipt =
+  | {runId:string;requestId:string;nodeId:string;attempt:number;kind:'agent-result';result:unknown}
+  | {runId:string;requestId:string;nodeId:string;attempt:number;kind:'agent-call-failed';failure:{message:string}};
+
+export interface HostAgentReceiptStatement {
+  domain: 'flowkit.host-agent-receipt.v1';
+  keyId: string;
+  proofId: string;
+  namespace: string;
+  runId: string;
+  requestId: string;
+  nodeId: string;
+  attempt: number;
+  kind: 'agent-result' | 'agent-call-failed';
+  artifactHash: string;
+  policyHash: string;
+  receiptHash: string;
+  issuedAt: number;
+  expiresAt: number;
+}
+export interface HostAgentAttestation {
+  statement: HostAgentReceiptStatement;
+  /** Canonical base64url Ed25519 signature of encodeAgentReceiptStatement bytes. */
+  signature: string;
+}
+export declare function normalizeHostAgentReceipt(input:unknown):HostAgentReceipt;
+export declare function createAgentReceiptStatement(input: {
+  run: Pick<InteractiveCheckpoint,'namespace'|'artifactHash'> & {policyHash:string};
+  receipt:HostAgentReceipt;
+  keyId:string;
+  proofId:string;
+  issuedAt:number;
+  expiresAt:number;
+}):Readonly<HostAgentReceiptStatement>;
+/** No private key is used or exposed. Host must sign in an isolated trust boundary. */
+export declare function encodeAgentReceiptStatement(
+  statement:HostAgentReceiptStatement
+):Uint8Array;
+
+export interface PublicInteractiveAgentTask {
+  schemaVersion:1;
+  kind:'agent';
+  id:string;
+  nodeId:string;
+  runId:string;
+  requestId:string;
+  attempt:number;
+  name:string;
+  instruction:string;
+  input:Record<string,unknown>;
+  missing:string[];
+  resultSchema:Record<string,unknown>;
+  reasons:string[];
+  overview?:{step:number};
+}
+export interface InteractiveDisclosureContext {
+  namespace:string;
+  runId:string;
+  requestId:string;
+  task:PublicInteractiveAgentTask;
+  disclosurePolicyId:string;
+}
+export interface TrustedInteractiveHost {
+  readonly policyHash:string;
+  readonly securityMode:'ed25519-agent-receipt-v1';
+  /** Trusted Host only, not a model-facing method. */
+  start(input: Parameters<InteractiveCoordinator['start']>[0]):Promise<InteractiveRunFrame>;
+  resume(input:{runId:string}):Promise<InteractiveRunFrame>;
+  load(input:{runId:string}):Promise<InteractiveRunFrame|null>;
+  /** Only this task shape may be shared into a model worker. */
+  getPublicAgentTask(input:{runId:string}):Promise<PublicInteractiveAgentTask|null>;
+  /** A signature from an independently secured Host transport is mandatory. */
+  accept(input:{
+    receipt:HostAgentReceipt;
+    attestation:HostAgentAttestation;
+  }):Promise<InteractiveRunFrame & {acceptedRevision:number;duplicate:boolean}>;
+}
+export interface TrustedInteractiveHostOptions {
+  store:CheckpointStore;
+  runtime:InteractiveRuntime;
+  policy?:Record<string,unknown>;
+  /** Pinned Ed25519 public keys or PEM encoded public keys. No private material. */
+  trustedPublicKeys:Record<string,unknown>;
+  /** Pinned artifact hashes approved by a separate trusted build/deployment. */
+  trustedArtifacts:string[];
+  /** Explicit model-visible Agent State keys, default empty/fail closed. */
+  allowedInputKeys?:string[];
+  disclosurePolicyId:string;
+  authorizeDisclosure(context:Readonly<InteractiveDisclosureContext>):boolean|Promise<boolean>;
+  maxProofAgeMs?:number;
+  clockSkewMs?:number;
+  now?:()=>number;
+  maxStagesPerCall?:number;
+}
+export declare function createTrustedInteractiveHost(
+  options:TrustedInteractiveHostOptions
+):TrustedInteractiveHost;
