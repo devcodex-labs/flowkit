@@ -184,7 +184,9 @@ test('M6: after Pending publish, killing Host and reopening only persisted Progr
   const revision=prior.cp.revision;
   // No source DSL is needed for resume: Program bytes are retained in Store.
   await rm(f.sourcePath);
+  const resumeStarted=process.hrtime.bigint();
   const recovered=await invoke(f,'resume');
+  const resumeMs=Number(process.hrtime.bigint()-resumeStarted)/1e6;
   assert.equal(recovered.code,0,recovered.stderr);
   assert.equal(recovered.events.find(x=>x.event==='task-published').requestId,
     prior.cp.pending.requestId);
@@ -193,6 +195,13 @@ test('M6: after Pending publish, killing Host and reopening only persisted Progr
   assert.equal(done.cp.status,'succeeded');
   assert.equal(done.cp.receipts.length,1);
   assertContinuousJournal(done);
+  console.log('M6_RECOVERY_METRICS '+JSON.stringify({
+    schemaVersion:1,resumeMs:Math.round(resumeMs),
+    revisionBefore:revision,revisionAfter:done.cp.revision,
+    casCount:done.cp.revision,journalEntries:done.journal.length,
+    checkpointBytes:canonicalBytes(done.cp).byteLength,
+    sameRequestId:true,
+  }));
 });
 
 test('M6: worker finished but Host crashed before durable receipt; retry preserves Pending identity, not exactly-once provider execution',async t=>{
@@ -214,7 +223,9 @@ test('M6: worker finished but Host crashed before durable receipt; retry preserv
 test('M6: budget 1 versus budget 128 reaches byte-equal terminal State, with monotonic CAS and no fake waiting',async t=>{
   const a=await fixture(t,{stageBudget:1});
   const b=await fixture(t,{stageBudget:128});
+  const startClock=process.hrtime.bigint();
   const [fast,slow]=await Promise.all([invoke(a),invoke(b)]);
+  const durationMs=Number(process.hrtime.bigint()-startClock)/1e6;
   assert.equal(fast.code,0,fast.stderr);
   assert.equal(slow.code,0,slow.stderr);
   for(const f of [a,b]) assertContinuousJournal(f.readStore());
@@ -228,6 +239,14 @@ test('M6: budget 1 versus budget 128 reaches byte-equal terminal State, with mon
     assert.equal(run.events.filter(x=>x.event==='task-published').length,1);
     assert.equal(run.events.at(-1).status,'succeeded');
   }
+  console.log('M6_S07_METRICS '+JSON.stringify({
+    schemaVersion:1,wallMs:Math.round(durationMs),
+    budget1:{checkpointBytes:canonicalBytes(left.cp).byteLength,casCount:left.cp.revision,
+      journalEntries:left.journal.length},
+    budget128:{checkpointBytes:canonicalBytes(right.cp).byteLength,casCount:right.cp.revision,
+      journalEntries:right.journal.length},
+    equalTerminalState:true,
+  }));
 });
 
 test('M6: changed Host disclosure policy denies resume with no journal/CAS mutation',async t=>{
@@ -279,9 +298,10 @@ test('M6: tampered SQLite artifact byte is rejected before worker dispatch; neve
   assert.deepEqual(canonicalBytes(cpSnapshot),canonicalBytes(before.cp));
 });
 
-test('M6: model worker with empty inherited environment receives only public task and cannot read Host secret files on isolated Linux',async t=>{
-  if(process.env.FLOWKIT_M6_ISOLATION!=='1')return t.skip('Dedicated Linux isolation job runs this proof');
-  const f=await fixture(t,{osIsolation:true});
+test('M6: external worker receives only public task; dedicated Linux job additionally enforces cross-UID access denial',async t=>{
+  const isolation=process.env.FLOWKIT_M6_ISOLATION==='1';
+  if(isolation) assert.equal(process.platform,'linux');
+  const f=await fixture(t,{osIsolation:isolation});
   const run=await invoke(f);
   assert.equal(run.code,0,run.stderr);
   assert.equal(run.events.filter(e=>e.event==='worker-exited').length,1);
