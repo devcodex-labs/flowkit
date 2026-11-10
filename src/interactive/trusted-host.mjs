@@ -180,7 +180,8 @@ export function createTrustedInteractiveHost({
     if (!pending || pending.kind!=='agent' || pending.runId!==runId) {
       throw denied('pending task cannot be certified');
     }
-    if (Object.keys(pending.input).some(key=>!allowed.has(key))) {
+    // Missing declared inputs reveal field names too; they require approval.
+    if ([...Object.keys(pending.input),...pending.missing].some(key=>!allowed.has(key))) {
       throw denied('Agent input is not on the disclosure allowlist');
     }
     const task=safeJSONSnapshot({
