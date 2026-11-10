@@ -78,7 +78,7 @@ test('M6 S07: near-2MiB waiting Checkpoint rejects an otherwise valid receipt at
     const receipt={
       runId:started.runId,requestId:started.pending.requestId,
       nodeId:started.pending.nodeId,attempt:started.pending.attempt,
-      result:{answer:'ok'},
+      result:{answer:'x'.repeat(64*1024)},
     };
     for(let i=0;i<2;i++){
       await assert.rejects(api.complete(receipt),/Canonical JSON exceeds maximum bytes/);
