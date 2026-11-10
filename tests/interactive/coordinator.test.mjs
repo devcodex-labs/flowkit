@@ -370,3 +370,34 @@ test('M4 a sparse validator reasons array fails closed without committing invali
   assert.equal(result.terminal.causeCode,'FK_I_VALIDATOR_CONTRACT');
   assert.deepEqual(result.state,state);
 });
+
+
+test('M4 a successful receipt CAS followed by a lost response is recovered by durable duplicate Ack',async t=>{
+  const {store,source,state}=await runAgentFixture(t);
+  let loseOnce=true;
+  const wrapped={
+    ...store,
+    compareAndSwap(args){
+      const response=store.compareAndSwap(args);
+      if(loseOnce && response.committed && args.nextCheckpoint.phase==='validate'){
+        loseOnce=false;
+        throw new Error('simulated lost CAS response after commit');
+      }
+      return response;
+    },
+  };
+  const original=coordinator(wrapped);
+  const waiting=await original.start({...source,startKey:'lost-response',state});
+  const submitted=receipt(waiting,{answer:'once'});
+  await assert.rejects(original.complete(submitted),/lost CAS response/);
+  const accepted=store.load(waiting.runId);
+  assert.equal(accepted.phase,'validate');
+  assert.equal(accepted.receipts.length,1);
+  assert.equal(accepted.receipts[0].requestId,waiting.pending.requestId);
+  const recovered=await coordinator(store).complete(submitted);
+  check(recovered,'succeeded');
+  assert.equal(recovered.duplicate,true);
+  assert.equal(recovered.acceptedRevision,accepted.revision);
+  assert.equal(recovered.state.answer,'once');
+  assert.equal(store.load(waiting.runId).receipts.length,1);
+});
