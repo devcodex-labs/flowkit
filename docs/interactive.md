@@ -1,4 +1,4 @@
-# FlowKit Interactive — P0-A M4 Host Coordinator
+# FlowKit Interactive — P0-A M4 Coordinator / M5 Trusted Host
 
 > **Internal/maintainer integration only.** The Standard root API remains exactly
 > `run / compile / compileSource / check / evalWhen / isControlSignal`.
@@ -11,10 +11,14 @@
 - **Not implemented in P0-A**: Human, Action, Verification, Loop, Parallel, Agent verify or external checkStep, automatic `runAgent` invocation, trusted Human provenance bridge, background service, P0-B/P1/P2 extensions.
 - The Coordinator and the Store are **owned and invoked by the Host**, not by the model. A model must not have direct filesystem/database access or direct `complete()` authority.
 
-## Example: compile, start, resolve pending, resume
+## Low-level Host-only example: compile, start, resolve pending, resume
 
 The source is a validated `*.workflow.js` or `*.workflow.ts` using
 FlowKit's existing DSL; it is **not imported or executed** while compiling.
+
+**Do not expose this low-level Coordinator example to the model.** For an
+actual model/Host boundary, use the M5 signed-provenance and public-task adapter
+described in [Trusted Host security](./interactive-host-security.md).
 
 ~~~js
 import {readFile} from 'node:fs/promises';
@@ -120,8 +124,11 @@ try {
 - Agent input contains only declared input keys plus a `missing` list;
   absent keys are not synthesized as null. The Host still owns disclosure
   rules for confidential state and instructions.
-- `complete()` is **not a model-exposed tool**. M5 must enforce actual Host
-  provenance and identity outside the model-controlled process.
+- The low-level `complete()` method remains **Host-only**. M5 adds
+  `createTrustedInteractiveHost`, Ed25519 receipt attestations and explicit
+  public-task disclosure checks. This protects only a Host separated from
+  model-controlled filesystem/database/credential access; see
+  [Trusted Host security](./interactive-host-security.md).
 - Store data is written with `node:sqlite` in WAL mode and
   `synchronous=FULL`, with every transition in one SQLite transaction.
   Do not place this reference Store on an unreliable/shared filesystem.
