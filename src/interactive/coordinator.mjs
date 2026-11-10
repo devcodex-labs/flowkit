@@ -3,7 +3,9 @@ import {canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './can
 import {loadInteractiveProgram} from './load.mjs';
 
 const FINISHED = new Set(['succeeded','failed','errored']);
-const MAX_RECEIPTS = 128;
+// P0-A has at most 500 static nodes and 11 attempts per Agent.
+// Do not cap legitimate 500-node workflows below their worst-case 5,500 receipts.
+const MAX_RECEIPTS = 8192;
 const MAX_REASONS = 32;
 const MAX_REASON_LENGTH = 512;
 
@@ -159,6 +161,9 @@ function inputForAgent(state, fields) {
   return {input,missing};
 }
 function reasonsFromValidation(value) {
+  // Snapshot *before* array inspection: reject sparse arrays, proxies, getters,
+  // cycles and post-return mutation instead of accepting holes as undefined.
+  value = copy(value);
   if (!Array.isArray(value) || value.length > MAX_REASONS
     || value.some(v => typeof v !== 'string' || !v.length || v.length > MAX_REASON_LENGTH)) {
     throw failure('FK_I_VALIDATOR_CONTRACT','validateResult must return bounded string[]');
@@ -348,7 +353,13 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     const schema=copy(program.programTable.nodes[block.nodeId].metadata.output);
     if (cp.candidate.submissionKind === 'agent-call-failed') {
       return {kind:'agent-call-failed',reasons: ['runAgent threw: ' +
-        (cp.candidate.failure?.message ?? 'Agent call failed').slice(0,MAX_REASON_LENGTH-16)]};
+        cp.candidate.failure.message.slice(0,MAX_REASON_LENGTH-16)]};
+    }
+    // Compiler output schema is an object. An incorrectly permissive Host validator
+    // must not pass a primitive that would later strand the commit stage.
+    if (!cp.candidate.result || typeof cp.candidate.result !== 'object'
+      || Array.isArray(cp.candidate.result)) {
+      return {kind:'validation-rejected',reasons:['Agent result must be object']};
     }
     let reasons;
     try {
@@ -476,9 +487,18 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     if (!['agent-result','agent-call-failed'].includes(kind)) {
       throw failure('FK_I_INVALID_RECEIPT','Unsupported P0-A receipt type');
     }
+    let safeFailure;
+    if (kind === 'agent-call-failed') {
+      safeFailure=copy(callFailure);
+      if (!safeFailure || typeof safeFailure !== 'object' || Array.isArray(safeFailure)
+        || typeof safeFailure.message !== 'string' || !safeFailure.message.length
+        || safeFailure.message.length > 4096 || Object.keys(safeFailure).length !== 1) {
+        throw failure('FK_I_INVALID_RECEIPT','Agent failure requires bounded {message:string}');
+      }
+    }
     const submission=copy(kind==='agent-result'
       ? {runId,requestId,nodeId,attempt,kind,result}
-      : {runId,requestId,nodeId,attempt,kind,failure:callFailure});
+      : {runId,requestId,nodeId,attempt,kind,failure:safeFailure});
     const digest=fingerprint(submission);
     for (;;) {
       const cp=store.load(runId);
