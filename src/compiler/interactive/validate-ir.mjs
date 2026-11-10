@@ -33,6 +33,14 @@ const RULES = Object.freeze({
 
 export const interactiveBlockId = (nodeId, phase) => nodeId + '::' + phase;
 
+// A static rule, not an actual persisted ControlFrame (dynamic values belong to M4).
+const AGENT_FRAME_FIELDS = Object.freeze(['kind', 'nodeId', 'activation', 'attempt', 'phase', 'reasons', 'overviewStep']);
+export function agentFrameRule(nodeId) {
+  return {kind: 'agent', nodeId, pushBlockId: interactiveBlockId(nodeId, 'enter'),
+    popBlockId: interactiveBlockId(nodeId, 'route'), initialAttempt: 1,
+    fields: [...AGENT_FRAME_FIELDS]};
+}
+
 export function phaseContract(kind, phase) {
   const record = RULES[kind]?.[phase];
   if (!record) return null;
@@ -84,6 +92,19 @@ export function validateInteractiveIR(ir) {
   if (!ids.length || ids.length > 500 || ir.blocks.length > 3500) bad('Invalid P0-A IR size');
   if (ir.entryBlockId !== interactiveBlockId(ids[0], 'enter')) bad('Invalid entry block');
   if (!/^[a-f0-9]{64}$/.test(ir.sourceHash ?? '')) bad('Invalid source hash');
+  const expectedFrames = ids.filter(id => ir.nodes[id]?.kind === 'agent').map(agentFrameRule);
+  if (!Array.isArray(ir.frameRules) || ir.frameRules.length !== expectedFrames.length) {
+    bad('Invalid control-frame rule count');
+  } else {
+    for (const [index, expected] of expectedFrames.entries()) {
+      const actual = ir.frameRules[index];
+      if (!actual || actual.kind !== expected.kind || actual.nodeId !== expected.nodeId
+        || actual.pushBlockId !== expected.pushBlockId || actual.popBlockId !== expected.popBlockId
+        || actual.initialAttempt !== expected.initialAttempt || !sameArray(actual.fields, expected.fields)) {
+        bad('Invalid control-frame rule for Agent ' + expected.nodeId);
+      }
+    }
+  }
   const table = new Map();
   for (const block of ir.blocks) {
     if (!block || typeof block.id !== 'string') { bad('Malformed block'); continue; }

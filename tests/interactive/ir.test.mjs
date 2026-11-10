@@ -36,6 +36,10 @@ test('stable IR from original Graph, Dataflow and when AST includes all P0-A pha
   assert.ok(graph.some(e => e.from === 'worker' && e.to === 'done'));
   assert.ok(first.dataflow.worker);
   assert.deepEqual(first.nodes.worker.metadata.inputs, ['missing']);
+  assert.equal(first.frameRules.length, 1);
+  assert.equal(first.frameRules[0].pushBlockId, 'worker::enter');
+  assert.equal(first.frameRules[0].popBlockId, 'worker::route');
+  assert.ok(first.frameRules[0].fields.includes('overviewStep'));
   assert.equal(first.nodes.worker.metadata.retries, 2);
   assert.equal(first.nodes.worker.metadata.overview, true);
   const c = first.blocks.find(b => b.id === 'gate::route');
@@ -73,6 +77,9 @@ test('IR validator rejects injected edges, events, duplicate blocks and missing 
   const changedTarget = mutated();
   changedTarget.nodes.worker.metadata.next = 'unknown';
   assert.equal(validateInteractiveIR(changedTarget).ok, false);
+  const badFrame = mutated();
+  badFrame.frameRules[0].popBlockId = 'unknown::route';
+  assert.equal(validateInteractiveIR(badFrame).ok, false);
   const changedPhase = mutated();
   changedPhase.blocks.find(b => b.id === 'worker::validate').phase = 'awaiting';
   assert.equal(validateInteractiveIR(changedPhase).ok, false);

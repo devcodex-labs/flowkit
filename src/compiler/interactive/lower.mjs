@@ -1,5 +1,5 @@
 import { gateInteractiveFeatures } from './feature-gate.mjs';
-import { P0A_PHASES, interactiveBlockId, phaseContract, expectedBlockTargets, validateInteractiveIR } from './validate-ir.mjs';
+import { P0A_PHASES, interactiveBlockId, phaseContract, expectedBlockTargets, agentFrameRule, validateInteractiveIR } from './validate-ir.mjs';
 
 function copyData(value) {
   // Analyzer-owned DSL literals/when ASTs are JSON-safe. Preserve own __proto__
@@ -61,6 +61,7 @@ export function lowerInteractive(analysis, options = {}) {
     sourceHash: analysis.snapshot.sourceHash,
     entryBlockId: interactiveBlockId(first, 'enter'),
     nodes, blocks: [],
+    frameRules: definitions.filter(node => node.type === 'agent').map(node => agentFrameRule(node.id)),
     // Preserve Standard dataflow as diagnostic evidence; it is not a second
     // source of routing and it is not used to prefill missing Agent inputs.
     dataflow: Object.fromEntries(definitions.map(node => [node.id, {
