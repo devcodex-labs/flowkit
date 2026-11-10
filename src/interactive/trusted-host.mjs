@@ -233,9 +233,9 @@ export function createTrustedInteractiveHost({
       encoded=encodeAgentReceiptStatement(statement);
       const current=now();
       // Re-acknowledging an already accepted byte-identical receipt is safe
-      // after expiry: the original proof was validated before its first CAS.
-      // A NEW receipt must still have a fresh proof; signatures are checked
-      // for both cases, so an expired forged proof can never authenticate.
+      // after expiry: the durable ledger proves no new receipt is being
+      // introduced. NEW receipts still require fresh proofs and signatures
+      // are checked in both cases; raw Coordinator access stays Host-private.
       const receiptDigest=sha256Bytes(canonicalBytes(normalized));
       const alreadyAccepted=Array.isArray(cp.receipts) && cp.receipts.some(r=>
         r.requestId===normalized.requestId && r.nodeId===normalized.nodeId
