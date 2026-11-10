@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import {generateKeyPairSync, sign} from 'node:crypto';
 import * as api from '@devcodex-labs/flowkit';
 import * as interactive from '@devcodex-labs/flowkit/interactive';
 import * as dsl from '@devcodex-labs/flowkit/dsl';
@@ -30,7 +31,9 @@ assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
 
 
 assert.deepEqual(Object.keys(interactive),[
-  'compileInteractive','createInteractiveCoordinator','createSqliteCheckpointStore','loadInteractiveProgram',
+  'compileInteractive','createAgentReceiptStatement','createInteractiveCoordinator',
+  'createSqliteCheckpointStore','createTrustedInteractiveHost','encodeAgentReceiptStatement',
+  'loadInteractiveProgram','normalizeHostAgentReceipt',
 ]);
 await writeFile('simple.workflow.js',
   "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
@@ -51,4 +54,48 @@ try {
   assert.equal(frame.status,'succeeded');
   assert.deepEqual(frame.state,{installed:true});
   assert.equal((await machine.resume({runId:frame.runId})).revision,frame.revision);
+
+  await writeFile('signed.workflow.js',
+    "import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
+    "export default defineWorkflow({id:'trusted-consumer',version:'1.0.0',name:'Trusted',nodes:["+
+    "node('worker',{name:'Worker',skill:'skills/a.md',inputs:['message'],"+
+    "output:{type:'object',properties:{answer:{type:'string'}}},retries:0,next:'done'}),"+
+    "terminal('done',{name:'Done',status:'succeeded'})]});\n");
+  const signed=await interactive.compileInteractive('signed.workflow.js',{
+    output:'memory',featureStage:'P0-A',
+  });
+  assert.equal(signed.diagnostics.some(d=>d.severity==='error'),false);
+  const {publicKey,privateKey}=generateKeyPairSync('ed25519');
+  const now=1794400000000;
+  const trusted=interactive.createTrustedInteractiveHost({
+    store,runtime:{skillResolver:async()=> 'Safe instruction',
+      validateResult:(_schema,result)=>typeof result?.answer==='string'?[]:['invalid']},
+    trustedPublicKeys:{consumer:publicKey},
+    trustedArtifacts:[signed.programIdentity.artifactHash],
+    allowedInputKeys:['message'],
+    disclosurePolicyId:'consumer-disclosure-v1',
+    authorizeDisclosure:async()=>true,
+    now:()=>now,
+  });
+  const pending=await trusted.start({
+    programBytes:Buffer.from(signed.code),programIdentity:signed.programIdentity,
+    startKey:'consumer-trusted',state:{message:'shareable',hidden:'private'},
+  });
+  assert.equal(pending.status,'waiting');
+  const publicTask=await trusted.getPublicAgentTask({runId:pending.runId});
+  assert.deepEqual(publicTask.input,{message:'shareable'});
+  assert.equal(JSON.stringify(publicTask).includes('private'),false);
+  const receipt={kind:'agent-result',runId:pending.runId,requestId:pending.pending.requestId,
+    nodeId:pending.pending.nodeId,attempt:pending.pending.attempt,result:{answer:'verified'}};
+  const statement=interactive.createAgentReceiptStatement({
+    run:store.load(pending.runId),receipt,keyId:'consumer',proofId:'provider-result-1',
+    issuedAt:now-1000,expiresAt:now+10000,
+  });
+  const signature=sign(null,interactive.encodeAgentReceiptStatement(statement),privateKey)
+    .toString('base64url');
+  const final=await trusted.accept({receipt,attestation:{statement,signature}});
+  assert.equal(final.status,'succeeded');
+  assert.deepEqual(final.state,{message:'shareable',hidden:'private',answer:'verified'});
+  assert.equal((await trusted.accept({receipt,attestation:{statement,signature}})).duplicate,true);
+
 } finally {store.close();}
