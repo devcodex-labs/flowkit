@@ -191,12 +191,18 @@ export function createTrustedInteractiveHost({
       resultSchema:pending.resultSchema,reasons:pending.reasons,
       ...(pending.overview?{overview:pending.overview}:{}),
     },512*1024);
-    const decision=await authorizeDisclosure(
-      Object.freeze(safeJSONSnapshot({
-        namespace:cp.namespace,runId,requestId:pending.requestId,task,
-        disclosurePolicyId,
-      },512*1024)),
-    );
+    let decision;
+    try {
+      decision=await authorizeDisclosure(
+        Object.freeze(safeJSONSnapshot({
+          namespace:cp.namespace,runId,requestId:pending.requestId,task,
+          disclosurePolicyId,
+        },512*1024)),
+      );
+    } catch {
+      // Host-private DLP details must not leak into the model-facing error.
+      throw denied('Host did not approve model disclosure');
+    }
     if (decision!==true) throw denied('Host did not approve model disclosure');
     return task;
   }
