@@ -7,11 +7,15 @@
  * No endpoint allows worker/model stdin to invoke complete() or sign receipts.
  */
 import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {
   createPrivateKey,createPublicKey,sign,randomUUID,
 } from 'node:crypto';
 import process from 'node:process';
+
+const digest=bytes=>'sha256:'+createHash('sha256').update(bytes).digest('hex');
+function drift(message){return Object.assign(new Error('FK_I_POLICY_MISMATCH: '+message),{code:'FK_I_POLICY_MISMATCH'});}
 import {
   createSqliteCheckpointStore,createTrustedInteractiveHost,
   createAgentReceiptStatement,encodeAgentReceiptStatement,
@@ -22,7 +26,7 @@ function trace(event, fields={}) {
 }
 function onlyAllowedConfig(cfg) {
   if (!cfg || typeof cfg!=='object' || Array.isArray(cfg)) throw new TypeError('Expected trusted Host config');
-  for(const field of ['namespace','runId','startKey','storePath','programPath','identityPath','privateKeyPath','skillPath','workerPath']) {
+  for(const field of ['namespace','runId','startKey','storePath','programPath','identityPath','privateKeyPath','skillPath','workerPath','skillHash']) {
     if(typeof cfg[field]!=='string' || !cfg[field]) throw new TypeError('Missing Host config '+field);
   }
   if (!cfg.state || typeof cfg.state!=='object' || !Array.isArray(cfg.allowedInputKeys)) {
@@ -107,6 +111,21 @@ const config=JSON.parse(await readFile(configPath,'utf8'));
 onlyAllowedConfig(config);
 const programBytes=await readFile(config.programPath);
 const programIdentity=JSON.parse(await readFile(config.identityPath,'utf8'));
+if(digest(programBytes)!==programIdentity.artifactHash) throw drift('Program artifact bytes changed');
+async function checkSkill(){
+  if(digest(await readFile(config.skillPath))!==config.skillHash)
+    throw drift('Skill instruction bytes changed');
+}
+await checkSkill();
+// Source is optional after compiling; when still present it MUST match pinned
+// source identity. Deleting source cannot change the immutable saved Program.
+if(config.sourcePath){
+  let existingSource;
+  try {existingSource=await readFile(config.sourcePath)}
+  catch(e){if(e.code!=='ENOENT')throw e}
+  if(existingSource && digest(existingSource)!==programIdentity.sourceHash)
+    throw drift('Original source bytes changed');
+}
 const privateKey=createPrivateKey(await readFile(config.privateKeyPath));
 const publicKey=createPublicKey(privateKey);
 const store=createSqliteCheckpointStore(config.storePath,{namespace:config.namespace});
@@ -114,10 +133,10 @@ try {
   const host=createTrustedInteractiveHost({
     store,
     runtime:{
-      skillResolver:async()=>readFile(config.skillPath,'utf8'),
+      skillResolver:async()=>{await checkSkill();return readFile(config.skillPath,'utf8')}, 
       validateResult:(_schema,result)=>typeof result?.answer==='string'?[]:['Expected a string answer'],
     },
-    policy:{testHostId:'m6-isolated-node-host-v1'},
+    policy:{testHostId:'m6-isolated-node-host-v1',skillManifestHash:config.skillHash}, 
     trustedPublicKeys:{'m6-host-key':publicKey},
     trustedArtifacts:[programIdentity.artifactHash],
     allowedInputKeys:config.allowedInputKeys,
@@ -143,6 +162,7 @@ try {
       continue;
     }
     if(frame.status!=='waiting')break;
+    await checkSkill();
     const task=await host.getPublicAgentTask({runId:frame.runId});
     if(!task || task.requestId!==frame.pending?.requestId) {
       throw new TypeError('Published task and Store Pending differ');
@@ -154,6 +174,7 @@ try {
       process.kill(process.pid,'SIGKILL');
     }
     const external=await spawnScriptedWorker(config,task);
+    await checkSkill();
     trace('worker-exited',{requestId:external.requestId});
     if(cut==='after-worker') {
       trace('fault-injected',{where:'after-worker',requestId:task.requestId});
