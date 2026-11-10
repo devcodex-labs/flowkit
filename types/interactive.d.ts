@@ -59,6 +59,7 @@ export interface InteractiveAgentPending {
   kind: 'agent';
   runId: string;
   nodeId: string;
+  id: string;
   name: string;
   requestId: string;
   attempt: number;
