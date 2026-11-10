@@ -12,14 +12,21 @@ export async function compileInteractive(file, options) {
     throw new TypeError('Expected .workflow.js or .workflow.ts file');
   }
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('Compile options object required');
-  if (!['memory','file'].includes(options.output)) throw new TypeError('Invalid compile output');
-  if (options.featureStage !== 'P0-A') throw new TypeError('Only P0-A is implemented');
-  if (options.targetVersion !== undefined && options.targetVersion !== 'interactive-state-machine-v1') {
+  const known = new Set(['output','outDir','featureStage','targetVersion']);
+  for (const key of Reflect.ownKeys(options)) {
+    if (typeof key !== 'string' || !known.has(key)) throw new TypeError('Unknown Interactive compile option');
+    if (!Object.hasOwn(Object.getOwnPropertyDescriptor(options,key),'value')) throw new TypeError('Compile option accessors forbidden');
+  }
+  const snapshotOptions = Object.fromEntries(Object.keys(options).map(key=>[key,options[key]]));
+  if (!['memory','file'].includes(snapshotOptions.output)) throw new TypeError('Invalid compile output');
+  if (snapshotOptions.featureStage !== 'P0-A') throw new TypeError('Only P0-A is implemented');
+  if (snapshotOptions.targetVersion !== undefined && snapshotOptions.targetVersion !== 'interactive-state-machine-v1') {
     throw new TypeError('Unsupported semantics version');
   }
+  if (snapshotOptions.outDir !== undefined && typeof snapshotOptions.outDir !== 'string') throw new TypeError('outDir must be a string');
   const cwd = process.cwd();
   const filename = path.resolve(cwd,file);
-  const outDir = options.outDir === undefined ? path.dirname(filename) : path.resolve(cwd,options.outDir);
+  const outDir = snapshotOptions.outDir === undefined ? path.dirname(filename) : path.resolve(cwd,snapshotOptions.outDir);
   const snapshot = await readFile(filename); // original source bytes, never imported
   const analysis = await analyzeSource(snapshot,{
     filename, projectRoot:path.dirname(filename),
@@ -31,7 +38,7 @@ export async function compileInteractive(file, options) {
     return {code:'',diagnostics:[...lowered.diagnostics,...emitted.diagnostics]};
   }
   const result = {code:emitted.code,diagnostics:[...lowered.diagnostics],programIdentity:emitted.programIdentity};
-  if (options.output === 'file') {
+  if (snapshotOptions.output === 'file') {
     const stem = path.basename(filename).replace(/\.workflow\.(js|ts)$/,'');
     const artifactPath = path.join(outDir,stem + '.interactive.mjs');
     await mkdir(outDir,{recursive:true});
