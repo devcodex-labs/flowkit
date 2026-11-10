@@ -237,3 +237,24 @@ test('M3 a tampered checkpoint row is rejected, not replayed or silently repaire
   t.after(()=>reopened.close());
   assert.throws(()=>reopened.load('r'),/STORE_CORRUPT/);
 });
+
+test('M3 refuses non-WAL storage, oversized Program bytes and policy-identity drift', async t => {
+  assert.throws(() => createSqliteCheckpointStore(':memory:', {namespace:'n'}), /FK_I_STORE_UNSAFE/);
+  const file = await fixture(t);
+  const store = createSqliteCheckpointStore(file,{namespace:'n'});
+  t.after(() => store.close());
+  const oversized = new Uint8Array(4*1024*1024+1);
+  assert.throws(() => store.putArtifact({programIdentity:identity,bytes:oversized}), /PROGRAM_MISMATCH/);
+  store.putArtifact({programIdentity:identity,bytes:artifactBytes});
+  const immutablePolicy = 'sha256:' + '7'.repeat(64);
+  const initial = store.createRun({
+    startKey:'fixed-policy',
+    checkpoint:{...checkpoint('n','r'),policyHash:immutablePolicy},
+  }).checkpoint;
+  const mutated = {...next(initial),policyHash:'sha256:'+'8'.repeat(64)};
+  assert.throws(() => store.compareAndSwap({
+    runId:'r',expectedRevision:0,nextCheckpoint:mutated,transitionId:'drift',
+  }), /INVALID_CHECKPOINT/);
+  assert.deepEqual(store.load('r'),initial);
+  assert.deepEqual(store.listJournal('r').map(entry=>entry.revision),[0]);
+});
