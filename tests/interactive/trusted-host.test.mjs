@@ -8,7 +8,7 @@ import {analyzeSource} from '../../src/compiler/analyze.mjs';
 import {lowerInteractive} from '../../src/compiler/interactive/lower.mjs';
 import {emitInteractive} from '../../src/compiler/interactive/emit.mjs';
 import {createSqliteCheckpointStore} from '../../src/interactive/sqlite-store.mjs';
-import {canonicalBytes} from '../../src/interactive/canonical.mjs';
+import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createTrustedInteractiveHost} from '../../src/interactive/trusted-host.mjs';
 import {
   createAgentReceiptStatement,encodeAgentReceiptStatement,normalizeHostAgentReceipt,
