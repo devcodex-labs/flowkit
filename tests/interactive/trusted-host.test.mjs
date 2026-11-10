@@ -123,7 +123,8 @@ test('M5 strict disclosure allowlist and authorizer both fail closed with zero C
   ]) {
     const f=await waiting(t,options);
     const before=canonicalBytes(f.store.load(f.frame.runId));
-    await assert.rejects(f.host.getPublicAgentTask({runId:f.frame.runId}),/HOST_DENIED|Private DLP/);
+    await assert.rejects(f.host.getPublicAgentTask({runId:f.frame.runId}),error=>
+      error.code==='FK_I_HOST_DENIED' && !error.message.includes('Private DLP details'));
     assert.deepEqual(canonicalBytes(f.store.load(f.frame.runId)),before);
   }
 });
