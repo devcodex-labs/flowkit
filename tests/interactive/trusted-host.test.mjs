@@ -309,3 +309,27 @@ test('M5 async disclosure approval never releases a Pending superseded by anothe
   assert.equal(f.store.load(f.frame.runId).state.answer,'already-completed');
   assert.equal(await f.host.getPublicAgentTask({runId:f.frame.runId}),null);
 });
+
+
+test('M5 missing-input field names are also covered by explicit public allowlist',async t=>{
+  const f=await fixture(t);
+  const alternative=await compile(source.replace(
+    "inputs:['existing']","inputs:['existing','secretKeyName']",
+  ));
+  const host=createTrustedInteractiveHost({
+    ...f.hostOptions,
+    trustedArtifacts:[alternative.programIdentity.artifactHash],
+    allowedInputKeys:['existing'],
+  });
+  const pending=await host.start({
+    ...alternative,startKey:'missing-sensitive-field',
+    state:{ready:true,existing:'safe'},
+  });
+  assert.equal(pending.status,'waiting');
+  assert.deepEqual(pending.pending.missing,['secretKeyName']);
+  const snapshot=canonicalBytes(f.store.load(pending.runId));
+  await assert.rejects(host.getPublicAgentTask({runId:pending.runId}),{
+    code:'FK_I_HOST_DENIED',
+  });
+  assert.deepEqual(canonicalBytes(f.store.load(pending.runId)),snapshot);
+});
