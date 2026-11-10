@@ -112,6 +112,8 @@ test('loader rejects wrong digest, dynamic imports and mismatched Program ABI',a
  await assert.rejects(loadInteractiveProgram(Buffer.from(dynamic),hash(dynamic)),/imports are forbidden/);
  const different=code.replace('FlowkitInteractiveProgramV1','MaliciousProgram');
  await assert.rejects(loadInteractiveProgram(Buffer.from(different),hash(different)),/Invalid Interactive Program ABI/);
+ const tampered=code.replace('worker::enter','alien::enter');
+ await assert.rejects(loadInteractiveProgram(Buffer.from(tampered),hash(tampered)),/INVALID_TRANSITION/);
 });
 
 test('public-facing compiler can emit memory/file without importing DSL source, and only uses original analyzer',async t=>{
