@@ -3,10 +3,6 @@ import {canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './can
 import {loadInteractiveProgram} from './load.mjs';
 
 const FINISHED = new Set(['succeeded','failed','errored']);
-const ERROR_CODES = new Set([
-  'FK_R002','FK_R004','FK_R010','FK_R011','FK_I_VALIDATOR_CONTRACT',
-  'FK_I_INVALID_TRANSITION','FK_I_INVALID_CHECKPOINT',
-]);
 const MAX_RECEIPTS = 128;
 const MAX_REASONS = 32;
 const MAX_REASON_LENGTH = 512;
@@ -145,7 +141,7 @@ function applyStack(cp, effect) {
 function asPublicFrame(cp) {
   return copy({
     namespace:cp.namespace,runId:cp.runId,status:cp.status,revision:cp.revision,
-    state: FINISHED.has(cp.status) ? cp.state : undefined,
+    ...(FINISHED.has(cp.status) ? {state:cp.state} : {}),
     ...(cp.status === 'waiting' ? {pending:cp.pending} : {}),
     ...(cp.status === 'paused' ? {pauseReason:cp.pauseReason ?? 'stage-budget'} : {}),
     ...(FINISHED.has(cp.status) ? {terminal:cp.terminal ?? null} : {}),
@@ -257,7 +253,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     }
   }
   function stepCAS(cp, proposal, eventKind, extras={}) {
-    const next = {...cp,revision:cp.revision+1,...extras};
+    const next = {...cp,revision:cp.revision+1};
     if (proposal.kind === 'raise-error') {
       next.status='errored';
       next.terminal={status:'errored',nodeId:proposal.nodeId,causeCode:proposal.causeCode};
@@ -376,7 +372,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       const program=await loadPinned(cp);
       if (FINISHED.has(cp.status) || cp.status==='waiting') return asPublicFrame(cp);
       if (cp.status === 'paused') {
-        if (cp.pauseReason !== 'stage-budget') return asPublicFrame(cp);
+        if (!['stage-budget','skill-temporary'].includes(cp.pauseReason)) return asPublicFrame(cp);
         const unpause={...cp,status:'running',revision:cp.revision+1,pauseReason:null};
         const committed=store.compareAndSwap({runId,expectedRevision:cp.revision,
           nextCheckpoint:unpause,transitionId:stableTransitionId(cp,'resume-budget'),
