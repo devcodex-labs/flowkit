@@ -86,14 +86,15 @@ async function spawnAndKill({file,compiled,mode,phase,side,runId,receipt}) {
   });
 }
 
-test('M4 real process SIGKILL before/after Agent preparation and durable publish resumes once',async t=>{
-  for(const side of ['before','after']){
-    const {file,compiled,db,api}=await fixture(t);
-    const runId='start-'+side;
-    await spawnAndKill({file,compiled,mode:'start',phase:'awaiting',side,runId});
-    const checkpoint=db.load(runId);
-    assert.ok(checkpoint);
-    assert.ok(['dispatch-ready','awaiting'].includes(checkpoint.phase));
+test('M4 real process SIGKILL before/after Agent enter, prepare and durable publish resumes once',async t=>{
+  for(const phase of ['prepare','dispatch-ready','awaiting']){
+    for(const side of ['before','after']){
+      const {file,compiled,db,api}=await fixture(t);
+      const runId='start-'+phase+'-'+side;
+      await spawnAndKill({file,compiled,mode:'start',phase,side,runId});
+      const checkpoint=db.load(runId);
+      assert.ok(checkpoint);
+      assert.ok(['enter','prepare','dispatch-ready','awaiting'].includes(checkpoint.phase));
     const waiting=await api.resume({runId});
     assert.equal(waiting.status,'waiting');
     assert.equal(waiting.pending.attempt,1);
@@ -110,6 +111,7 @@ test('M4 real process SIGKILL before/after Agent preparation and durable publish
     assert.equal(db.load(runId).receipts.length,1);
     assert.deepEqual(db.listJournal(runId).map(x=>x.revision),
       Array.from({length:done.revision+1},(_,i)=>i));
+    }
   }
 });
 
