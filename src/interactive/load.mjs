@@ -14,8 +14,11 @@ function ensureNoImports(ast) {
       throw new TypeError('Re-exports are forbidden');
     }
     for (const value of Object.values(node)) {
-      if (Array.isArray(value)) for (const item of value) if (item?.type) pending.push(item);
-      else if (value?.type) pending.push(value);
+      if (Array.isArray(value)) {
+        for (const item of value) if (item?.type) pending.push(item);
+      } else if (value?.type) {
+        pending.push(value);
+      }
     }
   }
 }
