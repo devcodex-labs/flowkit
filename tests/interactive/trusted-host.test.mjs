@@ -286,3 +286,26 @@ test('M5 object prototype, proxy, accessor and undefined cannot bypass signed re
   }
   assert.throws(()=>normalizeHostAgentReceipt({...valid,extra:true}),/PROVENANCE_REJECTED/);
 });
+
+
+test('M5 async disclosure approval never releases a Pending superseded by another Host',async t=>{
+  let finishWhileApproving;
+  const f=await waiting(t,{
+    authorizeDisclosure:async()=>{
+      await finishWhileApproving();
+      return true;
+    },
+  });
+  finishWhileApproving=async()=>{
+    const receipt=agentResult(f.frame,{answer:'already-completed'});
+    const attestation=proof(f.store.load(f.frame.runId),receipt,f.keys.privateKey);
+    const completed=await f.host.accept({receipt,attestation});
+    assert.equal(completed.status,'succeeded');
+  };
+  await assert.rejects(f.host.getPublicAgentTask({runId:f.frame.runId}),{
+    code:'FK_I_HOST_DENIED',
+  });
+  assert.equal(f.store.load(f.frame.runId).status,'succeeded');
+  assert.equal(f.store.load(f.frame.runId).state.answer,'already-completed');
+  assert.equal(await f.host.getPublicAgentTask({runId:f.frame.runId}),null);
+});
