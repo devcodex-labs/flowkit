@@ -44,7 +44,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs tests/when/*.test.mjs tests/runtime/*.test.mjs tests/cli/*.test.mjs tests/integrations/*.test.mjs tests/package/*.test.mjs",
+    "test": "node --test tests/dsl.test.mjs tests/contracts.test.mjs tests/compiler/*.test.mjs tests/interactive/*.test.mjs tests/when/*.test.mjs tests/runtime/*.test.mjs tests/cli/*.test.mjs tests/integrations/*.test.mjs tests/package/*.test.mjs",
     "test:types": "node scripts/test-types.mjs",
     "check:package": "node scripts/check-package.mjs",
     "test:package": "node scripts/test-package.mjs",
