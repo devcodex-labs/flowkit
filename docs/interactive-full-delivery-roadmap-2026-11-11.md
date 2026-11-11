@@ -3,7 +3,7 @@
 **Baseline date:** 2026-11-11 (UTC+8)  
 **Repository:** `devcodex-labs/flowkit`  
 **Frozen main:** `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`  
-**Planning branch:** `fix/m6-current-main-e2e-20261111`
+**Current design branch:** `design/trusted-host-security-v2-20261111` (historical Phase 0/1 baseline remains immutable)
 
 > This document records the approved end-to-end route from the current M6/P0-A state through P0-B, P1, P2 and production delivery. It is a roadmap and traceability ledger, not evidence that deferred features have been implemented or passed.
 
@@ -11,11 +11,11 @@
 
 ### 1.1 Main and CI
 
-- Main HEAD: `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`.
-- Main CI run: [42954859078](https://github.com/devcodex-labs/flowkit/actions/runs/42954859078), completed successfully.
+- Current main HEAD after Phase 1: `9bac8f86347a405efe068f96423ae3e501005061`.
+- Current main CI: [42998521531](https://github.com/devcodex-labs/flowkit/actions/runs/42998521531), 7/7 jobs successful.
 - M1–M5 implementation surfaces and S07 capacity work exist on main. Their presence is not a blanket claim that every M6/native-host gate is passed.
 - PR #8, #9 and #10 are merged.
-- PR #7 is open Draft, head `e1e15a70356e53401288d393aa7527c6723fe797`, based on an older main snapshot `c873e3edf0f1a78b13178966cdeb408391755170`. Its M6 tests need to be revalidated against current main.
+- PR #7 is **closed without merge** as superseded. PR #13 is **merged** into main with current-main M6 tests, correct project-root discovery and successful exact-HEAD CI.
 - PR #12 is open Draft, head `c6b42a36050d885a37831cbdf0839428b2052c85`, based on `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`. Its scripted C13–C20 tests and documentation CI passed; this does not pass C12/S13 native-host gates.
 
 ### 1.2 Evidence classes
@@ -31,9 +31,9 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 
 | Phase | Scope | Required exit condition | Current state |
 |---|---|---|---|
-| 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — baseline and ledger committed on this branch |
-| 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS** — replacement PR #13 exact-HEAD CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
-| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | Pending |
+| 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — established in merged PR #13 |
+| 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS, merged** — PR #13; main CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
+| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **Draft complete**, internal adversarial review recorded; **external independent security review pending** |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
 | 4 | Native Grok Build JS tool bridge | Grok Build itself calls FlowKit JS tools through Pending → model completion → JS submit/resume → Terminal | Pending |
 | 5 | M6 live-model complex acceptance | Applicable C01–C24 cases classified and evidenced at P/M/N levels; all M6 blockers closed | Pending |
@@ -350,11 +350,10 @@ A phase cannot pass by deleting a test, weakening an assertion, changing the evi
 
 ## 15. Current next actions
 
-1. Phase 0 baseline/traceability is complete.
-2. PR #7's M6 integration tests were ported onto current main in replacement PR #13.
-3. The fixture now covers default nearest-package discovery and explicit `projectRoot` override.
-4. Exact HEAD `df1eec669d5f46a04f40718abf16fe111db6caf3` passed CI run [42997084061](https://github.com/devcodex-labs/flowkit/actions/runs/42997084061): 7/7 jobs; Ubuntu/Windows × Node 22/24 each passed 369/369 tests; Linux OS-user isolation plus M6 e2e passed 11/11 on Node 22 and Node 24.
-5. Independent code review found no production Core changes. PR #13 is ready for review/merge as test infrastructure only; this does not close native C12/S13 or M6 final acceptance.
-6. After PR #13 is merged, close/supersede stale PR #7 without merging its old branch, then begin Phase 2 Trusted Host security design.
+1. Phase 0/1 **complete**: PR #13 merged to main `9bac8f86347a405efe068f96423ae3e501005061`; old PR #7 closed unmerged.
+2. Main CI [42998521531](https://github.com/devcodex-labs/flowkit/actions/runs/42998521531): 7/7 successful; Ubuntu/Windows × Node 22/24 each 369/369; Linux OS isolation + M6 11/11 on both Node versions.
+3. Phase 2 security design draft: [Trusted Host V2](./interactive-trusted-host-security-v2-design.md), [threat model](./interactive-trusted-host-security-v2-threat-model.md), [acceptance matrix](./interactive-trusted-host-security-v2-acceptance.md), [bounded self-review](./interactive-trusted-host-security-v2-review.md).
+4. Phase 2 must receive **external independent security review** before being frozen for Phase 3. Draft/CI success is not a substitute for native Host security acceptance.
+5. Then implement OS isolation, trusted bridge, direct Grok Build tool loop, real-model edge cases and Phase 6 M6 closure. PR #12 remains Draft until its own scoped review.
 
 **No direct main modification or release is authorized. Merge only through a reviewed PR after exact-HEAD CI. This test/roadmap PR does not authorize production semantic changes or declare M6 complete.**
