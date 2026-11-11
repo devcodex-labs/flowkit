@@ -1,0 +1,11 @@
+[
+  {
+    "index": 0,
+    "nodeId": "requirements",
+    "requestId": "req:21438c34374576a97626dca57822f8818b330b5390251afebac979fe45ee6373",
+    "taskDigest": "sha256:b48e9fe5d58be4db39b122704761d396e38c0c8859aad010aecf5aa8a57bb138",
+    "result": {
+      "requirementSummary": "目标是在不扩大 FlowKit 职责的前提下，对 Interactive P0-A 建立可审计的复杂验收。必须覆盖四个以上串行 Agent、两个以上条件路由、上下游结构化数据传递、Schema 校验失败后的有界重试、Host 崩溃恢复、SQLite CAS 幂等、签名安全隔离、容量边界与三十个以上节点的长链。每个场景分别记录 Program 哈希、真实节点顺序、请求身份、原始回执版本、Journal 连续性和预期终态。脚本协议测试与真实模型测试必须独立标注，未获得 Grok Build 原生会话来源认证时不能宣称 S13 验收通过；业务文件存储及复杂上下文关联仍属于用户配置的 Host 或可选 Context。"
+    }
+  }
+]
