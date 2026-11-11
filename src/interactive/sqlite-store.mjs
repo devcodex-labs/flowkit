@@ -7,7 +7,6 @@ import {
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
-const MAX_INLINE_RECEIPT_CACHE = 16;
 function boundedCheckpoint(input) {
   try { return safeJSONSnapshot(input); }
   catch (error) {
