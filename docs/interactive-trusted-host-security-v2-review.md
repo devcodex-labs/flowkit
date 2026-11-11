@@ -138,3 +138,21 @@ H3-05 OS-only security negatives          <-- only H3-01; no Grok tool dependenc
 
 **下一步判停：** 本轮 F-01/F-R2-01 的段落修订无新 P0/P1 Finding 后，可认为**这两项设计矛盾**在文档层关闭；但 F-02 的工具能力、F-04 的跨账户隔离和 F-07 的正式契约证据均必须保持原有状态。PR #14 继续 Draft，不因文档回归或作者自审直接合并。
 
+
+
+## 8. Grok Build 第三轮最终定向复核（F-01 / F-R2-01）
+
+**外部报告：** `FlowKit-PR14-F01-FR2-01-Final-Targeted-Review-Grok.md`，SHA-256 `7936d6cef9d3c26f5870eb2303fe52c6f215487e740c1fa57787e06716c67933`。审查者为前两轮同一 Grok Build 独立审查者；只读核对冻结 HEAD `316e426aa8d96e4a6b6bee8afd35c0cd313fd244`。裁决：F-01、F-R2-01 **CLOSED（设计文档层面）**；不表示 Phase 3/4 安全验收完成。
+
+| 复核项 | Grok 最终裁决 | 本项目核验 | 后续状态 |
+|---|---|---|---|
+| F-01 阶段依赖 | CLOSED | H3-05 仅依赖 H3-01；H3-02 使用独立能力 PoC，不将其冒充 NAT-14；H3-04 负责接入/签名/恢复集成验证；正式 NAT-14 在 Phase 4 | PoC、SEC 与 NAT-14 真实执行仍待后续阶段 |
+| F-R2-01 IPC Profile | CLOSED | Secure Windows/Linux 最小 Profile 不强制 mTLS、TCP listener 或独立 Bridge；SEC-05 始终验证真实候选输入路径；SEC-07 仅监听型 TLS/mTLS 存在时强制 | Windows/Linux 两个 Profile 仍需真实权限测试 |
+| F-02 | PARTIAL | Grok 原生 MCP tool_call 起始事件、rawInput 对照、截断/大输入仍未实测 | H3-02/NAT-14 BLOCKED，直到真实能力探针与后续验收 |
+| F-04 | PARTIAL | 继承句柄机制有 Node POC，但没有 Windows 跨 SID/服务 Token 的真实负例 | Phase 3 SEC-02/03 BLOCKED |
+| F-07 | NOT_VERIFIABLE | 正式 V0.3/V0.6-R5 原文和完整 SHA-256 未获得 | 正式契约符合性继续 BLOCKED |
+
+**本轮额外文档对齐：** Grok 指出 Windows 检查表中“无证书访问 loopback”和“受保护 Bridge client 合法访问”两步未明确限定部署条件。虽然 SEC-05/SEC-07 与 §9.1 已经规定无监听路径，但为避免执行者误解，已把威胁模型第 3 节第 6–7 项改为条件步骤：无监听记录 `N/A—NO_LISTENER` 并验证 SEC-05；无独立 Bridge 记录 `N/A—NO_SEPARATE_BRIDGE` 并验证 SEC-05/06。该修订属于文档一致性收尾，不改变安全要求、不创建新监听端点，也不降低实际候选入口的验证要求。
+
+**裁决边界：** 本轮关闭的是 F-01 与 F-R2-01 的设计矛盾。PR #14 仍是 docs-only 设计记录；F-02/F-04/F-07 不得改成 PASS。CI 只证明既有回归，不能证明 Windows Secure Host、Grok 原生来源、C12/S13 或正式契约符合性。是否合并 PR #14 应由用户在确认其作为“带明确 BLOCKED 限制的设计记录”后决定；合并也不自动授权 Phase 3 实施。
+
