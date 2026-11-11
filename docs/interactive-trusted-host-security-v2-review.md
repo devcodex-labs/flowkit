@@ -95,3 +95,46 @@
 - [Microsoft: process handle inheritance](https://learn.microsoft.com/en-us/windows/win32/procthread/inheritance)
 - [Grok Build: MCP server configuration](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md)
 - [Grok Build: headless events and `--tools`](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
+
+## 7. Grok Build 第二轮定向复审与追加闭环
+
+**原始报告：** `FlowKit-PR14-Trusted-Host-V2-F01-F07-Targeted-Rereview-Grok.md`；本轮上传文件 SHA-256：`4528278eddb1ade36c8a388c4ad4181f93f8d364a323ca54b0a4c19ea4ee3062`；Grok 核对冻结 HEAD `51a759975abcaee928faf50aec99ebed324fdfcc`，只读裁决 **CONDITIONAL PASS**。本节是事后的针对性代码/文档交叉验证记录，不能冒充 Grok 对新提交的再审 PASS。
+
+### 7.1 外部复审裁决（冻结旧 SHA，不能倒填）
+
+| Finding | Grok 二轮结论 | 独立交叉核对 | 这次修订 | 后续边界 |
+|---|---|---|---|---|
+| F-01 P1 | PARTIAL | 原 `H3-05→H3-04→H3-03→H3-02`，H3-02 却引用 Phase 4 NAT-14，确有依赖环 | 把 H3-05 移到 H3-01 后、只依赖 H3-01；H3-02 改为独立「工具注册与签前 tool_call 最小能力探针」，**不是 NAT-14**；H3-04 负责集成后全量安全测试，Phase 4 正式 NAT-14 不提前记 PASS | 本次改动需定向 diff 复核，真实 PoC/NAT-14 仍未运行 |
+| F-02 P1 | PARTIAL | Grok MCP 工具已具官方扩展机制，但 tool_call.rawInput flush/参数一致性/大值仍未实测 | 维持 §5.5 的候选工具探针与 `toolInputDigest` / `receiptHash` 双哈希规则；没有把 PoC 伪装成成功 | H3-02 实现 BLOCKED，直到可复现小型工具能力探针；C12/S13 仍 BLOCKED |
+| F-03 P2 | CLOSED | TH-017/TH-023 与 SEC-11/SEC-04 P0 已对齐 | 不重做 | Phase 3 实际 OS 安全证明未完成 |
+| F-04 P2 | PARTIAL | Grok 测到 Node 同用户继承的 fd 可被子进程读取；**没有跨 OS 身份实测** | 保留句柄白名单和跨用户负例 | Phase 3 SEC-02/SEC-03 仍 BLOCKED |
+| F-05 P2 | CLOSED | Windows 官方默认 Named Pipe 赋予 Everyone/Anonymous 读取权；报告称 Node 22/24 实测 SDDL，但未提供原始脚本文件 | 保留禁止默认 Node Pipe，安全 Pipe 必须创建时自定义 DACL+SID | SEC-16 仅采用 Named Pipe 时适用，未跑 Win32 实测 |
+| F-06 P2 | CLOSED | C12 映射、flowkitRequestId 与 grokRequestId、Outbox canonical bytes 和 receiptHash 规则已存在 | 不重写 Core 或重新序列化签名业务正文 | 真实签后崩溃 SEC-18/NAT-15 未运行 |
+| F-07 P2 | NOT_VERIFIABLE | 历史存档存在正式原件的名称与沙箱路径记录，但本次原始字节不可用；不能据此说文件从不存在 | 保留正式契约 V0.3/V0.6-R5 的符合性 **BLOCKED** | 完成符合性裁决仍需正式原文和完整 SHA-256，不得由路线图或审查报告代替 |
+| F-R2-01 P2 | 新 Finding | §3.2 说本地端点可选，§7 Profile 与 §10 总结又把 mTLS 当默认，且 SEC-05/07 会暗示必须创建监听器 | §7 Windows/Linux Profile 和最终结论都改为两 OS 身份、Key/DB/句柄保护必选，**mTLS/独立 Bridge/监听端口按实际部署可选**；SEC-05 验证真正的候选入口，SEC-07 无监听时记 N/A—NO_LISTENER 而非 PASS | 本次设计修订需 diff 复核；没有网络端点不能免除模型输入权限验证 |
+
+### 7.2 单向阶段依赖检查（不得出现旧循环）
+
+```text
+Phase 2 design review
+       |
+H3-01 Host OS identity & secrets isolation
+       |
+H3-05 OS-only security negatives          <-- only H3-01; no Grok tool dependency
+       |                               |                         Grok tool capability probe (no NAT-14 PASS)
+       |                                     |
+       |                                   H3-02 ingress/tool adapter
+       |                                     |
+       |                                   H3-03 evidence/Outbox
+       |                                     |
+       +-----------------------------------H3-04 signer + integration security checks
+                                             |
+                                Phase 3 OS/IPC security exit (Win + Linux)
+                                             |
+                                Phase 4 native Grok, formal NAT-14/S13/C12
+```
+
+**范围纪律：** 本次仅文档修订，没有触碰 Program ABI、Ed25519 receipt v1、Coordinator、Store 或其他生产 Core。CI 全绿只证明现有回归没受影响，**不证明**跨用户 Windows ACL、Grok 原生事件时序、Provider 身份或 Phase 3/4 执行完成。
+
+**下一步判停：** 本轮 F-01/F-R2-01 的段落修订无新 P0/P1 Finding 后，可认为**这两项设计矛盾**在文档层关闭；但 F-02 的工具能力、F-04 的跨账户隔离和 F-07 的正式契约证据均必须保持原有状态。PR #14 继续 Draft，不因文档回归或作者自审直接合并。
+
