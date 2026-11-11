@@ -21,6 +21,10 @@
 
 如果 Grok Build 有与 Host 相同的 OS 权限、可进入 Host token，或是本机管理员（可提权修改 ACL、服务及进程），即使程序在两个 Node.js 进程中，安全门禁仍记 `BLOCKED`。Linux 的 `chmod` 与 Windows 的 ACL 不具有直接可比的安全含义。
 
+### 1.1.1 Bridge 与 Host 同账户时的 TCB 规则
+
+受保护 Bridge 与 Host 若在同一 HOST_USER/UID 下运行，就属于同一个可信计算基（TCB），不能宣称 Bridge 在 OS 层无权访问 Host 私钥或数据库。**最低强制边界是 MODEL_USER 与整个可信 TCB 分离。** 如果还要求在受信 Bridge 被攻破后保护 Host 签名密钥，必须单独部署 BRIDGE_USER 并实测不同账户 ACL/UID。所有模型输入都必须通过严格的工具入口与 Host-side 原生事件观察；Bridge 与 Host 同账户绝不能成为让模型获得任意 Host API 的理由。
+
 ### 1.2 与阶段对应
 
 - Phase 2：规范并审查所有威胁和验证门槛；不声称已运行 Windows/Grok 安全测试。
