@@ -40,6 +40,9 @@ jobs:
           # Type rejection fixtures retain diagnostics in JSON evidence.
           echo "::remove-matcher owner=tsc::"
           npm run verify
+      - name: Measure repeated Interactive Program loads (diagnostic, Ubuntu Node 24)
+        if: ${{ matrix.os == 'ubuntu-24.04' && matrix.node == '24.22.1' }}
+        run: node scripts/bench-interactive-load.mjs
       - name: Consume candidate package through all documentation examples
         env:
           FLOWKIT_DOCS_EVIDENCE: .tmp/docs/candidate.json
