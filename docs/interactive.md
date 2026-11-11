@@ -83,6 +83,23 @@ try {
 }
 ~~~
 
+## S07 capacity and idempotency boundary
+
+The reference SQLite Store enforces a 2 MiB hard Checkpoint bound, reserves
+256 KiB for a durable terminal error and accepts at most 128 KiB of inline
+Agent result JSON. Larger business data belongs to the Host-selected storage
+provider; Agent results should return only the small user-defined reference.
+
+A signed matching inline result that exceeds the bound leads to a durable
+`errored(FK_I_CHECKPOINT_CAPACITY)` transition **without an acceptedRevision**.
+For accepted receipts the Store maintains a separate immutable SQLite
+execution-only receipt index, while the Checkpoint retains only a bounded
+recent-receipt cache. Older accepted request IDs retain their exact
+acknowledgment across restarts, including after proof expiry.
+
+See [the focused S07 storage contract](./interactive-s07-capacity.md). No
+business-artifact persistence, file GC or Context module is added.
+
 ## Invariants and recovery
 
 1. **Program is the routing authority.** The generated `advance(view,event)`
