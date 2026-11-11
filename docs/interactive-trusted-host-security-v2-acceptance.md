@@ -40,7 +40,10 @@
 | SEC-16 | Windows Node 原生管道方案的 DACL/SID 实测（若选用） | 真实 DACL 验证、拒绝远程、非授权 SID 无法 connect；不能只看端口/管道名 | P0 if adopted | TH-006 | Windows |
 | SEC-17 | Linux UID 隔离脚本 + 实际受限 CLI 进程 | scripted nobody 和 Grok CLI 两种场景区分，且真正被拒绝访问 | P0 | TH-001–TH-004 | Linux |
 
-**通过标准：** SEC-01–SEC-11、SEC-15 的适用 P0 全部 PASS，SEC-16/17 对应适用部署模式 PASS；P1 漏项有明确解决计划且不造成 P0 绕过。若 Windows 的 Secure Host profile 不可部署，本机 Windows N 层 BLOCKED，但不影响 Linux profile 的独立结果。不得用 Linux PASS 代替 Windows PASS。
+| SEC-18 | Host 观察事件/签名回执 Outbox：签名前/签后/accept-CAS 前后真 SIGKILL | 原观察事件、proofId、signed bytes、acceptedRevision 对账；未接纳过期证明不能通过；已接纳同内容即使过期仍返回旧 Ack | P0 | TH-029 | Win/Linux |
+| SEC-19 | 证据保留/容量、隐私与历史审计 | Host-only evidence 不泄密、不无限增长；修订 Retention 配置后历史 Ack 和 Journal 仍可审查 | P1 | TH-030 | Win/Linux |
+
+**通过标准：** SEC-01–SEC-11、SEC-15、SEC-18 的适用 P0 全部 PASS，SEC-16/17 对应适用部署模式 PASS；P1 漏项有明确解决计划且不造成 P0 绕过。若 Windows 的 Secure Host profile 不可部署，本机 Windows N 层 BLOCKED，但不影响 Linux profile 的独立结果。不得用 Linux PASS 代替 Windows PASS。
 
 ## 3. Phase 4：直接 Grok Build 原生 JS 工具链
 
@@ -62,16 +65,18 @@
 
 **NAT-14：submit 工具事件时序反例。** 用受控代理模拟可信 Supervisor 仅在工具返回后才会收到 `tool_call_update`，工具本身却等待 Host 接纳。必须发现此循环等待；若无法提供签前可验证的 `tool_call` 起始事件与输入摘要，应将该机制标为 BLOCKED 并采用单独审查的双阶段协议，不能简单超时重试或用模型自报完成替代。
 
-**NAT-01–NAT-05 为 S13 核心链**，NAT-06–NAT-12、NAT-14 覆盖 C12/C22/C23 的伪造与故障路径；NAT-13 是能力探测，不无端把不存在的 Provider 签名作为所有平台不可能完成的前置条件，但也不放宽冻结的来源证明要求。
+**NAT-15：真实 Grok 结果签署后、Store CAS 前崩溃的 Outbox 恢复。** 至少一个真实模型已产生的结果进入 Host-only `SIGNED`，在 `host.accept()` 前 SIGKILL；重启时核对是否已被 Store 接纳，尚未接纳则检查签名有效期，过期必须阻断或经独立受信原事件严格重认证，绝不发明模型结果或多次 State Commit。对应 SEC-18/TH-029。
+
+**NAT-01–NAT-05 为 S13 核心链**，NAT-06–NAT-12、NAT-14–NAT-15 覆盖 C12/C22/C23 的伪造与故障路径；NAT-13 是能力探测，不无端把不存在的 Provider 签名作为所有平台不可能完成的前置条件，但也不放宽冻结的来源证明要求。
 
 ## 4. Phase 5/6：与冻结验收的交叉映射
 
 | Frozen item | 需要本矩阵哪些证据 | 不能用来替代的既有测试 |
 |---|---|---|
-| S02、S04、S05、S06、S07 | SEC-08/10/12/13/15 | 不能把脚本 M6 e2e 说成真实 Grok |
+| S02、S04、S05、S06、S07 | SEC-08/10/12/13/15/18 | 不能把脚本 M6 e2e 说成真实 Grok |
 | S13、T11、T27 | NAT-01–05、NAT-06/07、SEC-01–06 | 不能把文件 Polling 的 M 层测试说成原生 JS 工具 |
 | C01、C02、C03、C04 | NAT-01–05/10 | 单纯回放 ChatGPT fixture 不计新模型回合 |
-| C05、C06、C23 | NAT-08/09/10 + SEC-10 | 单一 SIGKILL 或双进程 scripted race 不能替代组合场景 |
+| C05、C06、C23 | NAT-08/09/10/15 + SEC-10/18 | 单一 SIGKILL 或双进程 scripted race 不能替代组合场景 |
 | C07、C08、C22 | SEC-01–09/11/13/15、NAT-06/11 | Linux nobody 不能证明 Windows ACL |
 | C09、C16 | SEC-12、NAT-10 | 不能将 oversize 无认证回执当 Provider failure |
 | C10、C11、C13–C20 | 历史 P 级复测 + 同 SHA CI | 不要求 36 次真实模型付费 |
