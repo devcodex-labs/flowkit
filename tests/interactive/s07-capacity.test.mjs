@@ -414,3 +414,21 @@ test('S07 moderately large valid inline output is still accepted when whole Chec
     completed.acceptedRevision);
   checkJournal(f.store,frame.runId);
 });
+
+
+test('S07 result alone fits hard JSON limit but full Agent receipt exceeds it: durable terminal, not raw RangeError waiting',async t=>{
+  const f=await fixture(t);
+  const w=await waiting(f,{runId:'envelope-edge',startKey:'envelope-edge'});
+  const result={answer:'q'.repeat(MAX_CHECKPOINT_BYTES-140)};
+  assert.ok(canonicalBytes(result).byteLength<MAX_CHECKPOINT_BYTES);
+  const response=receipt(w,result);
+  const envelope={...response,kind:'agent-result'};
+  assert.throws(()=>canonicalBytes(envelope),/Canonical JSON exceeds maximum bytes/);
+  await assert.rejects(f.api.complete(response),{code:'FK_I_CHECKPOINT_CAPACITY'});
+  const stopped=f.store.load(w.runId);
+  assert.equal(stopped.status,'errored');
+  assert.equal(stopped.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
+  assert.deepEqual(stopped.state,{message:'small'});
+  assert.equal(f.store.getReceipt(w.runId,w.pending.requestId),null);
+  checkJournal(f.store,w.runId);
+});
