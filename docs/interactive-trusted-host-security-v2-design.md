@@ -152,7 +152,7 @@ Windows 文件访问检查依据微软 ACL / File Security 文档。单纯设置
 
 1. HOST_UID 与 MODEL_UID/GID 分离，MODEL_UID 不得为 root、不得拥有 `sudo`、`CAP_DAC_OVERRIDE`、调试 Host 的能力。
 2. Host-only 私有根目录 `0700`，密钥 `0600`，数据库及 WAL/SHM 继承相同隔离；公共 Task 由 Host 明确披露。
-3. 可复用相同的 loopback mTLS 协议；若使用 Unix Domain Socket，则 socket 所在目录、所属 group、权限、Peer Credential 及符号链接/路径替换风险都必须单独审查。
+3. **仅在确实启用相应监听端点时**采用 loopback TLS/mTLS 或 Unix Domain Socket，并审查对应证书、端点所在目录、所属组、权限、Peer Credential 与符号链接/路径替换风险。最小单 Host 进程方案不要求创建网络监听。
 4. 测试 MODEL_UID 的文件读取/写入、目录遍历、pid/fd/env 访问、Host 进程调试/注入、IPC 伪造、跨租户访问。
 5. 现有 `tests/security/host-isolation.mjs` 只能证明**脚本模型子进程**的 Linux UID 边界；真实 Grok Build 对应进程仍需同样的测试和进程证据。
 6. 不把 Docker 非特权容器、WSL2 或运行时目录名本身当作安全隔离，除非隔离配置经过实际攻击测试。
@@ -282,8 +282,8 @@ xAI Grok Build 文档提供：
 | 模式 | 实际用途 | 可宣称层级 |
 |---|---|---|
 | Developer Mode | 用户直接打开 Grok Build，手工读 Pending/写 response，Host 可共享普通用户进程 | 仅 P/M；**不能**通过 N 层安全门禁 |
-| Secure Windows Host | HOST_USER 与非管理员 MODEL_USER 分离，显式 ACL、TLS/mTLS、独立可信 CLI 观察 | P/M/T；只有完成全部 C12/S13 测试才可 N |
-| Secure Linux Host | HOST_UID 与 MODEL_UID 分离，0700/0600 与已认证 IPC、独立观察 | P/M/T；只有完成全部 C12/S13 测试才可 N |
+| Secure Windows Host | HOST_USER 与非管理员 MODEL_USER 分离；私钥、SQLite/WAL/SHM、服务控制和继承句柄均有实际拒绝证据；启用任何候选数据入口必须完成身份/权限/伪造测试；**不要求默认开启 mTLS 或监听端口** | Phase 3 的 OS 安全按 Windows Profile 单独裁决；只有真实观察工具事件后可申请 T，完成 C12/S13 才可 N |
+| Secure Linux Host | HOST_UID 与 MODEL_UID 分离；0700/0600、数据库及子进程句柄保护实测；任何已启用的候选数据入口需按真实传输方式安全验收；**不强制启用 TCP/mTLS/UDS 监听** | Phase 3 的 OS 安全按 Linux Profile 单独裁决；只有真实观察工具事件后可申请 T，完成 C12/S13 才可 N |
 | Unsupported Host | 没有 JS 执行工具、不能隔离、不能绑定来源 | `NO_JS_EXECUTOR` 或 `BLOCKED`，不得回退模拟 |
 
 **最小安装原则**：运行时只要求目标 Host 环境已有 Node 22.13+，Host 适配可作为按需子进程；Windows 独立服务账户部署需要一次性管理员配置，不代表每个用户一个独立服务器。对于多用户 Host，租户 `namespace` 必须与 IPC 的经认证身份绑定，而不是接受模型自报 tenant。
@@ -292,12 +292,12 @@ xAI Grok Build 文档提供：
 
 | 序号 | 独立交付 | 最小改动目标 | 前置 |
 |---|---|---|---|
-| H3-01 | Host bootstrap/provisioning | Windows/Linux 受保护身份、private FS、信任配置 | 本设计通过安全审查 |
-| H3-02 | Grok 工具/Transport adapter | 首选 MODEL_USER 下受信配置的 MCP FlowKit 工具；先做原生 ToolCall 参数/事件时序 PoC，再按 Profile 选择受限本地 IPC（可选 loopback TLS/mTLS） | H3-01；H3-02 编码前须验证工具实际可注册、NAT-14 时序与回执绑定 |
+| H3-01 | Host bootstrap/provisioning | Windows/Linux 受保护 OS 身份、Host-only 私有目录、密钥/数据库及启动句柄白名单 | 本设计独立复审通过；不依赖 Grok 工具 PoC |
+| H3-05 | **OS-only negative-security tests** | Windows ACL、Linux UID、进程/Token/继承句柄、Host 私钥/SQLite/WAL/SHM 实际拒绝访问 | **仅依赖 H3-01**；不运行 Grok 工具 PoC、不等待 H3-02/H3-03/H3-04 |
+| H3-02 | Grok 工具/Transport adapter | 模型侧受限 MCP 工具优先；决定真实候选数据通道后再实现有界 IPC（可选 loopback mTLS） | H3-01 + **工具注册与签前 `tool_call` 最小能力探针（只记 PoC，绝不冒充 NAT-14 正式 PASS）** |
 | H3-03 | Trusted observation / signed receipt Outbox | Host-only 进程/会话/tool/event/receiptHash 关联；OBSERVED/SIGNED/ACKED WAL/FULL 持久化、过期/重签与历史 Ack 对账 | H3-02 |
-| H3-04 | M5 signer integration | 按 `proofId` 查证据，签原 v1 statement 后 `accept` | H3-03 |
-| H3-05 | OS negative-security tests | Windows ACL、Linux UID、shell/pid/IPC/replay/tamper | H3-04 |
-| H4-01 | Grok CLI native tool observer | 基于 H3-02 PoC 固定 streaming-json 事件、toolCallId/input 摘要及日志伪造防护 | H3-05 |
+| H3-04 | M5 signer integration + adapter security regression | 按 `proofId` 核对证据，签 v1 statement 后 `accept`；**在已启用候选通道上验证 SEC-05/06/08/10/15/18 的 P0 负例** | H3-03 与 H3-05；H3-04 完成前 Phase 3 不得宣称整体 PASS |
+| H4-01 | Grok CLI native tool observer | 基于 H3-02 PoC 固定 streaming-json 事件、toolCallId/input 摘要及日志伪造防护 | Phase 3 整体安全退出条件已满足 |
 | H4-02 | Direct Grok JS/MCP tool loop | 启动授权 Run、获取 Pending、提交结果、续接终态；不得绕过 Host signer/Store | H4-01 |
 | H4-03 | Native Grok adversarial acceptance | S13/C12、kill/resume、双会话、提示注入和大输出 | H4-02 |
 
@@ -323,8 +323,8 @@ xAI Grok Build 文档提供：
 ### 9.1 唯一阶段入口与出口（F-01）
 
 - **Phase 3 入口**：安全设计独立复审已通过；Host/Model 两套 OS 身份及 Key、SQLite、WAL/SHM、ACL 规则已冻结，禁止默认 Node Named Pipe 当作安全 IPC。无需预先运行 Grok 原生工具。
-- **Phase 3 退出**：Windows 与 Linux 两个适用 Secure Host Profile 的 SEC P0 均有真实权限、进程、IPC、签名与恢复证据；单平台通过只计该 Profile，不宣称 Phase 3 整体完成。
-- **H3-02 开工前**：用最小 PoC 选定实际可注册的 Grok MCP 或受限工具及参数绑定方式，验证可独立捕获调用输入和签前事件时序；否则 H3-02 BLOCKED，H3-01 OS 工作不被回滚。
+- **Phase 3 退出**：H3-05 的 Windows/Linux OS 负例、H3-04 的实际候选通道/签名/恢复负例及两个 Secure Host Profile 全部适用 SEC P0 均有独立证据；单平台通过只计该 Profile，不宣称 Phase 3 整体完成。未启用监听端点时应记录 `NO_LISTENER` 与不适用的网络用例，并实测实际存在的候选数据通道，不得为刷测试人为创建 TCP/mTLS 服务。
+- **H3-02 开工前**：执行单独的**工具注册与签前 `tool_call` 最小能力探针**（非 NAT-14，不计正式验收 PASS），确认所选 MCP/受限工具的真实注册、可观测输入及事件时序具备实施条件；做不到则仅 H3-02 BLOCKED，H3-01/H3-05 的 OS 安全工作不受影响。**NAT-14** 只在 Phase 4 基于实际原生 Host 运行后正式执行并裁决。
 - **Phase 4 入口**：Phase 3 退出门禁通过、原生工具和 NAT-14 时序可实施。正式 C12/S13 原生闭环只能通过 Phase 4 的真实证据放行。
 
 ## 10. 官方资料及解释边界
@@ -344,4 +344,4 @@ xAI Grok Build 文档提供：
 
 ---
 
-**设计结论：** 采用“Host 受保护 OS 身份 + 默认跨平台 loopback TLS/mTLS + Host-only 原生工具观察/证据索引 + 现有 Ed25519 receipt v1 + FlowKit Core 不变”的 Phase 3/4 实施方向。Named Pipe 可保留为经独立 DACL 与身份验证后的后续优化，不能成为 Windows 安全通过的捷径。
+**设计结论：** 采用“MODEL_USER 与受保护 HOST_USER/TCB 分离 + 文件/服务/句柄权限验证 + Host-only 原生工具观察与证据索引 + Ed25519 receipt v1 + FlowKit Core 不变”的最小安全形态。**不强制 Bridge 独立进程、TCP 监听或 mTLS**；仅在实际部署存在监听端点时按相应传输方式增加安全认证和负例。默认 Windows Node Named Pipe 禁止作为安全入口；只有创建时 DACL/SID 已经验证的自定义实现才可选。Grok 原生工具来源、签前参数与时序需先通过 H3-02 最小能力探针，在 Phase 4 NAT-14/C12/S13 正式验收。
