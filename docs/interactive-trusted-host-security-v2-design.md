@@ -113,14 +113,15 @@ durable next Pending / Terminal
 4. Host 服务控制权限必须防止 MODEL_USER 重启为任意代码、修改服务可执行文件、修改配置或向 Host 注入调试/进程访问。
 5. `Get-Acl` / `icacls` 和实际以 MODEL_USER 身份进行的读取、写入、重命名、替换、子进程及进程访问负例必须一起通过。
 6. UAC 提示、用户同意、管理员/root 权限不可被当作“自动隔离能力”。**如果 Grok Build 仍以管理员 Token 运行，就 BLOCKED。**
+7. Supervisor 启动 MODEL_USER 时仅允许继承必要的匿名 stdout/stderr/明确授权的通信句柄，不得继承 Host 私钥、SQLite 主库/WAL/SHM、证书、配置、文件映射、进程/Token 句柄或机密环境变量。Windows 使用不继承句柄或经审查的显式句柄白名单。**实际子进程句柄表和跨账户测试**必须与路径 ACL 拒绝测试同时通过。
 
 Windows 文件访问检查依据微软 ACL / File Security 文档。单纯设置 `chmod 0600` 或把路径命名为 `host-private` 不作为 Windows 隔离证据。
 
 ### 3.2 IPC 传输基线选择（ADR-H2）
 
-**推荐跨平台第一版采用：`127.0.0.1` 的 Host-owned TLS/mTLS 控制端点**，利用 Node 内置 `node:tls`，不需要 Grok ACP，不修改 Core。要求：
+**最小受信部署仅强制两套 OS 身份：MODEL_USER 与 Host TCB。** Bridge、Supervisor 与 Host 在同一 HOST_USER 内可合并为一个受保护进程，不强制在同一 TCB 内增加一跳 mTLS。仅在部署需要跨进程本地监听端点时，才选用 `127.0.0.1` TLS/mTLS；此时必须证明传输身份与原生工具事件的分离，ACP 不是必要前置。若使用 TLS/mTLS，要求：
 - `127.0.0.1` 单独绑定（如需要 IPv6，明确独立回环绑定并认证）；禁止 `0.0.0.0`、LAN、自动外网暴露。
-- 双向证书认证：`requestCert=true`、`rejectUnauthorized=true`、Host 配置信任的 CA/客户端证书指纹白名单；证书私钥由不同 OS 主体持有并受 ACL 保护。
+- TLS/mTLS 要求 `requestCert=true`、`rejectUnauthorized=true`、服务端证书身份固定、CA/客户端证书指纹白名单。客户端证书仅证明本地通道身份；如果客户端进程在 MODEL_USER 下运行，其凭据可被模型读取，绝不能作为 Model/Provider 原生来源证明或 Host 签名授权。Host-only 密钥仍由 HOST_USER 持有。
 - 服务端的 Host 私钥与 Ed25519 回执私钥均仅在 HOST_USER 访问域。
 - 客户端凭据只授权非常窄的 bridge 操作；**客户端拥有凭据 ≠ Provider/模型身份认证**，不允许以“mTLS 成功”直接给模型结果签署原生来源证明。
 - 每个连接再经 Run/tenant/operation/taskDigest/requestId/attempt 绑定授权，必须检查终态、漂移和 replay。
@@ -133,7 +134,7 @@ Windows 文件访问检查依据微软 ACL / File Security 文档。单纯设置
 
 1. **MODEL_USER 原生工具调用 → 不可信数据入口。** 模型只传公开 Run/RequestId 与 result；该入口不持有 Ed25519 signer、mTLS client key 或 Store。这里的 JSON 永远只是候选数据。
 2. **HOST_USER 控制的 Supervisor → 验证真实 native `tool_call` 事件。** Supervisor 从其保护的捕获通道获得 CLI 进程、Session 与 tool-call 事件，将它和入口收到的候选结果按 Run/RequestId/Attempt/ToolCallId/Hash 严格匹配。
-3. **受保护 Bridge → mTLS → Host signer/Store。** mTLS 的 client cert key 只在受保护的 Bridge Principal 中存在；MODEL_USER 无法读、复制或通过通用代理 API 滥用该凭据。Bridge 的转发行为由受信 Supervisor 的事件证据驱动，不接受纯模型自报“已经验证”。
+3. **Host TCB 校验后才签收。** 受保护 Bridge 与 Host 若为同一 HOST_USER，可直接走内部受限调用；独立 Bridge 进程或 loopback mTLS 是部署选项，不是第二个独立信任域。任何输入候选只有与 Host 独立观察到的工具事件绑定后才可签名。
 4. **Host 签署后才允许状态推进。** 任何观察链断裂、乱序、事件无法关联、超时或权限错误都不能发出 Host 签名和 CAS。
 
 模型→Bridge 的入口可以是限制功能的本机工具命令/临时 IPC；该入口不被当作认证事实来源。**禁止**把所有 CLI 工具调用事件视为已被 Provider 数字签名。
@@ -202,6 +203,14 @@ xAI Grok Build 文档提供：
 - C12/S13 的最终等级必须依照冻结验收条款判定。若条款明确要求 Provider 级来源且 Grok 没有可用的可验证机制，标 `BLOCKED` 并提交具体差异供审查，**不能降低验收要求**。
 - 同一用户运行的普通 CLI、文件轮询、模型自报身份及 Host 自签未经校验的 JSON 都不能解除 C12/S13。
 - 对于 ChatGPT/Codex/Claude 的后续适配，要求同样证据等级，并逐宿主声明不足；不允许为了平台兼容以通用伪 provenance 填补空白。
+
+### 5.5 直接 Grok Build 工具注册与结果证据（F-02）
+
+1. `--tools` 是内置工具 allowlist，**不会注册自定义 FlowKit JS 函数**。首选探针为在受信安装的 Grok `.grok/config.toml` 中配置受限的 **MCP FlowKit 工具服务器**，该服务器运行于 MODEL_USER 且不持有 Host 私钥、SQLite 或 signer；备选固定 Node/Shell 命令只有在能提供同等级原生输入事件证据时才可用。实际 MCP 工具的发现、启用、授权及 `tool_call.rawInput` 形式须实测，不能凭文档声称完成。
+2. 受信 HOST_USER Supervisor 只从自己掌控的 CLI stdout 捕获结构化事件；模型和工具 stdout 的伪造/混淆能力通过 NAT-06/14 攻击实测排除。模型侧 MCP 工具发出的候选 RPC 是不可信数据，`--tools`/MCP 的存在本身不构成来源认证。
+3. **两个摘要分别定义**：`toolInputDigest = sha256(canonicalBytes(rawInput))`，对比 Host 独立捕获的原生 `rawInput` 与 MCP 候选 RPC 参数；Host 根据当前 authoritative Pending 创建 `normalizedReceipt`，然后 `receiptHash = sha256(canonicalBytes(normalizedReceipt))`。必须从上述两条已验证输入路径重算出**相同 normalizedReceipt 与 receiptHash**，不是要求 `rawInput` 原文逐字节等于包含 Host 补充字段的完整回执。Grok 的 `grokRequestId`、`grokSessionId` 与 FlowKit 的 `flowkitRequestId` 不可互换。
+4. 入参规模应实测 64 KiB、256 KiB 和接近合法回执上限的边界。2 MiB 是 M5 Signed Receipt 的**上限**，不是 Grok/MCP 保证支持的参数量。若 CLI 起始事件丢失/截断参数，或结果走模型可替换文件而只看到命令字符串，签名必须 BLOCKED；必要时另审 Host-owned immutable buffer + 对应可验证事件摘要的两阶段协议，不允许隐式降级。
+5. 工具 `start/getPending/submit/continue` 是 Host Adapter 的行为映射，不是新增 FlowKit Core 公共 API。`start` 只能启动经可信用户预授权的 Program/State，不允许模型创造 allowlist 条目；`continue` 返回脱敏状态，不输出 Host frame 完整 State。
 
 ## 6. IPC / JS 工具契约（Host Adapter Proposal，不修改 SDK）
 
@@ -284,8 +293,8 @@ xAI Grok Build 文档提供：
 | 序号 | 独立交付 | 最小改动目标 | 前置 |
 |---|---|---|---|
 | H3-01 | Host bootstrap/provisioning | Windows/Linux 受保护身份、private FS、信任配置 | 本设计通过安全审查 |
-| H3-02 | Transport adapter | 127.0.0.1 mTLS、严格 framing/ACL-bound auth | H3-01 |
-| H3-03 | Trusted observation / signed receipt Outbox | Host-only 进程/会话/tool/event/result digest 关联；OBSERVED/SIGNED/ACKED 持久化、过期与重试对账 | H3-02 |
+| H3-02 | Grok 工具/Transport adapter | 首选 MODEL_USER 下受信配置的 MCP FlowKit 工具；先做原生 ToolCall 参数/事件时序 PoC，再按 Profile 选择受限本地 IPC（可选 loopback TLS/mTLS） | H3-01；H3-02 编码前须验证工具实际可注册、NAT-14 时序与回执绑定 |
+| H3-03 | Trusted observation / signed receipt Outbox | Host-only 进程/会话/tool/event/receiptHash 关联；OBSERVED/SIGNED/ACKED WAL/FULL 持久化、过期/重签与历史 Ack 对账 | H3-02 |
 | H3-04 | M5 signer integration | 按 `proofId` 查证据，签原 v1 statement 后 `accept` | H3-03 |
 | H3-05 | OS negative-security tests | Windows ACL、Linux UID、shell/pid/IPC/replay/tamper | H3-04 |
 | H4-01 | Grok direct CLI native JS tool | 原生工具启动、获取 Pending、提交、续接终态 | H3-05 |
