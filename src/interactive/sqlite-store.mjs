@@ -7,14 +7,17 @@ import {
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
-function boundedCheckpoint(input) {
-  try { return safeJSONSnapshot(input); }
+function boundedCheckpointBytes(input) {
+  try { return canonicalBytes(input); }
   catch (error) {
     if (error instanceof RangeError && /Canonical JSON exceeds maximum bytes/.test(error.message)) {
       throw failure('FK_I_CHECKPOINT_CAPACITY', 'Checkpoint exceeds 2 MiB hard limit');
     }
     throw error;
   }
+}
+function boundedCheckpoint(input) {
+  return JSON.parse(boundedCheckpointBytes(input).toString('utf8'));
 }
 
 function failure(code, detail) {
@@ -286,7 +289,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
      */
     createRun({startKey, startIntent = null, checkpoint}) {
       identifier(startKey, 'startKey');
-      const base = safeJSONSnapshot(checkpoint);
+      const base = boundedCheckpoint(checkpoint);
       identifier(base?.runId, 'checkpoint.runId');
       assertCheckpoint(base, namespace, base.runId, 0);
       if (base.startKey !== undefined || base.startIntentHash !== undefined) {
@@ -298,7 +301,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         policyHash:base.policyHash ?? null, intent,
       }));
       const initial = {...base, startKey, startIntentHash};
-      const checkpointBytes = canonicalBytes(initial);
+      const checkpointBytes = boundedCheckpointBytes(initial);
       // The reserve must already exist before a Run can publish its first Pending.
       // Read/duplicate-start of a pre-upgrade Run is not blocked by this check.
       const checkpointHash = sha256Bytes(checkpointBytes);
