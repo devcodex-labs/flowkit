@@ -175,8 +175,12 @@ function assertRuntime(program,runtime) {
   if (typeof runtime !== 'object' || !runtime || Array.isArray(runtime)) {
     throw new TypeError('InteractiveRuntime must be an object');
   }
-  if (runtime.checkStep !== undefined) {
-    throw failure('FK_I_UNSUPPORTED_GRAPH','P0-A cannot silently skip checkStep');
+  // A Host may expose shared Standard runtime callbacks. Ignore an unused
+  // checkStep only when the verified Program has no Agent/validation bindings.
+  // Agent P0-A still fails closed: we must not silently skip its checkStep.
+  if (runtime.checkStep !== undefined
+    && program.programTable.requiredBindings.length > 0) {
+    throw failure('FK_I_UNSUPPORTED_GRAPH','P0-A cannot silently skip Agent checkStep');
   }
   for (const binding of program.programTable.requiredBindings) {
     if (binding.id === 'runtime.validateResult' && typeof runtime.validateResult !== 'function'
