@@ -85,7 +85,7 @@ const coordinator=createInteractiveCoordinator({store,runtime,policy});
 4. Never treat an unchanged string version as cryptographic proof of unchanged
    behavior. FlowKit does **not** introspect arbitrary JS closures, network
    dependencies, or mutable files to discover their semantic identity.
-5. `policy.bindingVersions` is **recommended and Host-enforced**, not yet
+5. `policy.bindingVersions` is **recommended and Host-maintained**, not yet
    mandatory for legacy P0-A runs. Introducing a strict mandatory flag would
    break already deployed Agent runs; it requires a separate compatibility
    decision. P0-A relies on the Host to supply truthful version identities.
@@ -106,15 +106,26 @@ rather than silently skipping a validation function it does not implement.
 Agent verification and external `checkStep` remain reserved for P0-B.
 The error is `FK_I_UNSUPPORTED_GRAPH` and no Run is created.
 
-## Program-load cost, measured separately
+## Program-load cost and bounded verified cache
 
-`Coordinator.loadPinned` reads the immutable Program from SQLite, revalidates
-its manifest, and calls the verified loader for every stage. This is safe but
-may be unnecessarily expensive. We first benchmark repeated exact-byte loads
-and a multi-phase workflow, with **no performance-SLA claim and no automatic
-cache**. Any future cache must be keyed by immutable Program identity and
-cannot bypass trust or artifact checks. See the recorded benchmark evidence
-in the Stage 2 PR review.
+The initial sampled benchmark on Ubuntu Node 24.22.1 measured a 15,908-byte
+immutable Program across 16 Condition nodes: repeated verified loader
+median **5.386 ms**, p90 **9.068 ms** (28 warm samples), with **34**
+artifact reads and **147.468 ms** full Run time. These are
+single-run diagnostic samples, **not a production SLA**.
+
+Because per-phase loader re-parsing is meaningful relative to the overall
+execution time, the Coordinator now maintains a **per-instance, 4-entry LRU**
+of *already-verified immutable Program objects*. It never stores the Program
+in an external or global cache. At **every stage, including cache hits**,
+FlowKit still reads the Host-owned Store, verifies the full Program byte hash
+and manifest identity, checks the current policy, runtime binding requirements,
+and legal Checkpoint phase. A changed/missing Store artifact rejects even
+with a warm cache; this is covered by explicit negative tests.
+
+`node scripts/bench-interactive-load.mjs` measures the same workflow without
+latency thresholds. The precise Stage 2 PR CI evidence records both before
+and after results; timings vary by OS/Node and must not be treated as SLA.
 
 ## Exit gate
 
