@@ -87,8 +87,8 @@
 3. 验证 Host 服务对象的控制/更改配置权限不能被 Grok 用户调用；
 4. 从 Grok 子进程尝试列目录、读、写、改名、替换、删除 Host 私有文件；
 5. 从 Grok 子进程尝试打开 Host PID/进程句柄进行敏感权限操作；
-6. 从 Grok 子进程尝试无证书/伪证书连接 loopback 端点；
-7. 用真实受保护 Bridge client 连接并完成合法请求；
+6. **仅当部署实际启用 loopback TLS/mTLS 监听端点时**，从 Grok 子进程尝试无证书/伪证书连接；若未启用，记录 `N/A—NO_LISTENER`，不得为了该项创建监听器，并转而验证实际候选数据入口（SEC-05）；
+7. **仅当部署独立受保护 Bridge client 时**，用该客户端完成合法请求；若采用单一 HOST_USER TCB/无独立 Bridge，记录 `N/A—NO_SEPARATE_BRIDGE`，并验证实际 Host TCB 候选入口和工具事件绑定（SEC-05/06）；
 8. 证明新进程重启后仍保持隔离；
 9. 所有记录脱敏，不把私钥、私有数据库原文上传 CI；
 10. 若使用 Named Pipe，检查 SECURITY_ATTRIBUTES/DACL、非授权 SID 连接和服务 SID 验证；默认 Pipe ACL 不构成通过证据。
