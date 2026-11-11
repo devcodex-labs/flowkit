@@ -1,0 +1,10 @@
+{
+  "runId": "s13-chatgpt-bridge-run-20261111",
+  "requestId": "req:6bed7ea39b96e81b99100ffe69bb174ba38533d42f3bbdbefad6239cee0ac829",
+  "taskDigest": "sha256:96733a8e513b08020acc42ef5dabd93413d52b452d8b982d40afcf3b81ac2876",
+  "result": {
+    "summary": "FlowKit 将执行顺序、条件分支、失败路径和终态编译为可执行的 JavaScript Program，由代码而不是模型临时决定下一节点；Agent 只提交当前节点的结果，可信 Host 依据 Program、CAS 与 Journal 验证每次推进。",
+    "nextAction": "在可信 Host 运行本次 Condition→Agent→Terminal 工作流，核对已持久化 Pending 的 requestId 与任务摘要；接纳模型结构化输出后核验签名回执、最终 SQLite State、Journal 连续性、宿主重启恢复及重复回执的原始 Ack。",
+    "flowkitBoundary": "FlowKit 负责工作流编译、程序化路由、Checkpoint、回执幂等和恢复；Host 负责模型与 JS 工具调用、来源认证、安全隔离以及用户配置的产物存储；可选 Context 模块负责上下文引用和复杂数据关联，不能替代 Program 决定流程。"
+  }
+}
