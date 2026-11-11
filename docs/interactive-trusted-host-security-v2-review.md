@@ -38,6 +38,8 @@
 | DR-13 | P1（持久恢复） | Host 已签回执、尚未接纳就 SIGKILL；签名超期后可能丢失原始证明或误签编造结果 | §6.4 增加 Host-only OBSERVED/SIGNED/ACKED Outbox、签后持久化再 accept、过期未接纳 fail closed、严格原事件重证 | **设计已关闭；TH-029/SEC-18/NAT-15 待实测** |
 | DR-14 | P2（容量/隐私） | 原生会话事件和签名 Outbox 可能永久堆积或记录敏感 State | Host-only 审计只保存必要证据与摘要；保留窗口和容量在 Phase 3 配置并测试 | **设计已关闭；TH-030/SEC-19 待实测** |
 
+| DR-15 | P1（信任边界一致性） | 如果 Bridge 与 Host 同用 HOST_USER，不能同时宣称 Bridge 在 OS 层无权读取 Host signer/SQLite | 明确 Bridge+Host 同权时是一个可信计算基（TCB），只能声明 MODEL_USER 被隔离；需要 Host 对 Bridge 的再隔离时必须使用独立 BRIDGE_USER 及真实 ACL/UID | **设计已关闭；SEC-01/02/05/06 待实测** |
+
 ## 3. 设计冻结所需的可核对不变式
 
 - [x] 现有 M5 Ed25519 Statement V1 不变；新增来源证据采用独立 Host-only ledger。
@@ -66,4 +68,4 @@
 
 **不是外部独立审查通过。** 由于当前执行环境无法代替用户本地的 Windows 服务账户和 Grok Build 会话，Phase 3 的真实安全证明、Phase 4 的原生事件序列均未执行。必须保留 BLOCKED，不得将文档 CI PASS 写成安全验收 PASS。
 
-**建议：** 保持文档设计 PR Draft，独立审查时按 DR-01..14、TH-001..030、SEC/NAT 矩阵逐项核对。若没有实质性新设计 Finding，可正式确认本设计并开始 Phase 3；如发现信任域或工具事件顺序不可实现，必须先修正本设计再实施，禁止绕开门禁。
+**建议：** 保持文档设计 PR Draft，独立审查时按 DR-01..15、TH-001..030、SEC/NAT 矩阵逐项核对。若没有实质性新设计 Finding，可正式确认本设计并开始 Phase 3；如发现信任域或工具事件顺序不可实现，必须先修正本设计再实施，禁止绕开门禁。
