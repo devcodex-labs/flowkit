@@ -10,9 +10,11 @@ export const MAX_JOURNAL_BYTES = 2 * 1024 * 1024;
 // a failed Agent receipt must still leave enough bytes for a durable error exit.
 export const CHECKPOINT_ERROR_RESERVE_BYTES = 256 * 1024;
 export const MAX_ACTIVE_CHECKPOINT_BYTES = MAX_CHECKPOINT_BYTES - CHECKPOINT_ERROR_RESERVE_BYTES;
-// Business files are Host-owned. Large inline model JSON must use a Host-managed
-// reference or be deterministically rejected without stranding a Pending.
-export const MAX_INLINE_AGENT_RESULT_BYTES = 128 * 1024;
+// There is no extra arbitrary per-Agent 128-KiB limit: the hard serialization
+// bound stays 2 MiB. Admission is decided by the *whole* current Checkpoint
+// against MAX_ACTIVE_CHECKPOINT_BYTES, not by payload size in isolation.
+// Large business artifacts remain Host-owned.
+export const MAX_INLINE_AGENT_RESULT_BYTES = MAX_CHECKPOINT_BYTES;
 
 function validUnicode(value) {
   for (let i = 0; i < value.length; i += 1) {
