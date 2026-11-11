@@ -69,3 +69,29 @@
 **不是外部独立审查通过。** 由于当前执行环境无法代替用户本地的 Windows 服务账户和 Grok Build 会话，Phase 3 的真实安全证明、Phase 4 的原生事件序列均未执行。必须保留 BLOCKED，不得将文档 CI PASS 写成安全验收 PASS。
 
 **建议：** 保持文档设计 PR Draft，独立审查时按 DR-01..15、TH-001..030、SEC/NAT 矩阵逐项核对。若没有实质性新设计 Finding，可正式确认本设计并开始 Phase 3；如发现信任域或工具事件顺序不可实现，必须先修正本设计再实施，禁止绕开门禁。
+
+
+## 6. Grok 独立复审 F-01–F-07 的逐条核验（2026-11-11）
+
+**外部材料：** `FlowKit-PR14-Trusted-Host-V2-Independent-Security-Review-Grok.md`（对 PR #14 frozen head `d1c7c76d03780f04a5b761699cdbc9ac82f0b86c` 的只读审查，结论 `CONDITIONAL PASS`）。本小节是后续交叉核验，**不是替代 Grok 初审的新第三方意见**。
+
+| Finding | 独立交叉核验 | 处理结果及剩余门禁 |
+|---|---|---|
+| F-01 P1 | **确认。** 旧 §9 同时要求先验证 Grok 工具和把它放到 Phase 4，门禁冲突。 | 主设计 §9.1、路线图 Phase 3 改成唯一入口/退出规则；H3-02 工具能力探针先于通信代码，原生 C12/S13 仍 Blocked。 |
+| F-02 P1 | **核心缺口确认，Grok 的“只有 Shell/MCP”和“rawInput 必须逐字节包含全部 normalizedReceipt”不是已证实的硬事实。** 官方 Grok Build 支持通过 MCP 扩展工具；`--tools` 本身仅为内置工具 allowlist。 | 主设计 §5.5 冻结优先 MCP PoC、受信配置及两条摘要：rawInput→toolInputDigest、Host 当前 Pending+参数→receiptHash；在 NAT-14/Grok 实测之前 H3-02 不能投入生产。 |
+| F-03 P2 | **确认。** TH-017/023 为 P1，却对齐 SEC-11/04 的 P0。 | 威胁表升级至 P0；TH-028 保留 P1（协议活性而非 P0 越权），但 NAT-14 作为 Phase 4 强制阻断门禁，不得延期放行。 |
+| F-04 P2 | **确认机制风险，非跨账户实测。** Windows 句柄继承保留权限；报告只做同用户 fd 探针。 | 主设计、SEC-02/03 增加真正继承句柄表/子进程非授权访问负例；Windows 跨 SID 攻击实测仍 BLOCKED。 |
+| F-05 P2 | **官方规则确认，具体 Node SDDL 未独立复现。** 微软说明默认 Named Pipe DACL 给 Everyone/Anonymous 读取，Node 公开选项未提供可指定 SDDL 的安全接口。 | 默认 Node Named Pipe 明确禁止安全 IPC；仅创建时自定义 DACL+SID 的 Win32 引导经验证后可选，或采用受信的本机传输。 |
+| F-06 P2 | **确认。** C12 交叉索引缺行、Grok requestId 与 FlowKit requestId 混用风险、Outbox 正文摘要未冻结。 | 验收矩阵补 C12，增加独立 `flowkitRequestId/grokRequestId/grokSessionId/toolCallId`；重签仅对 Outbox 保存的同一 normalizedReceipt canonical bytes/proofId 和当前 Pending 重新核证。 |
+| F-07 P2 | **可访问性缺口确认。** 既有会话曾给出 V0.3/V0.6-R5 历史生成路径，但此 PR、当前文件库和工作环境未找到可复核原件。不能推断文件从未存在。 | 从 PR 中移除“已有可核验正式契约”暗示；要求补原文不可变定位和完整 SHA-256 后才可裁决正式契约符合性，当前 BLOCKED。 |
+
+**额外核验说明**：Grok 本地 Node 默认管道 DACL 与同用户句柄实验没有提供可独立执行的原始脚本/日志；本交叉复审仅采用 Windows 官方文档所证明的权限机制，不冒充已在用户电脑复现。Grok Build MCP 支持来自官方用户指南，但尚未执行 `grok -p` 的 NAT-14 工具时序实测。
+
+**当前裁决：** 七项均已登记修订；F-01/03/05/06 的文档矛盾已修正；F-02/04 的设计控制已定义但关键平台实测仍缺；F-07 缺正式原文仍 BLOCKED。PR #14 继续 Draft，**不得以文档 CI 通过替代 Phase 2 的修订段落独立复核，也不得进入 Phase 3 的受信通信实现**。
+
+后续：让 Grok Build **只复审本轮修订 diff**、官方 MCP/工具事件时序前置条件与 F-07 原件可访问性；无新实质性设计 Finding 且正式契约可核验后方可关闭 Phase 2。Phase 3/4 的运行证据在其阶段分别取得。
+
+- [Microsoft: Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
+- [Microsoft: process handle inheritance](https://learn.microsoft.com/en-us/windows/win32/procthread/inheritance)
+- [Grok Build: MCP server configuration](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md)
+- [Grok Build: headless events and `--tools`](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
