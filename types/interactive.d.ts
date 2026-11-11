@@ -151,8 +151,12 @@ export interface InteractiveSkillDescriptor {
 export interface InteractiveRuntime {
   skillResolver?: (descriptor: InteractiveSkillDescriptor) => string|Promise<string>;
   validateResult?: (schema: Record<string,unknown>, result: unknown) => string[];
-  /** checkStep is deliberately NOT supported in P0-A. */
-  checkStep?: never;
+  /**
+   * A shared Standard Host may expose checkStep. It is ignored only for a
+   * verified Program with zero Agent bindings; Agent P0-A rejects it rather
+   * than silently skipping a requested validation capability.
+   */
+  checkStep?: unknown;
 }
 export interface InteractiveCoordinator {
   readonly policyHash: string;
