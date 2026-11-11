@@ -248,6 +248,24 @@ xAI Grok Build 文档提供：
 - 同内容重复提交 → 原 acceptedRevision；不同内容同 requestId → `FK_I_RECEIPT_CONFLICT`；迟到或错租户按原协议拒绝。
 - 策略/密钥轮换：保留已批准旧运行的身份/密钥策略直到 Run drain；无法提供安全迁移时 fail closed，不得重签一个编造的旧回答。
 - 缺来源证据、隔离破坏或私钥访问异常时停止签署新 receipt，Store 保持在可审查的最后 durable State；不能用无穷重试假装恢复成功。
+- 详见 §6.4 对签后、CAS 前进程崩溃的 Outbox 和过期证明处理；禁止无持久证据的重签。
+
+### 6.4 Host-only 观察证据与签名回执 Outbox（关闭 DR-13）
+
+**必须解决的故障窗口**：模型结果已被独立观察、Host 已签 v1 statement，但 `host.accept()` 还没提交持久回执就崩溃。如果签名已过期，M5 仅允许**已接纳、内容相同的回执**在过期后复用历史 Ack；**未接纳的过期回执不能直接重放成功**。
+
+实现约束：
+
+1. Host-only observation ledger 使用独立保护的持久存储（可为 Host Adapter 自己的 SQLite/附加表；不得未经批准改变 FlowKit Core Store Schema），记录原始受信事件的不可变摘要、`namespace/runId/requestId/attempt/taskDigest/resultDigest`、来源安全等级、已验证 CLI/proc/toolCallId、时钟与审计 ID。
+2. 在调用 signer 前先持久写入 `OBSERVED` 事件与验证结果。签名成功后，**先持久写入完整的 signed statement/receipt 和 `SIGNED` Outbox 记录**（Host-only，保留原始字节），再调用现有 `host.accept()`。不能在内存里签完就立即调用，留下不可对账的崩溃窗口。
+3. 若 `accept()` 成功，核实 Store 的 `getReceipt(runId,requestId)` 与 v1 `receiptHash/acceptedRevision` 相同后，标记 `ACKED`。如果此时又崩溃，重启时从 Store 核对后补写 `ACKED`，不能产生第二次业务 State 提交。
+4. 若崩溃后为 `SIGNED` 但 Store 尚未接纳：**未过期**则原字节重放；**已过期**则保持 Pending，不得拿原过期签名绕过 M5。仅当 Host-only 原始受信事件仍可验证、同一身份与同一结果摘要且有独立审计的重证策略时，才允许生成**同一真实观察事件**的新签名；否则 `BLOCKED/RECONCILE`，不得伪造“模型重新完成”。
+5. `proofId` 应由 Host 独立分配，映射到不可变证据记录；必须限制同一 toolCallId/事件/结果在不同 Run、租户、attempt 之间复用。
+6. 对冲突的两个合法结果，现有 Coordinator CAS 仍决定唯一有效提交；Outbox 记录未中标的结果必须标记 `CONFLICT/REJECTED`，不能“清理失败结果”时丢掉必要审计。
+7. Outbox 保留策略应与 Run 生命周期、合规审查窗口、敏感数据最小化和存储上限绑定；默认禁止无限制记录完整模型文本、私钥、完整 State。实际保留时长/GC 策略作为 Host 部署配置在 Phase 3 验收中冻结，**不是**新增 FlowKit Core 通用业务产物库或 GC。
+8. 必须测试 `OBSERVED→SIGNED`、`SIGNED→ACCEPTED`、`ACCEPTED→ACKED` 的真实进程强杀、错租户、超期签名、重复回复、签名轮换与审计 Outbox 恢复，并证明 Journal/Checkpoint 不被 Outbox 重建逻辑重写。
+
+这个设计避免把“Host 自己可以重新签名”误当成持久恢复与 Provider exactly-once 证明，也不改变现有 M5 对过期证明与历史 Ack 的安全语义。
 
 ## 7. 部署与运行模式
 
@@ -266,7 +284,7 @@ xAI Grok Build 文档提供：
 |---|---|---|---|
 | H3-01 | Host bootstrap/provisioning | Windows/Linux 受保护身份、private FS、信任配置 | 本设计通过安全审查 |
 | H3-02 | Transport adapter | 127.0.0.1 mTLS、严格 framing/ACL-bound auth | H3-01 |
-| H3-03 | Agent result evidence ledger | Host-only 进程/会话/tool/event/result digest 关联 | H3-02 |
+| H3-03 | Trusted observation / signed receipt Outbox | Host-only 进程/会话/tool/event/result digest 关联；OBSERVED/SIGNED/ACKED 持久化、过期与重试对账 | H3-02 |
 | H3-04 | M5 signer integration | 按 `proofId` 查证据，签原 v1 statement 后 `accept` | H3-03 |
 | H3-05 | OS negative-security tests | Windows ACL、Linux UID、shell/pid/IPC/replay/tamper | H3-04 |
 | H4-01 | Grok direct CLI native JS tool | 原生工具启动、获取 Pending、提交、续接终态 | H3-05 |
