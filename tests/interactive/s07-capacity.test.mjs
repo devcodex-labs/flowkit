@@ -366,3 +366,38 @@ test('S07 capacity guard at publish and after an accepted receipt uses determini
   assert.equal(duplicate.acceptedRevision,result.acceptedRevision);
   checkJournal(f.store,w.runId);
 });
+
+
+test('S07 M5 authentic signed oversize receipt closes Run durably without issuing a false Ack',async t=>{
+  const f=await fixture(t);
+  const keys=generateKeyPairSync('ed25519');
+  const now=1794400000000;
+  const host=createTrustedInteractiveHost({
+    store:f.store,runtime,trustedPublicKeys:{provider:keys.publicKey},
+    trustedArtifacts:[f.source.programIdentity.artifactHash],
+    allowedInputKeys:[],disclosurePolicyId:'s07-oversize-v1',
+    authorizeDisclosure:async()=>true,now:()=>now,
+  });
+  const frame=await host.start({...f.source,
+    startKey:'signed-overlimit',runId:'signed-overlimit',state:{retain:'yes'}});
+  assert.equal(frame.status,'waiting');
+  const signedReceipt={
+    runId:frame.runId,requestId:frame.pending.requestId,nodeId:frame.pending.nodeId,
+    attempt:frame.pending.attempt,kind:'agent-result',
+    result:{answer:'x'.repeat(MAX_INLINE_AGENT_RESULT_BYTES)},
+  };
+  const statement=createAgentReceiptStatement({
+    run:f.store.load(frame.runId),receipt:signedReceipt,keyId:'provider',
+    proofId:'signed-oversize',issuedAt:now-1000,expiresAt:now+20000,
+  });
+  const signature=sign(null,encodeAgentReceiptStatement(statement),keys.privateKey)
+    .toString('base64url');
+  await assert.rejects(host.accept({receipt:signedReceipt,
+    attestation:{statement,signature}}),{code:'FK_I_CHECKPOINT_CAPACITY'});
+  const stopped=await host.load({runId:frame.runId});
+  assert.equal(stopped.status,'errored');
+  assert.equal(stopped.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
+  assert.deepEqual(stopped.state,{retain:'yes'});
+  assert.equal(f.store.getReceipt(frame.runId,frame.pending.requestId),null);
+  checkJournal(f.store,frame.runId);
+});
