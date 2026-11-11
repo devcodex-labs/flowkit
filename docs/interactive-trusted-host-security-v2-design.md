@@ -192,7 +192,7 @@ xAI Grok Build 文档提供：
 5. 如果某个事件无法可靠证明对应当前结果、会话/进程或授权工具执行，**不得签署 Agent 回执**；保持原 Pending，写 Host-only 审计并按受控恢复策略处置。
 6. Host 归一化 `normalizeHostAgentReceipt(receipt)` 后，建立 Host-only `proofId → verifiedSessionEvidence` 绑定，选择已核准的 `keyId`，调用现有 `createAgentReceiptStatement` 和 `encodeAgentReceiptStatement` 在 HOST_USER 下签 Ed25519。
 7. 最后调用现有 `host.accept({receipt,attestation})`。现有 statement 的 `proofId` 和 `receiptHash` 正好绑定已认证事件与结果；**不新增 v1 ABI 字段**。
-7. 原始证据若是任何模型可写的 JSON，则只能作辅助上下文，不是独立认证来源。
+8. 原始证据若是任何模型可写的 JSON，则只能作辅助上下文，不是独立认证来源。
 9. `agent-call-failed` 和 provider output-overflow 只在 Host 可信观察到真实失败/限制后签发，禁止把任意模型自报失败升级为可信状态变更。
 
 ### 5.4 对可验证性边界作出硬判定
