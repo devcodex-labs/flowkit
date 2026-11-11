@@ -134,7 +134,7 @@ test('S07 valid 64 KiB receipt at safe active headroom deterministically errors 
 });
 
 test('S07 oversized Host-owned inline Agent output is a durable terminal capacity error; no false acceptedRevision',async t=>{
-  for(const bytes of [MAX_INLINE_AGENT_RESULT_BYTES+1,MAX_CHECKPOINT_BYTES+1024]){
+  for(const bytes of [MAX_ACTIVE_CHECKPOINT_BYTES+1,MAX_CHECKPOINT_BYTES+1024]){
     const f=await fixture(t);
     const runId='too-large-'+bytes;
     const w=await waiting(f,{runId,startKey:runId,state:{valuable:'kept'}});
@@ -385,7 +385,7 @@ test('S07 M5 authentic signed oversize receipt closes Run durably without issuin
   const signedReceipt={
     runId:frame.runId,requestId:frame.pending.requestId,nodeId:frame.pending.nodeId,
     attempt:frame.pending.attempt,kind:'agent-result',
-    result:{answer:'x'.repeat(MAX_INLINE_AGENT_RESULT_BYTES)},
+    result:{answer:'x'.repeat(MAX_ACTIVE_CHECKPOINT_BYTES)},
   };
   const statement=createAgentReceiptStatement({
     run:f.store.load(frame.runId),receipt:signedReceipt,keyId:'provider',
@@ -400,5 +400,17 @@ test('S07 M5 authentic signed oversize receipt closes Run durably without issuin
   assert.equal(stopped.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
   assert.deepEqual(stopped.state,{retain:'yes'});
   assert.equal(f.store.getReceipt(frame.runId,frame.pending.requestId),null);
+  checkJournal(f.store,frame.runId);
+});
+
+
+test('S07 moderately large valid inline output is still accepted when whole Checkpoint has capacity',async t=>{
+  const f=await fixture(t);
+  const frame=await waiting(f,{runId:'moderate-inline',startKey:'moderate-inline'});
+  const completed=await f.api.complete(receipt(frame,{answer:'z'.repeat(256*1024)}));
+  assert.equal(completed.status,'succeeded');
+  assert.equal(completed.state.answer.length,256*1024);
+  assert.equal(f.store.getReceipt(frame.runId,frame.pending.requestId).acceptedRevision,
+    completed.acceptedRevision);
   checkJournal(f.store,frame.runId);
 });
