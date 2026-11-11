@@ -186,11 +186,19 @@ function assertRuntime(program,runtime) {
   }
 }
 function initialCheckpoint(namespace, runId, program, policyHash, state) {
+  let snapshot;
+  try { snapshot=copy(state); }
+  catch(error) {
+    if (error instanceof RangeError && /Canonical JSON exceeds maximum bytes/.test(error.message)) {
+      throw failure('FK_I_CHECKPOINT_CAPACITY', 'initial State exceeds Checkpoint hard limit');
+    }
+    throw error;
+  }
   return {
     schemaVersion:1,namespace,runId,revision:0,
     artifactHash:program.artifactHash,policyHash,status:'running',
     blockId:program.programTable.entryBlockId,
-    phase:'enter',state:copy(state),
+    phase:'enter',state:snapshot,
     controlStack:[],activationSeq:0,receipts:[],
     pending:null,prepared:null,candidate:null,terminal:null,
     contextError:null,
