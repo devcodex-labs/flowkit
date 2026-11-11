@@ -189,7 +189,7 @@ xAI Grok Build 文档提供：
 
 1. Host 持久化当前 Run 和 Pending，建立不可变 `{namespace,runId,nodeId,flowkitRequestId,attempt,artifactHash,policyHash,taskDigest}` 索引。`flowkitRequestId` 映射为原 M5 receipt 的 `requestId`；Grok CLI 的 `grokRequestId/grokSessionId/toolCallId` 保留为另外的 Host-only 观察字段，不能覆盖 FlowKit 身份。
 2. Trusted supervisor 创建 Host-only `sessionEvidenceId`（不是模型输入），记录实测 CLI binary Hash、OS principal、启动时间、进程树、Grok 会话标识（若提供）、工具 invocation/update 事件、原始输出 digest、requestId 绑定和事件的单调序号。
-3. 当 Grok Build 通过原生工具提交结果时，Bridge 只发送结果数据和公开 request identity。Supervisor/Host 通过**独立捕获的真实工具事件**及当前 Pending 核对 ToolCallId、result digest、会话/进程通道、租户权限、时效和容量。
+3. 当 Grok Build 通过原生工具提交结果时，Bridge 只发送结果数据和公开 request identity。Supervisor/Host 通过**独立捕获的真实工具事件**及当前 Pending 核对 ToolCallId、`toolInputDigest/receiptHash`、会话/进程通道、租户权限、时效和容量。
 4. **先捕获调用开始，再签署回执。** 对 `submit`，Host 必须在工具执行前独立捕获真实 `tool_call` 事件（携带完整输入参数或可验证摘要），与 Bridge 候选结果匹配。不能等待 `submit` 结束后才出现的 `tool_call_update` 或工具最终输出再签署，否则会形成“工具等待 Host，Host 等待工具”的死锁。完成事件用于签后审计；如果 Grok 当前版本无法证明开始事件时序，需要在 Phase 4 改为显式双阶段协议，不能假设已有能力。
 5. 如果某个事件无法可靠证明对应当前结果、会话/进程或授权工具执行，**不得签署 Agent 回执**；保持原 Pending，写 Host-only 审计并按受控恢复策略处置。
 6. Host 归一化 `normalizeHostAgentReceipt(receipt)` 后，建立 Host-only `proofId → verifiedSessionEvidence` 绑定，选择已核准的 `keyId`，调用现有 `createAgentReceiptStatement` 和 `encodeAgentReceiptStatement` 在 HOST_USER 下签 Ed25519。
@@ -298,8 +298,8 @@ xAI Grok Build 文档提供：
 | H3-03 | Trusted observation / signed receipt Outbox | Host-only 进程/会话/tool/event/receiptHash 关联；OBSERVED/SIGNED/ACKED WAL/FULL 持久化、过期/重签与历史 Ack 对账 | H3-02 |
 | H3-04 | M5 signer integration | 按 `proofId` 查证据，签原 v1 statement 后 `accept` | H3-03 |
 | H3-05 | OS negative-security tests | Windows ACL、Linux UID、shell/pid/IPC/replay/tamper | H3-04 |
-| H4-01 | Grok direct CLI native JS tool | 原生工具启动、获取 Pending、提交、续接终态 | H3-05 |
-| H4-02 | Grok CLI output observer | `streaming-json` 原始事件捕获、可信 ToolCallId/result link | H4-01 |
+| H4-01 | Grok CLI native tool observer | 基于 H3-02 PoC 固定 streaming-json 事件、toolCallId/input 摘要及日志伪造防护 | H3-05 |
+| H4-02 | Direct Grok JS/MCP tool loop | 启动授权 Run、获取 Pending、提交结果、续接终态；不得绕过 Host signer/Store | H4-01 |
 | H4-03 | Native Grok adversarial acceptance | S13/C12、kill/resume、双会话、提示注入和大输出 | H4-02 |
 
 上述编号仅表示交付片段，不新增正式阶段。每个片段有独立测试/审查并保留失败反例。未来可切换其他 IPC 实现，但要保持相同权限与身份断言。
@@ -313,7 +313,6 @@ xAI Grok Build 文档提供：
 - Host 在独立验证来源前签署任意模型 JSON；
 - 把 `usage.signature`、`GROK_SESSION_ID`、普通日志或 mTLS client 证书直接当成 Provider 签名；
 - 新设计与现有签名 v1、Program ABI、PolicyHash 或只读/公开视图冲突；
-- Grok 原生工具输入与签前可观测性属于 H3-02 开发前的接口探针、Phase 4 的 NAT-14 正式验收；不阻断 H3-01 的 OS 隔离实施。
 
 **完成 Phase 2 的条件：**
 1. 完成独立安全复审（至少一次对抗性核验，本轮模型自审不得自称外部独立）。
