@@ -543,10 +543,15 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     }
     // Size-only rejection must not require serializing an enormous receipt
     // into the 2 MiB Checkpoint budget before we can mark a matched Run errored.
-    const inlineTooLarge=kind==='agent-result' && oversizedInline(result);
-    const submission=inlineTooLarge ? null : copy(kind==='agent-result'
+    const rawSubmission=kind==='agent-result'
       ? {runId,requestId,nodeId,attempt,kind,result}
-      : {runId,requestId,nodeId,attempt,kind,failure:safeFailure});
+      : {runId,requestId,nodeId,attempt,kind,failure:safeFailure};
+    // Both the value AND its actual receipt envelope must be serializable
+    // under the protocol's 2 MiB bound. Otherwise snapshotting first would
+    // throw a raw RangeError while leaving an authenticated Pending waiting.
+    const inlineTooLarge=kind==='agent-result'
+      && (oversizedInline(result) || oversizedInline(rawSubmission));
+    const submission=inlineTooLarge ? null : copy(rawSubmission);
     const digest=inlineTooLarge ? null : fingerprint(submission);
     for (;;) {
       const cp=store.load(runId);
