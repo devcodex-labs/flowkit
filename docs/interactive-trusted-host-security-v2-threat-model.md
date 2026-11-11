@@ -24,7 +24,7 @@
 ### 1.2 与阶段对应
 
 - Phase 2：规范并审查所有威胁和验证门槛；不声称已运行 Windows/Grok 安全测试。
-- Phase 3：TH-001–TH-017、TH-022–TH-025、TH-027 的适用 OS/IPC/签名/Human 负例；TH-025 在 P0-A 仅验证伪造 Human 请求被拒绝，真实 Human 审批延后 P0-B。
+- Phase 3：TH-001–TH-017、TH-022–TH-025、TH-027、TH-029、TH-030 的适用 OS/IPC/签名/Human 负例；TH-025 在 P0-A 仅验证伪造 Human 请求被拒绝，真实 Human 审批延后 P0-B。
 - Phase 4：TH-018–TH-021、TH-026、TH-028 的真实 Grok 来源绑定、原生 JS 工具调用以及时序/PID 重放负例。
 - Phase 5/6：复核所有攻击族及 C08/C12/C22/C23 证据。
 - P0-B Human 和 P1/P2 并行新增威胁在相应阶段扩展，不在当前 P0-A 偷做。
@@ -62,6 +62,9 @@
 
 | TH-027 / P0 | Bridge 拥有 mTLS 客户端证书，但会从任意模型 JSON 直接触发转发 | Bridge 转发须有 Host-only CLI 工具事件证据 | 无可匹配 tool_call 的普通模型工具命令不能触发签名/CAS |
 | TH-028 / P1 | Host 等待 submit 的 tool_call_update，submit 又等待 Host 接纳，造成死锁 | 在签署前验证 tool_call start/input；update 作事后审计 | 模拟事件只在工具结束后发出时必须 fail closed/显式调整协议，不得无限 waiting |
+
+| TH-029 / P0 | Host 签署 v1 receipt 后、CAS 接纳前崩溃；证明过期后错误重签伪造历史回复 | Host-only OBSERVED/SIGNED/ACKED Outbox，签名后持久化再 accept，恢复时与 receipt-index 对账；过期未接纳时 fail closed | SIGKILL 签名前/签后/CAS 后；未接纳过期证明不得产生状态修改；原有效结果只能经受信证据对账 |
+| TH-030 / P1 | 模型结果和 Host 观察日志无限增长或泄漏原始 State/密钥，隐私与磁盘 DoS | Host-only 有界 retention、加密/ACL、按 Run 生命周期和审计窗口清理，避免记录完整敏感文本 | 大量 Run/长链后空间有界；Public Task 和公开日志无 canary；保留必要 hash-chain audit |
 
 **验收证明强度**：
 - “模型说无法访问”不是 TH-001–TH-005 证明，必须真的运行拒绝访问的文件/进程命令；
