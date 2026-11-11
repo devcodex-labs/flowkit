@@ -150,15 +150,16 @@ test('S07 oversized Host-owned inline Agent output is a durable terminal capacit
   }
 });
 
-test('S07 initial State exceeding active budget fails before creating a resumable Run',async t=>{
+test('S07 initial State exceeding soft OR hard budget deterministically fails before creating Run',async t=>{
   const f=await fixture(t);
-  const state={filler:'a'.repeat(MAX_ACTIVE_CHECKPOINT_BYTES)};
-  await assert.rejects(f.api.start({...f.source,
-    runId:'oversized-initial',startKey:'initial-too-large',state}),{
-    code:'FK_I_CHECKPOINT_CAPACITY',
-  });
-  assert.equal(f.store.load('oversized-initial'),null);
-  assert.deepEqual(f.store.listJournal('oversized-initial'),[]);
+  for(const bytes of [MAX_ACTIVE_CHECKPOINT_BYTES,MAX_CHECKPOINT_BYTES+1024]){
+    const runId='oversized-initial-'+bytes;
+    const state={filler:'a'.repeat(bytes)};
+    await assert.rejects(f.api.start({...f.source,
+      runId,startKey:runId,state}),{code:'FK_I_CHECKPOINT_CAPACITY'});
+    assert.equal(f.store.load(runId),null);
+    assert.deepEqual(f.store.listJournal(runId),[]);
+  }
 });
 
 test('S07 21 Agent receipts retain a constant-size Checkpoint cache but all old Ack identities in SQLite index',async t=>{
