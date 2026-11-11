@@ -26,9 +26,9 @@
 | SEC-02 | MODEL 对 Host signing key、Host config、Program allowlist 做路径读取/复制及继承句柄扫描 | 文件路径全部 EACCES/EPERM/Access Denied，MODEL 子进程无继承的私钥/Token 句柄；Host 能正常签名 | P0 | TH-002, TH-005 | Win/Linux |
 | SEC-03 | MODEL 读/写/删除/替换 SQLite 主库、WAL、SHM、备份并检查继承文件/映射句柄 | 文件路径全部拒绝，MODEL 子进程无可读写的继承句柄，Host 恢复和数据完整性未受影响 | P0 | TH-003, TH-004 | Win/Linux |
 | SEC-04 | MODEL 用任意 CLI/shell/子进程尝试取得 Host Token、服务控制和进程调试权 | 不能提权、不能改服务启动程序、不能注入 Host | P0 | TH-001, TH-023 | Win/Linux |
-| SEC-05 | 使用实际 Host-controlled IPC；无凭据/伪凭据/跨租户客户连接 | 只有已授权 Bridge principal 允许访问，错误 Principal 不产生 CAS | P0 | TH-006, TH-007, TH-013 | Win/Linux |
+| SEC-05 | 对所有**实际启用的模型候选数据入口**执行授权及跨租户测试（匿名捕获/受控 MCP 转发/已启用的 IPC 等） | 无受信工具事件、错误 OS 主体、错误 Run/tenant 的提交不能签名或 CAS；若部署无监听端点记录 `NO_LISTENER`，**不得免测实际输入路径** | P0 | TH-006, TH-007, TH-013, TH-027 | Win/Linux |
 | SEC-06 | 用模型工具内普通 shell/curl/node 重演 `submitAgentResult` | 没有受信工具事件证据则不能获取 Host 签名或有效 Ack | P0 | TH-008, TH-009, TH-010 | Win/Linux |
-| SEC-07 | IPC 端点非回环、服务器伪造、证书到期、错误 CA/Hash、错误用途、证书泄漏 | 全部拒绝并且没有隐式 HTTP/plaintext fallback | P0 | TH-006–TH-008 | Win/Linux |
+| SEC-07 | **仅当选择监听型 TLS/mTLS IPC**：非回环、服务器伪造、证书到期、错误 CA/Hash、错误用途、证书泄漏 | 活跃 TLS/mTLS 端点的所有反例均拒绝，无 HTTP/plaintext fallback；没有 TLS/mTLS 监听时记 `N/A—NO_LISTENER` 并指向 SEC-05 的实际候选通道验证，不得为通过此项新增监听器 | P0 if adopted | TH-006–TH-008 | Win/Linux |
 | SEC-08 | 修改 Public Task、Result body、runId、requestId、attempt、nodeId、artifact、policy | 拒绝且 CP/Journal/receipt-index 字节不变，Host 错误不泄漏敏感值 | P0 | TH-011–TH-014 | Win/Linux |
 | SEC-09 | Host 签名时注入模型自报 `proofId`/SessionId/已审批文本 | 不用模型值替换 Host-only evidence；签名前拒绝 | P0 | TH-009, TH-010, TH-025 | Win/Linux |
 | SEC-10 | Publisher/Host 持久化前后分别 SIGKILL，重新启动并恢复同 Run | 原 Pending identity、CAS、Journal、回执一致 | P0 | TH-015, TH-020 | Win/Linux |
@@ -43,7 +43,7 @@
 | SEC-18 | Host 观察事件/签名回执 Outbox：签名前/签后/accept-CAS 前后真 SIGKILL | 原观察事件、proofId、signed bytes、acceptedRevision 对账；未接纳过期证明不能通过；已接纳同内容即使过期仍返回旧 Ack | P0 | TH-029 | Win/Linux |
 | SEC-19 | 证据保留/容量、隐私与历史审计 | Host-only evidence 不泄密、不无限增长；修订 Retention 配置后历史 Ack 和 Journal 仍可审查 | P1 | TH-030 | Win/Linux |
 
-**通过标准：** SEC-01–SEC-11、SEC-15、SEC-18 的适用 P0 全部 PASS，SEC-16/17 按所选部署 Profile 验证；TH-017/TH-023 与 SEC-11/SEC-04 同为 P0。P1 漏项只能在不构成 P0 绕过的前提下登记。**仅一个平台通过只能记录该平台 Profile PASS；完整 Phase 3 退出要求 Windows 与 Linux 两个指定 Secure Host Profile 均实测 PASS**。Grok 源认证另属 Phase 4，不要求在 Phase 3 入口提前完成。
+**通过标准：** SEC-01–SEC-11、SEC-15、SEC-18 中**适用于实际部署的 P0**必须全部 PASS；SEC-07 仅当采用监听型 TLS/mTLS 时强制，SEC-16 仅自定义 Named Pipe 被采用时强制，SEC-17 对 Linux 受限进程强制。无 TCP/mTLS 监听可记录 `N/A—NO_LISTENER`，不能把不存在的端点判成 PASS，也不能免除 SEC-05/06 对实际候选数据入口的身份/工具事件验证。TH-017/TH-023 与 SEC-11/SEC-04 均为 P0。P1 漏项不能构成 P0 绕过。**单一 OS Profile 通过不等于跨平台 Phase 3 完成；Windows 和 Linux 两个安全 Profile 均须有独立实测证据。** Grok 正式 NAT-14 仍是 Phase 4 门禁；H3-02 开工前的最小工具能力探针只记 PoC，不得冒充 NAT-14 PASS。
 
 ## 3. Phase 4：直接 Grok Build 原生 JS 工具链
 
