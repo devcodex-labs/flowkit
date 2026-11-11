@@ -115,6 +115,18 @@ export interface CheckpointStore {
     journalEntry?: unknown;
   }): {committed:boolean;checkpoint:InteractiveCheckpoint};
   listJournal(runId: string): unknown[];
+  /**
+   * Optional execution-only receipt index (implemented by the default SQLite
+   * Store). Resolves acceptedRevision/digest after a receipt leaves the
+   * Checkpoint's bounded recent-receipts cache.
+   */
+  getReceipt?(runId: string, requestId: string): {
+    requestId: string;
+    nodeId: string;
+    attempt: number;
+    digest: string;
+    acceptedRevision: number;
+  } | null;
 }
 export declare function createSqliteCheckpointStore(
   file: string, options: {namespace:string}
