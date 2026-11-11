@@ -35,5 +35,15 @@
       "reviewApproved": "true",
       "reviewNotes": "独立评审认为方案具备可执行的分层证据路线，但还应要求 C05/C06 直接引用真实 SIGKILL 与双进程 CAS 日志，不能只凭文字宣称恢复成功；C07 要明确 Skill 字节漂移与 Host 绑定版本的区别，C12 必须保留 Grok Build 原生会话来源认证门禁。本轮为受控负面测试，故意把 Schema 要求的布尔型 reviewApproved 写成字符串，预期 FlowKit 只能接纳回执身份、拒绝结果写入 State，并发布新的 review Pending，不能错误进入成功终态。"
     }
+  },
+  {
+    "index": 4,
+    "nodeId": "review",
+    "requestId": "req:5005e5df646511a14b1c70b87bc3416ff2399c8cc70d39b2f04bba812f24c092",
+    "taskDigest": "sha256:decd43a929d6d758aaaa629cc1efdf832f6020cf0662728d278ad35284191490",
+    "result": {
+      "reviewApproved": true,
+      "reviewNotes": "针对本次实际发布的第二次审查 Pending，前一轮失败原因明确是 reviewApproved 类型错误，必须改为布尔值而不是字符串。复审认为上游计划可以作为 FlowKit P0-A 复杂验收的执行基线：它区分了四 Agent 串行与两次条件路由、Schema 失败重试、36 Agent 长链、SQLite CAS 与 Journal、一致性预算、SIGKILL 和多进程竞争，并要求保存 Program 哈希与请求身份。建议先将脚本协议结果和当前五次真实 ChatGPT 模型回合分别列为不同证据层，再补验真实 Grok Build 原生 JS 工具、模型会话来源及独立权限隔离。这里批准的是测试方案可继续实施，不代表 C12 或整个 M6 S13 已经验收通过，也不能因此合并 M6。"
+    }
   }
 ]
