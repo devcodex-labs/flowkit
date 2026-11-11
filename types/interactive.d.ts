@@ -19,6 +19,14 @@ export interface InteractiveCompileOptions {
   output: 'memory' | 'file';
   featureStage: 'P0-A';
   outDir?: string;
+  /** Uses the Standard analyzer's nearest package.json discovery by default. */
+  projectRoot?: string;
+  /** Standard-compatible static Skill root (default "skills"). */
+  skillsRoot?: string;
+  /** Standard-compatible local Skill existence check (default true). */
+  skillCheck?: boolean;
+  /** Standard-compatible allowed HTTPS Skill host names. */
+  remoteSkillHosts?: string[];
   targetVersion?: 'interactive-state-machine-v1';
 }
 export interface InteractiveDiagnostic {
@@ -143,8 +151,12 @@ export interface InteractiveSkillDescriptor {
 export interface InteractiveRuntime {
   skillResolver?: (descriptor: InteractiveSkillDescriptor) => string|Promise<string>;
   validateResult?: (schema: Record<string,unknown>, result: unknown) => string[];
-  /** checkStep is deliberately NOT supported in P0-A. */
-  checkStep?: never;
+  /**
+   * A shared Standard Host may expose checkStep. It is ignored only for a
+   * verified Program with zero Agent bindings; Agent P0-A rejects it rather
+   * than silently skipping a requested validation capability.
+   */
+  checkStep?: unknown;
 }
 export interface InteractiveCoordinator {
   readonly policyHash: string;

@@ -175,8 +175,12 @@ function assertRuntime(program,runtime) {
   if (typeof runtime !== 'object' || !runtime || Array.isArray(runtime)) {
     throw new TypeError('InteractiveRuntime must be an object');
   }
-  if (runtime.checkStep !== undefined) {
-    throw failure('FK_I_UNSUPPORTED_GRAPH','P0-A cannot silently skip checkStep');
+  // A Host may expose shared Standard runtime callbacks. Ignore an unused
+  // checkStep only when the verified Program has no Agent/validation bindings.
+  // Agent P0-A still fails closed: we must not silently skip its checkStep.
+  if (runtime.checkStep !== undefined
+    && program.programTable.requiredBindings.length > 0) {
+    throw failure('FK_I_UNSUPPORTED_GRAPH','P0-A cannot silently skip Agent checkStep');
   }
   for (const binding of program.programTable.requiredBindings) {
     if (binding.id === 'runtime.validateResult' && typeof runtime.validateResult !== 'function'
@@ -233,6 +237,12 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
   const policySnapshot = copy(policy);
   const policyHash = fingerprint(policySnapshot);
   const stageBudget = validStageCount(maxStagesPerCall);
+  // Only verified immutable Program objects are cached, never Store records.
+  // Even on a cache hit every stage re-reads the Host's Store, checks exact
+  // Program bytes and identity, then verifies the current Run phase/policy.
+  // Small fixed LRU avoids a broad, implicit process-global cache.
+  const verifiedPrograms = new Map();
+  const MAX_VERIFIED_PROGRAMS = 4;
 
   async function loadPinned(cp) {
     if (cp.namespace !== store.namespace || cp.policyHash !== policyHash) {
@@ -240,14 +250,31 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     }
     assertSHA256(cp.artifactHash);
     const saved = store.getArtifact(cp.artifactHash);
-    if (!saved || saved.programIdentity.artifactHash !== cp.artifactHash) {
-      throw failure('FK_I_PROGRAM_MISMATCH','Missing compiled Program bytes');
+    if (!saved || saved.programIdentity?.artifactHash !== cp.artifactHash
+      || !(saved.bytes instanceof Uint8Array)
+      || sha256Bytes(saved.bytes) !== cp.artifactHash) {
+      throw failure('FK_I_PROGRAM_MISMATCH','Missing or modified compiler Program bytes');
     }
-    const program = await loadInteractiveProgram(saved.bytes,cp.artifactHash);
-    const declared = {...program.interactiveProgram.identity,artifactHash:cp.artifactHash};
-    if (canonicalBytes(declared).toString('hex')
-      !== canonicalBytes(saved.programIdentity).toString('hex')) {
-      throw failure('FK_I_PROGRAM_MISMATCH','Stored Program manifest mismatch');
+    const identityBytes=canonicalBytes(saved.programIdentity);
+    const cached=verifiedPrograms.get(cp.artifactHash);
+    let program;
+    if (cached && cached.identityBytes.equals(identityBytes)) {
+      program=cached.program;
+      // Update LRU order; no change to the frozen Program or Store.
+      verifiedPrograms.delete(cp.artifactHash);
+      verifiedPrograms.set(cp.artifactHash,cached);
+    } else {
+      // Never trust stale cached ABI/identity after a Store metadata change.
+      program=await loadInteractiveProgram(saved.bytes,cp.artifactHash);
+      const declared={...program.interactiveProgram.identity,artifactHash:cp.artifactHash};
+      if (!canonicalBytes(declared).equals(identityBytes)) {
+        throw failure('FK_I_PROGRAM_MISMATCH','Stored Program manifest mismatch');
+      }
+      verifiedPrograms.delete(cp.artifactHash);
+      verifiedPrograms.set(cp.artifactHash,{program,identityBytes});
+      if (verifiedPrograms.size>MAX_VERIFIED_PROGRAMS) {
+        verifiedPrograms.delete(verifiedPrograms.keys().next().value);
+      }
     }
     assertRuntime(program,execution);
     confirmCurrentBlock(cp,program);

@@ -11,6 +11,18 @@
 - **Not implemented in P0-A**: Human, Action, Verification, Loop, Parallel, Agent verify or external checkStep, automatic `runAgent` invocation, trusted Human provenance bridge, background service, P0-B/P1/P2 extensions.
 - The Coordinator and the Store are **owned and invoked by the Host**, not by the model. A model must not have direct filesystem/database access or direct `complete()` authority.
 
+## Static configuration and Host binding version consistency
+
+The Interactive compiler now reuses Standard's project-root discovery and
+Skill static validation options (`projectRoot`, `skillsRoot`, `skillCheck`,
+`remoteSkillHosts`). Versioned Host validation/Skill bindings are already
+pinned through the existing `policyHash` when the Host declares
+`policy.bindingVersions`. Pure Condition/Terminal Programs tolerate an unused
+shared `checkStep` callback; Agent P0-A still rejects one.
+
+See [Stage 2 integration contracts](./interactive-stage2-contract.md) for
+Host obligations, compatibility limits and verified Program cache behavior.
+
 ## Low-level Host-only example: compile, start, resolve pending, resume
 
 The source is a validated `*.workflow.js` or `*.workflow.ts` using
