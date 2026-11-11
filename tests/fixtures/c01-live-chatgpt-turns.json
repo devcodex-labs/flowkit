@@ -25,5 +25,15 @@
     "result": {
       "executionPlan": "实施分为三组证据。第一组使用真正编译的 P0-A JavaScript Program、SQLite 和可信 Host，构造四个串行 Agent 与两个条件节点，逐项断言输入只来自前序已确认的 State，分别执行通过、拒绝和缺失条件三条路由；向审查节点注入错误 Schema，确认不写入 State、生成新的 requestId 后再次提交合法回执，重试耗尽须持久化 FK_R004。第二组运行三十六 Agent 的脚本长链，检查每条 Journal、CAS 版本和历史回执查询；分别注入 SIGKILL、双进程竞争、Program 或 Skill 漂移、签名伪造和容量超限，验证恢复与失败封闭。第三组让真实 ChatGPT 逐次读取公开 Pending、独立产出五个模型回合，并留存原始任务摘要、提交记录和终态证据。真正的 Grok Build 模型会话及独立来源认证另行验证，无法提供原生日志时持续标记 BLOCKED，不因 CI 全绿宣称完成。"
     }
+  },
+  {
+    "index": 3,
+    "nodeId": "review",
+    "requestId": "req:43585b79c64e2980f1d8b0de4e1fc12b1925dc6aaca4b3a936c4548754d90a55",
+    "taskDigest": "sha256:da7a90e4b6e758dc2c73587f4760af28135ef53685aea7af35f6476d5b28ace5",
+    "result": {
+      "reviewApproved": "true",
+      "reviewNotes": "独立评审认为方案具备可执行的分层证据路线，但还应要求 C05/C06 直接引用真实 SIGKILL 与双进程 CAS 日志，不能只凭文字宣称恢复成功；C07 要明确 Skill 字节漂移与 Host 绑定版本的区别，C12 必须保留 Grok Build 原生会话来源认证门禁。本轮为受控负面测试，故意把 Schema 要求的布尔型 reviewApproved 写成字符串，预期 FlowKit 只能接纳回执身份、拒绝结果写入 State，并发布新的 review Pending，不能错误进入成功终态。"
+    }
   }
 ]
