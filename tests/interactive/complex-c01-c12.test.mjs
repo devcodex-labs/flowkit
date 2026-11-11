@@ -275,7 +275,7 @@ test('C04 repeated invalid review schema consumes exactly retries+1 and FK_R004'
   assert.deepEqual(attempts,[1,2]);
   assert.equal(frame.status,'errored');
   assert.equal(frame.terminal.causeCode,'FK_R004');
-  assert.equal(Object.hasOwn(frame.state,'reviewApproved'),false);
+  assert.equal(Object.hasOwn(f.store.load(frame.runId).state,'reviewApproved'),false);
   evidence('C04',f,frame,{attempts,causeCode:'FK_R004'});
 });
 
@@ -594,7 +594,7 @@ test('C20 conflicting independently signed late-Agent answers accept only one CA
   const winning=settled.find(x=>x.status==='fulfilled').value;
   frame=await settle(f.host,winning);
   assert.equal(frame.pending.nodeId,'plan');
-  assert.ok(['DES-A','DES-B'].includes(frame.state.designId));
+  assert.ok(['DES-A','DES-B'].includes(f.store.load(frame.runId).state.designId));
   const journal=f.store.listJournal(frame.runId);
   assert.equal(journal.length,frame.revision+1);
   frame=(await respond(f,frame,answers.plan)).frame;
