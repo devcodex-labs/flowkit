@@ -68,6 +68,7 @@ import {
   createTrustedInteractiveHost,
   createAgentReceiptStatement,
   encodeAgentReceiptStatement,
+  normalizeHostAgentReceipt,
 } from '@devcodex-labs/flowkit/interactive';
 import {sign} from 'node:crypto';
 
