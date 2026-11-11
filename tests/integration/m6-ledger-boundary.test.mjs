@@ -1,8 +1,7 @@
 /**
- * M6 S07 adversarial capacity probe. This records the *currently unresolved*
- * liveness boundary instead of silently declaring the 2 MiB ledger gate PASS:
- * a legitimate Pending can fit in the Store while accepting its receipt cannot.
- * The Store must at least reject atomically (never half-accept a result).
+ * M6 S07 positive regression after scoped PR #8: a near-2MiB waiting
+ * Checkpoint is rejected before mutation, so a valid Agent result from the
+ * previous safely admitted Pending still reaches a terminal state.
  */
 import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,7 +25,7 @@ const workflow=[
   "terminal('done',{name:'Done',status:'succeeded'})]});",
 ].join('\n');
 
-test('M6 S07: near-2MiB waiting Checkpoint rejects an otherwise valid receipt atomically; liveness gate remains unresolved',async()=>{
+test('M6 S07: near-hard-limit waiting mutation fails before CAS; valid 64-KiB receipt reaches terminal',async()=>{
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-m6-ledger-'));
   roots.push(dir);
   const store=createSqliteCheckpointStore(path.join(dir,'store.db'),{namespace:'m6-s07'});
@@ -44,7 +43,8 @@ test('M6 S07: near-2MiB waiting Checkpoint rejects an otherwise valid receipt at
       store,
       runtime:{
         skillResolver:async()=> 'Write a valid answer',
-        validateResult:()=>[],
+        validateResult:(_schema,result)=>
+          typeof result?.answer==='string'?[]:['Expected string answer'],
       },
     });
     const started=await api.start({
@@ -55,43 +55,36 @@ test('M6 S07: near-2MiB waiting Checkpoint rejects an otherwise valid receipt at
     assert.equal(started.status,'waiting');
     const old=store.load(started.runId);
     const candidate={
-      ...old,revision:old.revision+1,
-      state:{...old.state,filler:''},
+      ...old,revision:old.revision+1,state:{...old.state,filler:''},
     };
-    // Near the actual 2 MiB persisted Checkpoint limit without exceeding it.
     const headroom=75;
     const baseSize=canonicalBytes(candidate).byteLength;
-    assert.ok(baseSize+headroom<MAX_CHECKPOINT_BYTES);
     candidate.state.filler='x'.repeat(MAX_CHECKPOINT_BYTES-baseSize-headroom);
-    const grown=store.compareAndSwap({
-      runId:started.runId,expectedRevision:old.revision,
-      nextCheckpoint:candidate,transitionId:'m6-s07-boundary-seed',
-      journalEntry:{kind:'m6-s07-capacity-test-seed'},
-    });
-    assert.equal(grown.committed,true);
-    const before=store.load(started.runId);
-    const beforeBytes=canonicalBytes(before);
+    const beforeBytes=canonicalBytes(old);
     const beforeJournal=store.listJournal(started.runId);
-    assert.ok(beforeBytes.byteLength<=MAX_CHECKPOINT_BYTES);
-    assert.ok(MAX_CHECKPOINT_BYTES-beforeBytes.byteLength<=headroom+1);
-    assert.equal(before.status,'waiting');
+    assert.ok(canonicalBytes(candidate).byteLength>MAX_CHECKPOINT_BYTES-128);
+    await assert.rejects(async()=>store.compareAndSwap({
+      runId:started.runId,expectedRevision:old.revision,
+      nextCheckpoint:candidate,transitionId:'m6-s07-too-big-before-publish',
+      journalEntry:{kind:'m6-s07-reject-large-State'},
+    }),{code:'FK_I_CHECKPOINT_CAPACITY'});
+    assert.deepEqual(canonicalBytes(store.load(started.runId)),beforeBytes);
+    assert.deepEqual(store.listJournal(started.runId),beforeJournal);
     const receipt={
       runId:started.runId,requestId:started.pending.requestId,
       nodeId:started.pending.nodeId,attempt:started.pending.attempt,
       result:{answer:'x'.repeat(64*1024)},
     };
-    for(let i=0;i<2;i++){
-      await assert.rejects(api.complete(receipt),/Canonical JSON exceeds maximum bytes/);
-      assert.deepEqual(canonicalBytes(store.load(started.runId)),beforeBytes);
-      assert.deepEqual(store.listJournal(started.runId),beforeJournal);
-    }
-    const recovered=await api.resume({runId:started.runId});
-    assert.equal(recovered.status,'waiting');
-    assert.equal(recovered.pending.requestId,started.pending.requestId);
-    console.log('M6_S07_LEDGER_SATURATION_BLOCKER '+JSON.stringify({
-      schemaVersion:1,checkpointBytes:beforeBytes.byteLength,
-      maximumBytes:MAX_CHECKPOINT_BYTES,receiptAccepted:false,
-      journalUnchanged:true,pendingReplayable:true,livenessResolved:false,
+    const completed=await api.complete(receipt);
+    assert.equal(completed.status,'succeeded');
+    assert.equal(completed.state.answer.length,64*1024);
+    assert.equal(store.getReceipt(started.runId,receipt.requestId).acceptedRevision,
+      completed.acceptedRevision);
+    assert.equal(store.listJournal(started.runId).length,completed.revision+1);
+    console.log('M6_S07_LEDGER_CAPACITY_FIXED '+JSON.stringify({
+      schemaVersion:1,checkpointLimitBytes:MAX_CHECKPOINT_BYTES,
+      unsafeMutationRejected:true,unchangedOnRejection:true,
+      validReceiptAccepted:true,ended:completed.status,
     }));
   }finally{store.close()}
 });
