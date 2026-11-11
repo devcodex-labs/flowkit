@@ -73,9 +73,10 @@ UNTRUSTED Grok Build / Codex / Claude / ChatGPT
         |
         | Native JS tool: only permitted operation + bounded task/result
         v
-MODEL-FACING BRIDGE (least privilege)
+PROTECTED BRIDGE / HOST SUPERVISOR (trusted Host TCB)
   explicit allowlist, schema/size/auth checks
-  cannot read signing key, SQLite or Coordinator
+  never exposes signer, SQLite or Coordinator to the model
+  if same HOST_USER: no separate OS isolation from Host is claimed
         |
         | authenticated, local-only transport
         v
@@ -137,7 +138,7 @@ Windows 文件访问检查依据微软 ACL / File Security 文档。单纯设置
 
 模型→Bridge 的入口可以是限制功能的本机工具命令/临时 IPC；该入口不被当作认证事实来源。**禁止**把所有 CLI 工具调用事件视为已被 Provider 数字签名。
 
-此结构不要求修改 FlowKit JS Program 或核心 SDK；它仅在宿主部署层实现更强的证据收集。受保护 Bridge 与 Host Adapter 可以在同一个 HOST_USER 安全域中运行，但必须遵守独立代码入口和最小权限，不通过模型可写模块加载。
+此结构不要求修改 FlowKit JS Program 或核心 SDK；它仅在宿主部署层实现更强的证据收集。**受保护 Bridge 与 Host Adapter 同在 HOST_USER 时属于同一个可信计算基（TCB）**：模型工具无法读取或调用两者的私有资源，但不能宣称“Bridge 被 OS 阻止读取 Host signer”。若安全目标进一步要求即使 Bridge 被攻击也无法读取 Host key/DB，必须部署独立 BRIDGE_USER 并对 Host 目录与 signer 进行真实 ACL/UID 隔离；它是可选的更强隔离配置，不能靠进程名称或 JS 对象封装假装实现。当前 M6 原生硬门禁首先证明 **MODEL_USER 与整个 Host TCB** 的真实隔离。
 
 **Named Pipe 作为可选 Windows 原生优化**，不得无审查替换上面的方案：
 - Node `node:net` 支持 Windows named pipe，但“能 `listen(path)`”不证明 DACL 正确。
