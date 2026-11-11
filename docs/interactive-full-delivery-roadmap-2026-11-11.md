@@ -1,9 +1,9 @@
 # FlowKit Interactive — Full Delivery Roadmap & Closure Ledger
 
 **Baseline date:** 2026-11-11 (UTC+8)  
-**Repository:** \`devcodex-labs/flowkit\`  
-**Frozen main:** \`ea2bb10893a9be2e5de3561fc9a660a6977ae15c\`  
-**Planning branch:** \`fix/m6-current-main-e2e-20261111\`
+**Repository:** `devcodex-labs/flowkit`  
+**Frozen main:** `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`  
+**Planning branch:** `fix/m6-current-main-e2e-20261111`
 
 > This document records the approved end-to-end route from the current M6/P0-A state through P0-B, P1, P2 and production delivery. It is a roadmap and traceability ledger, not evidence that deferred features have been implemented or passed.
 
@@ -11,12 +11,12 @@
 
 ### 1.1 Main and CI
 
-- Main HEAD: \`ea2bb10893a9be2e5de3561fc9a660a6977ae15c\`.
+- Main HEAD: `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`.
 - Main CI run: [42954859078](https://github.com/devcodex-labs/flowkit/actions/runs/42954859078), completed successfully.
 - M1–M5 implementation surfaces and S07 capacity work exist on main. Their presence is not a blanket claim that every M6/native-host gate is passed.
 - PR #8, #9 and #10 are merged.
-- PR #7 is open Draft, head \`e1e15a70356e53401288d393aa7527c6723fe797\`, based on an older main snapshot \`c873e3edf0f1a78b13178966cdeb408391755170\`. Its M6 tests need to be revalidated against current main.
-- PR #12 is open Draft, head \`c6b42a36050d885a37831cbdf0839428b2052c85\`, based on \`ea2bb10893a9be2e5de3561fc9a660a6977ae15c\`. Its scripted C13–C20 tests and documentation CI passed; this does not pass C12/S13 native-host gates.
+- PR #7 is open Draft, head `e1e15a70356e53401288d393aa7527c6723fe797`, based on an older main snapshot `c873e3edf0f1a78b13178966cdeb408391755170`. Its M6 tests need to be revalidated against current main.
+- PR #12 is open Draft, head `c6b42a36050d885a37831cbdf0839428b2052c85`, based on `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`. Its scripted C13–C20 tests and documentation CI passed; this does not pass C12/S13 native-host gates.
 
 ### 1.2 Evidence classes
 
@@ -57,11 +57,11 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 
 1. Rebase/recreate the M6 test changes from current main, rather than relying on the stale PR #7 base.
 2. Fix the temporary project fixture so the project-root contract is tested correctly:
-   - create a temporary \`package.json\` and verify default ancestor discovery; and
-   - separately verify explicit \`projectRoot\` override.
-3. Include \`tests/integration/*.test.mjs\` in the normal test command.
+   - create a temporary `package.json` and verify default ancestor discovery; and
+   - separately verify explicit `projectRoot` override.
+3. Include `tests/integration/*.test.mjs` in the normal test command.
 4. Run the M6 cross-process tests and Linux OS-user isolation job.
-5. Run build, full \`npm run verify\`, docs examples and website checks.
+5. Run build, full `npm run verify`, docs examples and website checks.
 6. Keep the worker explicitly labelled scripted; do not present it as Grok/Codex/Claude provider integration.
 7. If a production Core defect is found, create a separate minimal Core-fix PR and rerun relevant regressions.
 8. Do not merge the old PR #7 or the replacement PR until review and exact-HEAD CI pass.
