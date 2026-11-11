@@ -2,7 +2,7 @@
 
 > **阶段：Phase 2 / Design only。2026-11-11。**
 >
-> **设计基线：** `main@9bac8f86347a405efe068f96423ae3e501005061`；已批准的 Interactive V0.3 需求与 V0.6-R5 技术设计；M5 安全契约 [interactive-host-security.md](./interactive-host-security.md)；M6 完整路线 [full-delivery-roadmap](./interactive-full-delivery-roadmap-2026-11-11.md)。
+> **代码核对基线：** `main@9bac8f86347a405efe068f96423ae3e501005061`。历史确认的 V0.3 需求与 V0.6-R5 设计原件在当前审查可用文件/仓库中未找到，完整 SHA-256 也不可核验；两份原文的符合性维持 BLOCKED，不以路线图摘要冒充原件。当前可核对基线是 M5 安全契约 [interactive-host-security.md](./interactive-host-security.md)；M6 完整路线 [full-delivery-roadmap](./interactive-full-delivery-roadmap-2026-11-11.md)。
 >
 > **状态：待针对性安全复审，不是已实现功能。** 本文没有批准修改 Core、Program ABI、SQLite Schema 或现有 SDK 导出。发现需求/安全契约冲突时必须先处理差异。
 >
@@ -141,10 +141,10 @@ Windows 文件访问检查依据微软 ACL / File Security 文档。单纯设置
 此结构不要求修改 FlowKit JS Program 或核心 SDK；它仅在宿主部署层实现更强的证据收集。**受保护 Bridge 与 Host Adapter 同在 HOST_USER 时属于同一个可信计算基（TCB）**：模型工具无法读取或调用两者的私有资源，但不能宣称“Bridge 被 OS 阻止读取 Host signer”。若安全目标进一步要求即使 Bridge 被攻击也无法读取 Host key/DB，必须部署独立 BRIDGE_USER 并对 Host 目录与 signer 进行真实 ACL/UID 隔离；它是可选的更强隔离配置，不能靠进程名称或 JS 对象封装假装实现。当前 M6 原生硬门禁首先证明 **MODEL_USER 与整个 Host TCB** 的真实隔离。
 
 **Named Pipe 作为可选 Windows 原生优化**，不得无审查替换上面的方案：
-- Node `node:net` 支持 Windows named pipe，但“能 `listen(path)`”不证明 DACL 正确。
+- Node `node:net` 支持 Windows named pipe，但“能 `listen(path)`”不证明 DACL 正确。微软官方说明默认描述符向 Everyone 和 Anonymous 授予读取权限，因此未提供自定义 DACL 的默认 `node:net` Named Pipe 禁止作为安全 IPC。Grok 报告中的具体 Windows Node SDDL 测量未附原始脚本，本轮不将其记作我已重现。
 - Windows `CreateNamedPipeW` 可以在 `SECURITY_ATTRIBUTES` 中提供安全描述符；默认 DACL 可能给 Everyone/Anonymous 读取权限。
 - 如选 Named Pipe，必须用经审查的 OS 原生启动/安全辅助模块，明确控制 DACL/SDDL、服务 SID、可访问的客户端 SID、`PIPE_REJECT_REMOTE_CLIENTS`，并验证连接方的实际 Token/SID；不能只根据 PID、管道名字或随机路径判断授权。
-- Node 公开 `node:net` 接口是否允许设置足够精细的 Windows DACL **需在 Node 22/24 当前版本上验证**。未验证前不承诺“纯 `net.createServer` 即可安全使用”；若需要 Win32 辅助模块，其功能限定为平台安全引导，不得引入工作流第二 Runtime。
+- Node 22/24 公开 `server.listen({path,readableAll,writableAll})` 没有直接设置自定义 SDDL/服务 SID 的选项，不能从 `readableAll:false` 推断默认 DACL 安全。若选 Named Pipe，必须在创建时提供明确 DACL 和客户端身份校验，并用真实 Windows 测试验证；不得在宽松创建后补改权限。
 
 两种传输都不是模型来源证明；传输认证只证明授权通信主体。需配合 §5 的可信观察。
 
@@ -303,14 +303,21 @@ xAI Grok Build 文档提供：
 - Host 在独立验证来源前签署任意模型 JSON；
 - 把 `usage.signature`、`GROK_SESSION_ID`、普通日志或 mTLS client 证书直接当成 Provider 签名；
 - 新设计与现有签名 v1、Program ABI、PolicyHash 或只读/公开视图冲突；
-- 未证明原生 Grok 的工具执行机制具备必要的可观测与受控调用入口。
+- Grok 原生工具输入与签前可观测性属于 H3-02 开发前的接口探针、Phase 4 的 NAT-14 正式验收；不阻断 H3-01 的 OS 隔离实施。
 
 **完成 Phase 2 的条件：**
 1. 完成独立安全复审（至少一次对抗性核验，本轮模型自审不得自称外部独立）。
 2. 冻结 OS 身份、认证、最小 IPC、Host-only session evidence、签名与恢复策略。
 3. 每个威胁有可复现负例、PASS/FAIL/BLOCKED 分类和最小修复入口。
-4. 不要求在 Phase 2 完成 Windows/Grok 的真实运行证据；**真实证据是 Phase 3/4 的准入条件**。
+4. Phase 2 不要求真实 Windows/Grok 运行 PASS；Windows/Linux 权限实测属于 Phase 3 退出门禁，Grok 工具输入与时序探针是 H3-02 实施前置，NAT-14 在 Phase 4 正式验收。
 5. 任何外部 Provider 证明能力不确定时记录为“需在 Phase 4 实测”，不得作为默认已支持。
+
+### 9.1 唯一阶段入口与出口（F-01）
+
+- **Phase 3 入口**：安全设计独立复审已通过；Host/Model 两套 OS 身份及 Key、SQLite、WAL/SHM、ACL 规则已冻结，禁止默认 Node Named Pipe 当作安全 IPC。无需预先运行 Grok 原生工具。
+- **Phase 3 退出**：Windows 与 Linux 两个适用 Secure Host Profile 的 SEC P0 均有真实权限、进程、IPC、签名与恢复证据；单平台通过只计该 Profile，不宣称 Phase 3 整体完成。
+- **H3-02 开工前**：用最小 PoC 选定实际可注册的 Grok MCP 或受限工具及参数绑定方式，验证可独立捕获调用输入和签前事件时序；否则 H3-02 BLOCKED，H3-01 OS 工作不被回滚。
+- **Phase 4 入口**：Phase 3 退出门禁通过、原生工具和 NAT-14 时序可实施。正式 C12/S13 原生闭环只能通过 Phase 4 的真实证据放行。
 
 ## 10. 官方资料及解释边界
 
