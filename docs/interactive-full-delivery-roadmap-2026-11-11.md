@@ -225,7 +225,87 @@ Do not infer any semantics from all_succeeded or claim that cancelling a local p
 | N1–N13 | design review findings | closed or explicitly deferred before dependent phase |
 | R1/R2, R01–R22 | historical review/falsification cases | preserved as regression and review evidence |
 
-### 14.2 Finding ownership
+### 14.2 Individual T01–T34 requirement ownership
+
+| ID | Frozen requirement scope | Owning phase | Required closure evidence |
+|---|---|---|---|
+| T01 | Pure Condition → Terminal | P0-A | true/false/missing input; deterministic FK_R002 terminal; no infinite resume |
+| T02 | Agent, Skill and missing inputs | P0-A | Skill resolution, declared inputs, missing-input behavior and Standard Pending parity |
+| T03 | Wait, kill process, new process completes same Run | P0-A | real process restart, same Run/request identity, durable completion |
+| T04 | Invalid Schema and missing/failed validator | P0-A | invalid output rejected, retry/terminal semantics, validator contract failures |
+| T05 | Old requestId, wrong node, attempt or runId | P0-A | stale/forged identity rejected before mutation; namespace boundary also closes N5 |
+| T06 | Duplicate receipt idempotency and conflict | P0-A | same receipt returns original Ack; conflicting content rejected; cross-process CAS evidence |
+| T07 | Source, Program, compiler and policy drift | P0-A + production upgrade | drift fails closed; immutable artifact retained; SDK upgrade/resume policy closes N6 |
+| T08 | Invalid JSON, prototype keys and capacity limits | P0-A | canonicalization negatives, 2 MiB hard limit, active reserve and no-mutation rejection |
+| T09 | Two-process CAS | P0-A | actual independent processes contend; only one transition commits |
+| T10 | Unsupported nodes/configuration preflight | P0-A | unsupported feature/nodes rejected before execution; Program ABI and featureStage rules close N3/N9 |
+| T11 | Host has no JavaScript executor | Host | explicit NO_JS_EXECUTOR/BLOCKED; real native tool loop belongs to S13 |
+| T12 | Standard regression, AOT, TypeScript, SDK and error codes | All / release | Standard regressions, exports, types, package and error-code contracts |
+| T13 | retries:2 means at most three attempts | P0-A | attempt count, new request identity and no extra dispatch |
+| T14 | Retry exhaustion preserves FK_R004 | P0-A | terminal errored state, original cause and no invalid State commit |
+| T15 | Three-stage verification and candidate state | P0-B | checkStep/verify views, candidate merge and restart behavior; N2 |
+| T16 | Action Patch and writes allowlist | P0-B | allowed writes applied; unauthorized writes rejected; deletion semantics documented |
+| T17 | Action succeeds but receipt is lost | P0-B | indeterminate/reconcile with stable operationId; no second execute side effect |
+| T18 | Action → Verification and onFailure path | P0-B | contextError remains visible to trusted executor and terminal result; N2/N7 |
+| T19 | Verification true/false/invalid | P0-B | all outcomes, candidate State and invalid verifier behavior |
+| T20 | Human reject → revise → approve and prefix | P0-B | model cannot forge human decision; only independently verified human channel accepted; N4 |
+| T21 | Loop 1/3 iterations and final failure | P0-B | iteration count, max-exceeded route and restart parity |
+| T22 | Skill pinning and drift | P0-B + production upgrade | exact Skill identity, drift rejection and durable resume policy |
+| T23 | Cancel, late result and control signals | P0-B | cancellation/terminal race, idempotent cancel and stale receipt rejection |
+| T24 | Parallel all_succeeded / multiple Pending | P1 | separately approved fail-fast contract, branch state, concurrency and recovery |
+| T25 | Parallel any | P2 | winner election, terminal CAS, loser cancellation and late results |
+| T26 | Out-of-order/duplicate results and write conflicts | P1 | branch ordering, merge policy, duplicate handling and concurrent conflict recovery |
+| T27 | Real host closure | Host / M6 | native JS tool log: Pending → model completion → JS submit/resume → Terminal; S13 |
+| T28 | Source/artifact/package/types/docs consistency | All / release | reproducible compiler artifacts, package/tarball, types, CLI and executable docs |
+| T29 | Kill before/after every Agent phase | P0-A, P0-B, P1 and P2 | process-kill matrix with same Run, exact Pending/operation identity and durable state |
+| T30 | Forged Cursor, receipt or identity | All | tamper/replay/wrong-tenant/wrong-Program negative cases; no unauthorized mutation |
+| T31 | Non-pure validator and double complete | P0-A/P0-B | pure-local contract enforced; concurrent complete has one durable outcome |
+| T32 | External target without idempotency | P0-B/P1/P2 | indeterminate/reconcile policy; no false exactly-once or rollback claim |
+| T33 | Standard vs Interactive comparison | All milestones | row-by-row semantic parity/difference register; no undocumented divergence |
+| T34 | Long-running workflow, budgets and privacy | P0-A through production | bounded Checkpoint/Journal, recovery, disclosure minimization, capacity exit and stress evidence |
+
+### 14.3 Individual S01–S14 acceptance ownership
+
+| ID | Frozen acceptance scope | Owning phase | Closure evidence |
+|---|---|---|---|
+| S01 | Pure Condition → Terminal | P0-A | correct terminal, missing input becomes persistent errored state, repeated resume is stable |
+| S02 | Single Agent, retries and process-cut matrix | P0-A | publish/accept/commit cut points; request identity and Pending match Store |
+| S03 | Repeated invalid output and validator contract | P0-A | retries+1, FK_R004 and deterministic validator failure exit |
+| S04 | Two processes complete same request | P0-A | same receipt idempotent; different receipt conflict; uncertain CAS reconciled |
+| S05 | Identity and transition rejection paths | P0-A | wrong namespace/run/request/attempt/block and corrupt Store rejected without mutation |
+| S06 | Source/Program/Skill/Policy drift | P0-A | pinned bytes and policy mismatch fail closed before dispatch |
+| S07 | JSON adversarial inputs, Checkpoint capacity and stage budget | P0-A | canonical JSON, hard/active limits, byte-equal terminal State for budget 1/128 |
+| S08 | External checkStep/verify and candidate views | P0-B | Standard-equivalent trusted executorContext and restart at each boundary |
+| S09 | External Action, writes and reconcile | P0-B | Patch allowlist, receipt loss, stable operationId and no duplicate execute |
+| S10 | Action → Verification → onFailure and contextError | P0-B | verifier/notify context and terminal contextError match frozen semantics |
+| S11 | Human reject/revise/approve and Loop limit | P0-B | forged human submission rejected; trusted human provenance; exact loop count |
+| S12 | Cancel and late receipt | P0-B | CAS winner, repeated cancel idempotency, stale receipt rejection |
+| S13 | Native real-host JS tool loop | Phase 4 / M6 | raw native tool logs and independently verified Host/session/process provenance |
+| S14 | Four CI cells, package, types, SDK and Standard regression | Every release gate | exact-HEAD verify, exports/types/tarball/docs and supported OS/Node matrix |
+
+### 14.4 C01–C24 complex acceptance ownership
+
+The frozen detailed matrices remain the source of exact test steps and assertions:
+- [C01–C12 frozen matrix and evidence rules](https://github.com/devcodex-labs/flowkit/blob/test/interactive-complex-c01-c12-acceptance/docs/interactive-complex-acceptance-c01-c12.md)
+- [C13–C24 extension and evidence tiers](https://github.com/devcodex-labs/flowkit/blob/test/interactive-complex-c01-c12-acceptance/docs/interactive-complex-acceptance-extension-c13-c24.md)
+- [C13–C24 results report](https://github.com/devcodex-labs/flowkit/blob/test/interactive-complex-c01-c12-acceptance/docs/interactive-complex-acceptance-c13-c24-results-2026-11-11.md)
+
+| IDs | Coverage | Evidence tier / owner |
+|---|---|---|
+| C01–C04 | multi-Agent flow, conditions, Schema repair and retry exhaustion | P + M; Phase 5 |
+| C05–C06 | process crash/recovery, receipt race and independent model sessions | P + M/N; Phase 5 |
+| C07–C09 | Program/Skill/Policy drift, security and output/capacity | P + N; Phase 3/5 |
+| C10–C11 | long chain and stage-budget parity | P; Phase 5 |
+| C12 | native Grok/Codex host and JS tool loop | N; Phase 4/5 |
+| C13–C20 | branch-budget product, forged receipt, Ack replay, trusted failure, policy drift, multi-Run, 36-Agent fail-fast, conflicting signed submissions | P; Phase 5 regression |
+| C21 | cross-OS/Node DB migration | P enhancement; production compatibility, not silently upgraded to original P0-A hard gate |
+| C22 | prompt injection and Host privilege attacks | P + M/N; Phase 3/5 |
+| C23 | combined real-model failure/crash/concurrency scenario | M/N; Phase 5 |
+| C24 | release compatibility, package and native-host evidence | P + N; Phase 6/10 |
+
+All C rows remain individually classified PASS/FAIL/PARTIAL/BLOCKED/DEFERRED in the detailed matrix. This summary table does not replace their individual raw evidence.
+
+### 14.5 Finding ownership
 
 | Finding | Planned closure |
 |---|---|
@@ -245,7 +325,7 @@ Do not infer any semantics from all_succeeded or claim that cancelling a local p
 
 This assignment is a tracking map, not an assertion that the finding is already fixed or that a new API is approved. Any requirement-stage change requires the user's approval.
 
-### 14.3 Global release rule
+### 14.6 Global release rule
 
 No stage is complete while any applicable requirement, acceptance case, historical Finding or regression remains unclassified. Every unresolved item must be either:
 - fixed and re-tested;
@@ -259,8 +339,8 @@ A phase cannot pass by deleting a test, weakening an assertion, changing the evi
 1. Phase 0 baseline/traceability is complete.
 2. PR #7's M6 integration tests were ported onto current main in replacement PR #13.
 3. The fixture now covers default nearest-package discovery and explicit `projectRoot` override.
-4. Exact HEAD `3a1c855ec895845ec301f28f10233c0eff345c96` passed CI run [42996285329](https://github.com/devcodex-labs/flowkit/actions/runs/42996285329): 7/7 jobs; Ubuntu/Windows × Node 22/24 each passed 369/369 tests; Linux OS-user isolation plus M6 e2e passed 11/11 on Node 22 and Node 24.
+4. Exact HEAD `df1eec669d5f46a04f40718abf16fe111db6caf3` passed CI run [42997084061](https://github.com/devcodex-labs/flowkit/actions/runs/42997084061): 7/7 jobs; Ubuntu/Windows × Node 22/24 each passed 369/369 tests; Linux OS-user isolation plus M6 e2e passed 11/11 on Node 22 and Node 24.
 5. Independent code review found no production Core changes. PR #13 is ready for review/merge as test infrastructure only; this does not close native C12/S13 or M6 final acceptance.
 6. After PR #13 is merged, close/supersede stale PR #7 without merging its old branch, then begin Phase 2 Trusted Host security design.
 
-**No merge, main modification, release or production semantic change is authorized by this roadmap.**
+**No direct main modification or release is authorized. Merge only through a reviewed PR after exact-HEAD CI. This test/roadmap PR does not authorize production semantic changes or declare M6 complete.**
