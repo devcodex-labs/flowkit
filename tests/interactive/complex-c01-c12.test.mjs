@@ -345,3 +345,261 @@ test('C11 stage budget 1 and 128 produce same final State bytes and node order',
     result:'PASS',
   }));
 });
+
+
+// C13-C20 extend the FROZEN C01-C12 set with compound failure/interleaving
+// conditions. All model outputs below are SCRIPTED; zero real model calls.
+test('C13 cross-budget branch product: true/false/missing and late rejection',async t=>{
+  const observations=[];
+  for(const budget of [1,128]){
+    const f=await fixture(t,{maxStagesPerCall:budget});
+    const declined=await start(f,{runId:'C13-early-'+budget,
+      state:{ready:false,request:'software task'}});
+    assert.equal(declined.status,'failed');
+    assert.equal(declined.terminal.nodeId,'declined');
+    assert.equal(f.store.load(declined.runId).receipts.length,0);
+
+    const missing=await start(f,{runId:'C13-missing-'+budget,
+      state:{request:'software task'}});
+    assert.equal(missing.status,'errored');
+    assert.equal(missing.terminal.causeCode,'FK_R002');
+    assert.equal(f.store.load(missing.runId).receipts.length,0);
+
+    const falseFirst=await start(f,{runId:'C13-late-false-'+budget});
+    const rejected=await fourSteps(f,falseFirst,{
+      reviewResult:{reviewApproved:false}});
+    assert.equal(rejected.frame.status,'failed');
+    assert.equal(rejected.frame.terminal.nodeId,'declined');
+    assert.equal(rejected.trace.length,4);
+
+    const trueFirst=await start(f,{runId:'C13-late-true-'+budget});
+    const approved=await fourSteps(f,trueFirst);
+    assert.equal(approved.frame.status,'succeeded');
+    assert.equal(approved.frame.terminal.nodeId,'done');
+    const stateHash=sha256Bytes(canonicalBytes(approved.frame.state));
+    const rejectedStateHash=sha256Bytes(canonicalBytes(rejected.frame.state));
+    for(const runId of [declined.runId,missing.runId,
+      rejected.frame.runId,approved.frame.runId])audit(f,runId);
+    observations.push({budget,stateHash,rejectedStateHash,
+      statuses:[declined.status,missing.status,rejected.frame.status,
+        approved.frame.status]});
+  }
+  assert.equal(observations[0].stateHash,observations[1].stateHash);
+  assert.equal(observations[0].rejectedStateHash,
+    observations[1].rejectedStateHash);
+  assert.deepEqual(observations.map(x=>x.statuses),[
+    ['failed','errored','failed','succeeded'],
+    ['failed','errored','failed','succeeded']]);
+  console.log('FLOWKIT_COMPLEX_ACCEPTANCE '+JSON.stringify({
+    scenarioId:'C13',execution:'SCRIPTED_TRUSTED_HOST',modelCalls:0,
+    branchCases:4,stageBudgets:[1,128],observations,result:'PASS',
+  }));
+});
+
+test('C14 tampered/oversized signed-looking replies halfway through chain are no-ops',async t=>{
+  const f=await fixture(t);
+  let frame=await start(f,{runId:'C14-forged'});
+  frame=(await respond(f,frame,answers.requirements)).frame;
+  const pending=await task(f,frame);
+  assert.equal(pending.nodeId,'design');
+  const valid=receiptFor(pending,{designId:'DES-001'});
+  const attestation=attest(f,valid);
+  const cp=canonicalBytes(f.store.load(frame.runId));
+  const journal=f.store.listJournal(frame.runId);
+  const rejected=[
+    {receipt:{...valid,result:{designId:'swapped'}},attestation},
+    {receipt:{...valid,attempt:pending.attempt+1},attestation},
+    {receipt:{...valid,requestId:'forged-request'},attestation},
+    {receipt:{...valid,result:{designId:'x'.repeat(2_100_000)}},
+      attestation},
+    {receipt:valid,attestation:{...attestation,
+      signature:'A'.repeat(86)}},
+  ];
+  for(const entry of rejected){
+    await assert.rejects(f.host.accept(entry),
+      {code:'FK_I_PROVENANCE_REJECTED'});
+    assert.deepEqual(canonicalBytes(f.store.load(frame.runId)),cp);
+    assert.deepEqual(f.store.listJournal(frame.runId),journal);
+  }
+  const accepted=await f.host.accept({receipt:valid,attestation});
+  frame=await settle(f.host,accepted);
+  assert.equal(frame.pending.nodeId,'plan');
+  frame=(await respond(f,frame,answers.plan)).frame;
+  frame=(await respond(f,frame,answers.review)).frame;
+  assert.equal(frame.status,'succeeded');
+  assert.equal(frame.state.designId,'DES-001');
+  evidence('C14',f,frame,{rejectedBodies:rejected.length,
+    noMutationBeforeValidReceipt:true});
+});
+
+test('C15 lost Ack replay after Host rebuild and after downstream Terminal is immutable',async t=>{
+  const f=await fixture(t);
+  let frame=await start(f,{runId:'C15-lost-ack'});
+  const first=await respond(f,frame,answers.requirements);
+  frame=first.frame;
+  assert.equal(frame.pending.nodeId,'design');
+  const cp=canonicalBytes(f.store.load(frame.runId));
+  const before=f.store.listJournal(frame.runId);
+  const rebuilt=f.makeHost();
+  const duplicate=await rebuilt.accept({
+    receipt:first.receipt,attestation:first.attestation});
+  assert.equal(duplicate.duplicate,true);
+  assert.equal(duplicate.acceptedRevision,first.acceptedRevision);
+  assert.deepEqual(canonicalBytes(f.store.load(frame.runId)),cp);
+  assert.deepEqual(f.store.listJournal(frame.runId),before);
+  for(const id of ['design','plan','review']){
+    frame=(await respond(f,frame,answers[id])).frame;
+  }
+  assert.equal(frame.status,'succeeded');
+  const terminalRevision=f.store.load(frame.runId).revision;
+  const after=await f.makeHost().accept({
+    receipt:first.receipt,attestation:first.attestation});
+  assert.equal(after.duplicate,true);
+  assert.equal(after.acceptedRevision,first.acceptedRevision);
+  assert.equal(f.store.load(frame.runId).revision,terminalRevision);
+  evidence('C15',f,frame,{lostAckRecovered:true,
+    replayAfterTerminal:true});
+});
+
+test('C16 signed Host call-failed in late Agent retries safely and does not skip route',async t=>{
+  const f=await fixture(t);
+  let frame=await start(f,{runId:'C16-provider-failure'});
+  for(const id of ['requirements','design','plan']){
+    frame=(await respond(f,frame,answers[id])).frame;
+  }
+  const p=await task(f,frame);
+  const failure={runId:p.runId,requestId:p.requestId,nodeId:p.nodeId,
+    attempt:p.attempt,kind:'agent-call-failed',
+    failure:{message:'provider unavailable'}};
+  const proof=attest(f,failure);
+  const failed=await f.host.accept({receipt:failure,attestation:proof});
+  frame=await settle(f.host,failed);
+  assert.equal(frame.status,'waiting');
+  assert.equal(frame.pending.nodeId,'review');
+  assert.equal(frame.pending.attempt,2);
+  assert.notEqual(frame.pending.requestId,p.requestId);
+  assert.equal(Object.hasOwn(frame.state,'reviewApproved'),false);
+  const duplicate=await f.host.accept({receipt:failure,attestation:proof});
+  assert.equal(duplicate.duplicate,true);
+  assert.equal(duplicate.acceptedRevision,failed.acceptedRevision);
+  frame=(await respond(f,frame,answers.review)).frame;
+  assert.equal(frame.status,'succeeded');
+  evidence('C16',f,frame,{failureReceiptAccepted:true,
+    attempt2:true,staleAckImmutable:true});
+});
+
+test('C17 Host policy drift at intermediate Pending rejects before mutation; old Host completes',async t=>{
+  const f=await fixture(t);
+  let frame=await start(f,{runId:'C17-policy'});
+  for(const id of ['requirements','design']){
+    frame=(await respond(f,frame,answers[id])).frame;
+  }
+  assert.equal(frame.pending.nodeId,'plan');
+  const before=canonicalBytes(f.store.load(frame.runId));
+  const history=f.store.listJournal(frame.runId);
+  const drifted=createTrustedInteractiveHost({
+    store:f.store,runtime:{skillResolver:async({nodeId})=>'Perform declared step '+nodeId,
+      validateResult:validator},
+    policy:{deploymentId:'complex-c01-c12',
+      bindingVersions:{resolver:'v2',validator:'v1'}},
+    trustedPublicKeys:{'trusted-host':f.keys.publicKey},
+    trustedArtifacts:[f.compiled.programIdentity.artifactHash],
+    allowedInputKeys:['request','requirementId','designId','planId'],
+    disclosurePolicyId:'complex-test-public',
+    authorizeDisclosure:async()=>true,now:()=>NOW,
+  });
+  for(const action of [
+    ()=>drifted.load({runId:frame.runId}),
+    ()=>drifted.resume({runId:frame.runId}),
+    ()=>drifted.getPublicAgentTask({runId:frame.runId}),
+  ]){
+    await assert.rejects(action(),{code:'FK_I_HOST_DENIED'});
+    assert.deepEqual(canonicalBytes(f.store.load(frame.runId)),before);
+    assert.deepEqual(f.store.listJournal(frame.runId),history);
+  }
+  frame=(await respond(f,frame,answers.plan)).frame;
+  frame=(await respond(f,frame,answers.review)).frame;
+  assert.equal(frame.status,'succeeded');
+  evidence('C17',f,frame,{policyChangedResolver:'v1 -> v2',
+    driftRejectedWithoutCAS:true});
+});
+
+test('C18 two interleaved Runs isolate branching, start identity and Journal',async t=>{
+  const f=await fixture(t);
+  let a=await start(f,{runId:'C18-run-A'});
+  const b=await start(f,{runId:'C18-run-B',state:{
+    ready:false,request:'software task'}});
+  assert.equal(a.status,'waiting');
+  assert.equal(b.status,'failed');
+  assert.equal(f.store.load(b.runId).receipts.length,0);
+  const replay=await f.host.start({...f.compiled,runId:'C18-shadow',
+    startKey:'C18-run-A',state:{ready:true,request:'software task'}});
+  assert.equal(replay.runId,a.runId);
+  assert.equal(replay.pending.requestId,a.pending.requestId);
+  await assert.rejects(f.host.start({...f.compiled,runId:'C18-conflict',
+    startKey:'C18-run-A',state:{ready:false,request:'software task'}}),
+  {code:'FK_I_START_CONFLICT'});
+  a=(await fourSteps(f,a)).frame;
+  assert.equal(a.status,'succeeded');
+  assert.equal(f.store.load(b.runId).status,'failed');
+  assert.equal(f.store.load(b.runId).receipts.length,0);
+  audit(f,a.runId);audit(f,b.runId);
+  evidence('C18',f,a,{parallelRuns:2,
+    duplicateStartIdempotent:true,conflictingStartRejected:true});
+});
+
+test('C19 36-node chain with invalid output at step 18 has no ghost dispatch',async t=>{
+  const count=36;
+  const f=await fixture(t,{source:longSource(count),
+    allowedInputKeys:['request',...Array.from({length:count},(_,i)=>'step'+i)]});
+  let frame=await start(f,{runId:'C19-fail-midchain'});
+  const receipts=[];
+  for(let i=0;i<18;i++){
+    const p=await task(f,frame);
+    assert.equal(p.nodeId,'agent'+i);
+    receipts.push(p.requestId);
+    const value=i===17?{invalid:'bad'}:{['step'+i]:'value-'+i};
+    frame=(await respond(f,frame,value)).frame;
+  }
+  assert.equal(frame.status,'errored');
+  assert.equal(frame.terminal.causeCode,'FK_R004');
+  assert.equal(Object.hasOwn(frame.state,'step17'),false);
+  assert.equal(Object.hasOwn(frame.state,'step18'),false);
+  assert.equal(new Set(receipts).size,18);
+  const previous=canonicalBytes(f.store.load(frame.runId));
+  const resumed=await f.host.resume({runId:frame.runId});
+  assert.equal(resumed.status,'errored');
+  assert.deepEqual(canonicalBytes(f.store.load(frame.runId)),previous);
+  evidence('C19',f,frame,{declaredAgents:36,dispatched:18,
+    remainingNotDispatched:18,causeCode:'FK_R004'});
+});
+
+test('C20 conflicting independently signed late-Agent answers accept only one CAS',async t=>{
+  const f=await fixture(t);
+  let frame=await start(f,{runId:'C20-equivocation'});
+  frame=(await respond(f,frame,answers.requirements)).frame;
+  const p=await task(f,frame);
+  assert.equal(p.nodeId,'design');
+  const left=receiptFor(p,{designId:'DES-A'});
+  const right=receiptFor(p,{designId:'DES-B'});
+  const [one,two]=await Promise.allSettled([
+    f.host.accept({receipt:left,attestation:attest(f,left)}),
+    f.makeHost().accept({receipt:right,attestation:attest(f,right)}),
+  ]);
+  const settled=[one,two];
+  assert.equal(settled.filter(x=>x.status==='fulfilled').length,1);
+  assert.equal(settled.filter(x=>x.status==='rejected').length,1);
+  assert.equal(settled.find(x=>x.status==='rejected').reason.code,
+    'FK_I_RECEIPT_CONFLICT');
+  const winning=settled.find(x=>x.status==='fulfilled').value;
+  frame=await settle(f.host,winning);
+  assert.equal(frame.pending.nodeId,'plan');
+  assert.ok(['DES-A','DES-B'].includes(frame.state.designId));
+  const journal=f.store.listJournal(frame.runId);
+  assert.equal(journal.length,frame.revision+1);
+  frame=(await respond(f,frame,answers.plan)).frame;
+  frame=(await respond(f,frame,answers.review)).frame;
+  assert.equal(frame.status,'succeeded');
+  evidence('C20',f,frame,{twoValidCompetingHostReceipts:true,
+    exactlyOneCAS:true,winningDesign:frame.state.designId});
+});
