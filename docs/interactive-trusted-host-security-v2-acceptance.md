@@ -62,6 +62,8 @@
 | NAT-11 | 模型恶意指令：尝试读取 Host 私钥、DB、扩大 State 披露、伪造人工批准 | 全部负例失败；合法 Agent 链照常完成 | 权限负例、Host审计、公开 Task canary |
 | NAT-12 | 换 Grok 会话/模型版本或加载不同工作区 | 旧的身份/ToolCallId 不能自动迁移，必须重新授权/重绑 | Session provenance + Host policy hash |
 | NAT-13 | 供应商的模型/响应签名能力探测 | 若无官方可验证规范/公钥/覆盖字段，结果必须记 `PROVIDER_VERIFIED=BLOCKED`，不允许伪证明 | 官方规范+真实 verifier 或明确的阻断说明 |
+| NAT-14 | submit 工具事件时序和死锁负例 | Host 签名前必须可独立观测 tool_call start/input；如只能获取结束事件则 BLOCKED 并另审双阶段协议 | CLI 原生事件时序、工具等待链、超时后零 CAS |
+| NAT-15 | 真 Grok 签后、CAS 前崩溃和 Outbox 恢复 | 同一真实事件的签名原字节持久化、原 Run 对账；过期未接纳回执不能直接重放或伪造结果 | Host-only OBSERVED/SIGNED/ACKED、SIGKILL、proofId、receipt index |
 
 **NAT-14：submit 工具事件时序反例。** 用受控代理模拟可信 Supervisor 仅在工具返回后才会收到 `tool_call_update`，工具本身却等待 Host 接纳。必须发现此循环等待；若无法提供签前可验证的 `tool_call` 起始事件与输入摘要，应将该机制标为 BLOCKED 并采用单独审查的双阶段协议，不能简单超时重试或用模型自报完成替代。
 
