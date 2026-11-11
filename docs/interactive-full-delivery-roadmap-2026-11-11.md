@@ -34,7 +34,7 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 |---|---|---|---|
 | 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — established in merged PR #13 |
 | 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS, merged** — PR #13; main CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
-| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **CONDITIONAL**：Grok independent review F-01..F-07; F-01/F-02 corrections under review, formal V0.3/V0.6-R5 compliance source BLOCKED |
+| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **CONDITIONAL**：Grok first review F-01–F-07, second review F-01 PARTIAL、F-R2-01 P2；已修订依赖 DAG/可选 IPC Profile，需定向复核；V0.3/V0.6-R5 正式原文符合性仍 BLOCKED |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
 | 4 | Native Grok Build JS tool bridge | Grok Build itself calls FlowKit JS tools through Pending → model completion → JS submit/resume → Terminal | Pending |
 | 5 | M6 live-model complex acceptance | Applicable C01–C24 cases classified and evidenced at P/M/N levels; all M6 blockers closed | Pending |
@@ -82,13 +82,13 @@ Freeze a Host threat model before implementation:
 - Provider-signed evidence may be used if genuinely available, but is not assumed to be the only possible design. Any alternative Host-owned transport must state its exact assurance level and limits.
 - Human approval remains unavailable/blocked unless a model-unwritable trusted human decision channel is independently verified.
 
-Deliverables: threat model, trust topology, IPC contract, key custody design, provider/session provenance design, Windows/Linux deployment designs, attack matrix and acceptance criteria. Independent review must close all design findings before Phase 3.
+Deliverables: threat model, trust topology, candidate-ingress security contract (with optional authenticated listening IPC only when needed), key custody, provider/session evidence design, Windows/Linux profiles, attack matrix and acceptance gates. Independent review must close all **applicable design-blocking** findings before Phase 3. Missing formal V0.3/V0.6-R5 originals remain an explicit conformance BLOCKED item, not evidence that they never existed; OS capability PoCs can be performed separately, but no final conformance claim can be made without them.
 
 ## 6. Phase 3 — Trusted Host security implementation
 
 1. Implement distinct OS identities or an equivalently strong restricted token boundary.
 2. Restrict Host private directory, key and SQLite DB/WAL/SHM to the Host principal.
-3. Expose only constrained IPC operations with explicit authorization and input/output schemas.
+3. Validate all **actual model-candidate ingress paths** with explicit authorization and bounded I/O. Do not introduce a TCP/mTLS/Named Pipe listener just to satisfy a checklist: in a no-listener deployment record `NO_LISTENER` and test the real MCP/anonymous-pipe/tool-input path instead.
 4. Ensure the model cannot access raw DB, key, signer, Coordinator or private State.
 5. Add Windows ACL and Linux UID/GID integration tests. A test that exits because the platform is unsupported is BLOCKED, not PASS.
 6. Test read, write, replace, symlink, path traversal, process spawning, inherited handles/environment, IPC spoofing, replay, wrong tenant and unauthorized API calls.
@@ -96,9 +96,9 @@ Deliverables: threat model, trust topology, IPC contract, key custody design, pr
 8. Record raw OS identity, access-denied evidence, process tree, IPC identity and Store integrity.
 9. Repeat after reboot/restart and on the supported Node matrix.
 
-Entry: independent Phase 2 security design approved, with frozen OS principals, Host secrets/ACL and no insecure default Node Named Pipe; Grok native tool evidence is **not** required before H3-01 OS work. H3-02 implementation requires a minimal real Grok tool-registration + native tool_call input/timing probe.
+Entry: independent Phase 2 security design approved, with frozen OS principals, Host secrets/ACL and no insecure default Node Named Pipe; Grok native tool evidence is **not** required for H3-01/H3-05 OS-only isolation. H3-02 implementation requires only a separately documented Grok tool-registration and signed-before-completion input/timing **capability PoC**, which is **not** a formal NAT-14 PASS.
 
-Exit: the applicable Phase 3 P0 security tests pass on **both Windows and Linux** Secure Host Profiles, with no same-principal/handle/ACL/IPC bypass. Passing one OS yields only that Profile PASS. If actual Grok Build cannot be isolated from Host secrets, its N tier stays BLOCKED; do not expose secrets.
+Exit: **both Windows and Linux** Secure Host Profiles pass their applicable P0 OS/handle/active-ingress/signing/Outbox tests. H3-05 OS-only tests depend only on H3-01; H3-04 adapter integration adds active-ingress and recovery checks later. Without a listening endpoint, prove its absence and test the actual candidate-input mechanism, rather than demanding mTLS. One platform PASS only proves that platform. NAT-14 is officially tested in Phase 4; C12/S13 N remains BLOCKED until native model evidence is complete.
 
 ## 7. Phase 4 — Native Grok Build JavaScript bridge
 
