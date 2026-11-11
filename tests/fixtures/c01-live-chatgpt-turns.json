@@ -7,5 +7,14 @@
     "result": {
       "requirementSummary": "目标是在不扩大 FlowKit 职责的前提下，对 Interactive P0-A 建立可审计的复杂验收。必须覆盖四个以上串行 Agent、两个以上条件路由、上下游结构化数据传递、Schema 校验失败后的有界重试、Host 崩溃恢复、SQLite CAS 幂等、签名安全隔离、容量边界与三十个以上节点的长链。每个场景分别记录 Program 哈希、真实节点顺序、请求身份、原始回执版本、Journal 连续性和预期终态。脚本协议测试与真实模型测试必须独立标注，未获得 Grok Build 原生会话来源认证时不能宣称 S13 验收通过；业务文件存储及复杂上下文关联仍属于用户配置的 Host 或可选 Context。"
     }
+  },
+  {
+    "index": 1,
+    "nodeId": "architecture",
+    "requestId": "req:360b12eb62cdc3e6df997415de82522505a96b36a2cf7ab73b4d118007beb5e3",
+    "taskDigest": "sha256:2889244e0714d3fc2f845a74733a6c81523fce5a5eb44e8f13ee127aaae5bdac",
+    "result": {
+      "designSummary": "验收架构采用控制、执行与上下文三条明确边界：FlowKit 编译现有 DSL 为不可变的 JavaScript Program，以条件路由、Agent Pending、重试次数、Checkpoint 与 SQLite 原子 CAS 控制状态迁移；可信 Host 负责实际模型或工具调用、Ed25519 回执签名、私有凭证隔离、结果校验与业务产物的用户自定义存储；可选 Context 仅按需提供已有资料和关联引用，不参与控制下一节点。测试层划分为可复现的脚本协议回归、真实 ChatGPT 逐节点回复，以及 Grok Build 原生会话和来源认证三类证据。所有场景分别检查执行顺序、输入最小披露、错误终态、可恢复性和 Journal，不以测试数量或脚本执行成功冒充真实模型 S13 门禁。"
+    }
   }
 ]
