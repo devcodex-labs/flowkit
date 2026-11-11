@@ -187,7 +187,7 @@ xAI Grok Build 文档提供：
 
 ### 5.3 绑定算法和 Host 回执签署前置条件
 
-1. Host 持久化当前 Run 和 Pending，建立不可变 `{namespace,runId,nodeId,requestId,attempt,artifactHash,policyHash,taskDigest}` 索引。
+1. Host 持久化当前 Run 和 Pending，建立不可变 `{namespace,runId,nodeId,flowkitRequestId,attempt,artifactHash,policyHash,taskDigest}` 索引。`flowkitRequestId` 映射为原 M5 receipt 的 `requestId`；Grok CLI 的 `grokRequestId/grokSessionId/toolCallId` 保留为另外的 Host-only 观察字段，不能覆盖 FlowKit 身份。
 2. Trusted supervisor 创建 Host-only `sessionEvidenceId`（不是模型输入），记录实测 CLI binary Hash、OS principal、启动时间、进程树、Grok 会话标识（若提供）、工具 invocation/update 事件、原始输出 digest、requestId 绑定和事件的单调序号。
 3. 当 Grok Build 通过原生工具提交结果时，Bridge 只发送结果数据和公开 request identity。Supervisor/Host 通过**独立捕获的真实工具事件**及当前 Pending 核对 ToolCallId、result digest、会话/进程通道、租户权限、时效和容量。
 4. **先捕获调用开始，再签署回执。** 对 `submit`，Host 必须在工具执行前独立捕获真实 `tool_call` 事件（携带完整输入参数或可验证摘要），与 Bridge 候选结果匹配。不能等待 `submit` 结束后才出现的 `tool_call_update` 或工具最终输出再签署，否则会形成“工具等待 Host，Host 等待工具”的死锁。完成事件用于签后审计；如果 Grok 当前版本无法证明开始事件时序，需要在 Phase 4 改为显式双阶段协议，不能假设已有能力。
@@ -235,7 +235,7 @@ xAI Grok Build 文档提供：
   "operation": "submitAgentResult",
   "correlationId": "host-allocated-or-non-authoritative",
   "runId": "run-id",
-  "requestId": "req-id",
+  "flowkitRequestId": "req-id",
   "attempt": 1,
   "payload": {"result": {"summary": "..." }}
 }
@@ -243,6 +243,7 @@ xAI Grok Build 文档提供：
 
 说明：
 - `correlationId` 只用于可观测性，不是认证材料；
+- `flowkitRequestId` 是 FlowKit 当前 Pending 的身份，适配器映射成已有 receipt `requestId`；Grok `grokRequestId/grokSessionId` 仅为 Host-only 观察字段，不得覆盖它；
 - 真实桥接器应使用 strict key allowlist、受控 JSON/UTF-8 解析、长度前缀帧、deadline、连接并发限制和生命周期清理；
 - `namespace`、`artifactHash`、`policyHash`、`nodeId` 从 Host 当前 Pending 读取，模型提交的同名字段不能改变它们；
 - Host 把调用绑定到已验证 OS 客户端 principal、授权租户和当前 Run；错误 Run/Request/attempt、越界字段均拒绝；
@@ -266,10 +267,10 @@ xAI Grok Build 文档提供：
 
 实现约束：
 
-1. Host-only observation ledger 使用独立保护的持久存储（可为 Host Adapter 自己的 SQLite/附加表；不得未经批准改变 FlowKit Core Store Schema），记录原始受信事件的不可变摘要、`namespace/runId/requestId/attempt/taskDigest/resultDigest`、来源安全等级、已验证 CLI/proc/toolCallId、时钟与审计 ID。
+1. Host-only observation ledger 使用独立保护的持久存储（可为 Host Adapter 自己的 SQLite/附加表；不得未经批准改变 FlowKit Core Store Schema），记录受信工具事件摘要、`namespace/runId/flowkitRequestId/attempt/taskDigest/toolInputDigest/receiptHash`、Grok 的独立 `grokRequestId/grokSessionId/toolCallId`、CLI 进程、来源级别及审计 ID；`receiptHash` 与现有 `createAgentReceiptStatement` 对 `normalizedReceipt` 规范化后的 SHA-256 完全一致。Outbox 使用 SQLite WAL + `synchronous=FULL` 或已证明等效的 durable fsync 屏障。
 2. 在调用 signer 前先持久写入 `OBSERVED` 事件与验证结果。签名成功后，**先持久写入完整的 signed statement/receipt 和 `SIGNED` Outbox 记录**（Host-only，保留原始字节），再调用现有 `host.accept()`。不能在内存里签完就立即调用，留下不可对账的崩溃窗口。
 3. 若 `accept()` 成功，核实 Store 的 `getReceipt(runId,requestId)` 与 v1 `receiptHash/acceptedRevision` 相同后，标记 `ACKED`。如果此时又崩溃，重启时从 Store 核对后补写 `ACKED`，不能产生第二次业务 State 提交。
-4. 若崩溃后为 `SIGNED` 但 Store 尚未接纳：**未过期**则原字节重放；**已过期**则保持 Pending，不得拿原过期签名绕过 M5。仅当 Host-only 原始受信事件仍可验证、同一身份与同一结果摘要且有独立审计的重证策略时，才允许生成**同一真实观察事件**的新签名；否则 `BLOCKED/RECONCILE`，不得伪造“模型重新完成”。
+4. 若崩溃后为 `SIGNED` 但 Store 尚未接纳：**未过期**则原字节重放；**已过期**则保持 Pending，不得拿过期证明绕过 M5。只有 Host-only 原始证据仍有效、当前 Pending/namespace/Program/policy/attempt 未变，且 Outbox **持久保存的原始 normalizedReceipt canonical bytes 与 receiptHash 完全一致**时，才允许按审计规则在同一 proofId 与同一业务回执字节上生成新的签发时间/签名；不能从模型重新序列化或推断出另一份结果。已接纳的相同回执始终走原历史 Ack。否则 `BLOCKED/RECONCILE`。
 5. `proofId` 应由 Host 独立分配，映射到不可变证据记录；必须限制同一 toolCallId/事件/结果在不同 Run、租户、attempt 之间复用。
 6. 对冲突的两个合法结果，现有 Coordinator CAS 仍决定唯一有效提交；Outbox 记录未中标的结果必须标记 `CONFLICT/REJECTED`，不能“清理失败结果”时丢掉必要审计。
 7. Outbox 保留策略应与 Run 生命周期、合规审查窗口、敏感数据最小化和存储上限绑定；默认禁止无限制记录完整模型文本、私钥、完整 State。实际保留时长/GC 策略作为 Host 部署配置在 Phase 3 验收中冻结，**不是**新增 FlowKit Core 通用业务产物库或 GC。
