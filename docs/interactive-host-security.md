@@ -68,6 +68,7 @@ import {
   createTrustedInteractiveHost,
   createAgentReceiptStatement,
   encodeAgentReceiptStatement,
+  normalizeHostAgentReceipt,
 } from '@devcodex-labs/flowkit/interactive';
 import {sign} from 'node:crypto';
 
@@ -142,6 +143,104 @@ request ID, node ID, attempt, submission kind, canonical result digest,
 artifact identity, pinned policy identity, proof ID and issuance/expiry times.
 Only Ed25519 is accepted, with canonical base64url signatures. The default
 maximum proof lifetime is five minutes, with five seconds of clock skew.
+
+## Oversized real model output: Host → Coordinator contract (P0-A S07)
+
+**Two different failures must never be confused.**
+
+1. **Unverified or raw oversized receipt**: \`host.accept()\` calls
+   \`normalizeHostAgentReceipt()\` **before** signature/provenance verification.
+   The signed v1 receipt's canonical JSON limit is **2 MiB**, including
+   request metadata and the result envelope. A body above this limit returns
+   \`FK_I_PROVENANCE_REJECTED\` with **no Checkpoint, Journal or receipt-index
+   mutation**. The Run may still be \`waiting\`: rejecting unverified input
+   **must not** give a model the power to terminate another Run.
+2. **Trusted Host has independently observed provider output overflow**:
+   the Host's own authenticated provider transport / streaming limiter records
+   that the output cannot be represented within the v1 receipt limit. The Host
+   sends **only a small, bounded, Ed25519-attested**
+   \`{kind:'agent-call-failed',failure:{message:'...'}}\` for the *current
+   authoritative Pending*. This is **an accepted failure receipt**, not an
+   accepted oversize result. Existing Coordinator rules retry at most
+   \`retries+1\` attempts; when exhausted, the Run durably becomes
+   \`errored(FK_R004)\`. The failure receipt receives a normal immutable
+   \`acceptedRevision\`, and its duplicates return the same Ack.
+3. **Validly signed, bounded Agent result that overflows the *combined*
+   active Checkpoint budget**: the S07 Store capacity reserve applies.
+   Coordinator may durably terminate as \`errored(FK_I_CHECKPOINT_CAPACITY)\`
+   **without accepting that result**. This is a separate failure mode.
+
+A trusted Host integration should handle the provider output *before* building
+or signing a receipt. Minimal Host-side decision logic (illustrative;
+\`trustedModelTransport\` must be a **Host-owned provider/session transport**,
+not model JSON and not a public self-declared status field):
+
+~~~js
+const task = await host.getPublicAgentTask({runId});
+// The transport/Host must enforce an explicit response-byte budget, record
+// genuine provider/session outcome, and prevent unbounded buffering.
+// The observation is made outside the model channel.
+const observed = await trustedModelTransport(task);
+const identity = {
+  runId:task.runId,requestId:task.requestId,
+  nodeId:task.nodeId,attempt:task.attempt,
+};
+
+const receipt = observed.kind === 'verified-provider-output-limit'
+  ? {
+      ...identity,
+      kind:'agent-call-failed',
+      failure:{
+        // Constant-size Host-authored message. NEVER append model output.
+        message:'FK_I_AGENT_OUTPUT_TOO_LARGE: provider transport limit exceeded',
+      },
+    }
+  : {
+      ...identity,
+      kind:'agent-result',
+      result:observed.result,
+    };
+
+// The trusted signer must independently confirm observation.sessionId,
+// observation.requestId and exact provider result before signing.
+// Validate receipt size/shape with normalizeHostAgentReceipt(receipt).
+// Do not convert ANY arbitrary normalization/provenance error to a failure.
+const normalized = normalizeHostAgentReceipt(receipt);
+const now = Date.now();
+const statement = createAgentReceiptStatement({
+  run:store.load(task.runId),receipt:normalized,
+  keyId:'transport-key-v1',proofId:observed.verifiedEventId,
+  issuedAt:now,expiresAt:now+60_000,
+});
+const signature = sign(
+  null,encodeAgentReceiptStatement(statement),privateKey,
+).toString('base64url');
+const frame = await host.accept({
+  receipt:normalized,attestation:{statement,signature},
+});
+~~~
+
+**Strict Host obligations:** the verified size event is bound to the exact
+current Run/request/attempt and is observed through a trusted transport, not
+invented by model text. Sign only after independently checking the provider
+origin and event identity. If the Host cannot authenticate the size
+observation, it **must not** forge a signed failure or make a state change; it
+should retain the Pending and reconcile the provider request using its own
+delivery/idempotency policy. A safe Host should configure streaming/body-size
+limits up front, rather than first buffering arbitrarily large responses in
+memory. Never treat \`FK_I_PROVENANCE_REJECTED\` as proof of oversize; that
+generic code also covers forged, malformed and unsupported receipts.
+
+The Host may store a large *business* output using its own configured storage
+and return a **small reference** instead; FlowKit doesn't choose the storage
+provider, manage the file, or expire it. The reference must itself satisfy the
+declared Agent result schema and the regular disclosure/integrity rules.
+
+**Scope of evidence:** \`tests/interactive/host-oversize.test.mjs\` exercises
+the real compiler, Program, SQLite, Host Ed25519 attestation, Coordinator CAS,
+bounded retry/terminal and historical Ack with a **scripted trusted transport
+observation**. This does **not** prove that Codex/Claude/Grok's actual
+provider/session origin is verified. M6 S13 remains a separate gate.
 
 ## Rejection and recovery
 
