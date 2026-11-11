@@ -35,6 +35,9 @@
 | DR-11 | P2 | 只封 DB 主文件，不封 WAL/SHM、日志和备份 | 将 WAL/SHM/证据/backup/Service control/进程句柄列入 OS 负例 | **设计已关闭；SEC-03/04/13 待实测** |
 | DR-12 | P2 | Provider 模型调用可能重复，避免误称 exactly-once | 只承诺 CAS 有效状态至多一次；由 Host 处理供应商调用幂等/对账 | **设计已关闭；NAT-08/09 待实测** |
 
+| DR-13 | P1（持久恢复） | Host 已签回执、尚未接纳就 SIGKILL；签名超期后可能丢失原始证明或误签编造结果 | §6.4 增加 Host-only OBSERVED/SIGNED/ACKED Outbox、签后持久化再 accept、过期未接纳 fail closed、严格原事件重证 | **设计已关闭；TH-029/SEC-18/NAT-15 待实测** |
+| DR-14 | P2（容量/隐私） | 原生会话事件和签名 Outbox 可能永久堆积或记录敏感 State | Host-only 审计只保存必要证据与摘要；保留窗口和容量在 Phase 3 配置并测试 | **设计已关闭；TH-030/SEC-19 待实测** |
+
 ## 3. 设计冻结所需的可核对不变式
 
 - [x] 现有 M5 Ed25519 Statement V1 不变；新增来源证据采用独立 Host-only ledger。
@@ -44,7 +47,8 @@
 - [x] 直接 Grok Build 优先；ACP 不是前置条件。
 - [x] 同权 Developer Mode 只计 P/M，不计 N。
 - [x] 冻结了 tool_call start 与 Host 签名之间的时序；存在反例 NAT-14。
-- [x] 28 个 TH Threat、17 个 SEC OS/IPC 用例与 NAT-01..NAT-14 均已列出（NAT-14 为补充时序用例）。
+- [x] 签后、accept CAS 前崩溃和过期回执具备 Host-only Outbox/对账设计及 NAT-15 反例。
+- [x] 30 个 TH Threat、19 个 SEC OS/IPC 用例与 NAT-01..NAT-15 均已列出（NAT-14 为事件时序，NAT-15 为签名 Outbox 恢复）。
 - [x] 对比 P0-A / P0-B / P1 / P2，未在安全设计中偷加 Action/Human/Parallel 能力。
 - [ ] 外部审查者重新核查 Provider/source provenance 能否满足冻结 C12/S13 条件。
 - [ ] Phase 3 的 Windows Host 用户/服务 SID/ACL/mTLS 真实负例 PASS。
@@ -62,4 +66,4 @@
 
 **不是外部独立审查通过。** 由于当前执行环境无法代替用户本地的 Windows 服务账户和 Grok Build 会话，Phase 3 的真实安全证明、Phase 4 的原生事件序列均未执行。必须保留 BLOCKED，不得将文档 CI PASS 写成安全验收 PASS。
 
-**建议：** 保持文档设计 PR Draft，独立审查时按 DR-01..12、TH-001..028、SEC/NAT 矩阵逐项核对。若没有实质性新设计 Finding，可正式确认本设计并开始 Phase 3；如发现信任域或工具事件顺序不可实现，必须先修正本设计再实施，禁止绕开门禁。
+**建议：** 保持文档设计 PR Draft，独立审查时按 DR-01..14、TH-001..030、SEC/NAT 矩阵逐项核对。若没有实质性新设计 Finding，可正式确认本设计并开始 Phase 3；如发现信任域或工具事件顺序不可实现，必须先修正本设计再实施，禁止绕开门禁。
