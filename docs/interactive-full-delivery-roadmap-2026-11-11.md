@@ -34,7 +34,7 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 |---|---|---|---|
 | 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — established in merged PR #13 |
 | 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS, merged** — PR #13; main CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
-| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **CONDITIONAL**：Grok first review F-01–F-07, second review F-01 PARTIAL、F-R2-01 P2；已修订依赖 DAG/可选 IPC Profile，需定向复核；V0.3/V0.6-R5 正式原文符合性仍 BLOCKED |
+| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **CONDITIONAL**：第三轮 Grok 定向复核已确认 F-01、F-R2-01 **CLOSED**；F-02/F-04 仍 PARTIAL（后续 PoC/OS 实测），F-07 正式 V0.3/V0.6-R5 原文符合性仍 **BLOCKED**；PR #14 可作为明确标注限制的设计记录候选，尚未合并 |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
 | 4 | Native Grok Build JS tool bridge | Grok Build itself calls FlowKit JS tools through Pending → model completion → JS submit/resume → Terminal | Pending |
 | 5 | M6 live-model complex acceptance | Applicable C01–C24 cases classified and evidenced at P/M/N levels; all M6 blockers closed | Pending |
