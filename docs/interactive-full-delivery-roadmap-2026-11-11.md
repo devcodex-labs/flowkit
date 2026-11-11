@@ -290,18 +290,32 @@ The frozen detailed matrices remain the source of exact test steps and assertion
 - [C13–C24 extension and evidence tiers](https://github.com/devcodex-labs/flowkit/blob/test/interactive-complex-c01-c12-acceptance/docs/interactive-complex-acceptance-extension-c13-c24.md)
 - [C13–C24 results report](https://github.com/devcodex-labs/flowkit/blob/test/interactive-complex-c01-c12-acceptance/docs/interactive-complex-acceptance-c13-c24-results-2026-11-11.md)
 
-| IDs | Coverage | Evidence tier / owner |
+| ID | Frozen scenario | Evidence tier / owner |
 |---|---|---|
-| C01–C04 | multi-Agent flow, conditions, Schema repair and retry exhaustion | P + M; Phase 5 |
-| C05–C06 | process crash/recovery, receipt race and independent model sessions | P + M/N; Phase 5 |
-| C07–C09 | Program/Skill/Policy drift, security and output/capacity | P + N; Phase 3/5 |
-| C10–C11 | long chain and stage-budget parity | P; Phase 5 |
-| C12 | native Grok/Codex host and JS tool loop | N; Phase 4/5 |
-| C13–C20 | branch-budget product, forged receipt, Ack replay, trusted failure, policy drift, multi-Run, 36-Agent fail-fast, conflicting signed submissions | P; Phase 5 regression |
-| C21 | cross-OS/Node DB migration | P enhancement; production compatibility, not silently upgraded to original P0-A hard gate |
-| C22 | prompt injection and Host privilege attacks | P + M/N; Phase 3/5 |
-| C23 | combined real-model failure/crash/concurrency scenario | M/N; Phase 5 |
-| C24 | release compatibility, package and native-host evidence | P + N; Phase 6/10 |
+| C01 | Four serial Agents and two Conditions | P + M; Phase 5 |
+| C02 | Dynamic routes, true/false and missing-condition errors | P + M; Phase 5 |
+| C03 | Schema rejection, retry and valid repair | P + M; Phase 5 |
+| C04 | Invalid output and retry exhaustion | P + M; Phase 5 |
+| C05 | Host crash at Pending/accept/validate/commit boundaries | P + M/N; Phase 5 |
+| C06 | Two-process CAS, lost response and duplicate/conflicting receipts | P + M/N; Phase 5 |
+| C07 | Source/Program/Skill/Policy drift | P + N; Phase 3/5 |
+| C08 | Permissions, signature verification and data leakage | P + N; Phase 3/5 |
+| C09 | Checkpoint capacity, oversize and bounded receipt behavior | P + M/N; Phase 5 |
+| C10 | Long Agent chain and durable receipt ledger | P; Phase 5 |
+| C11 | Stage-budget 1/128 terminal State byte parity | P; Phase 5 |
+| C12 | Native Grok/Codex host and JS tool loop | N; Phase 4/5 |
+| C13 | Branch truth table × stage-budget cross product | P; Phase 5 |
+| C14 | Forged, stale, tampered and oversized receipts during a live Pending | P; Phase 5 |
+| C15 | Historical Ack replay after Host rebuild and Terminal | P; Phase 5 |
+| C16 | Trusted provider-call failure and bounded retry | P + M/N; Phase 5 |
+| C17 | Host policy/binding drift mid-chain | P; Phase 5 |
+| C18 | Interleaved Runs, idempotent start and conflicting start intent | P; Phase 5 |
+| C19 | 36-Agent chain failing at Agent 18 with fail-fast | P; Phase 5 |
+| C20 | Two different valid signed results competing for one CAS | P; Phase 5 |
+| C21 | SIGKILL and same physical DB recovery across Node/OS versions | P enhancement; Phase 10 unless approved as a hard gate |
+| C22 | Prompt injection and attempts to claim Host authority | P + M/N; Phase 3/5 |
+| C23 | Combined live-model failure, crash/recovery and competing submitters | M/N; Phase 5 |
+| C24 | Compatibility, package, docs and native-host release gate | P + N; Phase 6/10 |
 
 All C rows remain individually classified PASS/FAIL/PARTIAL/BLOCKED/DEFERRED in the detailed matrix. This summary table does not replace their individual raw evidence.
 
