@@ -19,6 +19,14 @@ export interface InteractiveCompileOptions {
   output: 'memory' | 'file';
   featureStage: 'P0-A';
   outDir?: string;
+  /** Uses the Standard analyzer's nearest package.json discovery by default. */
+  projectRoot?: string;
+  /** Standard-compatible static Skill root (default "skills"). */
+  skillsRoot?: string;
+  /** Standard-compatible local Skill existence check (default true). */
+  skillCheck?: boolean;
+  /** Standard-compatible allowed HTTPS Skill host names. */
+  remoteSkillHosts?: string[];
   targetVersion?: 'interactive-state-machine-v1';
 }
 export interface InteractiveDiagnostic {
