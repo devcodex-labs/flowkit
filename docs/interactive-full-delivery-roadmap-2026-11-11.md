@@ -2,7 +2,8 @@
 
 **Baseline date:** 2026-11-11 (UTC+8)  
 **Repository:** `devcodex-labs/flowkit`  
-**Frozen main:** `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`  
+**Historical Phase 0 baseline:** `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`  
+**Current Phase 2 source baseline:** `9bac8f86347a405efe068f96423ae3e501005061`  
 **Current design branch:** `design/trusted-host-security-v2-20261111` (historical Phase 0/1 baseline remains immutable)
 
 > This document records the approved end-to-end route from the current M6/P0-A state through P0-B, P1, P2 and production delivery. It is a roadmap and traceability ledger, not evidence that deferred features have been implemented or passed.
@@ -33,7 +34,7 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 |---|---|---|---|
 | 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — established in merged PR #13 |
 | 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS, merged** — PR #13; main CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
-| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **Draft complete**, internal adversarial review recorded; **external independent security review pending** |
+| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **CONDITIONAL**：Grok independent review F-01..F-07; F-01/F-02 corrections under review, formal V0.3/V0.6-R5 compliance source BLOCKED |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
 | 4 | Native Grok Build JS tool bridge | Grok Build itself calls FlowKit JS tools through Pending → model completion → JS submit/resume → Terminal | Pending |
 | 5 | M6 live-model complex acceptance | Applicable C01–C24 cases classified and evidenced at P/M/N levels; all M6 blockers closed | Pending |
@@ -95,7 +96,9 @@ Deliverables: threat model, trust topology, IPC contract, key custody design, pr
 8. Record raw OS identity, access-denied evidence, process tree, IPC identity and Store integrity.
 9. Repeat after reboot/restart and on the supported Node matrix.
 
-Exit: security tests pass on both supported OS families, with no same-principal bypass. If the actual Grok Build execution environment cannot be isolated from Host secrets, keep native secure-host acceptance BLOCKED and do not expose Host secrets to that model.
+Entry: independent Phase 2 security design approved, with frozen OS principals, Host secrets/ACL and no insecure default Node Named Pipe; Grok native tool evidence is **not** required before H3-01 OS work. H3-02 implementation requires a minimal real Grok tool-registration + native tool_call input/timing probe.
+
+Exit: the applicable Phase 3 P0 security tests pass on **both Windows and Linux** Secure Host Profiles, with no same-principal/handle/ACL/IPC bypass. Passing one OS yields only that Profile PASS. If actual Grok Build cannot be isolated from Host secrets, its N tier stays BLOCKED; do not expose secrets.
 
 ## 7. Phase 4 — Native Grok Build JavaScript bridge
 
@@ -132,13 +135,13 @@ Exit: every C item is PASS, FAIL, PARTIAL, BLOCKED or explicitly DEFERRED with o
 
 ## 9. Phase 6 — M6 review, P0-A closure and merge
 
-1. Dot independently checks exact code SHA, Program hash, raw native tool events, Pending/response, Host traces, signed statements, SQLite, Journal hash chain and OS evidence.
+1. An **independent reviewer** (local Grok Build or another separate reviewer; Dot is not mandatory) checks exact code SHA, Program hash, raw native tool events, Pending/response, Host traces, signed statements, SQLite, Journal hash chain and OS evidence.
 2. Run exact-HEAD CI: Ubuntu 24.04 and Windows 2025 × Node 22.13.0 and 24.22.1.
 3. Run Linux cross-UID and Windows ACL isolation jobs independently.
 4. Run build, npm verify, package/tarball, types, CLI, docs examples, website and Standard regressions.
 5. Resolve every M6 blocker and rerun the relevant scenario plus full regression.
 6. PR #12 may be merged only as the scripted matrix/docs contribution after its own review; its merge does not pass C12/S13.
-7. PR #7 or its current-main replacement may be merged only after M6 integration CI and security gates pass.
+7. PR #7 was closed without merging and its current-main replacement PR #13 was merged after independent code review and CI; do not merge it again. Future M6 native-host security evidence remains in PR #14 and follow-up scoped implementation PRs.
 8. Do not release a version until P0-A release criteria are explicitly met.
 
 ## 10. Phase 7 — P0-B sequential workflow
@@ -355,5 +358,7 @@ A phase cannot pass by deleting a test, weakening an assertion, changing the evi
 3. Phase 2 security design draft: [Trusted Host V2](./interactive-trusted-host-security-v2-design.md), [threat model](./interactive-trusted-host-security-v2-threat-model.md), [acceptance matrix](./interactive-trusted-host-security-v2-acceptance.md), [bounded self-review](./interactive-trusted-host-security-v2-review.md).
 4. Phase 2 must receive **external independent security review** before being frozen for Phase 3. Draft/CI success is not a substitute for native Host security acceptance.
 5. Then implement OS isolation, trusted bridge, direct Grok Build tool loop, real-model edge cases and Phase 6 M6 closure. PR #12 remains Draft until its own scoped review.
+
+**Formal contract source caveat:** Historical FlowKit requirement V0.3 and technical design V0.6-R5 are cited in previous handoffs, but their full immutable bodies/SHA-256 are not presently available to this PR's independent reviewer. Conformance to those documents remains **BLOCKED** until the exact originals can be independently read and hashed; roadmap IDs cannot replace official text.
 
 **No direct main modification or release is authorized. Merge only through a reviewed PR after exact-HEAD CI. This test/roadmap PR does not authorize production semantic changes or declare M6 complete.**
