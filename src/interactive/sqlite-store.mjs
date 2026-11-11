@@ -296,7 +296,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         throw failure('FK_I_INVALID_CHECKPOINT', 'start identity is store-generated');
       }
       const intent = safeJSONSnapshot(startIntent);
-      const startIntentHash = sha256Bytes(canonicalBytes({
+      const startIntentHash = sha256Bytes(boundedCheckpointBytes({
         namespace, startKey, artifactHash:base.artifactHash, state:base.state,
         policyHash:base.policyHash ?? null, intent,
       }));
