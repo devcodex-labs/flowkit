@@ -275,7 +275,7 @@ test('C04 repeated invalid review schema consumes exactly retries+1 and FK_R004'
   assert.deepEqual(attempts,[1,2]);
   assert.equal(frame.status,'errored');
   assert.equal(frame.terminal.causeCode,'FK_R004');
-  assert.equal(Object.hasOwn(f.store.load(frame.runId).state,'reviewApproved'),false);
+  assert.equal(Object.hasOwn(frame.state,'reviewApproved'),false);
   evidence('C04',f,frame,{attempts,causeCode:'FK_R004'});
 });
 
@@ -478,7 +478,7 @@ test('C16 signed Host call-failed in late Agent retries safely and does not skip
   assert.equal(frame.pending.nodeId,'review');
   assert.equal(frame.pending.attempt,2);
   assert.notEqual(frame.pending.requestId,p.requestId);
-  assert.equal(Object.hasOwn(frame.state,'reviewApproved'),false);
+  assert.equal(Object.hasOwn(f.store.load(frame.runId).state,'reviewApproved'),false);
   const duplicate=await f.host.accept({receipt:failure,attestation:proof});
   assert.equal(duplicate.duplicate,true);
   assert.equal(duplicate.acceptedRevision,failed.acceptedRevision);
