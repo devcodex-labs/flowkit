@@ -237,9 +237,12 @@ export function createTrustedInteractiveHost({
       // introduced. NEW receipts still require fresh proofs and signatures
       // are checked in both cases; raw Coordinator access stays Host-private.
       const receiptDigest=sha256Bytes(canonicalBytes(normalized));
-      const alreadyAccepted=Array.isArray(cp.receipts) && cp.receipts.some(r=>
-        r.requestId===normalized.requestId && r.nodeId===normalized.nodeId
-        && r.attempt===normalized.attempt && r.digest===receiptDigest);
+      const previous=typeof store.getReceipt==='function'
+        ? store.getReceipt(normalized.runId,normalized.requestId)
+        : cp.receipts?.find(r=>r.requestId===normalized.requestId);
+      const alreadyAccepted=previous?.requestId===normalized.requestId
+        && previous.nodeId===normalized.nodeId
+        && previous.attempt===normalized.attempt && previous.digest===receiptDigest;
       if (!Number.isSafeInteger(current) || current<=0
         || statement.issuedAt>current+clockSkewMs
         || (statement.expiresAt<current-clockSkewMs && !alreadyAccepted)
