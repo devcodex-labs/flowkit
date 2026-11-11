@@ -85,10 +85,11 @@ try {
 
 ## S07 capacity and idempotency boundary
 
-The reference SQLite Store enforces a 2 MiB hard Checkpoint bound, reserves
-256 KiB for a durable terminal error and accepts at most 128 KiB of inline
-Agent result JSON. Larger business data belongs to the Host-selected storage
-provider; Agent results should return only the small user-defined reference.
+The reference SQLite Store enforces a 2 MiB hard Checkpoint bound and reserves
+256 KiB for a durable terminal error. The capacity of any inline Agent result
+depends on the **full** Checkpoint size; no additional arbitrary 128-KiB limit
+is imposed. Larger business data belongs to the Host-selected storage
+provider; Agent results should return only a small user-defined reference.
 
 A signed matching inline result that exceeds the bound leads to a durable
 `errored(FK_I_CHECKPOINT_CAPACITY)` transition **without an acceptedRevision**.
