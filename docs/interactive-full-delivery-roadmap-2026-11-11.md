@@ -31,8 +31,8 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 
 | Phase | Scope | Required exit condition | Current state |
 |---|---|---|---|
-| 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | In progress on this branch |
-| 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | Pending |
+| 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — baseline and ledger committed on this branch |
+| 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS** — replacement PR #13 exact-HEAD CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
 | 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | Pending |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
 | 4 | Native Grok Build JS tool bridge | Grok Build itself calls FlowKit JS tools through Pending → model completion → JS submit/resume → Terminal | Pending |
@@ -256,10 +256,11 @@ A phase cannot pass by deleting a test, weakening an assertion, changing the evi
 
 ## 15. Current next actions
 
-1. Complete Phase 0 baseline/traceability.
-2. Port PR #7 M6 integration tests onto the frozen current main in a new branch.
-3. Fix project-root fixture correctly and add default-discovery plus explicit-override tests.
-4. Re-run exact-HEAD M6 integration, full verification and platform CI.
-5. Independently review and then proceed to Phase 2 Trusted Host security design.
+1. Phase 0 baseline/traceability is complete.
+2. PR #7's M6 integration tests were ported onto current main in replacement PR #13.
+3. The fixture now covers default nearest-package discovery and explicit `projectRoot` override.
+4. Exact HEAD `3a1c855ec895845ec301f28f10233c0eff345c96` passed CI run [42996285329](https://github.com/devcodex-labs/flowkit/actions/runs/42996285329): 7/7 jobs; Ubuntu/Windows × Node 22/24 each passed 369/369 tests; Linux OS-user isolation plus M6 e2e passed 11/11 on Node 22 and Node 24.
+5. Independent code review found no production Core changes. PR #13 is ready for review/merge as test infrastructure only; this does not close native C12/S13 or M6 final acceptance.
+6. After PR #13 is merged, close/supersede stale PR #7 without merging its old branch, then begin Phase 2 Trusted Host security design.
 
 **No merge, main modification, release or production semantic change is authorized by this roadmap.**
