@@ -81,8 +81,14 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ matrix.node }}
+      - name: Install locked dependencies for M6 Host integration
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Prove cross-UID model worker cannot read Host key or SQLite DB
         run: node tests/security/host-isolation.mjs
+      - name: Prove M6 Host and isolated worker integration
+        env:
+          FLOWKIT_M6_ISOLATION: '1'
+        run: node --test tests/integration/m6-e2e.test.mjs
 
   website:
     runs-on: ubuntu-24.04
