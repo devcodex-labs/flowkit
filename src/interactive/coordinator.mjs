@@ -1,11 +1,12 @@
 import {randomUUID} from 'node:crypto';
-import {canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
+import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
 
 const FINISHED = new Set(['succeeded','failed','errored']);
 // P0-A has at most 500 static nodes and 11 attempts per Agent.
 // Do not cap legitimate 500-node workflows below their worst-case 5,500 receipts.
 const MAX_RECEIPTS = 8192;
+const MAX_INLINE_RECEIPT_CACHE = 16;
 const MAX_REASONS = 32;
 const MAX_REASON_LENGTH = 512;
 
@@ -185,11 +186,19 @@ function assertRuntime(program,runtime) {
   }
 }
 function initialCheckpoint(namespace, runId, program, policyHash, state) {
+  let snapshot;
+  try { snapshot=copy(state); }
+  catch(error) {
+    if (error instanceof RangeError && /Canonical JSON exceeds maximum bytes/.test(error.message)) {
+      throw failure('FK_I_CHECKPOINT_CAPACITY', 'initial State exceeds Checkpoint hard limit');
+    }
+    throw error;
+  }
   return {
     schemaVersion:1,namespace,runId,revision:0,
     artifactHash:program.artifactHash,policyHash,status:'running',
     blockId:program.programTable.entryBlockId,
-    phase:'enter',state:copy(state),
+    phase:'enter',state:snapshot,
     controlStack:[],activationSeq:0,receipts:[],
     pending:null,prepared:null,candidate:null,terminal:null,
     contextError:null,
@@ -257,6 +266,42 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       throw error;
     }
   }
+  function failCapacity(cp) {
+    if (FINISHED.has(cp.status)) return {committed:false,checkpoint:cp};
+    const nodeId=cp.blockId.slice(0,cp.blockId.lastIndexOf('::'));
+    const next={
+      ...cp,revision:cp.revision+1,status:'errored',
+      terminal:{status:'errored',nodeId,causeCode:'FK_I_CHECKPOINT_CAPACITY'},
+      pending:null,prepared:null,candidate:null,
+      pauseReason:null,
+    };
+    // This terminal transition may use the Store's reserved 256 KiB; it
+    // never drops State or accepted receipt identities.
+    return store.compareAndSwap({
+      runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
+      transitionId:stableTransitionId(cp,'capacity-terminal'),
+      journalEntry:{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY',
+        from:cp.blockId},
+    });
+  }
+  function casOrCapacityExit(cp, args) {
+    try { return store.compareAndSwap(args); }
+    catch(error) {
+      if (error?.code!=='FK_I_CHECKPOINT_CAPACITY') throw error;
+      const terminal=failCapacity(cp);
+      return {...terminal,capacityExit:terminal.committed};
+    }
+  }
+  function oversizedInline(value) {
+    try { canonicalBytes(value,MAX_INLINE_AGENT_RESULT_BYTES);return false; }
+    catch(error) {
+      if (error instanceof RangeError && /Canonical JSON exceeds maximum bytes/.test(error.message)) {
+        return true;
+      }
+      throw error;
+    }
+  }
+
   function stepCAS(cp, proposal, eventKind, extras={}) {
     const next = {...cp,revision:cp.revision+1};
     if (proposal.kind === 'raise-error') {
@@ -306,7 +351,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       next.activationSeq=cp.activationSeq+1;
     }
     const transitionId=stableTransitionId(cp,eventKind + '/' + proposal.kind);
-    const write=store.compareAndSwap({
+    const write=casOrCapacityExit(cp,{
       runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,transitionId,
       journalEntry:{
         kind:proposal.kind,event:eventKind,from:cp.blockId,
@@ -385,7 +430,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       if (cp.status === 'paused') {
         if (!['stage-budget','skill-temporary'].includes(cp.pauseReason)) return asPublicFrame(cp);
         const unpause={...cp,status:'running',revision:cp.revision+1,pauseReason:null};
-        const committed=store.compareAndSwap({runId,expectedRevision:cp.revision,
+        const committed=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
           nextCheckpoint:unpause,transitionId:stableTransitionId(cp,'resume-budget'),
           journalEntry:{kind:'resume-budget'}});
         if (!committed.committed) continue;
@@ -404,7 +449,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
           if (['FK_R014','FK_I_TEMPORARY_SKILL'].includes(error?.code)) {
             const paused={...cp,revision:cp.revision+1,status:'paused',
               pauseReason:'skill-temporary'};
-            const result=store.compareAndSwap({runId,expectedRevision:cp.revision,
+            const result=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
               nextCheckpoint:paused,transitionId:stableTransitionId(cp,'pause-skill'),
               journalEntry:{kind:'pause',reason:'skill-temporary'}});
             if (!result.committed) continue;
@@ -451,7 +496,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       }
       const paused={...cp,revision:cp.revision+1,status:'paused',
         pauseReason:'stage-budget'};
-      const result=store.compareAndSwap({runId,expectedRevision:cp.revision,
+      const result=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
         nextCheckpoint:paused,transitionId:stableTransitionId(cp,'pause-budget'),
         journalEntry:{kind:'pause',reason:'stage-budget'}});
       if (result.committed) return asPublicFrame(result.checkpoint);
@@ -496,15 +541,25 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
         throw failure('FK_I_INVALID_RECEIPT','Agent failure requires bounded {message:string}');
       }
     }
-    const submission=copy(kind==='agent-result'
+    // Size-only rejection must not require serializing an enormous receipt
+    // into the 2 MiB Checkpoint budget before we can mark a matched Run errored.
+    const rawSubmission=kind==='agent-result'
       ? {runId,requestId,nodeId,attempt,kind,result}
-      : {runId,requestId,nodeId,attempt,kind,failure:safeFailure});
-    const digest=fingerprint(submission);
+      : {runId,requestId,nodeId,attempt,kind,failure:safeFailure};
+    // Both the value AND its actual receipt envelope must be serializable
+    // under the protocol's 2 MiB bound. Otherwise snapshotting first would
+    // throw a raw RangeError while leaving an authenticated Pending waiting.
+    const inlineTooLarge=kind==='agent-result'
+      && (oversizedInline(result) || oversizedInline(rawSubmission));
+    const submission=inlineTooLarge ? null : copy(rawSubmission);
+    const digest=inlineTooLarge ? null : fingerprint(submission);
     for (;;) {
       const cp=store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
       const program=await loadPinned(cp);
-      const already=cp.receipts.find(r=>r.requestId===requestId);
+      const indexed=typeof store.getReceipt==='function';
+      const already=(indexed ? store.getReceipt(runId,requestId) : null)
+        ?? cp.receipts.find(r=>r.requestId===requestId);
       if (already) {
         if (already.digest!==digest || already.nodeId!==nodeId || already.attempt!==attempt) {
           throw failure('FK_I_RECEIPT_CONFLICT','Different receipt with accepted requestId');
@@ -522,12 +577,21 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
         || pending.requestId!==requestId || pending.nodeId!==nodeId
         || pending.attempt!==attempt || frame.nodeId!==nodeId
         || frame.attempt!==attempt || block.nodeId!==nodeId
-        || cp.receipts.length >= MAX_RECEIPTS) {
+        || (!indexed && cp.receipts.length >= MAX_RECEIPTS)) {
         throw failure('FK_I_STALE_RECEIPT','Wrong request, node, attempt, or exhausted ledger');
       }
       const accept=block.acceptTarget;
       if (!block.legalTargets.includes(accept) || accept!==nodeId+'::validate') {
         throw failure('FK_I_INVALID_TRANSITION','Awaiting receipt target is not certified');
+      }
+      // An authenticated Host may signal a business artifact by a small
+      // reference. FlowKit never stores oversized inline results or invents
+      // an external business-data provider. The durable failure is NOT an Ack.
+      if (inlineTooLarge) {
+        const terminal=failCapacity(cp);
+        if (!terminal.committed) continue;
+        throw failure('FK_I_CHECKPOINT_CAPACITY',
+          'inline result exceeds the configured execution budget; Run is errored');
       }
       const ledgerEntry={requestId,nodeId,attempt,digest,acceptedRevision:cp.revision+1};
       const next={
@@ -537,12 +601,18 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
           submissionKind:kind,
           ...(kind==='agent-result'?{result:submission.result}
             :{failure:submission.failure}),validated:false},
-        receipts:[...cp.receipts,ledgerEntry],
+        receipts:indexed
+          ? [...cp.receipts.slice(-(MAX_INLINE_RECEIPT_CACHE-1)),ledgerEntry]
+          : [...cp.receipts,ledgerEntry],
       };
-      const persisted=store.compareAndSwap({runId,expectedRevision:cp.revision,
+      const persisted=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
         nextCheckpoint:next,transitionId:stableTransitionId(cp,'receipt:'+requestId),
         journalEntry:{kind:'receipt-accepted',nodeId,attempt,requestId,digest}});
       if (!persisted.committed) continue;
+      if (persisted.capacityExit) {
+        throw failure('FK_I_CHECKPOINT_CAPACITY',
+          'receipt could not be accepted; Run is durably errored');
+      }
       const current=await drive(runId);
       return {acceptedRevision:ledgerEntry.acceptedRevision,...current,duplicate:false};
     }

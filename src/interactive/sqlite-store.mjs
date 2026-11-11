@@ -1,12 +1,24 @@
 import {DatabaseSync} from 'node:sqlite';
 import {Buffer} from 'node:buffer';
 import {
-  MAX_CHECKPOINT_BYTES, MAX_JOURNAL_BYTES, assertSHA256,
+  MAX_CHECKPOINT_BYTES, MAX_ACTIVE_CHECKPOINT_BYTES, MAX_JOURNAL_BYTES, assertSHA256,
   canonicalBytes, decodeCanonical, safeJSONSnapshot, sha256Bytes,
 } from './canonical.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
+function boundedCheckpointBytes(input) {
+  try { return canonicalBytes(input); }
+  catch (error) {
+    if (error instanceof RangeError && /Canonical JSON exceeds maximum bytes/.test(error.message)) {
+      throw failure('FK_I_CHECKPOINT_CAPACITY', 'Checkpoint exceeds 2 MiB hard limit');
+    }
+    throw error;
+  }
+}
+function boundedCheckpoint(input) {
+  return JSON.parse(boundedCheckpointBytes(input).toString('utf8'));
+}
 
 function failure(code, detail) {
   return Object.assign(new Error(code + ': ' + detail), {code});
@@ -89,6 +101,15 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' PRIMARY KEY (namespace, run_id), UNIQUE (namespace, start_key),',
       ' FOREIGN KEY (namespace, artifact_hash) REFERENCES fk_i_artifacts(namespace, artifact_hash)',
       ') STRICT;',
+      'CREATE TABLE IF NOT EXISTS fk_i_receipt_index (',
+      ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, request_id TEXT NOT NULL,',
+      ' node_id TEXT NOT NULL, attempt INTEGER NOT NULL CHECK(attempt >= 1),',
+      ' digest TEXT NOT NULL, accepted_revision INTEGER NOT NULL CHECK(accepted_revision >= 1),',
+      ' entry_hash TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, run_id, request_id),',
+      ' UNIQUE (namespace, run_id, accepted_revision),',
+      ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id)',
+      ') STRICT;',
       'CREATE TABLE IF NOT EXISTS fk_i_journal (',
       ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, revision INTEGER NOT NULL,',
       ' transition_id TEXT NOT NULL, previous_hash TEXT, checkpoint_hash TEXT NOT NULL,',
@@ -111,6 +132,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const insertRun = db.prepare('INSERT INTO fk_i_runs(namespace, run_id, start_key, start_intent_hash, revision, artifact_hash, checkpoint_json, checkpoint_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const updateRun = db.prepare('UPDATE fk_i_runs SET revision = ?, checkpoint_json = ?, checkpoint_hash = ? WHERE namespace = ? AND run_id = ? AND revision = ?');
   const insertJournal = db.prepare('INSERT INTO fk_i_journal(namespace, run_id, revision, transition_id, previous_hash, checkpoint_hash, entry_json, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  const readReceipt = db.prepare('SELECT * FROM fk_i_receipt_index WHERE namespace = ? AND run_id = ? AND request_id = ?');
+  const insertReceipt = db.prepare('INSERT OR IGNORE INTO fk_i_receipt_index(namespace, run_id, request_id, node_id, attempt, digest, accepted_revision, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  const journalAtRevision = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND revision = ?');
 
   function transaction(mode, work) {
     db.exec(mode === 'write' ? 'BEGIN IMMEDIATE' : 'BEGIN');
@@ -135,6 +159,55 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       throw failure('FK_I_STORE_CORRUPT', 'journal does not match latest checkpoint');
     }
     return cp;
+  }
+  function receiptProof(runId, record) {
+    const journalRow = journalAtRevision.get(namespace, runId, record.acceptedRevision);
+    if (!journalRow || journalRow.entry_hash !== record.entryHash) {
+      throw failure('FK_I_STORE_CORRUPT', 'receipt index has no matching journal revision');
+    }
+    const detail = decodeCanonical(journalRow.entry_json,
+      sha256Bytes(Buffer.from(journalRow.entry_json, 'utf8')), MAX_JOURNAL_BYTES);
+    if (journalRow.entry_hash !== journalDigest(namespace, runId, record.acceptedRevision,
+      journalRow.transition_id, journalRow.previous_hash, journalRow.checkpoint_hash, detail)
+      || detail.kind !== 'receipt-accepted'
+      || detail.nodeId !== record.nodeId || detail.attempt !== record.attempt
+      || detail.requestId !== record.requestId || detail.digest !== record.digest) {
+      throw failure('FK_I_STORE_CORRUPT', 'receipt index differs from immutable journal');
+    }
+  }
+  function putReceiptIndex(runId, record, entryHash) {
+    identifier(record.requestId, 'receipt.requestId');
+    identifier(record.nodeId, 'receipt.nodeId');
+    if (!Number.isSafeInteger(record.attempt) || record.attempt < 1
+      || !Number.isSafeInteger(record.acceptedRevision) || record.acceptedRevision < 1) {
+      throw failure('FK_I_STORE_CORRUPT', 'invalid receipt index identity');
+    }
+    assertSHA256(record.digest);
+    assertSHA256(entryHash);
+    insertReceipt.run(namespace, runId, record.requestId, record.nodeId, record.attempt,
+      record.digest, record.acceptedRevision, entryHash);
+    const saved = readReceipt.get(namespace, runId, record.requestId);
+    if (!saved || saved.node_id !== record.nodeId || saved.attempt !== record.attempt
+      || saved.digest !== record.digest || saved.accepted_revision !== record.acceptedRevision
+      || saved.entry_hash !== entryHash) {
+      throw failure('FK_I_RECEIPT_CONFLICT', 'accepted request identity changed');
+    }
+  }
+  function legacyIndexBackfill(runId, receipts) {
+    for (const receipt of receipts ?? []) {
+      if (!receipt || !Number.isSafeInteger(receipt.acceptedRevision)) {
+        throw failure('FK_I_STORE_CORRUPT', 'invalid legacy receipt index');
+      }
+      const entry = journalAtRevision.get(namespace, runId, receipt.acceptedRevision);
+      if (!entry) throw failure('FK_I_STORE_CORRUPT', 'legacy receipt journal missing');
+      const record = {
+        requestId:receipt.requestId,nodeId:receipt.nodeId,attempt:receipt.attempt,
+        digest:receipt.digest,acceptedRevision:receipt.acceptedRevision,
+        entryHash:entry.entry_hash,
+      };
+      receiptProof(runId, record);
+      putReceiptIndex(runId, record, entry.entry_hash);
+    }
   }
   function appendJournal(runId, revision, transitionId, checkpointHash, previousHash, entry) {
     identifier(transitionId, 'transitionId');
@@ -216,19 +289,21 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
      */
     createRun({startKey, startIntent = null, checkpoint}) {
       identifier(startKey, 'startKey');
-      const base = safeJSONSnapshot(checkpoint);
+      const base = boundedCheckpoint(checkpoint);
       identifier(base?.runId, 'checkpoint.runId');
       assertCheckpoint(base, namespace, base.runId, 0);
       if (base.startKey !== undefined || base.startIntentHash !== undefined) {
         throw failure('FK_I_INVALID_CHECKPOINT', 'start identity is store-generated');
       }
       const intent = safeJSONSnapshot(startIntent);
-      const startIntentHash = sha256Bytes(canonicalBytes({
+      const startIntentHash = sha256Bytes(boundedCheckpointBytes({
         namespace, startKey, artifactHash:base.artifactHash, state:base.state,
         policyHash:base.policyHash ?? null, intent,
       }));
       const initial = {...base, startKey, startIntentHash};
-      const checkpointBytes = canonicalBytes(initial);
+      const checkpointBytes = boundedCheckpointBytes(initial);
+      // The reserve must already exist before a Run can publish its first Pending.
+      // Read/duplicate-start of a pre-upgrade Run is not blocked by this check.
       const checkpointHash = sha256Bytes(checkpointBytes);
       return transaction('write', () => {
         const existing = byStartKey.get(namespace, startKey);
@@ -241,6 +316,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         }
         if (read.get(namespace, initial.runId)) {
           throw failure('FK_I_RUN_CONFLICT', 'runId already belongs to another start');
+        }
+        if (checkpointBytes.byteLength > MAX_ACTIVE_CHECKPOINT_BYTES) {
+          throw failure('FK_I_CHECKPOINT_CAPACITY', 'initial Run would leave no error reserve');
         }
         if (!artifact.get(namespace, initial.artifactHash)) {
           throw failure('FK_I_PROGRAM_MISMATCH', 'Program bytes must be registered first');
@@ -265,7 +343,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
         throw new TypeError('expectedRevision must be a nonnegative safe integer');
       }
-      const next = safeJSONSnapshot(nextCheckpoint);
+      const next = boundedCheckpoint(nextCheckpoint);
       const journal = safeJSONSnapshot(journalEntry, MAX_JOURNAL_BYTES);
       return transaction('write', () => {
         const row = read.get(namespace, runId);
@@ -283,14 +361,65 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         assertCheckpoint(next, namespace, runId, expectedRevision + 1, row.artifact_hash);
         immutableIdentity(current, next);
         const bytes = canonicalBytes(next);
+        if (!TERMINAL.has(next.status) && bytes.byteLength > MAX_ACTIVE_CHECKPOINT_BYTES) {
+          throw failure('FK_I_CHECKPOINT_CAPACITY', 'nonterminal Checkpoint reserve exhausted');
+        }
         const checkpointHash = sha256Bytes(bytes);
         const last = latest.get(namespace, runId);
         if (!last) throw failure('FK_I_STORE_CORRUPT', 'missing journal head');
         const updated = updateRun.run(next.revision, bytes.toString('utf8'), checkpointHash,
           namespace, runId, expectedRevision);
         if (updated.changes !== 1) throw failure('FK_I_CAS_CONFLICT', 'revision changed during transaction');
-        appendJournal(runId, next.revision, transitionId, checkpointHash, last.entry_hash, journal);
+        const entryHash = appendJournal(runId, next.revision, transitionId, checkpointHash,
+          last.entry_hash, journal);
+        if (journal?.kind === 'receipt-accepted') {
+          // Backfill old inline receipts *before* a future Coordinator may
+          // compact its cache. Every old index row is verified against Journal.
+          legacyIndexBackfill(runId, current.receipts);
+          if (current.status !== 'waiting' || next.phase !== 'validate'
+            || next.candidate?.requestId !== journal.requestId
+            || next.candidate?.nodeId !== journal.nodeId
+            || next.candidate?.attempt !== journal.attempt) {
+            throw failure('FK_I_INVALID_RECEIPT', 'receipt transition does not match the Pending');
+          }
+          putReceiptIndex(runId, {
+            requestId:journal.requestId,nodeId:journal.nodeId,attempt:journal.attempt,
+            digest:journal.digest,acceptedRevision:next.revision,
+          },entryHash);
+        }
         return {committed:true, checkpoint:JSON.parse(bytes.toString('utf8'))};
+      });
+    },
+
+    /** Immutable, namespaced accepted-receipt lookup without growing CP. */
+    getReceipt(runId, requestId) {
+      identifier(runId, 'runId');
+      identifier(requestId, 'requestId');
+      return transaction('read', () => {
+        const run = read.get(namespace, runId);
+        if (!run) return null;
+        const cp = decodeRow(run);
+        const record = readReceipt.get(namespace, runId, requestId);
+        const indexed = record ? {
+          requestId:record.request_id,nodeId:record.node_id,attempt:record.attempt,
+          digest:record.digest,acceptedRevision:record.accepted_revision,
+          entryHash:record.entry_hash,
+        } : null;
+        if (indexed) {
+          receiptProof(runId, indexed);
+          return {
+            requestId:indexed.requestId,nodeId:indexed.nodeId,attempt:indexed.attempt,
+            digest:indexed.digest,acceptedRevision:indexed.acceptedRevision,
+          };
+        }
+        // Runs created before the S07 index keep their original inline history
+        // until it is transactionally backfilled by the next accepted receipt.
+        const legacy = cp.receipts?.find(x => x.requestId === requestId);
+        if (!legacy) return null;
+        const historical = journalAtRevision.get(namespace, runId, legacy.acceptedRevision);
+        if (!historical) throw failure('FK_I_STORE_CORRUPT', 'legacy receipt journal missing');
+        receiptProof(runId, {...legacy,entryHash:historical.entry_hash});
+        return safeJSONSnapshot(legacy);
       });
     },
 
