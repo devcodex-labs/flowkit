@@ -21,7 +21,7 @@ import {readFile,mkdtemp,rm} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
-import {generateKeyPairSync,sign} from 'node:crypto';
+import {generateKeyPairSync,randomBytes,sign} from 'node:crypto';
 import {compileInteractive} from '../../src/interactive/compile.mjs';
 import {createSqliteCheckpointStore} from '../../src/interactive/sqlite-store.mjs';
 import {createTrustedInteractiveHost} from '../../src/interactive/trusted-host.mjs';
@@ -38,7 +38,7 @@ const replyFile=fileURLToPath(
 const runId='s13-chatgpt-bridge-run-20261111';
 const startKey='s13-chatgpt-bridge-20261111';
 const namespace='s13-chatgpt-bridge-tenant';
-const privateCanary='HOST_PRIVATE_CANARY_DO_NOT_DISCLOSE_20261111';
+const privateCanary='HOST_PRIVATE_'+randomBytes(24).toString('hex');
 
 const initialState={
   ready:true,
