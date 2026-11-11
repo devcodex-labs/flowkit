@@ -128,16 +128,16 @@ Windows 文件访问检查依据微软 ACL / File Security 文档。单纯设置
 - 使用有界长度前缀帧、idle/read 超时、并发上限、严格 JSON schema，拒绝未知字段；针对 P0-A 的 2 MiB signed receipt 上限重新计算传输尺寸，不能靠截断输出制造错误分类。
 - 如果 Host 采用按需启动而非长驻进程，端点随 Run/调用按需生存；这不是 Core 的通用 Runtime。
 
-### 3.2.1 必须分离的两跳通道（封闭 DR-01）
+### 3.2.1 最小信任边界及可选两跳通道（DR-01 / F-02）
 
-不能把 mTLS 证书直接交给 Grok Build 的工具脚本：这样 MODEL_USER 就能够复制客户端私钥，冒充受信 Bridge。正确的接入路径为：
+不能把 **Host TCB 专用** mTLS 私钥交给 Grok Build 工具脚本：MODEL_USER 可复制其有权读取的凭据。模型侧候选连接若存在单独的客户端身份，其只能用于传输访问，绝不能代替模型来源证明。受信路径为：
 
-1. **MODEL_USER 原生工具调用 → 不可信数据入口。** 模型只传公开 Run/RequestId 与 result；该入口不持有 Ed25519 signer、mTLS client key 或 Store。这里的 JSON 永远只是候选数据。
+1. **MODEL_USER 原生工具调用 → 不可信数据入口。** 模型只传公开 Run/flowkitRequestId 与 result；该入口不持有 Ed25519 signer、Host TCB 的 mTLS 私钥或 Store。即使拥有模型侧传输凭据，JSON 仍然只是候选数据。
 2. **HOST_USER 控制的 Supervisor → 验证真实 native `tool_call` 事件。** Supervisor 从其保护的捕获通道获得 CLI 进程、Session 与 tool-call 事件，将它和入口收到的候选结果按 Run/RequestId/Attempt/ToolCallId/Hash 严格匹配。
 3. **Host TCB 校验后才签收。** 受保护 Bridge 与 Host 若为同一 HOST_USER，可直接走内部受限调用；独立 Bridge 进程或 loopback mTLS 是部署选项，不是第二个独立信任域。任何输入候选只有与 Host 独立观察到的工具事件绑定后才可签名。
 4. **Host 签署后才允许状态推进。** 任何观察链断裂、乱序、事件无法关联、超时或权限错误都不能发出 Host 签名和 CAS。
 
-模型→Bridge 的入口可以是限制功能的本机工具命令/临时 IPC；该入口不被当作认证事实来源。**禁止**把所有 CLI 工具调用事件视为已被 Provider 数字签名。
+模型→Host TCB 的候选入口可以是受限 MCP/Node 工具与本地 IPC；该入口不被当作认证事实来源。**禁止**把所有 CLI 工具调用事件视为已被 Provider 数字签名。
 
 此结构不要求修改 FlowKit JS Program 或核心 SDK；它仅在宿主部署层实现更强的证据收集。**受保护 Bridge 与 Host Adapter 同在 HOST_USER 时属于同一个可信计算基（TCB）**：模型工具无法读取或调用两者的私有资源，但不能宣称“Bridge 被 OS 阻止读取 Host signer”。若安全目标进一步要求即使 Bridge 被攻击也无法读取 Host key/DB，必须部署独立 BRIDGE_USER 并对 Host 目录与 signer 进行真实 ACL/UID 隔离；它是可选的更强隔离配置，不能靠进程名称或 JS 对象封装假装实现。当前 M6 原生硬门禁首先证明 **MODEL_USER 与整个 Host TCB** 的真实隔离。
 
