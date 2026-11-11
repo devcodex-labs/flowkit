@@ -16,5 +16,14 @@
     "result": {
       "designSummary": "验收架构采用控制、执行与上下文三条明确边界：FlowKit 编译现有 DSL 为不可变的 JavaScript Program，以条件路由、Agent Pending、重试次数、Checkpoint 与 SQLite 原子 CAS 控制状态迁移；可信 Host 负责实际模型或工具调用、Ed25519 回执签名、私有凭证隔离、结果校验与业务产物的用户自定义存储；可选 Context 仅按需提供已有资料和关联引用，不参与控制下一节点。测试层划分为可复现的脚本协议回归、真实 ChatGPT 逐节点回复，以及 Grok Build 原生会话和来源认证三类证据。所有场景分别检查执行顺序、输入最小披露、错误终态、可恢复性和 Journal，不以测试数量或脚本执行成功冒充真实模型 S13 门禁。"
     }
+  },
+  {
+    "index": 2,
+    "nodeId": "implementation",
+    "requestId": "req:78258c27df23723def94c945aaab4d0dc2854f2fe3280c5f3fb3a4c6af131084",
+    "taskDigest": "sha256:341c06092fa85738c9f4295be450932ec48d530e758a80cd4e043b04f945d900",
+    "result": {
+      "executionPlan": "实施分为三组证据。第一组使用真正编译的 P0-A JavaScript Program、SQLite 和可信 Host，构造四个串行 Agent 与两个条件节点，逐项断言输入只来自前序已确认的 State，分别执行通过、拒绝和缺失条件三条路由；向审查节点注入错误 Schema，确认不写入 State、生成新的 requestId 后再次提交合法回执，重试耗尽须持久化 FK_R004。第二组运行三十六 Agent 的脚本长链，检查每条 Journal、CAS 版本和历史回执查询；分别注入 SIGKILL、双进程竞争、Program 或 Skill 漂移、签名伪造和容量超限，验证恢复与失败封闭。第三组让真实 ChatGPT 逐次读取公开 Pending、独立产出五个模型回合，并留存原始任务摘要、提交记录和终态证据。真正的 Grok Build 模型会话及独立来源认证另行验证，无法提供原生日志时持续标记 BLOCKED，不因 CI 全绿宣称完成。"
+    }
   }
 ]
