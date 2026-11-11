@@ -68,29 +68,28 @@
 
 ```text
 UNTRUSTED Grok Build / Codex / Claude / ChatGPT
-  model + ordinary tool/shell permissions
-  OS principal: MODEL_USER (no admin/root)
+  OS principal: MODEL_USER (non-admin)
+  model + ordinary tools + optional configured MODEL_USER MCP tool
+  never holds signer, private Store or Host TCB credentials
         |
-        | Native JS tool: only permitted operation + bounded task/result
+        | (1) native tool_call rawInput/event: Host-captured CLI stream
+        | (2) candidate result: constrained untrusted local transport
         v
-PROTECTED BRIDGE / HOST SUPERVISOR (trusted Host TCB)
-  explicit allowlist, schema/size/auth checks
-  never exposes signer, SQLite or Coordinator to the model
-  if same HOST_USER: no separate OS isolation from Host is claimed
-        |
-        | authenticated, local-only transport
-        v
-TRUSTED HOST ADAPTER / SUPERVISOR (HOST_USER)
-  approved immutable Program manifest + Host policy
-  session/tool/provider observation ledger owned by HOST_USER
-  bounded reconciliation + per-run ownership/authorization
+TRUSTED HOST SUPERVISOR / ADAPTER (single HOST_USER TCB by default)
+  Host captures tool events from its own CLI child pipe
+  verifies tool input / result / current Pending and tenant policy
+  approved immutable Program manifest + Host-only session evidence
+  secure allowlist, disclosure, bounded reconciliation and Outbox
   --- private trust boundary ---
   createTrustedInteractiveHost()
-  generate/validate signed v1 Host receipt
+  createAgentReceiptStatement() + Ed25519 Host signer
   createSqliteCheckpointStore() -> WAL / FULL / CAS
         |
         v
 durable next Pending / Terminal
+
+OPTIONAL: separate BRIDGE_USER / protected local mTLS hop only when a
+deployment has a concrete need for another OS security boundary.
 ```
 
 **Control plane vs data plane**
