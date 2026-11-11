@@ -15,7 +15,7 @@ import {
   createAgentReceiptStatement,encodeAgentReceiptStatement,
 } from '../../src/interactive/host-attestation.mjs';
 import {
-  canonicalBytes,MAX_CHECKPOINT_BYTES,MAX_ACTIVE_CHECKPOINT_BYTES,
+  canonicalBytes,sha256Bytes,MAX_CHECKPOINT_BYTES,MAX_ACTIVE_CHECKPOINT_BYTES,
   MAX_INLINE_AGENT_RESULT_BYTES,
 } from '../../src/interactive/canonical.mjs';
 
@@ -267,4 +267,102 @@ test('S07 corrupting receipt index identity cannot turn a different body into ac
   }finally{db.close()}
   assert.throws(()=>f.store.getReceipt(w.runId,w.pending.requestId),{code:'FK_I_STORE_CORRUPT'});
   await assert.rejects(f.api.complete(receipt(w)),{code:'FK_I_STORE_CORRUPT'});
+});
+
+
+test('S07 pre-upgrade already-durable near-2MiB waiting Run has a terminal recovery exit without discarding State',async t=>{
+  const f=await fixture(t);
+  const w=await waiting(f,{runId:'legacy-near-limit',startKey:'legacy-near-limit'});
+  const old=f.store.load(w.runId);
+  const next=fillWaitingTo(f,w,MAX_CHECKPOINT_BYTES);
+  const bytes=canonicalBytes(next);
+  assert.ok(bytes.byteLength > MAX_ACTIVE_CHECKPOINT_BYTES);
+  const checkpointHash=sha256Bytes(bytes);
+  const transitionId='pre-upgrade-soft-limit-checkpoint';
+  const entry={kind:'legacy-large-checkpoint-test'};
+  const db=new DatabaseSync(f.file);
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    const previous=db.prepare(
+      'SELECT entry_hash FROM fk_i_journal WHERE namespace=? AND run_id=? ORDER BY revision DESC LIMIT 1'
+    ).get('s07',w.runId);
+    assert.ok(previous);
+    const entryHash=sha256Bytes(canonicalBytes({
+      namespace:'s07',runId:w.runId,revision:next.revision,
+      transitionId,previousHash:previous.entry_hash,checkpointHash,entry,
+    }));
+    db.prepare('UPDATE fk_i_runs SET revision=?, checkpoint_json=?, checkpoint_hash=? WHERE namespace=? AND run_id=?')
+      .run(next.revision,bytes.toString('utf8'),checkpointHash,'s07',w.runId);
+    db.prepare('INSERT INTO fk_i_journal(namespace,run_id,revision,transition_id,previous_hash,checkpoint_hash,entry_json,entry_hash) VALUES (?,?,?,?,?,?,?,?)')
+      .run('s07',w.runId,next.revision,transitionId,previous.entry_hash,
+        checkpointHash,canonicalBytes(entry).toString('utf8'),entryHash);
+    db.exec('COMMIT');
+  }catch(error){
+    db.exec('ROLLBACK');throw error;
+  }finally{db.close()}
+  const before=f.store.load(w.runId);
+  assert.equal(before.status,'waiting');
+  await assert.rejects(f.api.complete(receipt(w,{answer:'x'.repeat(64*1024)})),
+    {code:'FK_I_CHECKPOINT_CAPACITY'});
+  const final=f.store.load(w.runId);
+  assert.equal(final.status,'errored');
+  assert.equal(final.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
+  assert.deepEqual(final.state,before.state);
+  assert.equal(final.candidate,null);
+  assert.equal(final.pending,null);
+  assert.equal(f.store.getReceipt(w.runId,w.pending.requestId),null);
+  checkJournal(f.store,w.runId);
+});
+
+test('S07 capacity guard at publish and after an accepted receipt uses deterministic terminal without bogus Ack',async t=>{
+  const f=await fixture(t);
+  let failPublish=true;
+  const wrap={
+    ...f.store,
+    compareAndSwap(args){
+      if(failPublish && args.journalEntry?.kind==='publish-pending'){
+        failPublish=false;
+        throw Object.assign(new Error('Injected Store exhaustion'),
+          {code:'FK_I_CHECKPOINT_CAPACITY'});
+      }
+      return f.store.compareAndSwap(args);
+    },
+  };
+  const host=createInteractiveCoordinator({store:wrap,runtime});
+  const ended=await host.start({...f.source,runId:'publish-cap',startKey:'publish-cap',
+    state:{tiny:'unchanged'}});
+  assert.equal(ended.status,'errored');
+  assert.equal(ended.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
+  assert.deepEqual(f.store.load(ended.runId).state,{tiny:'unchanged'});
+  assert.equal(f.store.load(ended.runId).receipts.length,0);
+  assert.equal(f.store.listJournal(ended.runId).filter(x=>x.entry.kind==='publish-pending').length,0);
+
+  const w=await waiting(f,{runId:'commit-cap',startKey:'commit-cap'});
+  let failCommit=true;
+  const wrapCommit={
+    ...f.store,
+    compareAndSwap(args){
+      if(failCommit && args.journalEntry?.kind==='commit-state'){
+        failCommit=false;
+        throw Object.assign(new Error('Injected commit capacity'),
+          {code:'FK_I_CHECKPOINT_CAPACITY'});
+      }
+      return f.store.compareAndSwap(args);
+    },
+  };
+  const coor=createInteractiveCoordinator({store:wrapCommit,runtime});
+  const original=receipt(w,{answer:'accepted'});
+  const result=await coor.complete(original);
+  assert.equal(result.status,'errored');
+  assert.equal(result.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
+  assert.equal(result.duplicate,false);
+  assert.ok(result.acceptedRevision>w.revision);
+  const cp=f.store.load(w.runId);
+  assert.deepEqual(cp.state,{message:'small'});
+  assert.equal(f.store.getReceipt(w.runId,original.requestId).acceptedRevision,
+    result.acceptedRevision);
+  const duplicate=await f.api.complete(original);
+  assert.equal(duplicate.duplicate,true);
+  assert.equal(duplicate.acceptedRevision,result.acceptedRevision);
+  checkJournal(f.store,w.runId);
 });
