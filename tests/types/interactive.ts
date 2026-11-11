@@ -6,7 +6,11 @@ import type {
   InteractiveCompileOptions,
 } from '../../types/interactive.js';
 
-const options: InteractiveCompileOptions={output:'memory',featureStage:'P0-A'};
+const options: InteractiveCompileOptions={
+  output:'memory',featureStage:'P0-A',
+  projectRoot:'project',skillsRoot:'skills',skillCheck:true,
+  remoteSkillHosts:['skills.example.test'],
+};
 const compiled=compileInteractive('flow.workflow.ts',options);
 declare const artifact: InteractiveProgramIdentity;
 declare const bytes: Uint8Array;
@@ -27,8 +31,10 @@ void [compiled,loader,start,finish,resume];
 compileInteractive('x',{output:'memory',featureStage:'P0-B'});
 // @ts-expect-error validators remain synchronous
 const asyncValidator: NonNullable<InteractiveRuntime['validateResult']>=async()=>[];
-// @ts-expect-error no checkStep until P0-B
-const unsupported: InteractiveRuntime={checkStep:()=>null};
+// A shared Standard Host's checkStep is a valid declaration; the Interactive
+// Coordinator rejects it only when a P0-A Agent Program would silently skip it.
+const sharedRuntime:InteractiveRuntime={checkStep:()=>null};
+void sharedRuntime;
 // @ts-expect-error required durable idempotency key
 coordinator.start({programBytes:bytes,programIdentity:artifact});
 // @ts-expect-error correct attempt required on complete
