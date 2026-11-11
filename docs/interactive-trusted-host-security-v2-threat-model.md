@@ -38,12 +38,12 @@
 | ID / 级别 | 攻击 / 风险 | 防护或控制 | 必须出现的负例与通过标准 |
 |---|---|---|---|
 | TH-001 / P0 | 模型/工具可使用 Host 同一 OS 用户令牌，绕过一切文件目录约定 | Host 与 MODEL_USER 分离；实际 OS token / SID / UID 证明 | 同账户/管理员模式标 BLOCKED；受限模型身份不能提权到 Host |
-| TH-002 / P0 | 模型读取 Ed25519 签名私钥或 KMS 授权 | Host-only key custody、ACL、最小进程权限 | MODEL_USER 的真正读取/复制/列目录失败；Host 自身签名 PASS |
-| TH-003 / P0 | 模型直接读写 SQLite 主文件 | Host-only DB owner/DACL | 读取、覆盖、CREATE、DELETE、RENAME、替换文件失败 |
+| TH-002 / P0 | 模型读取 Ed25519 签名私钥或 KMS 授权 | Host-only key custody、ACL、最小进程权限 | MODEL_USER 的真正读取/复制/列目录失败，且其进程不存在可读私钥/Host token 的继承句柄；Host 自身签名 PASS |
+| TH-003 / P0 | 模型直接读写 SQLite 主文件 | Host-only DB owner/DACL | 读取、覆盖、CREATE、DELETE、RENAME、替换文件失败；进程句柄表无继承的主库/WAL/SHM/备份文件句柄 |
 | TH-004 / P0 | 直接读写 SQLite `-wal`、`-shm`、备份、快照、导出日志 | 与主 DB 同级别的保护；禁止不安全备份 | 主 DB 被拒绝但 WAL/SHM 可读时 FAIL；Host 恢复正常 |
 | TH-005 / P0 | 模型通过写入 Host 配置、artifact allowlist、Program 文件替换合法执行 | Host-only config/artifact manifest、exact hash、immutable verified bytes | 可写配置/产物时 FAIL；非授权 Program、policy drift fail closed |
-| TH-006 / P0 | Windows 管道默认 ACL 给多余主体访问、预占/伪造管道名 | 优先 loopback mTLS；若用 pipe 必须显式 DACL+Peer SID+拒绝远程 | 非授权 SID 无法连接、无法预占、无法充当 Server；失败不能自动降级 |
-| TH-007 / P0 | Loopback TCP 上未授权本地程序访问 Host | TLS mTLS、绑定回环、client cert/identity allowlist | 无证书、错证书、错误身份不能调用；非回环连接失败 |
+| TH-006 / P0 | Windows 管道默认 ACL 给多余主体访问、预占/伪造管道名 | 禁止默认 Node Named Pipe 作为安全 IPC；需监听时可用 loopback mTLS，若用 pipe 必须显式 DACL+Peer SID+拒绝远程 | 非授权 SID 无法连接、无法预占、无法充当 Server；失败不能自动降级 |
+| TH-007 / P0 | 如果启用 loopback TCP，未授权本地程序访问 Host | TLS/mTLS、绑定回环、明确客户端身份限制，并与 Host 独立工具事件绑定 | 无证书、错证书、错误身份不能调用；非回环连接失败 |
 | TH-008 / P0 | 客户端凭据落到模型工具可读范围，模型模仿 Bridge | Client key 仅限受保护 Bridge principal；MODEL_USER 仅提交候选数据；Host 还校验独立工具事件 | 直接用模型账户/普通 node/curl 模仿 `submit` 不能生成已签回执 |
 | TH-009 / P0 | 把普通 JSON、`GROK_SESSION_ID` 或模型声称已批准当来源证明 | Host-only supervisor 观察记录、受信 proofId 和 result digest 关联 | 改 sessionId/proofId/工具日志文件不能让 Host 发签名 |
 | TH-010 / P0 | Host 给未验证的 response.json / 模型失败文本签署 Ed25519 | 观察证据验证先于 signer | 无工具/来源证据，Host 必须拒绝并保持 Pending/Store 不变 |
@@ -53,22 +53,24 @@
 | TH-014 / P0 | 有效签名/旧响应被替换或被其他 Run 复用 | v1 statement binds namespace/run/request/node/attempt/receiptHash/artifact/policy | 改任一字段，验证失败；相同合法重复回执只返回原 Ack |
 | TH-015 / P0 | Checkpoint 尚未提交就发送下一个任务；Host 被杀后重复提交 | Store CAS 和先持久再派发；支持 same Run recovery | Publish/Accept/Commit 多切点 SIGKILL 后 Pending identity、State、Journal 一致 |
 | TH-016 / P1 | 长输出、恶意 JSON、百万级对象造成内存/CPU/日志拒绝服务 | 有界 transport frame、限流、deadline、canonical receipt v1 2MiB | 上限+1、恶意 key、无效 UTF-8/JSON、重复/超时拒绝；不得篡改 State |
-| TH-017 / P1 | 敏感 State/指令出现在 Pending、TLS 返回、Tool 结果或日志 | getPublicAgentTask allowlist + authorizeDisclosure + Host-only private view | canary 不得出现在模型可读流/日志；Host 内部仍保留完整 State |
+| TH-017 / P0 | 敏感 State/指令出现在 Pending、TLS 返回、Tool 结果或日志 | getPublicAgentTask allowlist + authorizeDisclosure + Host-only private view | canary 不得出现在模型可读流/日志；Host 内部仍保留完整 State |
 | TH-018 / P0 | 原生 Grok CLI 输出流或 tool_call 由模型/脚本伪造或替换 | 受信 Supervisor 捕获真实 CLI 事件、安装路径/hash 固定，禁止模型写原始证据目录 | 用 echo/伪造 `tool_call` JSON/改本地日志不能认证为真实工具调用 |
 | TH-019 / P0 | 客户端证书只证明 Bridge 账户，却被错当模型 Provider 身份 | `HOST_OBSERVED` 与 `PROVIDER_VERIFIED` 分开；独立原生事件证据 | 单独 mTLS PASS 不得让 C12/S13 获得 PASS；证明会话实际工具调用路径 |
 | TH-020 / P1 | 真实模型中途崩溃、Provider 请求重复计费，Host 宣称 exactly-once | 固定 Pending/RequestId、对账、历史 Ack；外部调用按 at-least-once 风险处理 | 接受重复模型调用可能发生；只承诺一次有效 State commit |
 | TH-021 / P0 | 工具/会话和 receipt 数据错配（结果 A 冒充结果 B） | 独立 ToolCallId/RequestId/TaskDigest/ResultDigest 绑定，Host-only proofId | 交换两次同 Run 不同 Pending 的结果或工具事件必须拒绝 |
 | TH-022 / P1 | Host 签名证据过期、密钥轮换/策略漂移导致在途 Run 无出口 | 固定 policyHash、已核实历史 Ack、轮换排空或显式迁移 | 不制造新旧身份混合回执；旧 Host 可以审计/安全处置 |
-| TH-023 / P1 | Windows service 控制权限、进程句柄、debug 权限让 MODEL_USER 以 Host 权限执行代码 | 专用服务 SID、SCM DACL、受限 Token、保护可执行路径 | MODEL_USER 不能修改/重启服务为任意程序，不能 attach/debug/dump Host |
+| TH-023 / P0 | Windows service 控制权限、进程句柄、debug 权限让 MODEL_USER 以 Host 权限执行代码 | 专用服务 SID、SCM DACL、受限 Token、保护可执行路径 | MODEL_USER 不能修改/重启服务为任意程序，不能 attach/debug/dump Host |
 | TH-024 / P1 | 路径重解析、符号链接、硬链接或 TOCTOU 替换 Host 文件 | Host owned path、真实路径/文件句柄验证、不跟随不安全链接 | 重定向私钥/SQLite/Program 读取失败或保持原已验证字节 |
 | TH-025 / P0 | 模型构造 `kind:'human'` 或“人工已同意”让流程越权 | P0-A signed receipt 只接受 Agent；P0-B 必须另证 humanProvenance | P0-A `kind:'human'` 直接拒绝；Human 未实施不能表示审批通过 |
 | TH-026 / P1 | 捕获会话 PID 后复用同 PID 或人为重放事件 | 进程启动时间/可执行文件摘要/session/tool sequence/host-only nonce | 旧 PID/session/toolCallId 不被新的 Run 自动承认 |
 
 | TH-027 / P0 | Bridge 拥有 mTLS 客户端证书，但会从任意模型 JSON 直接触发转发 | Bridge 转发须有 Host-only CLI 工具事件证据 | 无可匹配 tool_call 的普通模型工具命令不能触发签名/CAS |
-| TH-028 / P1 | Host 等待 submit 的 tool_call_update，submit 又等待 Host 接纳，造成死锁 | 在签署前验证 tool_call start/input；update 作事后审计 | 模拟事件只在工具结束后发出时必须 fail closed/显式调整协议，不得无限 waiting |
+| TH-028 / P1（Phase 4 强制阻断） | Host 等待 submit 的 tool_call_update，submit 又等待 Host 接纳，造成死锁 | 在签署前验证 tool_call start/input；update 作事后审计 | 阶段优先级与停点分开：未证明签前事件时序时 H3-02/Phase 4 BLOCKED，不得把 P1 当作可带风险放行 |
 
 | TH-029 / P0 | Host 签署 v1 receipt 后、CAS 接纳前崩溃；证明过期后错误重签伪造历史回复 | Host-only OBSERVED/SIGNED/ACKED Outbox，签名后持久化再 accept，恢复时与 receipt-index 对账；过期未接纳时 fail closed | SIGKILL 签名前/签后/CAS 后；未接纳过期证明不得产生状态修改；原有效结果只能经受信证据对账 |
 | TH-030 / P1 | 模型结果和 Host 观察日志无限增长或泄漏原始 State/密钥，隐私与磁盘 DoS | Host-only 有界 retention、加密/ACL、按 Run 生命周期和审计窗口清理，避免记录完整敏感文本 | 大量 Run/长链后空间有界；Public Task 和公开日志无 canary；保留必要 hash-chain audit |
+
+- TH-023/TH-017 是 Phase 3 P0，服务账户可执行权限和敏感 State 误披露不得以 P1 延后；TH-028 虽属协议 P1，但 H3-02 与 Phase 4 的准入条件强制检验工具事件时序，无证据仍为 BLOCKED。
 
 **验收证明强度**：
 - “模型说无法访问”不是 TH-001–TH-005 证明，必须真的运行拒绝访问的文件/进程命令；
