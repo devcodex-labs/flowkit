@@ -533,10 +533,13 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
         throw failure('FK_I_INVALID_RECEIPT','Agent failure requires bounded {message:string}');
       }
     }
-    const submission=copy(kind==='agent-result'
+    // Size-only rejection must not require serializing an enormous receipt
+    // into the 2 MiB Checkpoint budget before we can mark a matched Run errored.
+    const inlineTooLarge=kind==='agent-result' && oversizedInline(result);
+    const submission=inlineTooLarge ? null : copy(kind==='agent-result'
       ? {runId,requestId,nodeId,attempt,kind,result}
       : {runId,requestId,nodeId,attempt,kind,failure:safeFailure});
-    const digest=fingerprint(submission);
+    const digest=inlineTooLarge ? null : fingerprint(submission);
     for (;;) {
       const cp=store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
@@ -571,7 +574,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       // An authenticated Host may signal a business artifact by a small
       // reference. FlowKit never stores oversized inline results or invents
       // an external business-data provider. The durable failure is NOT an Ack.
-      if (kind==='agent-result' && oversizedInline(submission.result)) {
+      if (inlineTooLarge) {
         const terminal=failCapacity(cp);
         if (!terminal.committed) continue;
         throw failure('FK_I_CHECKPOINT_CAPACITY',
