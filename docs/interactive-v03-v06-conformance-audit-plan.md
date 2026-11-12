@@ -2,7 +2,9 @@
 
 **状态：已批准进入审查；尚未形成符合性结论。**  
 **基线日期：2026-11-12（UTC+8）**  
-**当前 main：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**历史源码核验基线：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**当前 main 快照：** `81c7839e9f0abe6f4db20d0fc242253b0baff0ea`（2026-11-12）  
+**当前基线证据：** [Phase 0 current baseline](./interactive-phase0-current-baseline-ci-fallback-20261112.md) · [P0-A 31-task crosswalk](./interactive-p0a-31-task-crosswalk-20261112.md)
 **需求基线：** Requirements V0.3（已确认）  
 **技术基线：** Technical Design V0.6-R5（已确认）  
 **安全补充：** PR #14 Trusted Host V2（已合并的安全设计记录，不覆盖 V0.3/V0.6-R5）  
@@ -37,7 +39,8 @@
 | Core POC Evidence ZIP | SHA-256 `a6b5201e8327463b57700174297bf986fbc4902c6ef6493710e8cac021f178` | 内部 manifest 28/28 文件条目 PASS；最终 TAP 22/22；9 个 SIGKILL 断点 |
 | V0.3 Grok Development Handoff ZIP | SHA-256 `8a2f679a796234383b5108d58db16c1016a35c6110301bc4eb7e091ee2ed5826` | 仅含 V0.3-R2 technical draft，不是 V0.6 Confirmed Handoff |
 | PR #14 | Merge commit `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd` | Trusted Host V2 安全设计记录已合并；不等于安全实施通过 |
-| 当前 main | `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd` | 本次代码符合性核验的当前基线 |
+| 历史 main（原 R1/R2 代码基线） | `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd` | 保留为历史审查基线，不覆盖 | 
+| 当前 main（2026-11-12） | `606d055d5f02451fea0b30294889d740ef370d49` | 本轮实现符合性核验对象 |
 
 POC 报告的限定结论：
 - POC-01 PARTIAL：使用受限 JSON Fixture，未接入真实 FlowKit AST/Fields/Graph/Dataflow。
@@ -74,7 +77,8 @@ POC 报告的限定结论：
 - [x] V0.6 Confirmed Handoff 内部 9/9 SHA256SUMS 校验。
 - [x] Core POC Evidence 内部 28/28 文件条目校验。
 - [x] 两个独立归档中的 V0.3/V0.6 基线文件哈希一致。
-- [x] 当前 main、PR #14 merge commit 和 CI 记录已登记。
+- [x] 原 R1/R2 历史 main、PR #14 merge commit 和当时 CI 记录已登记。
+- [x] 2026-11-12 当前 main `81c7839`、PR #16/#18/#19/#12/#11 合并、PR #17/#7 关闭状态已登记；PR #12/#11 更新后 exact-head CI 均 7/7 通过；PR #20 基线刷新和最终复审仍待完成。
 - [ ] 将原始文件字节、归档哈希、当前 main SHA 和工具版本写入最终审查报告的不可变 Evidence Index。
 
 ### Step 2 — V0.3 需求逐条提取与验收语义锁定
@@ -242,6 +246,15 @@ T25 的赢家选择、未完成分支、迟到副作用、下游状态可见性�
 - Node/OS/TS/包导出/类型/文档/性能/安全回归完整。
 - C12/S13 必须有真实原生工具、来源绑定和 Host 安全证据。
 - 发布/部署另行授权，不因 P0-A/P0-B 完成自动进行。
+
+## 3.1 Current-main re-baseline update (2026-11-12)
+
+- Keep `ae5fc5a` as the historical R1/R2 source-code comparison point; do not rewrite historical evidence.
+- Current implementation target is `81c7839e9f0abe6f4db20d0fc242253b0baff0ea`.
+- PR #18 fixes CF-07; PR #19 preserves local Windows verification evidence; PR #16 archives the R1/R2 audit; PR #12/#11 evidence assets are now merged. PR #17 is closed as superseded.
+- CF-08 is locally reproduced but not fixed. CF-01/02/05/06 remain open with the boundaries recorded in the 31-task crosswalk.
+- PR #12 and #11 updated-head CI runs 43181841181 and 43182753787 both passed 7/7. Native Grok C12/S13 remains BLOCKED; do not equate recorded ChatGPT responses with native Host attestation.
+- Current main run 43183321344 and refreshed PR #20 run 43185112963 both passed 7/7; PR #20 is ready for final review/merge.
 
 ## 4. 统一状态和停机规则
 
