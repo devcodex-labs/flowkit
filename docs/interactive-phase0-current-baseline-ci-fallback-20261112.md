@@ -27,7 +27,7 @@ Use only: \`PASS\`, \`FAIL\`, \`PARTIAL\`, \`BLOCKED\`, \`NOT-EXECUTED\`, \`NOT-
 - PR #16 (R1/R2 audit docs), PR #19 (local verification evidence) and PR #18 (R04 fix + regression tests) are merged.
 - PR #17 is closed without merge; its two deliberately failing R04 regression tests are included in #18.
 - PR #7 is closed without merge; its M6 work was superseded by #13.
-- PR #11 and #12 remain open Draft and must be reviewed on their own merits.
+- PR #11 and #12 remain open Draft, based on ea2bb108 and six commits behind current main. Their unique evidence assets have now been reviewed at source/log level; see §4.3. Both must be updated to current main and exact-head CI rerun before merge consideration.
 
 ### 2.2 Remaining open PRs
 
@@ -76,8 +76,9 @@ New pushes to the same ref can cancel older runs. This is intentional stale-run 
 - Latest successful main run before the three PR merges: [43146363166](https://github.com/devcodex-labs/flowkit/actions/runs/43146363166), commit \`13d573c5ddc4a0ed3502401589c581799c96c5d2\`, 7/7 jobs successful. It is **not** the current \`606d055\` HEAD.
 - The three rapid main pushes from merges #16/#19/#18 created runs [43161068943](https://github.com/devcodex-labs/flowkit/actions/runs/43161068943), [43161142187](https://github.com/devcodex-labs/flowkit/actions/runs/43161142187) and [43161214780](https://github.com/devcodex-labs/flowkit/actions/runs/43161214780). All now report \`completed/cancelled\`; the first two were superseded in the same-ref concurrency window.
 - Run 43161214780 is attempt 2; all seven jobs currently report cancelled. Accessible run metadata does not establish why its final attempt was cancelled. Do not label it queued or failed.
-- Five older runs (43095884874, 43095901291, 43095937558, 43096034832, 43096045021) remain \`queued\` on the old \`design/trusted-host-security-v2-20261111\` branch. Each currently has zero jobs and no associated open PR in the run metadata. Treat them as stale queued events, not as evidence that the current main workflow has active jobs waiting for a runner.
-- At the time of this snapshot, there are 5 queued runs, 0 in-progress runs. The latest main run is cancelled, not queued.
+- Five older runs (43095884874, 43095901291, 43095937558, 43096034832, 43096045021) remain queued on the old design/trusted-host-security-v2-20261111 branch. Each currently has zero jobs and no associated open PR in the run metadata. Treat them as stale queued events, not as evidence that the current main workflow has active jobs waiting for a runner.
+- PR #20 run 43169266030 (head bf0d63b) and 43169806113 (head 6de7ceb) were cancelled after subsequent commits superseded those exact heads. Latest PR #20 head is 8555d10484e01a02815fdcb2af29e07abd5cffc5; run 43170215982 has all seven jobs queued, no runner name and no start timestamp.
+- At the time of this snapshot, there are 6 queued runs (one current PR #20 run plus five stale design-branch runs), 0 in-progress runs. The latest main run is cancelled, not queued.
 
 GitHub Status currently reports all systems operational. The Nov 11 incident affecting Actions/Pages/Copilot was marked resolved at 21:21 UTC, with GitHub stating that the Actions backlog had been fully processed. Therefore, do **not** assert a current global GitHub outage without new evidence. A fresh isolated workflow run is required to test current scheduling on this repository.
 
@@ -85,6 +86,21 @@ Official status: https://www.githubstatus.com/
 Official Actions billing/usage: https://docs.github.com/en/actions/concepts/billing-and-usage
 
 The repository is now public. GitHub documents standard GitHub-hosted runner usage as free for public repositories. This makes private-repository included-minute exhaustion an unlikely explanation for current standard hosted-runner scheduling; repository/org policy and stale events still require evidence. Do not infer a billing cause.
+
+### 4.3 PR #11 / #12 evidence review
+
+**PR #11 (ChatGPT bridge):**
+- The Phase 1 Ubuntu 24.04 / Node 24.22.1 job log from run 42956481857 contains the actual public Pending and exact requestId/taskDigest; that run's overall conclusion is cancelled because later commits superseded it.
+- The Phase 2 Ubuntu 24.04 / Node 22.13.0 job log from run 42956698215 records S13_CHATGPT_TOOL_BRIDGE_COMPLETED, terminal success, acceptedRevision 6, Journal revisions 12, duplicate Ack and SQLite close/reopen; that run's overall conclusion is also cancelled. The final PR-head run 42957070193 passed 7/7 jobs.
+- This is M-level evidence of a ChatGPT tool-using response bound to the exact Pending digest. It does not attest native provider/session origin or Grok/Codex tools. The two phases use separate temporary CI databases; Phase 2 reconstructs the deterministic Pending and reopens its own DB. It does not prove one physical DB persisted between the model's two phases.
+
+**PR #12 (complex acceptance):**
+- The final PR-head run 42968816210 passed 7/7 jobs. C13–C20 scripted protocol tests passed in run 42968295106, with 372/372 tests in each of the four OS/Node matrix cells.
+- The C01/C03 live-model job log from run 42963110678 records five real ChatGPT turns, five request IDs, a Program hash, final State hash, successful terminal and 39 Journal revisions. This is M-level real-model evidence, not N-level native-host provenance. The fixture is replayed through a new temporary SQLite DB per CI run; the test does not share a physical DB across separate model turns/Actions runs.
+- C21 partial, C22 protocol/UID evidence only with native Host blocked, C23 blocked, C24 CI partial/native blocked. C12/S13 remains blocked.
+- C04's dedicated fixture uses retries=1/two attempts; default retries=2/three attempts remains covered separately by main Coordinator tests.
+
+Both PRs contain only docs/tests/fixtures/example workflows, not production Core changes. Both are six commits behind current main and require an update/rebase plus exact-head CI before merge review. Do not merge either PR or promote M evidence to native-host PASS.
 
 ## 5. CI outage / queue fallback policy
 
