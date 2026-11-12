@@ -2,7 +2,7 @@
 
 **状态：已批准进入审查；尚未形成符合性结论。**  
 **基线日期：2026-11-12（UTC+8）**  
-**当前 main：** \`ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd\`  
+**当前 main：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
 **需求基线：** Requirements V0.3（已确认）  
 **技术基线：** Technical Design V0.6-R5（已确认）  
 **安全补充：** PR #14 Trusted Host V2（已合并的安全设计记录，不覆盖 V0.3/V0.6-R5）  
@@ -15,14 +15,15 @@
 1. V0.6-R5 是否逐条遵守更高优先级的 V0.3 需求？
 2. 当前 main 的真实代码、测试与已合并 PR #14 安全设计，分别符合、部分符合或偏离哪些正式条款？
 3. 2026-11-10 Core POC 已经证明了什么、没有证明什么；哪些 POC 缺口必须先补？
-4. 是否具备形成 P0-A 模块级实施计划的条件；若具备，实施顺序、依赖、风险和退出门禁是什么？
+4. 对照已有 **P0-A 实施计划 V0.1 Confirmed**（M1–M6、31 项文件级任务）和当前 main 已实施的 M1–M5，哪些已具备可核验代码与测试、哪些仍属于 M6/Host 后续门禁？
 
 **权威层级：**
 - Requirements V0.3 是最高业务需求，技术设计不能覆盖或擅自修改它。
 - Technical Design V0.6-R5 是已确认的统一技术规范；正文 §§1–18 是唯一规范性设计。
 - PR #14 Trusted Host V2 是后续安全设计补充，必须映射回 V0.3/V0.6-R5，不能静默改变 Program ABI、Core API、Checkpoint/Store 语义或 P0-A/P0-B/P1/P2 边界。
 - Core POC 报告是有限范围的运行证据，不是需求或技术规范，也不能把未实现范围判 PASS。
-- 当前 main 是实现核验对象；V0.3/V0.6-R5 中引用的 \`ea2df674f3d3fd7f2b0ba4b48eb21e3bd47c3a2c\` 是历史源码参照，不得与当前 main SHA 混为一谈。
+- 当前 main 是实现核验对象；V0.3/V0.6-R5 中引用的 `ea2df674f3d3fd7f2b0ba4b48eb21e3bd47c3a2c` 是历史源码参照，不得与当前 main SHA 混为一谈。
+- **已有用户确认的 P0-A 实施计划 V0.1（2026-11-10），当前 main 亦已有 M1–M5 实施代码**。本轮不得重新生成第二份 P0-A 正式计划覆盖历史确认版，也不能把 PoC 时代的“未实施”直接投射为当前 main 状态；应建立既有 31 项任务、现有实现与未关闭 M6 门禁的对照。
 
 本计划不授权修改已确认原件、Program ABI、Core API、SQLite Schema、P0-A 状态语义；不授权生产代码开发、PR 合并、发布或部署。任何正式契约变更先形成差异与建议，等待用户确认并独立版本化。
 
@@ -30,13 +31,13 @@
 
 | 输入 | 固定身份 | 已知状态 |
 |---|---|---|
-| Requirements V0.3 | SHA-256 \`3a0adc3edb41869a6309bae29ec5496df00970c815f8dc16330a90cbf26e703e\`；56,883 bytes | 已确认原件，归档校验通过 |
-| Technical Design V0.6-R5 | SHA-256 \`09f3a5698e238d10b80efb8e26d1c41e51b663ca620efa70815dd7b52f2106ba\`；114,621 bytes | 已确认原件，两个归档副本哈希一致 |
-| V0.6 Confirmed Handoff ZIP | SHA-256 \`2deb5b3fa60ed3b7c2d29f028e33835c47aaa0a976e947de717128caf7326549\` | 内部 SHA256SUMS 9/9 PASS；包含批准/PoC 计划、R5 独立收敛复审、需求追踪与静态验证结果 |
-| Core POC Evidence ZIP | SHA-256 \`a6b5201e8327463b57700174297bf986fbc4902c6ef6493710e8cac021f178\` | 内部 manifest 28/28 文件条目 PASS；最终 TAP 22/22；9 个 SIGKILL 断点 |
-| V0.3 Grok Development Handoff ZIP | SHA-256 \`8a2f679a796234383b5108d58db16c1016a35c6110301bc4eb7e091ee2ed5826\` | 仅含 V0.3-R2 technical draft，不是 V0.6 Confirmed Handoff |
-| PR #14 | Merge commit \`ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd\` | Trusted Host V2 安全设计记录已合并；不等于安全实施通过 |
-| 当前 main | \`ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd\` | 本次代码符合性核验的当前基线 |
+| Requirements V0.3 | SHA-256 `3a0adc3edb41869a6309bae29ec5496df00970c815f8dc16330a90cbf26e703e`；56,883 bytes | 已确认原件，归档校验通过 |
+| Technical Design V0.6-R5 | SHA-256 `09f3a5698e238d10b80efb8e26d1c41e51b663ca620efa70815dd7b52f2106ba`；114,621 bytes | 已确认原件，两个归档副本哈希一致 |
+| V0.6 Confirmed Handoff ZIP | SHA-256 `2deb5b3fa60ed3b7c2d29f028e33835c47aaa0a976e947de717128caf7326549` | 内部 SHA256SUMS 9/9 PASS；包含批准/PoC 计划、R5 独立收敛复审、需求追踪与静态验证结果 |
+| Core POC Evidence ZIP | SHA-256 `a6b5201e8327463b57700174297bf986fbc4902c6ef6493710e8cac021f178` | 内部 manifest 28/28 文件条目 PASS；最终 TAP 22/22；9 个 SIGKILL 断点 |
+| V0.3 Grok Development Handoff ZIP | SHA-256 `8a2f679a796234383b5108d58db16c1016a35c6110301bc4eb7e091ee2ed5826` | 仅含 V0.3-R2 technical draft，不是 V0.6 Confirmed Handoff |
+| PR #14 | Merge commit `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd` | Trusted Host V2 安全设计记录已合并；不等于安全实施通过 |
+| 当前 main | `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd` | 本次代码符合性核验的当前基线 |
 
 POC 报告的限定结论：
 - POC-01 PARTIAL：使用受限 JSON Fixture，未接入真实 FlowKit AST/Fields/Graph/Dataflow。
@@ -90,7 +91,7 @@ POC 报告的限定结论：
 - T28：源码、生成 JS、包、类型、文档、测试交叉一致。
 - T29–T34：崩溃、伪造、竞态、未知副作用、Standard/Interactive 差异、预算和隐私。
 
-产物：\`V03-T01-T34-Requirement-Ledger\`。每条保留原始措辞、阶段、必要不变量、正例、负例、退出证据；不改编号、不重写正式需求。
+产物：`V03-T01-T34-Requirement-Ledger`。每条保留原始措辞、阶段、必要不变量、正例、负例、退出证据；不改编号、不重写正式需求。
 
 ### Step 3 — V0.6-R5 §§1–18 技术规范逐章审查
 
@@ -121,7 +122,7 @@ POC 报告的限定结论：
 
 建立统一矩阵，至少包含：
 
-\`requirementId\`、\`sourceText\`、\`V0.6Section\`、\`designDecision\`、\`currentMainFiles\`、\`tests\`、\`PR14SecurityMapping\`、\`POCEvidence\`、\`designStatus\`、\`implementationStatus\`、\`evidenceTier\`、\`gap\`、\`owner\`、\`reentryGate\`。
+`requirementId`、`sourceText`、`V0.6Section`、`designDecision`、`currentMainFiles`、`tests`、`PR14SecurityMapping`、`POCEvidence`、`designStatus`、`implementationStatus`、`evidenceTier`、`gap`、`owner`、`reentryGate`。
 
 必须分开回答：
 - **需求符合性**：V0.6 有没有忠实实现 V0.3？
@@ -184,7 +185,7 @@ POC 报告的限定结论：
 
 先由本轮审查形成证据矩阵，再交 Grok Build 独立复核；不得让复审者只看摘要或只读上一轮结论。修订正式契约前必须取得用户确认。
 
-## 3. 正式契约审查后的实施路线
+## 3. 已确认 P0-A 实施计划核对与后续路线
 
 ### Step 9 — 定向 PoC 补验证（按依赖并行）
 
@@ -197,9 +198,9 @@ POC 报告的限定结论：
 
 每个补验证保留源 Commit、Program Hash、Node/OS 版本、命令、原始日志和 PASS/PARTIAL/FAIL/BLOCKED；不能用 Linux 结果代替 Windows，也不能用 POC 代替生产实现。
 
-### Step 10 — P0-A 模块级实施计划
+### Step 10 — 核对已确认 P0-A 实施计划 V0.1 与当前 M1–M5
 
-依据已确认 V0.6 §16.1/§16.2 和补验证结果，交付：
+不是重新制定已确认的计划。对照 `01-P0A-IMPLEMENTATION-PLAN-V0.1-CONFIRMED.md`、`00-APPROVAL-RECORD.md` 和当前 M1–M5 源码/PR/CI，映射 31 项任务，记录已实现、已验收、缺口与 M6 尾项；只产生差异台账与有证据的补充执行计划。依据 V0.6 §16.1/§16.2 核对：
 - 模块/文件级范围与依赖图。
 - Frontend/Feature Gate/Resumable IR/IR Validator/JS Emitter。
 - Loader/同字节验证/ProgramRegistry/retain。
@@ -212,10 +213,11 @@ POC 报告的限定结论：
 
 **V0.6 §16 的 P0-A 范围**：共享 DSL 分析、Resumable IR、真实 JS Program ABI、可信 Registry/Store/Journal/Receipt、Condition/Terminal/基本 Agent（Skill + 同步纯 validateResult + 默认重试）、compileInteractive/start/complete/resume、受权 adminTerminate、namespace/结果投影和跨进程恢复。Action、独立 Verification、Human、Loop、Parallel 和 Agent 非纯 checkStep/verify 必须拒绝，不能提前开放。
 
-### Step 11 — 用户明确授权后才开始 P0-A 正式代码开发
+### Step 11 — 对尚未完成的 M6/Host 工作执行独立变更门禁
 
-- 每个模块独立分支/PR。
-- 先编译器与纯 Condition/Terminal，再 Registry/Store/Journal，再 Coordinator/Agent，再 Host 安全接入。
+- 已合并 M1–M5 不重复开发；只针对真实差异或未关闭的 M6/Host 工作实施独立改动，精确说明影响的正式要求。
+- 新增生产 Core/ABI/Schema 或改变被冻结语义，必须经过具体变更方案及用户批准；纯审查与测试不会扩大授权。
+- 尚未完成的 Host 隔离、模型来源、M6 原生工具调用只能按相应阶段和证据门禁实施。
 - 每个阶段先跑本地针对测试，再跑四平台/Node CI，再独立复审。
 - 每个 PR 只解决已确认范围；任何 ABI/Schema/语义变化先走变更审查。
 - P0-A 退出：T01–T14 中 A/Host、T29/T30/T34-A、S01–S07、S12-A、S14 的适用项有真实证据；Standard 全量回归通过；真实 JS Host 工具能力如不支持则明确 BLOCKED，不伪装完成。
@@ -244,14 +246,14 @@ T25 的赢家选择、未完成分支、迟到副作用、下游状态可见性�
 ## 4. 统一状态和停机规则
 
 每条矩阵只能使用：
-- \`PASS\`：有精确源码/原文和可复现运行证据。
-- \`GAP\`：设计或实现缺项，尚不一定构成冲突。
-- \`CONFLICT\`：与更高优先级已确认契约冲突。
-- \`NOT-IMPLEMENTED\`：设计存在但当前生产代码没有实现。
-- \`PARTIAL\`：仅部分路径或平台有证据。
-- \`BLOCKED\`：缺少必要工具/平台/信任来源或测试环境。
-- \`DEFERRED\`：由已确认阶段边界推迟到 P0-B/P1/P2。
+- `PASS`：有精确源码/原文和可复现运行证据。
+- `GAP`：设计或实现缺项，尚不一定构成冲突。
+- `CONFLICT`：与更高优先级已确认契约冲突。
+- `NOT-IMPLEMENTED`：设计存在但当前生产代码没有实现。
+- `PARTIAL`：仅部分路径或平台有证据。
+- `BLOCKED`：缺少必要工具/平台/信任来源或测试环境。
+- `DEFERRED`：由已确认阶段边界推迟到 P0-B/P1/P2。
 
 最终只有在 T01–T34、V0.6 §§1–18、R01–R22、S01–S14、当前 main 和 PR14 安全补充均完成交叉追踪、重大 Findings 收敛并通过独立复审后，才可将正式契约符合性标为 PASS。
 
-**本计划不改变 V0.3/V0.6-R5，也不自动授权 P0-A 代码开发。** V0.6 §18 明确要求：先根据 PoC 证据完成模块级 P0-A 计划，再由用户明确授权正式开发。
+**本计划不改变 V0.3/V0.6-R5，也不自动授权新的生产语义开发。** V0.6 §18 约定的前期计划阶段已完成：2026-11-10 有用户确认的 P0-A V0.1 实施计划，后续 M1–M5 已进入当前 main。本轮只评估已有成果与未关闭的 M6/Host 工作，不重开已完成里程碑。
