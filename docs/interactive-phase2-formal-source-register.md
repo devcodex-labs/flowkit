@@ -2,7 +2,9 @@
 
 **状态：SRC-01 / V0.3 与 SRC-02 / V0.6-R5 均已找回并完成 SHA-256/包内清单验证；SRC-03、SRC-04 也已在资料空间目录中定位。**  
 **登记日期：2026-11-12（UTC+8）**  
-**当前 main：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**历史源码核验基线：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**当前 main 快照：** `81c7839e9f0abe6f4db20d0fc242253b0baff0ea`（2026-11-12）  
+**关联当前状态：** [Phase 0 基线/CI 回退记录](./interactive-phase0-current-baseline-ci-fallback-20261112.md) · [P0-A 31 项交叉核对](./interactive-p0a-31-task-crosswalk-20261112.md)
 **关联设计：** [Trusted Host V2](./interactive-trusted-host-security-v2-design.md) · [完整路线图](./interactive-full-delivery-roadmap-2026-11-11.md)
 
 ## 1. 目标原件
@@ -72,6 +74,14 @@ SRC-01 和 SRC-02 的原件字节、SHA-256 与包内清单已验证；SRC-03 �
 - **当前无需用户重新上传 V0.3 或 V0.6-R5。** 两份正式原件均已在本轮资料中找到并验证。
 - SRC-04 `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip` 已在 Library `/FlowKit/` 定位，大小 171,006 bytes；本轮任务不依赖该 ZIP 才能开始符合性审查。若后续需要逐条核对历史 R5 复审过程，再单独读取该归档。
 - 不能将 V0.3-R2 Draft 或任何摘要当作 V0.6-R5 正式设计；本登记引用的 V0.6-R5 正式文件 SHA-256 为 `09f3a5698e238d10b80efb8e26d1c41e51b663ca620efa70815dd7b52f2106ba`。
+
+
+## 6. Current main and PR snapshot (2026-11-12)
+
+- Current main: `81c7839e9f0abe6f4db20d0fc242253b0baff0ea`. The original recovery/source-hash evidence above is unchanged; `ae5fc5a` remains a historical source-review baseline only.
+- PR #16/#18/#19/#12/#11 are merged; PR #17/#7 are closed without merge. PR #20 remains the sole open Phase 0 documentation PR.
+- PR #12 exact-head Actions run 43181841181 and PR #11 exact-head run 43182753787 both passed 7/7. PR #20's earlier exact-head run 43174072647 passed 7/7 on the previous 606d055 baseline; the refreshed PR #20 must rerun on current main.
+- Formal source recovery is complete; formal conformance review remains pending.
 
 ---
 
