@@ -104,7 +104,7 @@ try {
   New-ProtectedDirectory $modelDir @(@{Sid=$modelUser.SID;Rights='Modify'})
   [void][IO.Directory]::CreateDirectory($publicDir)
   foreach ($file in @(
-    'tests\security\secure-host-worker.mjs','tests\security\secure-host-win-process.ps1',
+    'tests\security\secure-host-worker.mjs',
     'src\interactive\sqlite-store.mjs','src\interactive\canonical.mjs'
   )) {
     $destination = Join-Path $publicDir $file
@@ -112,6 +112,9 @@ try {
     Copy-Item -LiteralPath (Join-Path $repo $file) -Destination $destination
   }
   Copy-Item -LiteralPath $Node -Destination (Join-Path $publicDir 'node.exe')
+  # Compile before launching either ordinary user. The model runs only the built probe.
+  Add-Type -Path (Join-Path $PSScriptRoot 'secure-host-win-process.cs') -OutputType ConsoleApplication `
+    -OutputAssembly (Join-Path $publicDir 'process-access.exe')
   [IO.File]::WriteAllText((Join-Path $publicDir 'task.json'),"flowkit-public-task`n")
 
   $hostProcess = Start-ProfileWorker $hostUser $hostPassword 'host' $hostDir
@@ -138,7 +141,10 @@ try {
   if (!$closed.keyUsable -or !$closed.protectedBytesUnchanged) { throw 'Host postcondition failed' }
   Write-Host ($closed | ConvertTo-Json -Depth 8 -Compress)
 } catch {
-  foreach ($errorPath in @((Join-Path $hostDir 'host-error.json'),(Join-Path $modelDir 'model-error.json'))) {
+  foreach ($errorPath in @(
+    (Join-Path $hostDir 'host-error.json'),(Join-Path $modelDir 'model-error.json'),
+    (Join-Path $modelDir 'model-file-result.json')
+  )) {
     if ([IO.File]::Exists($errorPath)) { Write-Host (Get-Content -LiteralPath $errorPath -Encoding UTF8 -Raw) }
   }
   throw

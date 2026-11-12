@@ -155,11 +155,11 @@ async function runModel() {
     assert.ok(fds.every(fd=>!fd.target.startsWith(hostDir+'/')),'a Host fixture file descriptor is visible');
     processEvidence={fds};
   } else {
-    const powershell=path.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
-    const probe=path.join(import.meta.dirname,'secure-host-win-process.ps1');
-    processEvidence=JSON.parse(execFileSync(powershell,[
-      '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',probe,'-HostProcessId',String(hostPid),
-    ],{encoding:'utf8',windowsHide:true,timeout:20000}));
+    await report(modelDir,'model-file-result.json',{pid:process.pid,identity:actualIdentity,publicTaskReadable:true,checks});
+    const probe=path.join(root,'public','process-access.exe');
+    processEvidence=JSON.parse(execFileSync(probe,[String(hostPid)],{
+      encoding:'utf8',windowsHide:true,timeout:10000,
+    }));
     assert.equal(processEvidence.length,6);
     assert.ok(processEvidence.every(result=>result.denied===true),JSON.stringify(processEvidence));
   }
