@@ -406,13 +406,16 @@ test('M4 a successful receipt CAS followed by a lost response is recovered by du
 
 test('R04 regression: start snapshots caller-owned State before first await',async t=>{
   const {api,source,state,store}=await runAgentFixture(t);
-  const originalState={...state};
+  // Exercise both an existing top-level key and a nested caller-owned reference.
+  state.context={request:'before-await'};
+  const originalState=structuredClone(state);
   const starting=api.start({...source,startKey:'r04-state-snapshot',state});
-  // A later write by the caller must never become the Run's initial State.
+  // These writes occur synchronously after invoking start(), before its await resolves.
   state.existing='modified-after-start';
+  state.context.request='modified-after-start';
   const frame=await starting;
   assert.deepEqual(store.load(frame.runId).state,originalState,
-    'persisted State must be an entry-time snapshot');
+    'persisted State must be a deep entry-time snapshot');
 });
 
 test('R04 regression: start snapshots caller-owned startIntent before first await',async t=>{
