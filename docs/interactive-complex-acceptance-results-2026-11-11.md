@@ -9,7 +9,7 @@
 
 ## 1. 精确提交 / CI 证据
 
-- [GitHub Actions 42963110678](https://github.com/devcodex-labs/flowkit/actions/runs/42963110678)：7/7 jobs completed / success，Windows 2025 与 Ubuntu 24.04 × Node 22.13.0 / 24.22.1 四组合各 **364 tests / 364 pass / 0 fail / 0 skip**，并且四个组合均输出了 C01_LIVE_CHATGPT_COMPLETED 及 C01/C02/C03/C04/C10/C11 的 FLOWKIT_COMPLEX_ACCEPTANCE 结构化记录。
+- [GitHub Actions 42963110678](https://github.com/devcodex-labs/flowkit/actions/runs/42963110678)：7/7 jobs completed / success，Windows 2025 与 Ubuntu 24.04 × Node 22.13.0 / 24.22.1 四组合各 **364 tests / 364 pass / 0 fail / 0 skip**，并且四个组合均输出了 C01_CHATGPT_RECORDED_RESPONSES_ACCEPTED 及 C01/C02/C03/C04/C10/C11 的 FLOWKIT_COMPLEX_ACCEPTANCE 结构化记录。
 - CI 同时覆盖打包、类型、Standard Regression、文档消费、网站构建以及两项 Linux Host 跨 UID 权限隔离。
 - 完成前的多轮 GitHub Actions 因 PR 新提交被取消，**不能**把它们作为精确最终 HEAD 的 7/7 通过证据；每个模型回合的原始 Pending / SHA 仍可在对应 Job 日志核查。
 - Program 代码来源：真正的 FlowKit Analyzer/Interactive Lowerer/Emitter，运行时使用实际生成的 JavaScript Program、默认 SQLite Store 与 Ed25519 Trusted Host；除真实模型桥接外，Agent 回答由脚本确定性提供，**模型调用数为零**。
@@ -49,7 +49,7 @@ sha256:339425694337fdd24ff005b2d8eab3109d4026ce6bc176f7a8c130421a7cabb5
 | 4 | Independent Review，故意给错误类型的 reviewApproved | 7363bd1742fc94a99e05d7140d2e545d57145e04 | **受控错误注入**；校验拒绝，仅接纳回执身份，不写入业务 State，产生 attempt=2 |
 | 5 | Independent Review，根据新的 reasons 修正 reviewApproved 布尔值 | abe592e888a4ea77357e31bd5d26ab14b4dac1dd | 新 requestId，成功，Condition 决定 succeeded/done |
 
-最终结构化日志字段：C01_LIVE_CHATGPT_COMPLETED，realModelTurns=5，status=succeeded，journalRevisions=39，retriesObserved=1，terminal node=done，模型公开任务未泄露 Host 私有 canary。每个 CI Job 在各回执间确实关闭/重开了自己的 SQLite 数据库，证明同一 Job 内物理数据库恢复及 Host 重建。
+最终结构化日志字段：C01_LIVE_CHATGPT_COMPLETED，recordedModelResponses=5，status=succeeded，journalRevisions=39，retriesObserved=1，terminal node=done，模型公开任务未泄露 Host 私有 canary。每个 CI Job 在各回执间确实关闭/重开了自己的 SQLite 数据库，证明同一 Job 内物理数据库恢复及 Host 重建。
 
 **必须防止三种误称：**
 
