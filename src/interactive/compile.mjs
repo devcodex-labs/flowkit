@@ -41,7 +41,7 @@ export async function compileInteractive(file, options) {
   const analysis = await analyzeSource(snapshot,{
     ...analyzerOptions,filename,projectRoot,
   });
-  const lowered = lowerInteractive(analysis,{featureStage:options.featureStage});
+  const lowered = lowerInteractive(analysis,{featureStage:snapshotOptions.featureStage});
   if (!lowered.ir) return {code:'',diagnostics:[...lowered.diagnostics]};
   const emitted = emitInteractive(lowered.ir);
   if (emitted.diagnostics.some(d => d.severity === 'error')) {
