@@ -1,6 +1,6 @@
 # FlowKit Interactive — Phase 2 正式契约原件追踪登记
 
-**状态：部分恢复 — SRC-01 已取得并完成 SHA-256/包内清单验证；SRC-02（V0.6-R5 技术设计原件）仍 BLOCKED。**  
+**状态：SRC-01 / V0.3 与 SRC-02 / V0.6-R5 均已找回并完成 SHA-256/包内清单验证；SRC-03、SRC-04 也已在资料空间目录中定位。**  
 **登记日期：2026-11-12（UTC+8）**  
 **当前 main：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
 **关联设计：** [Trusted Host V2](./interactive-trusted-host-security-v2-design.md) · [完整路线图](./interactive-full-delivery-roadmap-2026-11-11.md)
@@ -10,9 +10,9 @@
 | ID | 应取得的正式原件 | 已知历史路径/版本线索 | 当前证据 | 状态 |
 |---|---|---|---|---|
 | SRC-01 | `FlowKit-Host-Driven-Interactive-Execution-Requirements-V0.3-Confirmed.md` | 用户上传的 `FlowKit-Interactive-Development-Handoff-For-Grok-2026-11-10(2).zip` 内部 `01-CONFIRMED-REQUIREMENTS/`；范围 T01–T34 | 已取得原文件 56,883 bytes；SHA-256 `3a0adc3edb41869a6309bae29ec5496df00970c815f8dc16330a90cbf26e703e`；与 MANIFEST、SHA256SUMS 和历史审查报告前缀一致 | **VERIFIED** |
-| SRC-02 | `TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md` | 目标为历史确认的 V0.6-R5 技术设计原件 | 本次上传的 2026-11-10 交接 ZIP 不含此文件；只含 `FlowKit-Interactive-Technical-Design-Draft-V0.3-R2.md`（103,479 bytes，SHA-256 `92eff8d490213ac74f542639df0b7deaf459457d1553f3e78a2d7d6a475520f8`），MANIFEST 明确标记技术设计为 Draft V0.3-R2 / not yet confirmed | **BLOCKED** |
-| SRC-03 | `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` | 历史确认的 V0.6-R5 交接包 | 本次上传的是不同名称的 `FlowKit-Interactive-Development-Handoff-For-Grok-2026-11-10(2).zip`；其 SHA-256 为 `8a2f679a796234383b5108d58db16c1016a35c6110301bc4eb7e091ee2ed5826`，与历史审查报告记录的 ZIP 哈希前缀/后缀吻合，但包内 MANIFEST 证明它是 V0.3 requirements + V0.3-R2 technical draft 的审查交接包，不是 V0.6-R5 Confirmed Handoff | **NOT FOUND（已排除误认）** |
-| SRC-04 | `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip` | V0.6-R5 最终收敛复审包 | 本次三个上传附件均未包含该文件或等价的原始归档 | **NOT FOUND** |
+| SRC-02 | `TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md` | `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff(1).zip` 内部 `FlowKit-Interactive-V0.6-R5-Confirmed/`；资料空间 `/FlowKit/TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md` | 原文件 114,621 bytes；SHA-256 `09f3a5698e238d10b80efb8e26d1c41e51b663ca620efa70815dd7b52f2106ba`；与交接 ZIP 内 SHA256SUMS 完整值一致；9/9 清单条目全部 PASS。相同文件也存在于 Core POC evidence ZIP 的 baseline/ 目录，SHA-256 完全相同 | **VERIFIED** |
+| SRC-03 | `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` | 资料空间 `/FlowKit/FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip`；本轮用户上传同内容副本 `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff(1).zip` | 资料空间目录存在原始命名记录；本轮上传副本 91,555 bytes，SHA-256 `2deb5b3fa60ed3b7c2d29f028e33835c47aaa0a976e947de717128caf7326549`，包含 V0.6-R5 正式原件，内部 9/9 SHA256SUMS 校验通过。资料空间原始条目的原始字节未单独导出，不声称其 ZIP 容器字节与上传副本完全相同 | **LOCATED / CONTENT VERIFIED VIA UPLOADED COPY** |
+| SRC-04 | `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip` | 资料空间 `/FlowKit/FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip` | 已在资料空间目录定位，大小 171,006 bytes；当前文件读取接口未提供该 ZIP 的原始字节，因此尚未对其内部文件和 ZIP SHA-256 做验证。不是本轮已上传的 V0.6 Confirmed Handoff ZIP | **LOCATED / RAW BYTES NOT YET VERIFIED** |
 
 **重要区分与已完成验证：** 用户单独上传的 `FlowKit-Interactive-Design-V0.3-R2-Independent-Review-Grok(1).md`（55,392 bytes，SHA-256 `7efca5840151e3a1851b4fb590ec11780f56f53da691a02d770871cdf477646f`）是对 **Technical Design Draft V0.3-R2** 的独立审查报告，不是 V0.6-R5 技术设计原件。它记录的需求 SHA 前缀 `3a0adc3e…6e703e` 已由本次 ZIP 中的真实 V0.3 文件完整验证；Draft V0.3-R2 的 SHA-256 为 `92eff8d4…475520f8`。上传 ZIP 的完整 SHA-256 `8a2f679a796234383b5108d58db16c1016a35c6110301bc4eb7e091ee2ed5826` 也与报告所记 ZIP 前缀/后缀吻合。该 ZIP 内 MANIFEST 的 `technical_design_status` 明确为 `Draft V0.3-R2, not yet confirmed`，因此不能把它当作 V0.6-R5。
 
@@ -63,4 +63,4 @@ SRC-01 已完成字节级与包内完整性验证。剩余原件恢复后，按�
 
 ---
 
-**当前结论：** SRC-01 已取得、SHA-256 已完整验证，且 2026-11-10 交接包 13/13 清单通过；SRC-02（V0.6-R5 正式技术设计）仍无可验证原始字节，SRC-03/04 仍未找到。Phase 2 的 V0.3 需求追踪可以继续，但完整正式技术契约符合性维持 **BLOCKED**；H3-01/H3-05 的独立 OS 安全工作可以继续，但不得越界修改冻结功能契约。
+**当前结论：** SRC-01（V0.3）与 SRC-02（V0.6-R5）正式原件均已找回并完成 SHA-256/清单验证；SRC-02 位于本轮上传的 Confirmed Handoff ZIP，9/9 条目通过。SRC-03 在资料空间已定位且有已验证内容副本；SRC-04 在资料空间已定位，但其 ZIP 原始字节尚未读取。原件恢复门禁已解除，下一步应直接开展 V0.3/V0.6-R5 逐条符合性核验，不再要求用户重新上传这两份文件；H3-01/H3-05 的独立 OS 安全工作可以继续，但不得越界修改冻结功能契约。
