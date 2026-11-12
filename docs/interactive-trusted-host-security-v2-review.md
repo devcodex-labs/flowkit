@@ -156,3 +156,8 @@ H3-05 OS-only security negatives          <-- only H3-01; no Grok tool dependenc
 
 **裁决边界：** 本轮关闭的是 F-01 与 F-R2-01 的设计矛盾。PR #14 仍是 docs-only 设计记录；F-02/F-04/F-07 不得改成 PASS。CI 只证明既有回归，不能证明 Windows Secure Host、Grok 原生来源、C12/S13 或正式契约符合性。是否合并 PR #14 应由用户在确认其作为“带明确 BLOCKED 限制的设计记录”后决定；合并也不自动授权 Phase 3 实施。
 
+
+
+## 9. PR #14 merge gate and remaining limitations
+
+- The final design review remains documentation-only. GitHub Actions run `43096045021` for HEAD `b9d0c1efe17c386f798e30b4331f7bd90a1936e3` remained queued with zero jobs created for several hours; this is not a PASS or FAIL test result. GitHub Status reported an Actions/Pages/Copilot incident on 2026-11-11 20:48–21:21 UTC, now resolved. The last fully successful regression run is `43045141302` for prior docs-only HEAD `316e426aa8d96e4a6b6bee8afd35c0cd313fd244`. A fresh exact-HEAD PR run is required before the authorized squash merge. No production source changed between those two heads; the intervening changes are documentation only. Do not merge based on a queued run.
