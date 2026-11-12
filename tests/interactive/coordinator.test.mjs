@@ -402,3 +402,28 @@ test('M4 a successful receipt CAS followed by a lost response is recovered by du
   assert.equal(recovered.state.answer,'once');
   assert.equal(store.load(waiting.runId).receipts.length,1);
 });
+
+
+test('R04 regression: start snapshots caller State and startIntent before its first await',async t=>{
+  const {api,source,state,store}=await runAgentFixture(t);
+  const originalState={...state};
+  const originalIntent={request:'before-await'};
+  const intent={...originalIntent};
+  const starting=api.start({
+    ...source,startKey:'r04-first-await-snapshot',state,startIntent:intent,
+  });
+  // This mutation happens after the caller hands the object to the SDK,
+  // but before the first awaited Program import has completed.
+  state.existing='modified-after-start';
+  intent.request='modified-after-start';
+  const frame=await starting;
+  const saved=store.load(frame.runId);
+  assert.deepEqual(saved.state,originalState,
+    'checkpoint must reflect State at call entry, not external post-call writes');
+  // Same original intent and state must retain the startKey's original identity.
+  const replay=await api.start({
+    ...source,startKey:'r04-first-await-snapshot',
+    state:originalState,startIntent:originalIntent,
+  });
+  assert.equal(replay.runId,frame.runId);
+});
