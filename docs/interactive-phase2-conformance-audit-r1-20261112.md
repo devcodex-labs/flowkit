@@ -16,6 +16,8 @@
 
 **CF-02 / P1（待契约裁决） / P0-A 公开 SDK 形态不一致。** V0.3 §7.1（第 250–274 行）与 V0.6 §4（第 226–255 行）描述 `@devcodex-labs/flowkit/interactive` 公共 `start/complete/resume`；当前 `src/interactive/index.mjs` 导出的是 `createInteractiveCoordinator()` / `createTrustedInteractiveHost()` factory，调用签名和公开能力不同。当前 `package.json` 确实提供 `./interactive` 子路径但不是冻结示例中的命名函数。可能是后续获批的 Host-only 封装调整，尚无当前证据证明这种签名变更被正式批准；建议独立核验变更记录，若无批准则列为契约冲突候选，不直接改源码或改旧需求。
 
+**CF-05 / P1（契约差异与披露风险，未证实模型泄漏） / Host/Public Result 投影。** V0.6-R5 §4 明确“所有公开返回帧不含完整 State”，§5 的 `InteractiveFrameV1` 仅携带 `resultRef`，而完整 State 应通过独立授权的 `readTrustedTerminalResult` 获取。当前 `src/interactive/coordinator.mjs#L140-L150` 的 `asPublicFrame(cp)` 在任何终态直接加上 `{state: cp.state}`，`types/interactive.d.ts#L83-L93` 也允许 `state?`；`createInteractiveCoordinator` 与 `createTrustedInteractiveHost().load/resume/start` 经公开 `./interactive` 导出后可返回该帧。`getPublicAgentTask` 仍有明确最小披露验证，因此**不能由此断言模型已经看到私有 State**；但 Host-visible 与 model-facing 返回类型没有按冻结 §4/§5 显式拆分，存在误转发、`result:read` 权限边界不清和 SDK 合约不一致的风险。**需要审查可信读取通道是否有已批准变更以及模型 SDK 的真实下游用途；正式契约未批准修订前不得悄悄改类型或泄露私有结果。**
+
 **CF-03 / BLOCKED / Host 真实来源与 OS 隔离。** 当前 M6 11 项 e2e 为真实 Node Host + scripted Worker，验证 P 等级协议；先前 Grok 文件 Harness 的真实模型参与为有限 M 证据，**都不能证明** C12/S13/T27 的原生工具调用、Windows 独立账户/ACL 与可信模型会话来源。PR #14 安全设计已经记录了 H3-01/H3-05/NAT-14 等后续门禁，仍需实测。
 
 **CF-04 / 边界声明 / 依法延期范围。** V0.3 §15 与 V0.6 §16 明确 P0-B/P1/P2 阶段范围；Action/Human/Loop/Parallel 未实现 **不是** P0-A 失败。P2 any 赢家/迟到副作用尚未获专项确认，不得推测已批准语义。
