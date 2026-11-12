@@ -52,7 +52,7 @@
 请重新上传以下文件（至少前两份原始 Markdown）：
 
 1. `FlowKit-Host-Driven-Interactive-Execution-Requirements-V0.3-Confirmed.md`
-2. `TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md`)
+2. `TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md`
 3. 如方便，上传 `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` 及其原始 `SHA256SUMS.txt`
 4. 如方便，上传 `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip`
 
