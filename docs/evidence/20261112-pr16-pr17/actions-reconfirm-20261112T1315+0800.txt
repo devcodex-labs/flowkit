@@ -1,0 +1,48 @@
+Reconfirm at 2026-11-12 13:15:03 +08:00
+Working directory: D:\Worker\flowkit
+Commands: git status --porcelain=v1; git rev-parse --abbrev-ref HEAD; git rev-parse HEAD;
+          gh pr view 16,17,18,19 --json number,state,isDraft,mergedAt,mergeable,headRefOid,baseRefOid,url,title
+          gh pr checks 16,17,18,19
+          gh run view 43156062422,43155961638,43159273722,43159631042 --json databaseId,status,conclusion,createdAt,updatedAt,event,headSha,url,displayTitle
+
+--- git ---
+porcelain: empty
+branch: main
+HEAD: 13d573c5ddc4a0ed3502401589c581799c96c5d2
+
+--- gh pr view ---
+16 OPEN draft MERGEABLE mergedAt=null head=90cc0de7e4f0d5971207a85221c32e9f79d9c9b5 base=13d573c5ddc4a0ed3502401589c581799c96c5d2
+   https://github.com/devcodex-labs/flowkit/pull/16
+17 OPEN draft MERGEABLE mergedAt=null head=ada01c933553206948ffcf2f944dfc5604e44da2 base=13d573c5ddc4a0ed3502401589c581799c96c5d2
+   https://github.com/devcodex-labs/flowkit/pull/17
+18 OPEN draft MERGEABLE mergedAt=null head=452ac387b1f3da97d38bfb27b8582953ab1b818e base=13d573c5ddc4a0ed3502401589c581799c96c5d2
+   https://github.com/devcodex-labs/flowkit/pull/18
+19 OPEN draft MERGEABLE mergedAt=null head=3175a0794a8fb1305ffa0f06d1ae426c0c2b4ae9 base=13d573c5ddc4a0ed3502401589c581799c96c5d2
+   https://github.com/devcodex-labs/flowkit/pull/19
+
+--- gh pr checks ---
+Each of PR 16, 17, 18, 19 printed seven jobs, all "pending" with duration 0.
+gh pr checks exit code: 8 for each PR.
+Exit 8 here is the CLI code for checks that have not finished. It is not a recorded test failure and not a success.
+
+PR 16 run https://github.com/devcodex-labs/flowkit/actions/runs/43156062422
+PR 17 run https://github.com/devcodex-labs/flowkit/actions/runs/43155961638
+PR 18 run https://github.com/devcodex-labs/flowkit/actions/runs/43159273722
+PR 19 run https://github.com/devcodex-labs/flowkit/actions/runs/43159631042
+
+Job names on every run:
+Host OS-user isolation / Node 22.13.0
+Host OS-user isolation / Node 24.22.1
+ubuntu-24.04 / Node 22.13.0
+ubuntu-24.04 / Node 24.22.1
+website
+windows-2025 / Node 22.13.0
+windows-2025 / Node 24.22.1
+
+--- gh run view ---
+43156062422 status=queued conclusion= createdAt=2026-11-12T04:37:52Z updatedAt=2026-11-12T04:37:54Z event=pull_request headSha=90cc0de7e4f0d5971207a85221c32e9f79d9c9b5
+43155961638 status=queued conclusion= createdAt=2026-11-12T04:36:58Z updatedAt=2026-11-12T04:36:59Z event=pull_request headSha=ada01c933553206948ffcf2f944dfc5604e44da2
+43159273722 status=queued conclusion= createdAt=2026-11-12T05:07:42Z updatedAt=2026-11-12T05:07:42Z event=pull_request headSha=452ac387b1f3da97d38bfb27b8582953ab1b818e
+43159631042 status=queued conclusion= createdAt=2026-11-12T05:10:51Z updatedAt=2026-11-12T05:10:51Z event=pull_request headSha=3175a0794a8fb1305ffa0f06d1ae426c0c2b4ae9
+
+No run has a success or failure conclusion. Queued is not recorded as an outage and not recorded as a green matrix.

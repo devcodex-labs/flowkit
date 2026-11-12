@@ -6,7 +6,8 @@
 
 - PR #16（文档审查）：建议合并。它是审查记录，不是 Phase 2 通过结论。
 - PR #17（预期失败的回归测试）：不建议合并。两个 R04 用例已稳定失败，缺陷属实。
-- PR #18（修复）：建议合并。同一份测试在修复后通过。CI 矩阵仍在排队，不能把本机结果写成矩阵通过。
+- PR #18（修复）：建议合并。竞态已消除，本地回归已通过，范围内复审没有新的 P0/P1。CI 矩阵仍是 `queued`，不能把本机结果写成在线矩阵通过。
+- PR #19（本报告）：建议作为证据记录入库。它没有产品代码。同一次复核时它自己的 Actions 也仍是 `queued`。
 
 ## 1. PR HEAD 与基线
 
@@ -14,9 +15,10 @@
 |---|---|---|---|---|
 | [#16](https://github.com/devcodex-labs/flowkit/pull/16) | OPEN, Draft, MERGEABLE | `90cc0de7e4f0d5971207a85221c32e9f79d9c9b5` | `13d573c5ddc4a0ed3502401589c581799c96c5d2` | 只新增两份审查文档，+259 / −0 |
 | [#17](https://github.com/devcodex-labs/flowkit/pull/17) | OPEN, Draft, MERGEABLE | `ada01c933553206948ffcf2f944dfc5604e44da2` | 同上 | 只改 `tests/interactive/coordinator.test.mjs`，+31 / −0 |
-| [#18](https://github.com/devcodex-labs/flowkit/pull/18) | OPEN, Draft | `452ac387b1f3da97d38bfb27b8582953ab1b818e` | 同上 | 修复 + 与 #17 相同的两个测试，+45 / −3 |
+| [#18](https://github.com/devcodex-labs/flowkit/pull/18) | OPEN, Draft, MERGEABLE | `452ac387b1f3da97d38bfb27b8582953ab1b818e` | 同上 | 修复 + 与 #17 相同的两个测试，+45 / −3 |
+| [#19](https://github.com/devcodex-labs/flowkit/pull/19) | OPEN, Draft, MERGEABLE | 见第 14 节；本段写入时为 `3175a0794a8fb1305ffa0f06d1ae426c0c2b4ae9` | 同上 | 本报告与脱敏日志，无产品代码 |
 
-PR #16 / #17 的 HEAD 与任务开始时给出的历史 SHA 一致，执行前已用 `gh pr view` 重新读取，不是沿用旧记录。本地 `main` 在整个过程中保持 `13d573c5ddc4a0ed3502401589c581799c96c5d2`，工作区干净。
+PR #16 / #17 的 HEAD 与任务开始时给出的历史 SHA 一致，执行前已用 `gh pr view` 重新读取，不是沿用旧记录。2026-11-12 13:15 +08 再次 `gh pr view`：四条 PR 仍是 OPEN Draft，`mergedAt` 为 null，base 仍是 `13d573c5ddc4a0ed3502401589c581799c96c5d2`，#16/#17/#18 的 head 未变。本地 `D:\Worker\flowkit` 的 `main` 仍是该 SHA，`git status --porcelain=v1` 为空。原始输出在 `docs/evidence/20261112-pr16-pr17/actions-reconfirm-20261112T1315+0800.txt`。
 
 检出：
 
@@ -24,6 +26,7 @@ PR #16 / #17 的 HEAD 与任务开始时给出的历史 SHA 一致，执行前�
 - `D:\Worker\flowkit-pr16-verify`：detached `90cc0de`。
 - `D:\Worker\flowkit-pr17-verify`：detached `ada01c9`。
 - `D:\Worker\flowkit-pr17-fix`：分支 `fix/r04-start-input-snapshot-20261112`。
+- `D:\Worker\flowkit-pr16-pr17-review`：分支 `review/pr16-pr17-local-verification-20261112`，本报告所在。
 - 已有 worktree `D:\Worker\flowkit-acceptance-grok-20261111` 未使用。
 
 `git diff --stat 13d573c 90cc0de` 只有：
@@ -217,12 +220,14 @@ Trusted Host 探针：`host.start()` 在同步进入 `coordinator.start()` 时�
 | PR #16 `docs:check`（CRLF 工作区） | FAIL，环境行尾，非文档内容 |
 | PR #16 `docs:check`（索引 LF） | PASS |
 | PR #16 `docs:build` | PASS |
-| PR #16 GitHub Actions run `43156062422` | BLOCKED，7 个 job 均为 pending / 0 秒 |
+| PR #16 GitHub Actions run `43156062422` | BLOCKED，`status=queued`，`conclusion` 空，7 个 job pending / 0 秒，`gh pr checks` exit 8 |
 | PR #17 两个 R04 测试 | FAIL，已复现 |
 | PR #17 同文件其余测试 | PASS |
 | PR #18 `npm run verify` Node 24.22.2 与 22.22.2 | PASS，各 371 |
 | PR #18 docs examples / check / build | PASS |
-| PR #18 Actions run `43159273722` | BLOCKED，7 个 job 均为 pending / 0 秒 |
+| PR #17 Actions run `43155961638` | BLOCKED，`status=queued`，`conclusion` 空，7 个 job pending / 0 秒，`gh pr checks` exit 8 |
+| PR #18 Actions run `43159273722` | BLOCKED，同上 |
+| PR #19 Actions run `43159631042` | BLOCKED，同上。这是本报告自己的运行，不能当成报告已通过在线 CI |
 | Ubuntu | BLOCKED，本机未跑 |
 | CI 精确 Node 22.13.0、24.22.1 | BLOCKED，未跑 |
 | 真实 Grok 原生 Host、C12、S13、T27 | BLOCKED |
@@ -264,12 +269,34 @@ CF-08 保持独立，不在这个 diff 里。
 
 - **建议合并 PR #16。** 文档与源码证据一致，没有把未完成验收标成通过，没有生产代码。合并它只表示审查记录可以入库。
 - **不建议合并 PR #17。** 测试失败是真的。PR #18 已包含同一测试。两个 PR 都合并会造成重复。修复合并后可以由后续复审关闭 #17。
-- **建议合并 PR #18。** 本地 Windows 的 Node 22.22.2 与 24.22.2 回归已通过，独立复审没有发现本变更范围内的新 P0/P1。合并前仍应看到 GitHub Actions 矩阵实际结束；当前 7 个 job 都还在 pending，本建议不把它们算作通过。
+- **建议合并 PR #18。** 竞态已在入口快照处消除，本地 Windows 的 Node 22.22.2 与 24.22.2 回归已通过，独立复审没有发现本变更范围内的新 P0/P1。这三项是本建议的依据。GitHub Actions 仍是 `queued`，不计入通过，也不把排队写成已证实的故障。
+- **建议合并 PR #19。** 它只提交本报告和脱敏日志。合并它只表示证据记录可以入库。
+- 本会话不执行合并、不推 `main`、不发布 npm、不创建 Release。最终复审和授权范围内的合并由后续复审方执行。
 
 ## 13. 未完成项
 
-- GitHub Actions：PR #16 run `43156062422`、PR #17 run `43155961638`、PR #18 run `43159273722` 在本报告写完时全部 pending。排队原因未判定。
+- GitHub Actions：PR #16 run `43156062422`、PR #17 run `43155961638`、PR #18 run `43159273722`、PR #19 run `43159631042` 在 2026-11-12 13:15 +08 仍是 `queued`，`conclusion` 为空。`gh pr checks` 对各 PR 的退出码都是 8。排队原因未判定。exit 8 在这里是 CLI 对未完成检查的退出码，不是产品测试失败。
 - 未跑 Ubuntu，未跑 CI 锁定的 Node 22.13.0 与 24.22.1。
 - 未做真实 Grok 原生工具调用、C12、S13、T27、Windows 独立账户 / ACL。脚本 Host 测试不能代替这些。
 - CF-01、CF-02、CF-05、CF-06、CF-08 仍打开。CF-02/05/06 需要正式契约裁决后才能改 API。
 - 本机未重新打开 V0.6-R5 原文，相关措辞仍以 R1 摘录和 R2 的披露为准。
+
+## 14. 2026-11-12 13:15 +08 复核
+
+命令在 `D:\Worker\flowkit` 执行。原始输出：`docs/evidence/20261112-pr16-pr17/actions-reconfirm-20261112T1315+0800.txt`。
+
+| 对象 | 结果 |
+|---|---|
+| 本地 `main` | `13d573c5ddc4a0ed3502401589c581799c96c5d2`，`git status --porcelain=v1` 为空 |
+| PR #16 | OPEN，Draft，MERGEABLE，`mergedAt` null，head `90cc0de7e4f0d5971207a85221c32e9f79d9c9b5` |
+| PR #17 | OPEN，Draft，MERGEABLE，`mergedAt` null，head `ada01c933553206948ffcf2f944dfc5604e44da2` |
+| PR #18 | OPEN，Draft，MERGEABLE，`mergedAt` null，head `452ac387b1f3da97d38bfb27b8582953ab1b818e` |
+| PR #19 | OPEN，Draft，MERGEABLE，`mergedAt` null，head `3175a0794a8fb1305ffa0f06d1ae426c0c2b4ae9`（本复核记录提交之前） |
+| run `43156062422` | `status=queued`，`conclusion` 空，`createdAt` `2026-11-12T04:37:52Z`，`updatedAt` `2026-11-12T04:37:54Z`，head `90cc0de` |
+| run `43155961638` | `status=queued`，`conclusion` 空，`createdAt` `2026-11-12T04:36:58Z`，`updatedAt` `2026-11-12T04:36:59Z`，head `ada01c9` |
+| run `43159273722` | `status=queued`，`conclusion` 空，`createdAt` 与 `updatedAt` 都是 `2026-11-12T05:07:42Z`，head `452ac38` |
+| run `43159631042` | `status=queued`，`conclusion` 空，`createdAt` 与 `updatedAt` 都是 `2026-11-12T05:10:51Z`，head `3175a07` |
+
+四个 run 各有 7 个 job，`gh pr checks` 都显示 `pending`、耗时 `0`。没有 job 进入 `in_progress`、`success` 或 `failure`。因此不能写在线 CI 通过，也不能写 GitHub Actions 已无法运行。本机 Windows 结果仍然只覆盖 Node 22.22.2 与 24.22.2。
+
+本段本身的提交会让 PR #19 再排一次 Actions。那一次运行不在上表四个 run 里。本报告不预写它的 `status` 或 `conclusion`。
