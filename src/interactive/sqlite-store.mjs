@@ -42,6 +42,7 @@ function assertCheckpoint(value, namespace, runId, revision, artifactHash) {
     throw failure('FK_I_PROGRAM_MISMATCH', 'run artifact is immutable');
   }
   if (!STATUSES.has(value.status)
+    || (value.transitionIdVersion!==undefined && value.transitionIdVersion!==1)
     || typeof value.blockId !== 'string' || !value.blockId
     || typeof value.phase !== 'string' || !value.phase
     || !value.blockId.endsWith('::' + value.phase)
@@ -55,7 +56,7 @@ function assertCheckpoint(value, namespace, runId, revision, artifactHash) {
   }
 }
 function immutableIdentity(previous, next) {
-  for (const key of ['namespace', 'runId', 'schemaVersion', 'artifactHash', 'startKey', 'startIntentHash', 'policyHash']) {
+  for (const key of ['namespace', 'runId', 'schemaVersion', 'artifactHash', 'startKey', 'startIntentHash', 'policyHash', 'transitionIdVersion']) {
     if (previous[key] !== next[key]) {
       throw failure('FK_I_INVALID_CHECKPOINT', 'immutable field changed: ' + key);
     }
@@ -135,6 +136,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const readReceipt = db.prepare('SELECT * FROM fk_i_receipt_index WHERE namespace = ? AND run_id = ? AND request_id = ?');
   const insertReceipt = db.prepare('INSERT OR IGNORE INTO fk_i_receipt_index(namespace, run_id, request_id, node_id, attempt, digest, accepted_revision, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const journalAtRevision = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND revision = ?');
+  const journalById = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND transition_id = ?');
 
   function transaction(mode, work) {
     db.exec(mode === 'write' ? 'BEGIN IMMEDIATE' : 'BEGIN');
@@ -287,7 +289,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
      * Durable idempotent start: the server computes the intent fingerprint,
      * including tenant, artifact, initial State and caller options.
      */
-    createRun({startKey, startIntent = null, checkpoint}) {
+    createRun({startKey, startIntent = null, checkpoint, genesis}) {
       identifier(startKey, 'startKey');
       const base = boundedCheckpoint(checkpoint);
       identifier(base?.runId, 'checkpoint.runId');
@@ -301,6 +303,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         policyHash:base.policyHash ?? null, intent,
       }));
       const initial = {...base, startKey, startIntentHash};
+      if ((base.transitionIdVersion===1)!==Boolean(genesis)) {
+        throw failure('FK_I_INVALID_TRANSITION','versioned genesis metadata required');
+      }
       const checkpointBytes = boundedCheckpointBytes(initial);
       // The reserve must already exist before a Run can publish its first Pending.
       // Read/duplicate-start of a pre-upgrade Run is not blocked by this check.
@@ -325,7 +330,8 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         }
         insertRun.run(namespace, initial.runId, startKey, startIntentHash, 0,
           initial.artifactHash, checkpointBytes.toString('utf8'), checkpointHash);
-        appendJournal(initial.runId, 0, 'start:' + startIntentHash, checkpointHash, null, {kind:'created'});
+        appendJournal(initial.runId, 0, genesis?.transitionId ?? ('start:' + startIntentHash),
+          checkpointHash, null, {kind:'created',...(genesis ? {transition:genesis} : {})});
         return {created:true, checkpoint:JSON.parse(checkpointBytes.toString('utf8'))};
       });
     },
@@ -420,6 +426,23 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         if (!historical) throw failure('FK_I_STORE_CORRUPT', 'legacy receipt journal missing');
         receiptProof(runId, {...legacy,entryHash:historical.entry_hash});
         return safeJSONSnapshot(legacy);
+      });
+    },
+
+    /** Indexed read used by the async Store facade. Old records keep their original IDs. */
+    readJournalRecord(runId, {transitionId,revision}) {
+      identifier(runId, 'runId');
+      if (transitionId!==undefined) identifier(transitionId,'transitionId');
+      return transaction('read',()=>{
+        const cp=decodeRow(read.get(namespace,runId));
+        if (!cp) return null;
+        const row=transitionId===undefined ? journalAtRevision.get(namespace,runId,revision)
+          : journalById.get(namespace,runId,transitionId);
+        if (!row) return null;
+        const entry=JSON.parse(row.entry_json);
+        if (journalDigest(namespace,runId,row.revision,row.transition_id,row.previous_hash,row.checkpoint_hash,entry)
+          !==row.entry_hash) throw failure('FK_I_STORE_CORRUPT','invalid journal record');
+        return {revision:row.revision,transitionId:row.transition_id,entry};
       });
     },
 

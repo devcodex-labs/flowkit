@@ -31,9 +31,10 @@ assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
 
 
 assert.deepEqual(Object.keys(interactive),[
-  'compileInteractive','createAgentReceiptStatement','createInteractiveCoordinator',
-  'createSqliteCheckpointStore','createTrustedInteractiveHost','encodeAgentReceiptStatement',
-  'loadInteractiveProgram','normalizeHostAgentReceipt',
+  'compileInteractive','complete','createAgentReceiptStatement','createInteractiveCoordinator',
+  'createInteractiveHostContext','createSqliteCheckpointStore','createSqliteInteractivePersistence',
+  'createTrustedInteractiveHost','encodeAgentReceiptStatement',
+  'loadInteractiveProgram','normalizeHostAgentReceipt','resume','start',
 ]);
 await writeFile('simple.workflow.js',
   "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
@@ -41,6 +42,21 @@ await writeFile('simple.workflow.js',
 const compiledInteractive=await interactive.compileInteractive('simple.workflow.js',{
   output:'memory',featureStage:'P0-A',
 });
+const versioned=interactive.createSqliteInteractivePersistence('versioned.sqlite',{namespace:'installed'});
+try {
+  const auth=interactive.createInteractiveHostContext({
+    namespace:'installed',subjectId:'test-host',authorize:()=>true,authorizeTask:()=>false,
+  });
+  const frame=await interactive.start('simple.workflow.js',{}, {private:'host-only'},{
+    ...versioned,auth,startKey:'installed-versioned',policy:{
+      id:'consumer',version:'1',bindingManifest:{},disclosePolicyId:'consumer',
+      capabilityStage:'P0-A',canonicalizationVersion:'jcs-rfc8785-v1',
+    },
+  });
+  assert.equal(frame.status,'succeeded');
+  assert.equal(Object.hasOwn(frame,'state'),false);
+  assert.equal((await versioned.store.load(frame.runId)).transitionIdVersion,1);
+} finally {versioned.close();}
 assert.ok(compiledInteractive.programIdentity?.artifactHash);
 const store=interactive.createSqliteCheckpointStore('interactive-demo.db',{namespace:'consumer'});
 try {

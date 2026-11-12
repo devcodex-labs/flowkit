@@ -330,3 +330,153 @@ export interface TrustedInteractiveHostOptions {
 export declare function createTrustedInteractiveHost(
   options:TrustedInteractiveHostOptions
 ):TrustedInteractiveHostWithTerminalAccess;
+
+export interface TransitionRecordV1 {
+  namespace:string;
+  runId:string;
+  transitionId:string;
+  fromRevision:number|null;
+  toRevision:number;
+  fromBlockId:string|null;
+  toBlockId:string|null;
+  programHash:string;
+  eventDigest:string;
+  /** Present for the R5 transition identity scheme. */
+  proposalDigest?:string;
+  committedAt:string;
+}
+
+export interface ReceiptRecordV1 {
+  namespace:string;
+  runId:string;
+  requestId:string;
+  kind:'agent';
+  submissionDigest:string;
+  acceptedRevision:number;
+  outcome:'succeeded'|'failed'|'legacy';
+  transitionId:string;
+  /** P0-A execution identity retained by the SQLite compatibility facade. */
+  nodeId?:string;
+  attempt?:number;
+}
+
+/** P0-A persistence payload, shared with the legacy SQLite checkpoint format. */
+export type RunCheckpointV1 = InteractiveCheckpoint & {
+  startKey:string;
+  startIntentHash:string;
+  policyHash:string;
+  transitionIdVersion?:1;
+};
+
+export type CASResultV1 =
+  | {committed:true;checkpoint:RunCheckpointV1}
+  | {committed:false;currentRevision:number};
+
+/** All reads must be linearizable within namespace, including history. */
+export interface CheckpointStoreV1 {
+  readonly namespace:string;
+  /** Atomically creates Genesis and protects the registered Program from release. */
+  createIfAbsent(startKey:string,initial:RunCheckpointV1,genesis:TransitionRecordV1):Promise<{created:boolean;checkpoint:RunCheckpointV1}>;
+  load(runId:string):Promise<RunCheckpointV1|null>;
+  compareAndSwap(runId:string,expectedRevision:number,tx:{next:RunCheckpointV1;transition:TransitionRecordV1;receipt?:ReceiptRecordV1}):Promise<CASResultV1>;
+  loadTransition(runId:string,transitionId:string):Promise<TransitionRecordV1|null>;
+  loadReceipt(runId:string,requestId:string):Promise<ReceiptRecordV1|null>;
+}
+
+export interface TrustedProgramRefV1 {
+  namespace:string;
+  artifactHash:string;
+  programId:string;
+}
+
+export interface TrustedProgramRegistryV1 {
+  readonly namespace:string;
+  putImmutable(bytes:Uint8Array,manifest:InteractiveProgramIdentity):Promise<TrustedProgramRefV1>;
+  resolveByHash(artifactHash:string):Promise<Uint8Array>;
+  describe(artifactHash:string):Promise<InteractiveProgramIdentity|null>;
+  retain(runId:string,artifactHash:string):Promise<void>;
+  release(runId:string,artifactHash:string):Promise<void>;
+}
+
+export declare function createSqliteInteractivePersistence(file:string,options:{namespace:string}):{
+  readonly store:CheckpointStoreV1;
+  readonly programRegistry:TrustedProgramRegistryV1;
+  close():void;
+};
+
+declare const hostContextBrand:unique symbol;
+export interface TrustedHostContextV1 {
+  readonly [hostContextBrand]:true;
+  readonly namespace:string;
+  readonly subjectId:string;
+  readTerminalResult(resultRef:InteractiveTerminalResultRef,
+    options:Omit<InteractiveOptionsV1,'auth'>):Promise<TrustedInteractiveTerminalResult>;
+}
+
+export interface PublicPendingV1 {
+  requestId:string;
+  nodeId:string;
+  kind:'agent';
+  attempt:number;
+  activation:number;
+  intent:'execute';
+  task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'>;
+}
+
+export interface InteractiveFrameV1 {
+  protocolVersion:1;
+  runId:string;
+  revision:number;
+  status:Exclude<InteractiveRunStatus,'running'>;
+  pending:ReadonlyArray<PublicPendingV1>;
+  checkpointRef:{runId:string;revision:number};
+  terminal?:{nodeId:string;status:'succeeded'|'failed'};
+  resultRef?:InteractiveTerminalResultRef;
+  acknowledgement?:{requestId:string;acceptedRevision:number;repeated:boolean};
+  diagnostics?:readonly InteractiveDiagnostic[];
+}
+
+export declare function createInteractiveHostContext(options:{
+  namespace:string;
+  subjectId:string;
+  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'result:read';
+    startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number}>):boolean|Promise<boolean>;
+  authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
+    task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
+}):TrustedHostContextV1;
+
+type BindingV1<Mode extends string,F> = {id:string;version:string;mode:Mode;implementation:F};
+export interface InteractiveRuntimeV1 {
+  validateResult?:BindingV1<'pure-local',NonNullable<InteractiveRuntime['validateResult']>>;
+  skillResolver?:BindingV1<'trusted-read',(reference:string,meta?:InteractiveSkillDescriptor)=>string|Promise<string>>;
+}
+
+export interface InteractivePolicyV1 {
+  id:string;
+  version:string;
+  bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
+  disclosePolicyId:string;
+  capabilityStage:'P0-A';
+  canonicalizationVersion:'jcs-rfc8785-v1';
+  requiredSkillManifestHash?:string;
+}
+
+export interface InteractiveOptionsV1 {
+  readonly store:CheckpointStoreV1;
+  readonly programRegistry:TrustedProgramRegistryV1;
+  readonly policy:InteractivePolicyV1;
+  readonly auth:TrustedHostContextV1;
+  maxStagesPerCall?:number;
+  signal?:AbortSignal;
+}
+
+export type HostSubmissionV1 =
+  | {kind:'agent';runId:string;requestId:string;outcome:'succeeded';result:Record<string,unknown>}
+  | {kind:'agent';runId:string;requestId:string;outcome:'failed';error:{code:string;message:string;retryable?:boolean;
+      origin?:'runtime'|'executor'|'validator'|'store'|'policy'}};
+
+export declare function start(source:string|TrustedProgramRefV1,runtime:InteractiveRuntimeV1,
+  initialState:Record<string,unknown>,options:InteractiveOptionsV1&{startKey:string}):Promise<InteractiveFrameV1>;
+export declare function complete(submission:HostSubmissionV1,runtime:InteractiveRuntimeV1,
+  options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
+export declare function resume(runId:string,runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
