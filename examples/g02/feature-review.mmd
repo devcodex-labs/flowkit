@@ -1,0 +1,15 @@
+flowchart TD
+  Gate{"检查材料是否齐全"}
+  Analyze["需求分析"]
+  Design["技术设计"]
+  Review["独立评审"]
+  Decide{"根据评审结论分流"}
+  Accepted("评审通过")
+  Rejected("评审未通过或材料不齐")
+  Gate -- "materialsReady" --> Analyze
+  Gate -- "true" --> Rejected
+  Analyze --> Design
+  Design --> Review
+  Review --> Decide
+  Decide -- "reviewApproved" --> Accepted
+  Decide -- "true" --> Rejected

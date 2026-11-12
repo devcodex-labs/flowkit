@@ -101,3 +101,8 @@ dialect, actual model execution, business actions and an approval service. See
 [host integration](../docs/host-integration.md) and [troubleshooting](../docs/troubleshooting.md).
 
 示例目录不随 npm 包分发。v1.0.0 包包含 `dist`、`README.md`、`LICENSE` 和包元数据；用户可从仓库或文档站获取完整教程文件。
+
+## G02 产品闭环验证（Interactive P0-A 子集）
+
+[g02/](g02/) 保存一次真实用户意图到可执行 JavaScript 的验证材料：Grok Build 按现有 DSL 生成 `feature-review.workflow.js`，再用官方 `compile`/`check` 与 `compileInteractive` 生成并运行 Program。Standard 层只演示该 DSL 已有的 Agent/Condition/Terminal；完整八类节点仍以本目录的 editorial golden 为准。Interactive 层只验收 P0-A 子集与 Pending/恢复，不能把 Node 执行或本地测试签名写成原生安全 Host 来源认证。操作说明见该目录 README。
+

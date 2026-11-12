@@ -1,0 +1,102 @@
+[
+  {
+    "layer": "interactive-p0a",
+    "scenario": "success-with-scripted-retry",
+    "status": "succeeded",
+    "terminal": {
+      "nodeId": "accepted",
+      "status": "succeeded"
+    },
+    "reviewApproved": true,
+    "pendingPublished": false,
+    "route": [
+      {
+        "source": "grok-model",
+        "nodeId": "analyze",
+        "attempt": 1,
+        "requestId": "req:cd869d313e933b356b99d9229e8ac9be161eca22e0d4b2c11a53091f58f868a7",
+        "statusAfter": "waiting",
+        "next": "design"
+      },
+      {
+        "source": "grok-model",
+        "nodeId": "design",
+        "attempt": 1,
+        "requestId": "req:d76207d128012416efb5dc4b1ade578be4ac0e1802031fe8f92b215734407de3",
+        "statusAfter": "waiting",
+        "next": "review"
+      },
+      {
+        "source": "scripted-invalid",
+        "nodeId": "review",
+        "attempt": 1,
+        "requestId": "req:d2d5fe090a4aeef9500ee9a624690a23f17d887d3c84a90e36538d29cb775133",
+        "statusAfter": "waiting",
+        "next": "review"
+      },
+      {
+        "source": "grok-model",
+        "nodeId": "review",
+        "attempt": 2,
+        "requestId": "req:6cc88145ba67ad65081a9a78a741f8cbf26b35e9d7b4b8017ca095d59f0ea363",
+        "statusAfter": "succeeded",
+        "next": "accepted"
+      }
+    ],
+    "programHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
+    "evidenceNote": "Interactive Program + SQLite + local test receipts via Node. Not N-PASS. Not native secure Host provenance."
+  },
+  {
+    "layer": "interactive-p0a",
+    "scenario": "gate-false",
+    "status": "failed",
+    "terminal": {
+      "nodeId": "rejected",
+      "status": "failed"
+    },
+    "reviewApproved": null,
+    "pendingPublished": false,
+    "route": [],
+    "programHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
+    "evidenceNote": "Interactive Program + SQLite + local test receipts via Node. Not N-PASS. Not native secure Host provenance."
+  },
+  {
+    "layer": "interactive-p0a",
+    "scenario": "review-approved-false",
+    "status": "failed",
+    "terminal": {
+      "nodeId": "rejected",
+      "status": "failed"
+    },
+    "reviewApproved": false,
+    "pendingPublished": false,
+    "route": [
+      {
+        "source": "grok-model",
+        "nodeId": "analyze",
+        "attempt": 1,
+        "requestId": "req:8c18ec5e3534510274b4ee71d0f02da7c12b00f627bc44a1109c9d3ad20997d0",
+        "statusAfter": "waiting",
+        "next": "design"
+      },
+      {
+        "source": "grok-model",
+        "nodeId": "design",
+        "attempt": 1,
+        "requestId": "req:2d76c8634f8c31f8a6161f42241f1f2b69db3728bd674f0373c3333d2507cf9a",
+        "statusAfter": "waiting",
+        "next": "review"
+      },
+      {
+        "source": "grok-model",
+        "nodeId": "review",
+        "attempt": 1,
+        "requestId": "req:aade8c66498bab1b076a8e3d7a9f37e5d7ff2d830fc95fd856592007707f18ba",
+        "statusAfter": "failed",
+        "next": "rejected"
+      }
+    ],
+    "programHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
+    "evidenceNote": "Interactive Program + SQLite + local test receipts via Node. Not N-PASS. Not native secure Host provenance."
+  }
+]

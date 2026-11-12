@@ -1,0 +1,75 @@
+{
+  "stageId": "G02",
+  "model": "Grok Bot / Grok Build",
+  "evidenceTier": "M",
+  "providerVerified": false,
+  "nativeJsTool": false,
+  "nativeHostProvenance": false,
+  "note": "除明确标注 source=scripted-invalid 的条目外，Agent 结果均由 Grok 在查阅已发布 Pending 的公开 instruction/input 后撰写，并绑定到精确 requestId 与 taskDigest。本地 Trusted Host 使用测试用 Ed25519 密钥签名回执，这不是供应商来源证明，也不得标为 N-PASS。本环境通过 Node/FlowKit CLI 执行 JS，不得声称已通过原生安全 Host 来源认证。",
+  "request": "为 FlowKit 维护者增加一条只读的工作流运行摘要查看能力：在不修改现有 Standard Root 六个 API、不引入独立 FlowKit Server 的前提下，允许受信 Host 读取一次运行的终态状态（succeeded/failed/errored）、terminal 节点和公开投影，便于排障。不在本阶段实现 adminTerminate，也不改变 Interactive P0-A 的节点范围。",
+  "programArtifactHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
+  "sourceHash": "sha256:8df70cd1af7dd9b0b5ea2c2143815c8aca862696f580fa46b21f726c021ec592",
+  "workflowId": "g02-feature-review",
+  "namespace": "g02-feature-review",
+  "scenario": "success-with-scripted-retry",
+  "runId": "g02-success-retry-20261112",
+  "startKey": "g02-success-retry-start",
+  "materialsReady": true,
+  "expectedTerminal": {
+    "nodeId": "accepted",
+    "status": "succeeded"
+  },
+  "turns": [
+    {
+      "index": 0,
+      "nodeId": "analyze",
+      "attempt": 1,
+      "requestId": "req:cd869d313e933b356b99d9229e8ac9be161eca22e0d4b2c11a53091f58f868a7",
+      "taskDigest": "sha256:cc148ff129cd73677a5d7a8fc8afd641664dcafa0f39fecf2864b85fea7d8237",
+      "source": "grok-model",
+      "authoredAt": "2026-11-12T17:11:00+08:00",
+      "result": {
+        "requirementSummary": "本需求的目标是为受信 Host 提供一条只读的工作流运行摘要查询能力，便于排障时确认一次运行的终态。摘要仅应返回 succeeded、failed 或 errored 等运行状态、terminal 节点标识，以及已批准的公开投影，不得暴露完整私有 State 或 Host 机密。明确约束包括：不得修改现有 Standard Root 的六个 API，不得为此引入独立 FlowKit Server，不得在本阶段实现 adminTerminate，也不得扩大 Interactive P0-A 已实现节点范围。非目标包括通用产物存储、模型网关和跨租户管理控制台。可验收结果是：在现有 Interactive 契约下，受信 Host 能对指定 runId 读取上述只读摘要，未授权主体不能获得额外字段，且该能力不改变 Program 路由或 Standard 兼容性。"
+      }
+    },
+    {
+      "index": 1,
+      "nodeId": "design",
+      "attempt": 1,
+      "requestId": "req:d76207d128012416efb5dc4b1ade578be4ac0e1802031fe8f92b215734407de3",
+      "taskDigest": "sha256:3a88c90088ca520ef9e3dfb9912d4d352c0c5410eaf13a34fb7eb510fb36bcd5",
+      "source": "grok-model",
+      "authoredAt": "2026-11-12T17:12:30+08:00",
+      "result": {
+        "designSummary": "建议在现有 `@devcodex-labs/flowkit/interactive` 子路径上，由受信 Host 调用已有 Coordinator 或 Trusted Host 的只读查询接口来获得运行摘要，而不是新增 Standard Root API，也不建立独立 FlowKit Server。FlowKit Core 继续只负责 Program 路由、Checkpoint 与合法事件校验，摘要内容应从已提交的 Checkpoint 或公开投影组装，仅包含运行状态、terminal 节点和已授权的公开字段。完整 State、私钥、SQLite 路径不得进入公开投影。adminTerminate 仍按未决缺口单独处理，不与本只读查询捆绑交付。可选 OpenAPI Adapter 若日后暴露该查询，必须停留在 Host 层并复用同一公开投影策略。验收应证明：同一 Program Hash 下的终态摘要可在进程重启后从 Store 重读，且模型无法通过该回答改写 PC 或后继节点。"
+      }
+    },
+    {
+      "index": 2,
+      "nodeId": "review",
+      "attempt": 1,
+      "requestId": "req:d2d5fe090a4aeef9500ee9a624690a23f17d887d3c84a90e36538d29cb775133",
+      "taskDigest": "sha256:503a23e6e656f6665aaae76ad668eb4fb8b4345655d776f8d7acd42462d868f7",
+      "source": "scripted-invalid",
+      "authoredAt": "2026-11-12T17:13:20+08:00",
+      "note": "脚本化负例：故意提交不符合 resultSchema 的对象，用于验证非法 Agent 输出触发重试。不是模型输出。",
+      "result": {
+        "comment": "this is not a valid review schema",
+        "ok": 1
+      }
+    },
+    {
+      "index": 3,
+      "nodeId": "review",
+      "attempt": 2,
+      "requestId": "req:6cc88145ba67ad65081a9a78a741f8cbf26b35e9d7b4b8017ca095d59f0ea363",
+      "taskDigest": "sha256:4c7ba81821e86f8008a7377a74e152a8587bc21343b650d3c0dbda9c4e3c9d65",
+      "source": "grok-model",
+      "authoredAt": "2026-11-12T17:14:10+08:00",
+      "result": {
+        "reviewApproved": true,
+        "reviewNotes": "独立评审认为需求与设计一致：目标被准确收敛为受信 Host 下的只读运行摘要，范围包含终态状态、terminal 节点和公开投影，并明确排除完整私有 State。设计选择复用 interactive 子路径上已有 Coordinator 或 Trusted Host 的只读查询，而不是修改 Standard Root 六个 API，也没有引入独立 FlowKit Server，符合约束。adminTerminate 被正确排除在本能力之外，OpenAPI 若出现也只作为 Host 层可选适配。验收路径要求同一 Program Hash 下终态摘要可在 Store 重启后重读，且模型不能改写路由，这是可执行的。因此批准该方案继续，但不把本批准解释为安全宿主、原生工具或 P0-A 全量验收已经通过。"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+2026-11-12 17:14:30 CST
+command: npm test
+exit: 0
+tests: 394
+pass: 394
+fail: 0
+node: v24.22.1
+OS: Linux (local Grok Build box; not GitHub CI)
+note: includes tests/interactive/g02-product-closed-loop.test.mjs

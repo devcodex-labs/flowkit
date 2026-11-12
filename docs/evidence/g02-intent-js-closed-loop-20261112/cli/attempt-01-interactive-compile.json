@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-11-12T09:10:12.013Z",
+  "diagnostics": [],
+  "artifactPath": "/workspace/flowkit/examples/g02/feature-review.interactive.mjs",
+  "programIdentity": {
+    "workflowId": "g02-feature-review",
+    "workflowVersion": "1.0.0",
+    "sourceHash": "sha256:8df70cd1af7dd9b0b5ea2c2143815c8aca862696f580fa46b21f726c021ec592",
+    "compilerVersion": "1.0.0",
+    "programAbiVersion": 1,
+    "semanticsVersion": "interactive-state-machine-v1",
+    "checkpointSchemaVersion": 1,
+    "canonicalizationVersion": "jcs-rfc8785-v1",
+    "implementedStage": "P0-A",
+    "artifactHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded"
+  },
+  "codeBytes": 15015,
+  "codeSha256": "8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded"
+}
