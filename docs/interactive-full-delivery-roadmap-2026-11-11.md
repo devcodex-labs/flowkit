@@ -1,9 +1,11 @@
 # FlowKit Interactive — Full Delivery Roadmap & Closure Ledger
 
-**Baseline date:** 2026-11-11 (UTC+8)  
+**Baseline date:** 2026-11-12 (UTC+8)  
 **Repository:** `devcodex-labs/flowkit`  
 **Historical Phase 0 baseline:** `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`  
-**Current main HEAD after PR #14:** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**Historical main HEAD after PR #14:** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**Current main snapshot:** `606d055d5f02451fea0b30294889d740ef370d49`  
+**Phase 0 refresh:** Draft PR [#20](https://github.com/devcodex-labs/flowkit/pull/20) records the current baseline and 31-task crosswalk.
 **Phase 2 design record:** merged via PR #14 (docs-only; formal contract conformance remains conditional)
 
 > This document records the approved end-to-end route from the current M6/P0-A state through P0-B, P1, P2 and production delivery. It is a roadmap and traceability ledger, not evidence that deferred features have been implemented or passed.
@@ -12,14 +14,18 @@
 
 ### 1.1 Main and CI
 
-- Current main HEAD after PR #14: `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`.
-- Post-merge main CI: [43132513659](https://github.com/devcodex-labs/flowkit/actions/runs/43132513659), **7/7 jobs successful** (Ubuntu/Windows × Node 22/24, Linux Host OS-user isolation × Node 22/24, website).
+- Current main snapshot: `606d055d5f02451fea0b30294889d740ef370d49`.
+- Historical main CI [43146363166](https://github.com/devcodex-labs/flowkit/actions/runs/43146363166) passed 7/7 on `13d573c5ddc4a0ed3502401589c581799c96c5d2`; it is **not** the current main SHA.
+- The three rapid main pushes after PR #16/#19/#18 produced runs 43161068943, 43161142187 and 43161214780; all now show `completed/cancelled`. The workflow has `cancel-in-progress: true`, so earlier same-ref runs are superseded. The latest run's final cancellation cause is not established by accessible metadata.
+- Fresh isolated PR #20 run [43169806113](https://github.com/devcodex-labs/flowkit/actions/runs/43169806113) has 7/7 jobs `queued` with no runner/start timestamp. Five older queued runs remain on the merged Trusted Host design branch, with zero jobs and no associated open PR.
+- GitHub Status currently reports all systems operational; the Nov 11 incident is resolved. Do not label this a proven global outage; current evidence shows a repository/run-specific scheduling anomaly. Local verification is a fallback, not CI PASS.
 - PR #14 merge commit: `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`; the merge adds only the reviewed Trusted Host V2 design/acceptance/review documentation.
 - M1–M5 implementation surfaces and S07 capacity work exist on main. Their presence is not a blanket claim that every M6/native-host gate is passed.
 - PR #8, #9 and #10 are merged.
 - PR #7 is **closed without merge** as superseded. PR #13 is **merged** into main with current-main M6 tests, correct project-root discovery and successful exact-HEAD CI.
-- PR #12 remains open Draft, head `c6b42a36050d885a37831cbdf0839428b2052c85`, based on `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`. Its scripted C13–C20 tests and documentation CI passed; this does not pass C12/S13 native-host gates.
+- PR #11 (ChatGPT tool bridge) and PR #12 (C01–C24 acceptance) remain open Draft; both are based on the older `ea2bb108` baseline and are 6 commits behind current main. Update/review their independent changes before merging. Their scripted evidence does not pass native Grok C12/S13 gates.
 - PR #14 is **merged** as a docs-only conditional security design record. Merge does not authorize Phase 3 or claim Windows/Linux Secure Host, Grok native provenance, C12/S13 or M6 acceptance.
+- PR #16 (formal audit R1/R2), #18 (R04 input snapshot fix) and #19 (local verification report/evidence) are merged. PR #17 is closed without merge because its two regression tests are included in #18.
 
 ### 1.2 Evidence classes
 
@@ -34,7 +40,7 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 
 | Phase | Scope | Required exit condition | Current state |
 |---|---|---|---|
-| 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — established in merged PR #13 |
+| 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Historical freeze complete** — PR #13; current-main re-baseline and 31-task crosswalk are being updated in PR #20 |
 | 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS, merged** — PR #13; main CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
 | 2 | Trusted Host security design and formal contract conformance | Approved threat model, OS identity, IPC, key custody, Store ownership, provenance and confirmed V0.3/V0.6-R5 conformance | **设计记录已合并**（PR #14；main CI 43132513659 7/7 PASS）；F-01/F-R2-01 **CLOSED**；F-02/F-04 仍 PARTIAL。V0.3 Requirements 与 V0.6-R5 Technical Design 均已恢复并完成完整 SHA-256/包内清单校验；V0.6 Confirmed Handoff 9/9、Core POC Evidence 28/28 文件条目 PASS。现有核心 PoC 为 **22/22 测试 PASS、9/9 进程级崩溃点恢复**，但仅为 Linux/Node 22.16 独立原型；POC-01/05/06/09 PARTIAL，POC-07 Human BLOCKED，POC-08 完整矩阵 BLOCKED。F-07 的原件缺失问题已关闭，正式契约符合性审查进入 **IN-PROGRESS**；在完成 T01–T34、R01–R22、S01–S14 及当前实现映射前，Phase 2 不宣称 conformance PASS。参见 [正式契约原件登记](./interactive-phase2-formal-source-register.md) 和 [V0.3/V0.6 符合性审查计划](./interactive-v03-v06-conformance-audit-plan.md) |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
@@ -96,7 +102,7 @@ Freeze a Host threat model before implementation:
 - Provider-signed evidence may be used if genuinely available, but is not assumed to be the only possible design. Any alternative Host-owned transport must state its exact assurance level and limits.
 - Human approval remains unavailable/blocked unless a model-unwritable trusted human decision channel is independently verified.
 
-Deliverables: threat model, trust topology, candidate-ingress security contract (with optional authenticated listening IPC only when needed), key custody, provider/session evidence design, Windows/Linux profiles, attack matrix and acceptance gates. Independent review must close all **applicable design-blocking** findings before Phase 3. Missing formal V0.3/V0.6-R5 originals remain an explicit conformance BLOCKED item, not evidence that they never existed; OS capability PoCs can be performed separately, but no final conformance claim can be made without them.
+Deliverables: threat model, trust topology, candidate-ingress security contract (with optional authenticated listening IPC only when needed), key custody, provider/session evidence design, Windows/Linux profiles, attack matrix and acceptance gates. Independent review must close all **applicable design-blocking** findings before Phase 3. The V0.3/V0.6-R5 originals have been recovered and their full SHA-256/archive manifests verified (see source register). The source-provenance portion of F-07 is CLOSED; clause-by-clause conformance remains IN-PROGRESS until T01–T34, §§1–18, R01–R22 and S01–S14 are mapped and independently reviewed.
 
 ## 6. Phase 3 — Trusted Host security implementation
 
@@ -369,10 +375,10 @@ A phase cannot pass by deleting a test, weakening an assertion, changing the evi
 
 1. Phase 0/1 **complete**: PR #13 merged to main `9bac8f86347a405efe068f96423ae3e501005061`; old PR #7 closed unmerged.
 2. Main CI [42998521531](https://github.com/devcodex-labs/flowkit/actions/runs/42998521531): 7/7 successful; Ubuntu/Windows × Node 22/24 each 369/369; Linux OS isolation + M6 11/11 on both Node versions.
-3. Phase 2 security design record (still Draft/Conditional): [Trusted Host V2](./interactive-trusted-host-security-v2-design.md), [threat model](./interactive-trusted-host-security-v2-threat-model.md), [acceptance matrix](./interactive-trusted-host-security-v2-acceptance.md), [review ledger](./interactive-trusted-host-security-v2-review.md). Third-round Grok review closed F-01/F-R2-01; F-02/F-04 remain PARTIAL and F-07 remains BLOCKED.
-4. Three rounds of Grok Build independent review have been completed, including the final targeted review of F-01/F-R2-01. Phase 2 is **not yet frozen**: F-02 native tool binding, F-04 cross-principal handle isolation and F-07 formal contract provenance remain open/BLOCKED. Draft/CI success is not a substitute for native Host security acceptance or a professional third-party security certification.
-5. Then implement OS isolation, trusted bridge, direct Grok Build tool loop, real-model edge cases and Phase 6 M6 closure. PR #12 remains Draft until its own scoped review.
+3. Phase 2 security design record (still Draft/Conditional): [Trusted Host V2](./interactive-trusted-host-security-v2-design.md), [threat model](./interactive-trusted-host-security-v2-threat-model.md), [acceptance matrix](./interactive-trusted-host-security-v2-acceptance.md), [review ledger](./interactive-trusted-host-security-v2-review.md). Third-round Grok review closed F-01/F-R2-01; F-02/F-04 remain PARTIAL. F-07 source recovery is CLOSED; formal clause-by-clause conformance remains PENDING REVIEW.
+4. Three rounds of Grok Build independent review have been completed, including the final targeted review of F-01/F-R2-01. Phase 2 is **not yet frozen**: F-02 native tool binding and F-04 cross-principal handle isolation remain PARTIAL/BLOCKED; formal conformance is still pending. Draft/CI success is not a substitute for native Host security acceptance or a professional third-party security certification.
+5. Current Phase 0 re-baseline is tracked in [PR #20](https://github.com/devcodex-labs/flowkit/pull/20): current snapshot, CI fallback and the approved 31-task P0-A crosswalk. Then continue the exact dependency order: formal contract review and P0-A gap closure; H3-01/H3-05 OS-only work may proceed independently under the approved security design; H3-02 requires its capability probe; H3-03 follows H3-02; H3-04 follows H3-03 + H3-05; Phase 4 native Grok remains gated by Phase 3.
 
-**Formal contract source caveat:** Historical FlowKit requirement V0.3 and technical design V0.6-R5 are cited in previous handoffs, but their full immutable bodies/SHA-256 are not presently available to this PR's independent reviewer. Conformance to those documents remains **BLOCKED** until the exact originals can be independently read and hashed; roadmap IDs cannot replace official text.
+**Formal contract source status:** Requirements V0.3 and Technical Design V0.6-R5 originals are recovered and hash-verified (see [formal source register](./interactive-phase2-formal-source-register.md)). Do not mark overall conformance PASS until the complete clause-by-clause matrix and independent review are finished.
 
 **No direct main modification or release is authorized. Merge only through a reviewed PR after exact-HEAD CI. This test/roadmap PR does not authorize production semantic changes or declare M6 complete.**
