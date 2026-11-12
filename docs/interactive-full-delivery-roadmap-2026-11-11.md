@@ -3,8 +3,8 @@
 **Baseline date:** 2026-11-11 (UTC+8)  
 **Repository:** `devcodex-labs/flowkit`  
 **Historical Phase 0 baseline:** `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`  
-**Current Phase 2 source baseline:** `9bac8f86347a405efe068f96423ae3e501005061`  
-**Current design branch:** `design/trusted-host-security-v2-20261111` (historical Phase 0/1 baseline remains immutable)
+**Current main HEAD after PR #14:** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
+**Phase 2 design record:** merged via PR #14 (docs-only; formal contract conformance remains conditional)
 
 > This document records the approved end-to-end route from the current M6/P0-A state through P0-B, P1, P2 and production delivery. It is a roadmap and traceability ledger, not evidence that deferred features have been implemented or passed.
 
@@ -12,12 +12,14 @@
 
 ### 1.1 Main and CI
 
-- Current main HEAD after Phase 1: `9bac8f86347a405efe068f96423ae3e501005061`.
-- Current main CI: [42998521531](https://github.com/devcodex-labs/flowkit/actions/runs/42998521531), 7/7 jobs successful.
+- Current main HEAD after PR #14: `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`.
+- Post-merge main CI: [43132513659](https://github.com/devcodex-labs/flowkit/actions/runs/43132513659), **7/7 jobs successful** (Ubuntu/Windows × Node 22/24, Linux Host OS-user isolation × Node 22/24, website).
+- PR #14 merge commit: `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`; the merge adds only the reviewed Trusted Host V2 design/acceptance/review documentation.
 - M1–M5 implementation surfaces and S07 capacity work exist on main. Their presence is not a blanket claim that every M6/native-host gate is passed.
 - PR #8, #9 and #10 are merged.
 - PR #7 is **closed without merge** as superseded. PR #13 is **merged** into main with current-main M6 tests, correct project-root discovery and successful exact-HEAD CI.
-- PR #12 is open Draft, head `c6b42a36050d885a37831cbdf0839428b2052c85`, based on `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`. Its scripted C13–C20 tests and documentation CI passed; this does not pass C12/S13 native-host gates.
+- PR #12 remains open Draft, head `c6b42a36050d885a37831cbdf0839428b2052c85`, based on `ea2bb10893a9be2e5de3561fc9a660a6977ae15c`. Its scripted C13–C20 tests and documentation CI passed; this does not pass C12/S13 native-host gates.
+- PR #14 is **merged** as a docs-only conditional security design record. Merge does not authorize Phase 3 or claim Windows/Linux Secure Host, Grok native provenance, C12/S13 or M6 acceptance.
 
 ### 1.2 Evidence classes
 
@@ -34,7 +36,7 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 |---|---|---|---|
 | 0 | Baseline freeze and traceability | Immutable baseline, full requirement/Finding/test ledger and evidence index | **Complete** — established in merged PR #13 |
 | 1 | M6 current-main test compatibility | PR #7 tests run against frozen current main; no Core semantic change hidden in test repair | **PASS, merged** — PR #13; main CI 7/7; four matrix cells 369/369, Linux isolation/M6 e2e 11/11 on Node 22/24; no production Core change |
-| 2 | Trusted Host security design | Approved threat model, OS identity, IPC, key custody, Store ownership and provenance contract | **CONDITIONAL**：第三轮 Grok 定向复核已确认 F-01、F-R2-01 **CLOSED**；F-02/F-04 仍 PARTIAL（后续 PoC/OS 实测），F-07 正式 V0.3/V0.6-R5 原文符合性仍 **BLOCKED**；PR #14 可作为明确标注限制的设计记录候选，尚未合并 |
+| 2 | Trusted Host security design and formal contract conformance | Approved threat model, OS identity, IPC, key custody, Store ownership, provenance and confirmed V0.3/V0.6-R5 conformance | **设计记录已合并**（PR #14；main CI 43132513659 7/7 PASS）；F-01/F-R2-01 **CLOSED**；F-02/F-04 仍 PARTIAL；F-07 **BLOCKED**，等待正式需求/技术设计原件和完整 SHA-256。Phase 2 尚未正式收口；参见 [正式契约原件登记](./interactive-phase2-formal-source-register.md) |
 | 3 | Trusted Host security implementation | Windows and Linux isolation, access-denial tests and secure Host operations pass | Pending |
 | 4 | Native Grok Build JS tool bridge | Grok Build itself calls FlowKit JS tools through Pending → model completion → JS submit/resume → Terminal | Pending |
 | 5 | M6 live-model complex acceptance | Applicable C01–C24 cases classified and evidenced at P/M/N levels; all M6 blockers closed | Pending |
@@ -43,6 +45,12 @@ Never count P evidence as M or N. Never count a CI replay of recorded model turn
 | 8 | P1 Parallel all_succeeded | Dedicated fail-fast/parallel contract, recovery and concurrency acceptance pass | Deferred |
 | 9 | P2 Parallel any | Winner election, loser cancellation, late results and recovery pass | Deferred |
 | 10 | Production compatibility and release | Host matrix, SDK/types/CLI/package/docs/performance/security/release gates all pass | Deferred |
+
+### 2.1 Phase 2 formal contract source gate
+
+PR #14 is merged as a **conditional security design record**. The main post-merge CI passed 7/7, but Phase 2 formal conformance is not closed because the original confirmed Requirements V0.3 and Technical Design V0.6-R5 bodies/full SHA-256 are not available in the current Library/Conversation or main repository. Existing approval records, implementation plan, POC report and independent-review report are secondary evidence only; they cannot replace the approved source documents.
+
+The exact source names, historical path/hash clues, available secondary records, re-upload request and verification procedure are registered in [interactive-phase2-formal-source-register.md](./interactive-phase2-formal-source-register.md). **Do not begin Phase 3 until the user-provided original files are verified and the Phase 2 conformance matrix is independently reviewed.** This is the currently adopted execution order.
 
 ## 3. Phase 0 — Baseline and traceability
 
