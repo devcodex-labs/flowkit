@@ -18,7 +18,7 @@ Linux 启动器要求一次性环境，且 UID/GID 41001 和 41002 未占用。�
 .\tests\security\secure-host-windows.ps1 -Node (Get-Command node.exe).Source -DisposableRunner
 ```
 
-Windows 使用一次性 Windows Server 2025 运行机、提升权限的 64 位 Windows PowerShell 和两个随机命名的本地普通用户。引导进程创建显式 DACL，只有 Host 能修改私有目录，SYSTEM 和 Administrators 保留恢复权限。测试用临时账户和目录在结束时清理。
+Windows 使用一次性 Windows Server 2025 运行机、提升权限的 64 位 Windows PowerShell 和两个随机命名的本地普通用户。引导进程创建显式文件 DACL，只有 Host 能修改私有目录，SYSTEM 和 Administrators 保留恢复权限。测试 Host 在生成密钥前收紧自己的进程和 Token DACL，之后引导进程才启动受限进程。测试用临时账户和目录在结束时清理。
 
 ## 验收映射
 
@@ -27,7 +27,7 @@ Windows 使用一次性 Windows Server 2025 运行机、提升权限的 64 位 W
 | SEC-01 进程身份 | 核对 Host 和受限进程的实际 UID/GID、进程身份、能力和附加组。 | 核对两个进程的实际 SID、Administrators 组及调试等高权限。 |
 | SEC-02 密钥、配置和产物清单 | 测试各文件的读取、复制、打开写权限、删除、移走和替换。验证 Host 签名仍可用。 | 同样的文件测试及实际文件/目录 DACL。 |
 | SEC-03 SQLite、WAL、SHM 和备份 | 数据库打开期间验证六类访问被拒。Host 关闭后重新打开主库和备份做完整性检查，并核对受保护文件的字节摘要。 | 同样的文件和完整性测试。 |
-| SEC-04 进程访问 | 验证 Host 进程 fd、环境和内存入口的读取被拒，并检查无副作用的信号权限探测。 | 验证内存、线程创建和句柄复制权限请求被拒，验证不可获取可复制或可分配的 Host Token。只请求并关闭测试句柄。 |
+| SEC-04 进程访问 | 验证 Host 进程 fd、环境和内存入口的读取被拒，并检查无副作用的信号权限探测。 | 验证内存、线程创建和句柄复制权限请求被拒，验证不可获取可复制或可分配的 Host Token。探针只请求并关闭测试句柄。最终部署还需验证模型先于 Host 运行时的启动保护。 |
 | 句柄范围 | 实际枚举受限进程的 `/proc/self/fd`，校验没有 Host 私有文件，原生启动链仍待验证。 | 当前启动器分别启动两个账户，不向受限进程提供 Host 私有句柄。系统级子进程句柄表仍待在最终启动方式下验证。 |
 | SEC-17 Linux 实际受限进程 | 验证跨 UID 的脚本进程和 OS 拒绝。原生模型进程与可信来源仍待 G07 以后验证。 | 不适用 Linux UID 条款。 |
 

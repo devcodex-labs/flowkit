@@ -73,6 +73,16 @@ function verifyDatabase(filename) {
 async function runHost() {
   const actualIdentity=await identity();
   assert.equal(process.env.FLOWKIT_HOST_CANARY,canary);
+  let windowsAccessPolicy;
+  if (process.platform==='win32') {
+    const probe=path.join(root,'public','process-access.exe');
+    windowsAccessPolicy=JSON.parse(execFileSync(probe,['restrict',String(process.pid)],{
+      encoding:'utf8',windowsHide:true,timeout:10000,
+    }));
+    assert.deepEqual(windowsAccessPolicy,{
+      sid:actualIdentity.sid,processDaclApplied:true,tokenDaclApplied:true,
+    });
+  }
   const pair=generateKeyPairSync('ed25519');
   await writeFile(key,pair.privateKey.export({format:'pem',type:'pkcs8'}),{mode:0o600});
   await writeFile(config,'{"fixture":true}\n',{mode:0o600});
@@ -92,7 +102,9 @@ async function runHost() {
       assert.equal(fileModes['signing-key.pem'].mode,'600');
       assert.ok(Object.values(fileModes).every(file=>file.uid===actualIdentity.uid));
     }
-    await report(hostDir,'host-ready.json',{pid:process.pid,ppid:process.ppid,identity:actualIdentity,files:before,fileModes});
+    await report(hostDir,'host-ready.json',{
+      pid:process.pid,ppid:process.ppid,identity:actualIdentity,files:before,fileModes,windowsAccessPolicy,
+    });
     const until=Date.now()+75000;
     while (true) {
       try {await lstat(path.join(hostDir,'stop')); break;}
