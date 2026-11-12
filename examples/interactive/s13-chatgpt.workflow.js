@@ -3,7 +3,7 @@ import {defineWorkflow,condition,node,terminal} from '@devcodex-labs/flowkit/dsl
 export default defineWorkflow({
   id:'s13-chatgpt-tool-bridge',
   version:'0.1.0',
-  name:'ChatGPT 实际工具链 S13 验证',
+  name:'ChatGPT 回复绑定与可信 Host 验收（M-level）',
   nodes:[
     condition('gate',{
       name:'确定进入审核节点',
