@@ -47,7 +47,7 @@ SRC-01 已完成字节级与包内完整性验证。剩余原件恢复后，按�
 - SRC-01 / V0.3 需求原件已 VERIFIED；可以立即开展 T01–T34 的需求追踪与当前 main/设计符合性审查。
 - SRC-02 / V0.6-R5 技术设计原件仍 **BLOCKED**，因此技术设计版本符合性及完整 F-07 仍不能判 PASS。
 - F-07 保持 **BLOCKED**，但这不意味着工程工作全部停止。可继续实施与历史功能契约无关且可独立回滚的 H3-01 Host OS 身份/私有目录/密钥隔离，以及 H3-05 OS-only 负例；也可做不改生产代码的 Grok 工具能力 PoC。
-- 在正式原件恢复前，不得宣称 V0.3/V0.6-R5 符合性 PASS；不得修改 Program ABI、Core API、SQLite Schema、P0-A 状态语义或扩张到 P0-B/P1/P2。H3-02/03/04 的生产接入应在其依赖 PoC 和相关安全设计复核通过后推进。
+- 在 V0.6-R5 正式技术设计原件恢复并完成逐条审查前，不得宣称完整 V0.3/V0.6-R5 技术契约符合性 PASS；不得修改 Program ABI、Core API、SQLite Schema、P0-A 状态语义或扩张到 P0-B/P1/P2。H3-02/03/04 的生产接入应在其依赖 PoC 和相关安全设计复核通过后推进。
 - 正式原件恢复是关闭 F-07 和证明历史契约符合性的条件，不是继续所有独立安全工程工作的先决条件。
 - 不得因为原件缺失而重写一份“新版 V0.3”或“新版 V0.6-R5”并冒充历史批准版本。
 
@@ -56,8 +56,8 @@ SRC-01 已完成字节级与包内完整性验证。剩余原件恢复后，按�
 **目前无需重新上传 V0.3。** 若要关闭剩余的技术设计原件门禁，请寻找并提供以下文件；现在不需要为 H3-01/H3-05 中断工作：
 
 1. `TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md`
-3. 如方便，上传 `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` 及其原始 `SHA256SUMS.txt`
-4. 如方便，上传 `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip`
+2. 如方便，上传 `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` 及其原始 `SHA256SUMS.txt`
+3. 如方便，上传 `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip`
 
 若上传 ZIP，请保留原始包，不要重新压缩或修改文件后再提供，以免改变 SHA-256。
 
