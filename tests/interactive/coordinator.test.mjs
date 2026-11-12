@@ -402,3 +402,34 @@ test('M4 a successful receipt CAS followed by a lost response is recovered by du
   assert.equal(recovered.state.answer,'once');
   assert.equal(store.load(waiting.runId).receipts.length,1);
 });
+
+
+test('R04 regression: start snapshots caller-owned State before first await',async t=>{
+  const {api,source,state,store}=await runAgentFixture(t);
+  // Exercise both an existing top-level key and a nested caller-owned reference.
+  state.context={request:'before-await'};
+  const originalState=structuredClone(state);
+  const starting=api.start({...source,startKey:'r04-state-snapshot',state});
+  // These writes occur synchronously after invoking start(), before its await resolves.
+  state.existing='modified-after-start';
+  state.context.request='modified-after-start';
+  const frame=await starting;
+  assert.deepEqual(store.load(frame.runId).state,originalState,
+    'persisted State must be a deep entry-time snapshot');
+});
+
+test('R04 regression: start snapshots caller-owned startIntent before first await',async t=>{
+  const {api,source,state}=await runAgentFixture(t);
+  const intent={request:'before-await'};
+  const starting=api.start({
+    ...source,startKey:'r04-intent-snapshot',state,startIntent:intent,
+  });
+  // The idempotency identity must not depend on post-call mutation.
+  intent.request='modified-after-start';
+  const first=await starting;
+  const originalReplay=await api.start({
+    ...source,startKey:'r04-intent-snapshot',state,
+    startIntent:{request:'before-await'},
+  });
+  assert.equal(originalReplay.runId,first.runId);
+});

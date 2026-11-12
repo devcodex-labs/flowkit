@@ -539,16 +539,27 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     const byteSnapshot=Buffer.from(programBytes);
     const declared=copy(programIdentity);
     assertSHA256(declared.artifactHash);
+    // The first await yields even when the loader is already settled. Copy
+    // caller-owned State and startIntent before that yield. Checkpoint
+    // creation, the start intent hash, and Store writes all use these copies.
+    let stateSnapshot;
+    try { stateSnapshot=copy(state); }
+    catch(error) {
+      if (error instanceof RangeError && /Canonical JSON exceeds maximum bytes/.test(error.message)) {
+        throw failure('FK_I_CHECKPOINT_CAPACITY', 'initial State exceeds Checkpoint hard limit');
+      }
+      throw error;
+    }
+    const intentSnapshot=copy(startIntent);
     const program=await loadInteractiveProgram(byteSnapshot,declared.artifactHash);
     if (!canonicalBytes({...program.interactiveProgram.identity,artifactHash:declared.artifactHash})
       .equals(canonicalBytes(declared))) {
       throw failure('FK_I_PROGRAM_MISMATCH','identity and verified Program differ');
     }
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
-    const initial=initialCheckpoint(store.namespace,runId,program,policyHash,state);
-    const intent=copy(startIntent);
+    const initial=initialCheckpoint(store.namespace,runId,program,policyHash,stateSnapshot);
     store.putArtifact({programIdentity:declared,bytes:byteSnapshot});
-    const opened=store.createRun({startKey,startIntent:intent,checkpoint:initial});
+    const opened=store.createRun({startKey,startIntent:intentSnapshot,checkpoint:initial});
     return drive(opened.checkpoint.runId);
   }
 
