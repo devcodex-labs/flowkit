@@ -1,12 +1,13 @@
 /**
- * Live model evidence: four distinct Agent nodes + deliberate schema-retry,
- * two Conditions. Each answer MUST be written by the current ChatGPT model
- * only AFTER inspecting a real published Pending in prior Actions logs.
+ * Recorded ChatGPT-response evidence: four Agent nodes + deliberate schema retry,
+ * two Conditions. Responses are authored externally after inspecting the exact
+ * Pending in prior Actions logs, then replayed through FlowKit Program/SQLite/
+ * Trusted Host. This test does not call a model API or native FlowKit JS tool.
  *
- * Test runner replays recorded answers through actual FlowKit Compiler,
- * generated Program, SQLite and Ed25519 Trusted Host. It reopens the DB
- * within each CI run; separate Actions runs do NOT share a physical DB.
- * GitHub tool identity is NOT a provider-native session attestation.
+ * Normal CI requires all five recorded responses. Only explicit preparation
+ * mode (FLOWKIT_C01_PREPARE=1) may stop at a missing Pending for the next turn.
+ * SQLite is reopened within each CI run; separate Actions runs do NOT share a
+ * physical DB. GitHub tool identity is NOT provider-native session attestation.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +57,7 @@ function validate(schema,output){
 }
 const originalRequest='建立 FlowKit Interactive P0-A 的 C01–C12 复杂验收矩阵，验证多 Agent 顺序、条件路由、Schema 重试、SQLite 恢复、签名、安全与长链；不得越界实现 Context 或通用产物存储。';
 
-test('C01/C03 actual ChatGPT multiple tool turns follow real Program, review retry and terminal',async()=>{
+test('C01/C03 recorded ChatGPT responses bind to exact Pending and replay through Program/Host',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'fk-c01-live-'));
   const file=path.join(root,'run.sqlite');
   let store;
@@ -102,7 +103,10 @@ test('C01/C03 actual ChatGPT multiple tool turns follow real Program, review ret
     }catch(error){
       if(error?.code!=='ENOENT')throw error;
     }
+    const prepareMode=process.env.FLOWKIT_C01_PREPARE==='1';
     assert.ok(Array.isArray(replies)&&replies.length<=expectedPath.length);
+    assert.ok(prepareMode||replies.length===expectedPath.length,
+      'Normal CI requires all five recorded ChatGPT responses; use FLOWKIT_C01_PREPARE=1 only for explicit Pending preparation');
     const resultDigests=[];
     const requestIds=[];
     let rejectedReviewAttempts=0;
@@ -119,9 +123,11 @@ test('C01/C03 actual ChatGPT multiple tool turns follow real Program, review ret
       const taskDigest=sha256Bytes(canonicalBytes(task));
       const recorded=replies[index];
       if(!recorded){
+        assert.equal(prepareMode,true,
+          'A missing model response is allowed only in explicit FLOWKIT_C01_PREPARE mode');
         assert.equal(index,replies.length);
         assert.equal((await host.load({runId})).status,'waiting');
-        console.log('C01_LIVE_CHATGPT_PENDING '+JSON.stringify({
+        console.log('C01_CHATGPT_PENDING_PREPARED '+JSON.stringify({
           index,turn:index+1,expectedPath,
           requestId:task.requestId,taskDigest,
           programHash:compiled.programIdentity.artifactHash,
@@ -194,9 +200,9 @@ test('C01/C03 actual ChatGPT multiple tool turns follow real Program, review ret
     assert.equal(lastTask.status,'succeeded');
     const old=store.getReceipt(runId,replies[0].requestId);
     assert.ok(old&&old.acceptedRevision>0);
-    console.log('C01_LIVE_CHATGPT_COMPLETED '+JSON.stringify({
-      scenarioIds:['C01','C03'],execution:'REAL_CHATGPT_GITHUB_BRIDGE',
-      nativeHostAttested:false,realModelTurns:replies.length,
+    console.log('C01_CHATGPT_RECORDED_RESPONSES_ACCEPTED '+JSON.stringify({
+      scenarioIds:['C01','C03'],execution:'CHATGPT_AUTHORED_FIXTURE_REPLAY',
+      nativeHostAttested:false,recordedModelResponses:replies.length,
       resultDigests,requestIds,
       programHash:compiled.programIdentity.artifactHash,
       finalStateHash:sha256Bytes(canonicalBytes(frame.state)),
@@ -204,7 +210,7 @@ test('C01/C03 actual ChatGPT multiple tool turns follow real Program, review ret
       journalRevisions:journal.length,restartedSQLiteWithinEachCI:true,
       retriesObserved:rejectedReviewAttempts,
       outputLength:last.result.reviewNotes.length,
-      note:'Five real ChatGPT responses, but source/session not independently authenticated by Native Host and CI actions re-create DB',
+      note:'Five ChatGPT-authored responses replayed against exact Pending identities; GitHub tool identity is not native session attestation and each CI run recreates its DB',
     }));
   }finally{
     try{store?.close()}finally{await rm(root,{recursive:true,force:true})}
