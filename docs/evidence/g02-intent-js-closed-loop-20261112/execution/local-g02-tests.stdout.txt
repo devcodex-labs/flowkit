@@ -1,0 +1,16 @@
+✔ G02 Standard compile/check matches checked-in JS artifact and Program is real JavaScript (26.08371ms)
+✔ G02 Interactive compile matches checked-in Program bytes and identity hash (4.175926ms)
+✔ G02 Standard run covers success, gate-false, review-false and scripted retry; Program chooses branches (8.2015ms)
+✔ G02 Interactive success path binds Grok results, retries scripted invalid review, Program routes to accepted (113.391383ms)
+✔ G02 Interactive reviewApproved=false is routed by the Program to rejected (67.452899ms)
+✔ G02 Interactive materialsReady=false never publishes a Pending; Program goes to rejected (19.250238ms)
+✔ G02 fixtures record six grok-model uses, five distinct bodies, and one rebound reuse (0.668977ms)
+✔ G02 workflow is a P0-A subset and differs from the editorial Standard golden in node kinds (0.416418ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 312.650933

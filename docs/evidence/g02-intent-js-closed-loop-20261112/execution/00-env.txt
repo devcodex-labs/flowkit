@@ -1,0 +1,4 @@
+2026-11-12 17:56:18 CST
+node v24.22.1
+HEAD 689e0bd97127bf32116bdfa37f88b8e013f3adb2 (pre-commit working tree for G02-R01/R02)
+note=R01/R02 evidence refresh; pending counts measured from run-interactive.mjs route, not hardcoded

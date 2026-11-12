@@ -1,0 +1,32 @@
+[
+  {
+    "scenario": "success-with-scripted-retry",
+    "status": "succeeded",
+    "terminal": {
+      "nodeId": "accepted",
+      "status": "succeeded"
+    },
+    "pendingAtEnd": false,
+    "publishedPendingCount": 4
+  },
+  {
+    "scenario": "gate-false",
+    "status": "failed",
+    "terminal": {
+      "nodeId": "rejected",
+      "status": "failed"
+    },
+    "pendingAtEnd": false,
+    "publishedPendingCount": 0
+  },
+  {
+    "scenario": "review-approved-false",
+    "status": "failed",
+    "terminal": {
+      "nodeId": "rejected",
+      "status": "failed"
+    },
+    "pendingAtEnd": false,
+    "publishedPendingCount": 3
+  }
+]

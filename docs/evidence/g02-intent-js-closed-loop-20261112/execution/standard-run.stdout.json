@@ -1,0 +1,90 @@
+[
+  {
+    "layer": "standard",
+    "scenario": "success-with-retry",
+    "status": "succeeded",
+    "terminal": "accepted",
+    "reviewApproved": true,
+    "agentCalls": [
+      {
+        "scenario": "success-with-retry",
+        "id": "analyze",
+        "attempt": 1,
+        "keys": [
+          "requirementSummary"
+        ]
+      },
+      {
+        "scenario": "success-with-retry",
+        "id": "design",
+        "attempt": 1,
+        "keys": [
+          "designSummary"
+        ]
+      },
+      {
+        "scenario": "success-with-retry",
+        "id": "review",
+        "attempt": 1,
+        "keys": [
+          "comment",
+          "ok"
+        ]
+      },
+      {
+        "scenario": "success-with-retry",
+        "id": "review",
+        "attempt": 2,
+        "keys": [
+          "reviewApproved",
+          "reviewNotes"
+        ]
+      }
+    ],
+    "evidenceNote": "Standard run() via Node. Not native secure Host provenance. Not N-PASS."
+  },
+  {
+    "layer": "standard",
+    "scenario": "gate-false",
+    "status": "failed",
+    "terminal": "rejected",
+    "reviewApproved": null,
+    "agentCalls": [],
+    "evidenceNote": "Standard run() via Node. Not native secure Host provenance. Not N-PASS."
+  },
+  {
+    "layer": "standard",
+    "scenario": "review-false",
+    "status": "failed",
+    "terminal": "rejected",
+    "reviewApproved": false,
+    "agentCalls": [
+      {
+        "scenario": "review-false",
+        "id": "analyze",
+        "attempt": 1,
+        "keys": [
+          "requirementSummary"
+        ]
+      },
+      {
+        "scenario": "review-false",
+        "id": "design",
+        "attempt": 1,
+        "keys": [
+          "designSummary"
+        ]
+      },
+      {
+        "scenario": "review-false",
+        "id": "review",
+        "attempt": 1,
+        "keys": [
+          "reviewApproved",
+          "reviewNotes"
+        ]
+      }
+    ],
+    "evidenceNote": "Standard run() via Node. Not native secure Host provenance. Not N-PASS."
+  }
+]

@@ -1,0 +1,9 @@
+2026-11-12 17:56:30 CST
+command: npm test
+exit: 0
+tests: 395
+pass: 395
+fail: 0
+node: v24.22.1
+OS: Linux (local Grok Build box; not GitHub CI)
+note: includes G02-R01/R02 updates; one added accounting test (8 G02 tests / 395 total)
