@@ -1,20 +1,19 @@
 /**
- * ChatGPT-current-conversation -> real JS tool -> actual FlowKit Host bridge.
+ * ChatGPT-authored response -> exact FlowKit Pending -> trusted Host acceptance.
  *
- * Phase 1 (without a reply file): compile & execute the verified Program,
- * durably publish a public Agent Pending, and print its EXACT requestId/digest.
- * The ChatGPT model then reads that real CI output and writes a reply via its
- * authenticated GitHub tool call (a separate conversation action).
+ * Explicit preparation mode (FLOWKIT_S13_PREPARE=1) publishes the actual
+ * Pending and prints its exact requestId/taskDigest for an external ChatGPT
+ * turn. ChatGPT returns its authored response through an authenticated GitHub
+ * tool action. That is NOT a FlowKit native JS-tool invocation or S13 Host bridge.
  *
- * Phase 2 runs in a separate Actions invocation with a fresh temporary DB.
- * It deterministically recompiles the workflow and recreates the same Pending;
- * the fixture is accepted only when runId/requestId/taskDigest match exactly.
- * The test then closes/reopens this Phase-2 DB before Host signing/CAS. It does
- * NOT continue the physical SQLite database from the Phase-1 Actions run.
+ * Normal CI mode requires the complete response fixture. It deterministically
+ * recreates the same Pending, checks runId/requestId/taskDigest, then performs
+ * Host signing/CAS and SQLite close/reopen within Phase 2. The two phases use
+ * separate Actions invocations and do NOT share one physical SQLite database.
  *
- * This proves actual tool-using ChatGPT participated. It does NOT independently
- * attest ChatGPT provider/session origin, Codex-native JS tools or cross-UID
- * model isolation. M6 S13 native Host gate remains separately BLOCKED.
+ * Evidence is M-level ChatGPT participation only. It does NOT independently
+ * attest provider/session origin, native Grok/Codex tools or cross-UID isolation.
+ * Native Host S13 remains BLOCKED.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -60,7 +59,7 @@ const policy={
 };
 const resultFields=['flowkitBoundary','nextAction','summary'];
 
-test('S13 live ChatGPT turn consumes actual public Pending and returns via Host signature/CAS',async()=>{
+test('ChatGPT-authored response is bound to exact Pending and accepted by trusted Host',async()=>{
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-s13-chatgpt-'));
   const file=path.join(dir,'run.sqlite');
   let store;
@@ -140,8 +139,10 @@ test('S13 live ChatGPT turn consumes actual public Pending and returns via Host 
       if(error?.code!=='ENOENT')throw error;
     }
     if(!modelReply){
+      assert.equal(process.env.FLOWKIT_S13_PREPARE,'1',
+        'Complete ChatGPT response fixture is required for normal CI; set FLOWKIT_S13_PREPARE=1 only for explicit Pending preparation');
       assert.equal((await firstHost.load({runId})).status,'waiting');
-      console.log('S13_CHATGPT_PHASE1_WAITING '+JSON.stringify({
+      console.log('CHATGPT_PENDING_PREPARED '+JSON.stringify({
         runId,requestId:pending.requestId,revision:frame.revision,
         journalRevisions:firstJournal.length,
         result:'Real public task printed for next ChatGPT tool turn',
@@ -207,7 +208,7 @@ test('S13 live ChatGPT turn consumes actual public Pending and returns via Host 
     assert.equal(duplicate.acceptedRevision,completed.acceptedRevision);
     assert.equal(duplicate.revision,completed.revision);
     assert.equal((await resumedHost.resume({runId})).status,'succeeded');
-    console.log('S13_CHATGPT_TOOL_BRIDGE_COMPLETED '+JSON.stringify({
+    console.log('CHATGPT_RESPONSE_FIXTURE_ACCEPTED '+JSON.stringify({
       runId,requestId:receipt.requestId,
       modelReplyDigest:sha256Bytes(canonicalBytes(modelReply.result)),
       artifactHash:compiled.programIdentity.artifactHash,
@@ -220,7 +221,7 @@ test('S13 live ChatGPT turn consumes actual public Pending and returns via Host 
       phase2DatabaseReconstructed:true,crossRunDatabaseContinuation:false,
       policyPinned:true,
       secretNotExposedToPublicTask:true,
-      warning:'Actual ChatGPT tool-using answer, but NO independent native model-session attestation; S13 remains BLOCKED',
+      warning:'ChatGPT-authored response delivered through GitHub tool; not a FlowKit native JS-tool call; no independent native session attestation; S13 remains BLOCKED',
     }));
   }finally{
     try{store?.close()}finally{await rm(dir,{recursive:true,force:true})}
