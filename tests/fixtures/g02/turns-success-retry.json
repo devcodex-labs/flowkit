@@ -5,7 +5,7 @@
   "providerVerified": false,
   "nativeJsTool": false,
   "nativeHostProvenance": false,
-  "note": "除明确标注 source=scripted-invalid 的条目外，Agent 结果均由 Grok 在查阅已发布 Pending 的公开 instruction/input 后撰写，并绑定到精确 requestId 与 taskDigest。本地 Trusted Host 使用测试用 Ed25519 密钥签名回执，这不是供应商来源证明，也不得标为 N-PASS。本环境通过 Node/FlowKit CLI 执行 JS，不得声称已通过原生安全 Host 来源认证。",
+  "note": "两份 G02 夹具合计：source=grok-model 的结果消费 6 次，对应 5 份独立撰写正文、1 次复用（评审拒绝路径的 analyze 复用成功路径同一 requirementSummary，并重新绑定本轮独立的 requestId/taskDigest，不构成第六次独立模型推理）。source=scripted-invalid 是故意非法的脚本负例，不是模型输出。本地 Trusted Host 使用测试用 Ed25519 密钥签名回执，这不是供应商来源证明，也不得标为 N-PASS。本环境通过 Node/FlowKit CLI 执行 JavaScript，不能声称已通过原生安全 Host 来源认证。",
   "request": "为 FlowKit 维护者增加一条只读的工作流运行摘要查看能力：在不修改现有 Standard Root 六个 API、不引入独立 FlowKit Server 的前提下，允许受信 Host 读取一次运行的终态状态（succeeded/failed/errored）、terminal 节点和公开投影，便于排障。不在本阶段实现 adminTerminate，也不改变 Interactive P0-A 的节点范围。",
   "programArtifactHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
   "sourceHash": "sha256:8df70cd1af7dd9b0b5ea2c2143815c8aca862696f580fa46b21f726c021ec592",
@@ -71,5 +71,9 @@
         "reviewNotes": "独立评审认为需求与设计一致：目标被准确收敛为受信 Host 下的只读运行摘要，范围包含终态状态、terminal 节点和公开投影，并明确排除完整私有 State。设计选择复用 interactive 子路径上已有 Coordinator 或 Trusted Host 的只读查询，而不是修改 Standard Root 六个 API，也没有引入独立 FlowKit Server，符合约束。adminTerminate 被正确排除在本能力之外，OpenAPI 若出现也只作为 Host 层可选适配。验收路径要求同一 Program Hash 下终态摘要可在 Store 重启后重读，且模型不能改写路由，这是可执行的。因此批准该方案继续，但不把本批准解释为安全宿主、原生工具或 P0-A 全量验收已经通过。"
       }
     }
-  ]
+  ],
+  "modelResponseUses": 6,
+  "distinctAuthoredBodies": 5,
+  "reusedBodies": 1,
+  "scriptedInvalidUses": 1
 }

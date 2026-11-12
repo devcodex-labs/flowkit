@@ -6,10 +6,11 @@
  * Interactive P0-A layer: compileInteractive, immutable JS Program, published
  * Pending, Trusted Host receipts, SQLite close/reopen recovery.
  *
- * Model evidence is M-level. Payloads with source=grok-model were authored by
- * Grok after inspecting the exact public Pending; source=scripted-invalid is a
- * deliberate fixture. Local Ed25519 receipts and Node/CLI execution are not
- * native secure Host provenance and must not be graded N-PASS.
+ * Model evidence is M-level. source=grok-model records result consumption
+ * bound to an exact Pending (6 uses, 5 distinct authored bodies, 1 reused
+ * body rebound to a new requestId/taskDigest). source=scripted-invalid is a
+ * deliberate fixture, not a model turn. Local Ed25519 receipts and Node/CLI
+ * execution are not native secure Host provenance and must not be graded N-PASS.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -331,6 +332,8 @@ test('G02 Interactive success path binds Grok results, retries scripted invalid 
     ['review', 1, 'scripted-invalid', 'review'],
     ['review', 2, 'grok-model', 'accepted'],
   ]);
+  assert.equal(route.length, 4);
+  assert.equal(frame.pending ?? null, null);
   assert.equal(Object.hasOwn(fixture.turns[3].result, 'next'), false);
 });
 
@@ -343,6 +346,8 @@ test('G02 Interactive reviewApproved=false is routed by the Program to rejected'
   assert.equal(fixture.turns.at(-1).result.reviewApproved, false);
   assert.equal(Object.hasOwn(fixture.turns.at(-1).result, 'next'), false);
   assert.equal(route.at(-1).next, 'rejected');
+  assert.equal(route.length, 3);
+  assert.equal(frame.pending ?? null, null);
 });
 
 test('G02 Interactive materialsReady=false never publishes a Pending; Program goes to rejected', async () => {
@@ -388,6 +393,37 @@ test('G02 Interactive materialsReady=false never publishes a Pending; Program go
     store?.close();
     await rm(dir, {recursive: true, force: true});
   }
+});
+
+
+test('G02 fixtures record six grok-model uses, five distinct bodies, and one rebound reuse', async () => {
+  const success = JSON.parse(await readFile(successFixtureFile, 'utf8'));
+  const rejected = JSON.parse(await readFile(rejectFixtureFile, 'utf8'));
+  const all = [...success.turns, ...rejected.turns];
+  assert.equal(all.length, 7);
+  const grok = all.filter((turn) => turn.source === 'grok-model');
+  const scripted = all.filter((turn) => turn.source === 'scripted-invalid');
+  assert.equal(grok.length, 6);
+  assert.equal(scripted.length, 1);
+  const bodyKey = (result) => JSON.stringify(result);
+  const distinct = new Set(grok.map((turn) => bodyKey(turn.result)));
+  assert.equal(distinct.size, 5);
+  const analyzeSuccess = success.turns[0];
+  const analyzeReuse = rejected.turns[0];
+  assert.equal(analyzeSuccess.nodeId, 'analyze');
+  assert.equal(analyzeReuse.nodeId, 'analyze');
+  assert.deepEqual(analyzeReuse.result, analyzeSuccess.result);
+  assert.notEqual(analyzeReuse.requestId, analyzeSuccess.requestId);
+  assert.notEqual(analyzeReuse.taskDigest, analyzeSuccess.taskDigest);
+  assert.equal(analyzeReuse.originalAuthoredAt, analyzeSuccess.authoredAt);
+  assert.equal(analyzeReuse.reusedAt, analyzeReuse.authoredAt);
+  assert.equal(analyzeReuse.reusedFrom.requestId, analyzeSuccess.requestId);
+  assert.equal(success.modelResponseUses, 6);
+  assert.equal(success.distinctAuthoredBodies, 5);
+  assert.equal(success.reusedBodies, 1);
+  assert.equal(rejected.modelResponseUses, 6);
+  assert.equal(rejected.distinctAuthoredBodies, 5);
+  assert.equal(rejected.reusedBodies, 1);
 });
 
 test('G02 workflow is a P0-A subset and differs from the editorial Standard golden in node kinds', async () => {

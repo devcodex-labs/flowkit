@@ -5,7 +5,7 @@
   "providerVerified": false,
   "nativeJsTool": false,
   "nativeHostProvenance": false,
-  "note": "除明确标注 source=scripted-invalid 的条目外，Agent 结果均由 Grok 在查阅已发布 Pending 的公开 instruction/input 后撰写，并绑定到精确 requestId 与 taskDigest。本地 Trusted Host 使用测试用 Ed25519 密钥签名回执，这不是供应商来源证明，也不得标为 N-PASS。本环境通过 Node/FlowKit CLI 执行 JS，不得声称已通过原生安全 Host 来源认证。",
+  "note": "两份 G02 夹具合计：source=grok-model 的结果消费 6 次，对应 5 份独立撰写正文、1 次复用（评审拒绝路径的 analyze 复用成功路径同一 requirementSummary，并重新绑定本轮独立的 requestId/taskDigest，不构成第六次独立模型推理）。source=scripted-invalid 是故意非法的脚本负例，不是模型输出。本地 Trusted Host 使用测试用 Ed25519 密钥签名回执，这不是供应商来源证明，也不得标为 N-PASS。本环境通过 Node/FlowKit CLI 执行 JavaScript，不能声称已通过原生安全 Host 来源认证。",
   "request": "为 FlowKit 维护者增加一条只读的工作流运行摘要查看能力：在不修改现有 Standard Root 六个 API、不引入独立 FlowKit Server 的前提下，允许受信 Host 读取一次运行的终态状态（succeeded/failed/errored）、terminal 节点和公开投影，便于排障。不在本阶段实现 adminTerminate，也不改变 Interactive P0-A 的节点范围。",
   "programArtifactHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
   "sourceHash": "sha256:8df70cd1af7dd9b0b5ea2c2143815c8aca862696f580fa46b21f726c021ec592",
@@ -28,9 +28,17 @@
       "taskDigest": "sha256:6a244424828420965de95f851a7b08697778d246f57ab9a57ae0d03c7e8decbd",
       "source": "grok-model",
       "authoredAt": "2026-11-12T17:14:50+08:00",
-      "note": "在查阅本轮新 Pending 的公开 input/instruction 后，确认与成功路径同一功能请求，复用此前由 Grok 撰写的需求分析正文，并绑定到本轮 requestId/taskDigest。",
+      "note": "复用且重新绑定：在查阅本轮新 Pending 的公开 input/instruction 后，确认与成功路径同一功能请求，复用此前由 Grok 撰写的需求分析正文（originalAuthoredAt 为首次撰写时间），并绑定到本轮独立的 requestId/taskDigest。这是第 6 次结果消费，不是一次新的模型推理。",
       "result": {
         "requirementSummary": "本需求的目标是为受信 Host 提供一条只读的工作流运行摘要查询能力，便于排障时确认一次运行的终态。摘要仅应返回 succeeded、failed 或 errored 等运行状态、terminal 节点标识，以及已批准的公开投影，不得暴露完整私有 State 或 Host 机密。明确约束包括：不得修改现有 Standard Root 的六个 API，不得为此引入独立 FlowKit Server，不得在本阶段实现 adminTerminate，也不得扩大 Interactive P0-A 已实现节点范围。非目标包括通用产物存储、模型网关和跨租户管理控制台。可验收结果是：在现有 Interactive 契约下，受信 Host 能对指定 runId 读取上述只读摘要，未授权主体不能获得额外字段，且该能力不改变 Program 路由或 Standard 兼容性。"
+      },
+      "originalAuthoredAt": "2026-11-12T17:11:00+08:00",
+      "reusedAt": "2026-11-12T17:14:50+08:00",
+      "reusedFrom": {
+        "scenario": "success-with-scripted-retry",
+        "nodeId": "analyze",
+        "requestId": "req:cd869d313e933b356b99d9229e8ac9be161eca22e0d4b2c11a53091f58f868a7",
+        "taskDigest": "sha256:cc148ff129cd73677a5d7a8fc8afd641664dcafa0f39fecf2864b85fea7d8237"
       }
     },
     {
@@ -59,5 +67,9 @@
         "reviewNotes": "评审不通过。需求摘要明确禁止修改 Standard Root 六个 API、禁止引入独立 FlowKit Server、禁止本阶段实现 adminTerminate，并要求摘要只包含终态状态、terminal 节点和公开投影，不得返回完整私有 State。当前设计却建议新增第七个根函数 runSummary()、建立独立 FlowKit Server、把完整终态 State 返回给调用方，还允许模型在接口中附带建议的下一节点，这些都直接突破了已声明约束，也会削弱 Program 对路由的唯一决定权。因此不能批准该设计。本结论只给出 reviewApproved=false 与评审说明，不指定工作流的下一个节点。"
       }
     }
-  ]
+  ],
+  "modelResponseUses": 6,
+  "distinctAuthoredBodies": 5,
+  "reusedBodies": 1,
+  "scriptedInvalidUses": 1
 }

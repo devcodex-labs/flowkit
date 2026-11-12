@@ -10,6 +10,6 @@
 | `07-standard-golden-diff.md` | 与 `examples/editorial.workflow.js` golden 的可解释差异 |
 | `HASHES.sha256` | 上述文件及示例/夹具的 SHA-256 |
 
-证据分级：编译与 JS/SQLite 执行为 P；Grok 在看到 Pending 后撰写并绑定 requestId/taskDigest 的 Agent 正文为 M；`source=scripted-invalid` 是脚本负例。本环境用 Node 和 FlowKit CLI 执行 JavaScript，**不得**标为 N-PASS 或原生安全 Host 来源认证。GitHub CI 7/7 只证明仓库回归，不证明原生 Grok 工具或跨用户 OS 隔离。
+证据分级：编译与 JS/SQLite 执行为 P；`source=grok-model` 为 M 层结果消费（6 次消费 / 5 份独立正文 / 1 次复用并重新绑定 Pending 身份，不是 6 次独立模型推理）；`source=scripted-invalid` 是脚本负例。`pendingAtEnd` 只描述终态帧；`publishedPendingCount` 来自实际执行 route。本环境用 Node 和 FlowKit CLI 执行 JavaScript，**不得**标为 N-PASS 或原生安全 Host 来源认证。GitHub CI 7/7 只证明仓库回归，不证明原生 Grok 工具或跨用户 OS 隔离。
 
 正式审查请同时使用 GitHub PR、精确 HEAD、本目录与交接包中的 `STAGE-REVIEW-REPORT.md`。

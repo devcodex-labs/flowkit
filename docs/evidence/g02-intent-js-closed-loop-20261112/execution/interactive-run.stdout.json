@@ -8,7 +8,8 @@
       "status": "succeeded"
     },
     "reviewApproved": true,
-    "pendingPublished": false,
+    "pendingAtEnd": false,
+    "publishedPendingCount": 4,
     "route": [
       {
         "source": "grok-model",
@@ -55,7 +56,8 @@
       "status": "failed"
     },
     "reviewApproved": null,
-    "pendingPublished": false,
+    "pendingAtEnd": false,
+    "publishedPendingCount": 0,
     "route": [],
     "programHash": "sha256:8d811766fd1d58456ce4e58cc2a2f04c4d1e36dd683f86496c2df946cb15eded",
     "evidenceNote": "Interactive Program + SQLite + local test receipts via Node. Not N-PASS. Not native secure Host provenance."
@@ -69,7 +71,8 @@
       "status": "failed"
     },
     "reviewApproved": false,
-    "pendingPublished": false,
+    "pendingAtEnd": false,
+    "publishedPendingCount": 3,
     "route": [
       {
         "source": "grok-model",

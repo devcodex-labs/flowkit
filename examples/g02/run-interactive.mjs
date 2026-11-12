@@ -122,7 +122,10 @@ async function replay(fixture, materialsReady = true) {
       status: frame.status,
       terminal: frame.terminal ?? null,
       reviewApproved: frame.state?.reviewApproved ?? null,
-      pendingPublished: frame.pending != null,
+      // pendingAtEnd is the terminal frame only. publishedPendingCount is
+      // measured from Pendings actually observed on this run's route.
+      pendingAtEnd: (frame.pending ?? null) != null,
+      publishedPendingCount: route.length,
       route,
       programHash: compiled.programIdentity.artifactHash,
       evidenceNote: 'Interactive Program + SQLite + local test receipts via Node. Not N-PASS. Not native secure Host provenance.',

@@ -34,4 +34,4 @@ node examples/g02/run-interactive.mjs
 node --test tests/interactive/g02-product-closed-loop.test.mjs
 ```
 
-`run-*.mjs` 从源码树导入现有 SDK，不创建第二套编译器。Interactive 脚本会在临时 SQLite 中重放已绑定的夹具；其中 `source=scripted-invalid` 的评审回执是故意非法的脚本负例，其余 Agent 正文是 Grok 在看到 Pending 之后撰写的模型输出。
+`run-*.mjs` 从源码树导入现有 SDK，不创建第二套编译器。Interactive 脚本会在临时 SQLite 中重放已绑定的夹具，并输出 `pendingAtEnd`（终态帧是否仍有 Pending）以及从本次 `route` 实测的 `publishedPendingCount`。夹具中 `source=scripted-invalid` 是故意非法的脚本负例；`source=grok-model` 共消费 6 次，对应 5 份独立撰写正文、1 次复用（重新绑定到新的 Pending 身份），不能计为 6 次独立模型推理。

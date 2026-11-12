@@ -1,4 +1,4 @@
-2026-11-12 17:13:48 CST
+2026-11-12 17:56:18 CST
 node v24.22.1
-HEAD 7e5960fc570f0cd91a5ff8e9fe6029345932442f
-layer=standard host=node-cli note=NOT native secure Host provenance; NOT N-PASS
+HEAD 689e0bd97127bf32116bdfa37f88b8e013f3adb2 (pre-commit working tree for G02-R01/R02)
+note=R01/R02 evidence refresh; pending counts measured from run-interactive.mjs route, not hardcoded
