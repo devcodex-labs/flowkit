@@ -53,8 +53,8 @@
 
 1. `FlowKit-Host-Driven-Interactive-Execution-Requirements-V0.3-Confirmed.md`
 2. `TECHNICAL-DESIGN-V0.6-R5-CONFIRMED.md`)
-3. 如方便，上传 `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` 及其原始 `SHA256SUMS.txt`)
-4. 如方便，上传 `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip`)
+3. 如方便，上传 `FlowKit-Interactive-V0.6-R5-Confirmed-Handoff.zip` 及其原始 `SHA256SUMS.txt`
+4. 如方便，上传 `FlowKit-Interactive-Final-Convergence-Review-V0.6-R5.zip`
 
 若上传 ZIP，请保留原始包，不要重新压缩或修改文件后再提供，以免改变 SHA-256。
 
