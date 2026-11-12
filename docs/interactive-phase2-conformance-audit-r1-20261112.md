@@ -18,6 +18,8 @@
 
 **CF-05 / P1（契约差异与披露风险，未证实模型泄漏） / Host/Public Result 投影。** V0.6-R5 §4 明确“所有公开返回帧不含完整 State”，§5 的 `InteractiveFrameV1` 仅携带 `resultRef`，而完整 State 应通过独立授权的 `readTrustedTerminalResult` 获取。当前 `src/interactive/coordinator.mjs#L140-L150` 的 `asPublicFrame(cp)` 在任何终态直接加上 `{state: cp.state}`，`types/interactive.d.ts#L83-L93` 也允许 `state?`；`createInteractiveCoordinator` 与 `createTrustedInteractiveHost().load/resume/start` 经公开 `./interactive` 导出后可返回该帧。`getPublicAgentTask` 仍有明确最小披露验证，因此**不能由此断言模型已经看到私有 State**；但 Host-visible 与 model-facing 返回类型没有按冻结 §4/§5 显式拆分，存在误转发、`result:read` 权限边界不清和 SDK 合约不一致的风险。**需要审查可信读取通道是否有已批准变更以及模型 SDK 的真实下游用途；正式契约未批准修订前不得悄悄改类型或泄露私有结果。**
 
+**CF-06 / P1（API/Store 可替换性，待契约裁决） / 冻结的异步 CheckpointStore 五操作与当前同步耦合不一致。** V0.6-R5 §5 定义的 `CheckpointStoreV1` 是 `createIfAbsent/load/compareAndSwap/loadTransition/loadReceipt` 五种 `Promise` 操作，§8 要求宿主提供可靠 Store 接缝。当前公开的 `types/interactive.d.ts#L101-L141` 则定义同步 `putArtifact/getArtifact/createRun/load/compareAndSwap/listJournal` 与可选 `getReceipt`；`src/interactive/coordinator.mjs#L220-L233` 的构造校验硬要求 `createRun/putArtifact/getArtifact`，后续如 `loadPinned`、`casOrCapacityExit` 对 `store.load/getArtifact/compareAndSwap` 直接同步取值，不等待 Promise。**因此目前不能直接用符合冻结五操作异步契约的远程 Host Store 适配器**；即使默认 SQLite 在 CI 中通过也不等于存储接口符合正式技术规范。该差异可能来自后续缩小 M3 范围的实施决策，需核验是否获用户明确批准；若无，应先出最小兼容/迁移方案和不破坏 WAL/CAS 的验证设计，不在本审查中直接改变 Core。**
+
 **CF-03 / BLOCKED / Host 真实来源与 OS 隔离。** 当前 M6 11 项 e2e 为真实 Node Host + scripted Worker，验证 P 等级协议；先前 Grok 文件 Harness 的真实模型参与为有限 M 证据，**都不能证明** C12/S13/T27 的原生工具调用、Windows 独立账户/ACL 与可信模型会话来源。PR #14 安全设计已经记录了 H3-01/H3-05/NAT-14 等后续门禁，仍需实测。
 
 **CF-04 / 边界声明 / 依法延期范围。** V0.3 §15 与 V0.6 §16 明确 P0-B/P1/P2 阶段范围；Action/Human/Loop/Parallel 未实现 **不是** P0-A 失败。P2 any 赢家/迟到副作用尚未获专项确认，不得推测已批准语义。
