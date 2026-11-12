@@ -1,0 +1,31 @@
+鉁?M4 pure Terminal passes without Agent bindings, then resume is stable (60.8125ms)
+鉁?M4 generated Program routes Condition before Agent, publishes immutable Pending, then commits verified State (69.443ms)
+鉁?M4 false Condition never emits an Agent Pending and returns failed Terminal (38.7358ms)
+鉁?M4 Standard-compatible missing when input is a durable errored FK_R002 (never a fake waiting) (34.377ms)
+鉁?M4 duplicate equal receipt returns durable acceptedRevision after multiple later CAS stages (54.7375ms)
+鉁?M4 wrong node, attempt, requestId, different digest and untrusted event kind all reject without State mutation (55.6257ms)
+鉁?M4 retries invalid Agent outputs at most retries+1, preserving State and FK_R004 on exhaustion (59.6097ms)
+鉁?M4 synchronous validator that throws or returns undefined becomes terminal contract error without retry (128.5878ms)
+鉁?M4 host-reported Agent call failure retries once and eventually stops without executing a model internally (52.1236ms)
+鉁?M4 run start fingerprint rejects drift but same startKey+same intent returns original run (44.78ms)
+鉁?M4 restart with no workflow source uses retained compiler artifact and immutable policy (65.3015ms)
+鉁?M4 stage budget=1 checkpoints every step, never returns an empty fake waiting, resumes to the same result (80.6356ms)
+鉁?M4 changing client-owned input object while waiting does not mutate persisted State (73.5977ms)
+鉁?M4 rejects unsupported checkStep and missing runtime bindings before start writes (27.6211ms)
+鉁?M4 concurrent complete from two independent Store connections accepts one receipt but returns same Ack (64.7732ms)
+鉁?M4 rejects other tenant runId without exposing checkpoint, even with same compiled workflow (56.7495ms)
+鉁?M4 forbids invalid JSON and preserve __proto__ as State data after verified merge (54.1332ms)
+鉁?M4 malformed Host failure message is rejected before receipt CAS and leaves waiting replayable (64.418ms)
+鉁?M4 an overly permissive validator cannot strand a primitive candidate at commit (60.8871ms)
+鉁?M4 a sparse validator reasons array fails closed without committing invalid State (42.0403ms)
+鉁?M4 a successful receipt CAS followed by a lost response is recovered by durable duplicate Ack (61.1731ms)
+鉁?R04 regression: start snapshots caller-owned State before first await (38.0448ms)
+鉁?R04 regression: start snapshots caller-owned startIntent before first await (45.259ms)
+鈩?tests 23
+鈩?suites 0
+鈩?pass 23
+鈩?fail 0
+鈩?cancelled 0
+鈩?skipped 0
+鈩?todo 0
+鈩?duration_ms 1454.8789
