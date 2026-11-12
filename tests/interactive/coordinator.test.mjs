@@ -404,26 +404,29 @@ test('M4 a successful receipt CAS followed by a lost response is recovered by du
 });
 
 
-test('R04 regression: start snapshots caller State and startIntent before its first await',async t=>{
+test('R04 regression: start snapshots caller-owned State before first await',async t=>{
   const {api,source,state,store}=await runAgentFixture(t);
   const originalState={...state};
-  const originalIntent={request:'before-await'};
-  const intent={...originalIntent};
-  const starting=api.start({
-    ...source,startKey:'r04-first-await-snapshot',state,startIntent:intent,
-  });
-  // This mutation happens after the caller hands the object to the SDK,
-  // but before the first awaited Program import has completed.
+  const starting=api.start({...source,startKey:'r04-state-snapshot',state});
+  // A later write by the caller must never become the Run's initial State.
   state.existing='modified-after-start';
-  intent.request='modified-after-start';
   const frame=await starting;
-  const saved=store.load(frame.runId);
-  assert.deepEqual(saved.state,originalState,
-    'checkpoint must reflect State at call entry, not external post-call writes');
-  // Same original intent and state must retain the startKey's original identity.
-  const replay=await api.start({
-    ...source,startKey:'r04-first-await-snapshot',
-    state:originalState,startIntent:originalIntent,
+  assert.deepEqual(store.load(frame.runId).state,originalState,
+    'persisted State must be an entry-time snapshot');
+});
+
+test('R04 regression: start snapshots caller-owned startIntent before first await',async t=>{
+  const {api,source,state}=await runAgentFixture(t);
+  const intent={request:'before-await'};
+  const starting=api.start({
+    ...source,startKey:'r04-intent-snapshot',state,startIntent:intent,
   });
-  assert.equal(replay.runId,frame.runId);
+  // The idempotency identity must not depend on post-call mutation.
+  intent.request='modified-after-start';
+  const first=await starting;
+  const originalReplay=await api.start({
+    ...source,startKey:'r04-intent-snapshot',state,
+    startIntent:{request:'before-await'},
+  });
+  assert.equal(originalReplay.runId,first.runId);
 });
