@@ -97,3 +97,11 @@
 
 - **R1**：原件和条款索引、首次实现证据矩阵（旧 main `ae5fc5a`）。
 - **R2（本文件）**：对五个关键源码 Blob 重新固定 main `13d573c`；重审 CF-01/02/05/06 的裁决边界；新增 CF-07/08 及复现计划；保持所有冻结契约不变。
+
+
+## 5. CF-07 独立测试证据关联（R2 补充索引）
+
+- 测试分支：`test/r04-start-input-snapshot-20261112`；[PR #17](https://github.com/devcodex-labs/flowkit/pull/17)。
+- 2026-11-12 的独立测试提交：`ada01c933553206948ffcf2f944dfc5604e44da2`。两个不同用例分别锁定 `state`（包括嵌套引用）与 `startIntent` 在首次 await 前的快照要求。
+- 这仅是**预期失败的源码复现测试**，尚无成功启动 runner 的正式测试证据；CI `queued` 与测试 `FAIL` 不可混同。
+- 此处只增加证据链接，不改变任何需求、实现判定、生产 Core、SDK、Program ABI 或 SQLite Schema。
