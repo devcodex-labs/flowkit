@@ -75,6 +75,7 @@ try {
     allowedInputKeys:['message'],
     disclosurePolicyId:'consumer-disclosure-v1',
     authorizeDisclosure:async()=>true,
+    authorizeTerminalAccess:({action})=>action==='run:read'||action==='result:read',
     now:()=>now,
   });
   const pending=await trusted.start({
@@ -96,6 +97,11 @@ try {
   const final=await trusted.accept({receipt,attestation:{statement,signature}});
   assert.equal(final.status,'succeeded');
   assert.deepEqual(final.state,{message:'shareable',hidden:'private',answer:'verified'});
+  const publicTerminal=await trusted.getPublicTerminalFrame({runId:final.runId});
+  assert.equal(Object.hasOwn(publicTerminal,'state'),false);
+  assert.deepEqual(publicTerminal.pending,[]);
+  const trustedResult=await trusted.readTrustedTerminalResult({resultRef:publicTerminal.resultRef});
+  assert.deepEqual(trustedResult.state,final.state);
   assert.equal((await trusted.accept({receipt,attestation:{statement,signature}})).duplicate,true);
 
 } finally {store.close();}

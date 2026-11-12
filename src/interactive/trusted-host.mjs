@@ -78,6 +78,14 @@ function numericPolicy(value,label,max) {
   return value;
 }
 
+function terminalNode(checkpoint) {
+  if (checkpoint.status==='succeeded' || checkpoint.status==='failed') {
+    if (typeof checkpoint.terminal?.nodeId!=='string'
+      || checkpoint.terminal.status!==checkpoint.status) throw denied();
+    return {nodeId:checkpoint.terminal.nodeId,status:checkpoint.status};
+  }
+}
+
 /**
  * Trusted Host facade for the existing P0-A Coordinator. The Host keeps
  * SQLite, runtime callbacks, and signing private key outside model access.
@@ -89,7 +97,7 @@ export function createTrustedInteractiveHost({
   store,runtime,policy={},
   trustedPublicKeys,trustedArtifacts,
   allowedInputKeys=[],
-  disclosurePolicyId,authorizeDisclosure,
+  disclosurePolicyId,authorizeDisclosure,authorizeTerminalAccess,
   maxProofAgeMs=5*60*1000,clockSkewMs=5000,
   now=()=>Date.now(),maxStagesPerCall=128,
 }={}) {
@@ -99,6 +107,9 @@ export function createTrustedInteractiveHost({
   }
   if (typeof now!=='function' || typeof authorizeDisclosure!=='function') {
     throw new TypeError('Trusted Host clock and disclosure authorizer are required');
+  }
+  if (authorizeTerminalAccess!==undefined && typeof authorizeTerminalAccess!=='function') {
+    throw new TypeError('Terminal access authorizer must be a function');
   }
   name(disclosurePolicyId);
   numericPolicy(maxProofAgeMs,'maxProofAgeMs',3600000);
@@ -165,6 +176,61 @@ export function createTrustedInteractiveHost({
     if (cp===null) return null;
     assertPinned(runId);
     return coordinator.load({runId});
+  }
+
+  async function loadAuthorizedTerminal(runId, action, revision) {
+    if (!authorizeTerminalAccess || typeof runId!=='string' || runId.length<1
+      || runId.length>256 || /[\u0000-\u001f\u007f]/.test(runId)) throw denied();
+    const checkpoint=assertPinned(runId);
+    if (checkpoint.runId!==runId || !['succeeded','failed','errored'].includes(checkpoint.status)
+      || (revision!==undefined && revision!==checkpoint.revision)) throw denied();
+
+    let decision;
+    try {
+      decision=await authorizeTerminalAccess(Object.freeze({
+        action,namespace:checkpoint.namespace,runId,revision:checkpoint.revision,
+      }));
+    } catch {
+      throw denied();
+    }
+    if (decision!==true) throw denied();
+
+    const current=assertPinned(runId);
+    if (current.runId!==runId || current.revision!==checkpoint.revision
+      || current.status!==checkpoint.status) throw denied();
+    return current;
+  }
+
+  async function getPublicTerminalFrame({runId}={}) {
+    const checkpoint=await loadAuthorizedTerminal(runId,'run:read');
+    const {revision,status}=checkpoint;
+    const terminal=terminalNode(checkpoint);
+    return {
+      protocolVersion:1,runId,revision,status,pending:[],
+      checkpointRef:{runId,revision},
+      ...(terminal ? {terminal} : {}),
+      resultRef:{runId,revision,projectionVersion:1},
+    };
+  }
+
+  async function readTrustedTerminalResult(input) {
+    let resultRef;
+    try {
+      resultRef=safeJSONSnapshot(input,2048)?.resultRef;
+    } catch {
+      throw denied();
+    }
+    if (!resultRef || Object.keys(resultRef).length!==3 || resultRef.projectionVersion!==1
+      || !Number.isSafeInteger(resultRef.revision) || resultRef.revision<0) throw denied();
+    const checkpoint=await loadAuthorizedTerminal(resultRef.runId,'result:read',resultRef.revision);
+    const terminal=terminalNode(checkpoint);
+    const causeCode=checkpoint.terminal?.causeCode;
+    return safeJSONSnapshot({
+      projectionVersion:1,namespace:checkpoint.namespace,runId:checkpoint.runId,
+      status:checkpoint.status,state:checkpoint.state,contextError:null,
+      ...(terminal ? {terminal} : {}),
+      ...(typeof causeCode==='string' ? {causeCode} : {}),
+    },MAX_CHECKPOINT_BYTES);
   }
 
   /**
@@ -277,7 +343,7 @@ export function createTrustedInteractiveHost({
   }
 
   return Object.freeze({
-    start,resume,load,getPublicAgentTask,accept,
+    start,resume,load,getPublicAgentTask,getPublicTerminalFrame,readTrustedTerminalResult,accept,
     policyHash:coordinator.policyHash,
     securityMode:'ed25519-agent-receipt-v1',
   });

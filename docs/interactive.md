@@ -159,6 +159,14 @@ business-artifact persistence, file GC or Context module is added.
   public-task disclosure checks. This protects only a Host separated from
   model-controlled filesystem/database/credential access; see
   [Trusted Host security](./interactive-host-security.md).
+- Keep the execution frames from `start()`, `resume()`, `load()`, and
+  `accept()` inside the trusted Host. To show a terminal status, call
+  `getPublicTerminalFrame({runId})`. It returns status and a versioned result
+  reference. Only a trusted caller should use
+  `readTrustedTerminalResult({resultRef})` for the full State. Configure
+  `authorizeTerminalAccess` in the Host from its authenticated session.
+  Grant `run:read` and `result:read` independently for the requested namespace
+  and Run. A result reference carries no permissions.
 - Store data is written with `node:sqlite` in WAL mode and
   `synchronous=FULL`, with every transition in one SQLite transaction.
   Do not place this reference Store on an unreliable/shared filesystem.

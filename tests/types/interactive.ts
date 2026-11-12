@@ -46,7 +46,7 @@ import {
   normalizeHostAgentReceipt,
 } from '../../types/interactive.js';
 import type {
-  HostAgentReceipt,HostAgentAttestation,PublicInteractiveAgentTask,
+  HostAgentReceipt,HostAgentAttestation,PublicInteractiveAgentTask,PublicInteractiveTerminalFrame,
   TrustedInteractiveHostOptions,
 } from '../../types/interactive.js';
 
@@ -58,10 +58,17 @@ const trustedOptions:TrustedInteractiveHostOptions={
   disclosurePolicyId:'tenant-approved-fields-v1',
   allowedInputKeys:['message'],
   authorizeDisclosure:async evidence=>evidence.task.kind==='agent',
+  authorizeTerminalAccess:context=>context.action==='run:read',
 };
 const trusted=createTrustedInteractiveHost(trustedOptions);
 const publicTask:Promise<PublicInteractiveAgentTask|null>=
   trusted.getPublicAgentTask({runId:'r'});
+const publicTerminal:Promise<PublicInteractiveTerminalFrame>=trusted.getPublicTerminalFrame({runId:'r'});
+void publicTerminal.then(frame=>{
+  // @ts-expect-error public projections omit private State
+  void frame.state;
+  return trusted.readTrustedTerminalResult({resultRef:frame.resultRef});
+});
 const receipt:HostAgentReceipt={
   kind:'agent-result',runId:'r',requestId:'q',nodeId:'n',attempt:1,result:{answer:'ok'},
 };

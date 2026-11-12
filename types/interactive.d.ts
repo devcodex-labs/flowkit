@@ -80,6 +80,7 @@ export interface InteractiveAgentPending {
 }
 export type InteractiveRunStatus =
   'running' | 'waiting' | 'paused' | 'succeeded' | 'failed' | 'errored';
+/** Execution frame for trusted Host callers. It can contain private State. */
 export interface InteractiveRunFrame {
   namespace: string;
   runId: string;
@@ -251,6 +252,41 @@ export interface InteractiveDisclosureContext {
   task:PublicInteractiveAgentTask;
   disclosurePolicyId:string;
 }
+export interface InteractiveTerminalAccessContext {
+  action:'run:read'|'result:read';
+  namespace:string;
+  runId:string;
+  revision:number;
+}
+
+export interface InteractiveTerminalResultRef {
+  runId:string;
+  revision:number;
+  projectionVersion:1;
+}
+
+export interface PublicInteractiveTerminalFrame {
+  protocolVersion:1;
+  runId:string;
+  revision:number;
+  status:'succeeded'|'failed'|'errored';
+  pending:readonly [];
+  checkpointRef:{runId:string;revision:number};
+  terminal?:{nodeId:string;status:'succeeded'|'failed'};
+  resultRef:InteractiveTerminalResultRef;
+}
+
+export interface TrustedInteractiveTerminalResult {
+  projectionVersion:1;
+  namespace:string;
+  runId:string;
+  status:PublicInteractiveTerminalFrame['status'];
+  terminal?:PublicInteractiveTerminalFrame['terminal'];
+  state:Record<string,unknown>;
+  contextError:null;
+  causeCode?:string;
+}
+
 export interface TrustedInteractiveHost {
   readonly policyHash:string;
   readonly securityMode:'ed25519-agent-receipt-v1';
@@ -266,6 +302,12 @@ export interface TrustedInteractiveHost {
     attestation:HostAgentAttestation;
   }):Promise<InteractiveRunFrame & {acceptedRevision:number;duplicate:boolean}>;
 }
+export interface TrustedInteractiveHostWithTerminalAccess extends TrustedInteractiveHost {
+  /** Public terminal projection, subject to the Host's run:read authorization. */
+  getPublicTerminalFrame(input:{runId:string}):Promise<PublicInteractiveTerminalFrame>;
+  /** Host-only result read, subject to a separate result:read authorization. */
+  readTrustedTerminalResult(input:{resultRef:InteractiveTerminalResultRef}):Promise<TrustedInteractiveTerminalResult>;
+}
 export interface TrustedInteractiveHostOptions {
   store:CheckpointStore;
   runtime:InteractiveRuntime;
@@ -278,6 +320,8 @@ export interface TrustedInteractiveHostOptions {
   allowedInputKeys?:string[];
   disclosurePolicyId:string;
   authorizeDisclosure(context:Readonly<InteractiveDisclosureContext>):boolean|Promise<boolean>;
+  /** Host-owned authorizer, required for both terminal projection methods. */
+  authorizeTerminalAccess?(context:Readonly<InteractiveTerminalAccessContext>):boolean|Promise<boolean>;
   maxProofAgeMs?:number;
   clockSkewMs?:number;
   now?:()=>number;
@@ -285,4 +329,4 @@ export interface TrustedInteractiveHostOptions {
 }
 export declare function createTrustedInteractiveHost(
   options:TrustedInteractiveHostOptions
-):TrustedInteractiveHost;
+):TrustedInteractiveHostWithTerminalAccess;

@@ -114,6 +114,68 @@ test('M5 authorized public task contains only allowlisted declared input, not St
   assert.equal(f.store.load(f.frame.runId).revision,f.frame.revision);
 });
 
+test('CF-05: terminal projection and trusted result require separate permissions',async t=>{
+  let allowedAction='run:read';
+  const calls=[];
+  const f=await waiting(t,{
+    authorizeTerminalAccess:async context=>{
+      calls.push(context);
+      return context.action===allowedAction;
+    },
+  });
+  const runId=f.frame.runId;
+  await assert.rejects(f.host.getPublicTerminalFrame({runId}),{code:'FK_I_HOST_DENIED'});
+  const receipt=agentResult(f.frame);
+  const completed=await f.host.accept({receipt,attestation:proof(f.store.load(runId),receipt,f.keys.privateKey)});
+  const resultRef={runId,revision:completed.revision,projectionVersion:1};
+  const before=canonicalBytes(f.store.load(runId));
+  const journal=f.store.listJournal(runId);
+
+  const frame=await f.host.getPublicTerminalFrame({runId});
+  assert.deepEqual(frame,{
+    protocolVersion:1,runId,revision:completed.revision,status:'succeeded',pending:[],
+    checkpointRef:{runId,revision:completed.revision},terminal:{nodeId:'done',status:'succeeded'},resultRef,
+  });
+  await assert.rejects(f.host.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
+  allowedAction='result:read';
+  await assert.rejects(f.host.getPublicTerminalFrame({runId}),{code:'FK_I_HOST_DENIED'});
+  const result=await f.host.readTrustedTerminalResult({resultRef});
+  assert.deepEqual(result,{
+    projectionVersion:1,namespace:'tenant-m5',runId,status:'succeeded',
+    terminal:{nodeId:'done',status:'succeeded'},state:completed.state,contextError:null,
+  });
+  assert.ok(calls.every(context=>Object.isFrozen(context) &&
+    context.namespace==='tenant-m5' && context.runId===runId && context.revision===completed.revision));
+  await assert.rejects(f.host.readTrustedTerminalResult({
+    resultRef:{...resultRef,revision:resultRef.revision-1},
+  }),{code:'FK_I_HOST_DENIED'});
+
+  const unconfigured=createTrustedInteractiveHost({...f.hostOptions,authorizeTerminalAccess:undefined});
+  await assert.rejects(unconfigured.getPublicTerminalFrame({runId}),{code:'FK_I_HOST_DENIED'});
+  const otherStore=createSqliteCheckpointStore(path.join(f.dir,'run.db'),{namespace:'another-tenant'});
+  t.after(()=>otherStore.close());
+  const other=createTrustedInteractiveHost({...f.hostOptions,store:otherStore,authorizeTerminalAccess:()=>true});
+  await assert.rejects(other.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
+  assert.deepEqual(canonicalBytes(f.store.load(runId)),before);
+  assert.deepEqual(f.store.listJournal(runId),journal);
+});
+
+test('CF-05: public error terminal omits the private cause and State',async t=>{
+  const f=await fixture(t,{authorizeTerminalAccess:()=>true});
+  const frame=await f.host.start({
+    ...f.program,startKey:'terminal-with-error',state:{secret:'Host private data'},
+  });
+  assert.equal(frame.status,'errored');
+  const projection=await f.host.getPublicTerminalFrame({runId:frame.runId});
+  assert.equal(projection.status,'errored');
+  assert.equal(Object.hasOwn(projection,'terminal'),false);
+  assert.equal(Object.hasOwn(projection,'causeCode'),false);
+  assert.equal(Object.hasOwn(projection,'state'),false);
+  const result=await f.host.readTrustedTerminalResult({resultRef:projection.resultRef});
+  assert.equal(result.causeCode,'FK_R002');
+  assert.deepEqual(result.state,{secret:'Host private data'});
+});
+
 test('M5 strict disclosure allowlist and authorizer both fail closed with zero CAS writes',async t=>{
   for(const options of [
     {allowedInputKeys:[]},
