@@ -1,0 +1,196 @@
+TAP version 13
+# (node:34416) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: M4 pure Terminal passes without Agent bindings, then resume is stable
+ok 1 - M4 pure Terminal passes without Agent bindings, then resume is stable
+  ---
+  duration_ms: 152.39
+  type: 'test'
+  ...
+# Subtest: M4 generated Program routes Condition before Agent, publishes immutable Pending, then commits verified State
+ok 2 - M4 generated Program routes Condition before Agent, publishes immutable Pending, then commits verified State
+  ---
+  duration_ms: 96.897
+  type: 'test'
+  ...
+# Subtest: M4 false Condition never emits an Agent Pending and returns failed Terminal
+ok 3 - M4 false Condition never emits an Agent Pending and returns failed Terminal
+  ---
+  duration_ms: 101.0779
+  type: 'test'
+  ...
+# Subtest: M4 Standard-compatible missing when input is a durable errored FK_R002 (never a fake waiting)
+ok 4 - M4 Standard-compatible missing when input is a durable errored FK_R002 (never a fake waiting)
+  ---
+  duration_ms: 67.8472
+  type: 'test'
+  ...
+# Subtest: M4 duplicate equal receipt returns durable acceptedRevision after multiple later CAS stages
+ok 5 - M4 duplicate equal receipt returns durable acceptedRevision after multiple later CAS stages
+  ---
+  duration_ms: 87.8788
+  type: 'test'
+  ...
+# Subtest: M4 wrong node, attempt, requestId, different digest and untrusted event kind all reject without State mutation
+ok 6 - M4 wrong node, attempt, requestId, different digest and untrusted event kind all reject without State mutation
+  ---
+  duration_ms: 222.6651
+  type: 'test'
+  ...
+# Subtest: M4 retries invalid Agent outputs at most retries+1, preserving State and FK_R004 on exhaustion
+ok 7 - M4 retries invalid Agent outputs at most retries+1, preserving State and FK_R004 on exhaustion
+  ---
+  duration_ms: 271.6269
+  type: 'test'
+  ...
+# Subtest: M4 synchronous validator that throws or returns undefined becomes terminal contract error without retry
+ok 8 - M4 synchronous validator that throws or returns undefined becomes terminal contract error without retry
+  ---
+  duration_ms: 411.5546
+  type: 'test'
+  ...
+# Subtest: M4 host-reported Agent call failure retries once and eventually stops without executing a model internally
+ok 9 - M4 host-reported Agent call failure retries once and eventually stops without executing a model internally
+  ---
+  duration_ms: 88.0933
+  type: 'test'
+  ...
+# Subtest: M4 run start fingerprint rejects drift but same startKey+same intent returns original run
+ok 10 - M4 run start fingerprint rejects drift but same startKey+same intent returns original run
+  ---
+  duration_ms: 68.5111
+  type: 'test'
+  ...
+# Subtest: M4 restart with no workflow source uses retained compiler artifact and immutable policy
+ok 11 - M4 restart with no workflow source uses retained compiler artifact and immutable policy
+  ---
+  duration_ms: 110.8433
+  type: 'test'
+  ...
+# Subtest: M4 stage budget=1 checkpoints every step, never returns an empty fake waiting, resumes to the same result
+ok 12 - M4 stage budget=1 checkpoints every step, never returns an empty fake waiting, resumes to the same result
+  ---
+  duration_ms: 146.1063
+  type: 'test'
+  ...
+# Subtest: M4 changing client-owned input object while waiting does not mutate persisted State
+ok 13 - M4 changing client-owned input object while waiting does not mutate persisted State
+  ---
+  duration_ms: 176.2838
+  type: 'test'
+  ...
+# Subtest: M4 rejects unsupported checkStep and missing runtime bindings before start writes
+ok 14 - M4 rejects unsupported checkStep and missing runtime bindings before start writes
+  ---
+  duration_ms: 168.1791
+  type: 'test'
+  ...
+# Subtest: M4 concurrent complete from two independent Store connections accepts one receipt but returns same Ack
+ok 15 - M4 concurrent complete from two independent Store connections accepts one receipt but returns same Ack
+  ---
+  duration_ms: 130.0283
+  type: 'test'
+  ...
+# Subtest: M4 rejects other tenant runId without exposing checkpoint, even with same compiled workflow
+ok 16 - M4 rejects other tenant runId without exposing checkpoint, even with same compiled workflow
+  ---
+  duration_ms: 99.6333
+  type: 'test'
+  ...
+# Subtest: M4 forbids invalid JSON and preserve __proto__ as State data after verified merge
+ok 17 - M4 forbids invalid JSON and preserve __proto__ as State data after verified merge
+  ---
+  duration_ms: 142.4165
+  type: 'test'
+  ...
+# Subtest: M4 malformed Host failure message is rejected before receipt CAS and leaves waiting replayable
+ok 18 - M4 malformed Host failure message is rejected before receipt CAS and leaves waiting replayable
+  ---
+  duration_ms: 118.2922
+  type: 'test'
+  ...
+# Subtest: M4 an overly permissive validator cannot strand a primitive candidate at commit
+ok 19 - M4 an overly permissive validator cannot strand a primitive candidate at commit
+  ---
+  duration_ms: 124.1347
+  type: 'test'
+  ...
+# Subtest: M4 a sparse validator reasons array fails closed without committing invalid State
+ok 20 - M4 a sparse validator reasons array fails closed without committing invalid State
+  ---
+  duration_ms: 93.9348
+  type: 'test'
+  ...
+# Subtest: M4 a successful receipt CAS followed by a lost response is recovered by durable duplicate Ack
+ok 21 - M4 a successful receipt CAS followed by a lost response is recovered by durable duplicate Ack
+  ---
+  duration_ms: 105.876
+  type: 'test'
+  ...
+# Subtest: R04 regression: start snapshots caller-owned State before first await
+not ok 22 - R04 regression: start snapshots caller-owned State before first await
+  ---
+  duration_ms: 111.4347
+  type: 'test'
+  location: 'D:\\Worker\\flowkit-pr17-verify\\tests\\interactive\\coordinator.test.mjs:407:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    persisted State must be a deep entry-time snapshot
+    + actual - expected
+    
+      {
+        context: {
+    +     request: 'modified-after-start'
+    -     request: 'before-await'
+        },
+    +   existing: 'modified-after-start',
+    -   existing: 'hello',
+        ready: true
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    ready: true
+    existing: 'hello'
+    context:
+      request: 'before-await'
+  actual:
+    context:
+      request: 'modified-after-start'
+    existing: 'modified-after-start'
+    ready: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/Worker/flowkit-pr17-verify/tests/interactive/coordinator.test.mjs:417:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: R04 regression: start snapshots caller-owned startIntent before first await
+not ok 23 - R04 regression: start snapshots caller-owned startIntent before first await
+  ---
+  duration_ms: 104.4814
+  type: 'test'
+  location: 'D:\\Worker\\flowkit-pr17-verify\\tests\\interactive\\coordinator.test.mjs:421:1'
+  failureType: 'testCodeFailure'
+  error: 'FK_I_START_CONFLICT: startKey belongs to different intent'
+  code: 'FK_I_START_CONFLICT'
+  stack: |-
+    failure (file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:24:24)
+    file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:313:19
+    transaction (file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:142:22)
+    Object.createRun (file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:308:14)
+    Object.start (file:///D:/Worker/flowkit-pr17-verify/src/interactive/coordinator.mjs:551:24)
+    async TestContext.<anonymous> (file:///D:/Worker/flowkit-pr17-verify/tests/interactive/coordinator.test.mjs:430:24)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..23
+# tests 23
+# suites 0
+# pass 21
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3495.5286

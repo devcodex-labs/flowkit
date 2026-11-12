@@ -1,0 +1,8 @@
+{
+  "controlBytes": 7632,
+  "racedBytes": 0,
+  "racedDiagnostics": [
+    "FK_I_UNSUPPORTED_GRAPH:This build implements only P0-A; caller cannot enable P0-B"
+  ],
+  "node": "v24.22.2"
+}

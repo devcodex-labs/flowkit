@@ -1,0 +1,15 @@
+{
+  "puts": 3,
+  "creates": 3,
+  "runId": "ok-run",
+  "savedState": {
+    "existing": "before",
+    "nested": {
+      "request": "before"
+    },
+    "ready": true
+  },
+  "journalEntries": 6,
+  "node": "v24.22.2",
+  "platform": "win32"
+}

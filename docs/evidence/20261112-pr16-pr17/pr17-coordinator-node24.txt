@@ -1,0 +1,73 @@
+鉁?M4 pure Terminal passes without Agent bindings, then resume is stable (75.0133ms)
+鉁?M4 generated Program routes Condition before Agent, publishes immutable Pending, then commits verified State (69.0836ms)
+鉁?M4 false Condition never emits an Agent Pending and returns failed Terminal (38.6616ms)
+鉁?M4 Standard-compatible missing when input is a durable errored FK_R002 (never a fake waiting) (38.3901ms)
+鉁?M4 duplicate equal receipt returns durable acceptedRevision after multiple later CAS stages (52.8343ms)
+鉁?M4 wrong node, attempt, requestId, different digest and untrusted event kind all reject without State mutation (55.4604ms)
+鉁?M4 retries invalid Agent outputs at most retries+1, preserving State and FK_R004 on exhaustion (64.6791ms)
+鉁?M4 synchronous validator that throws or returns undefined becomes terminal contract error without retry (128.5816ms)
+鉁?M4 host-reported Agent call failure retries once and eventually stops without executing a model internally (51.927ms)
+鉁?M4 run start fingerprint rejects drift but same startKey+same intent returns original run (43.0537ms)
+鉁?M4 restart with no workflow source uses retained compiler artifact and immutable policy (65.0977ms)
+鉁?M4 stage budget=1 checkpoints every step, never returns an empty fake waiting, resumes to the same result (77.9976ms)
+鉁?M4 changing client-owned input object while waiting does not mutate persisted State (72.4723ms)
+鉁?M4 rejects unsupported checkStep and missing runtime bindings before start writes (33.6865ms)
+鉁?M4 concurrent complete from two independent Store connections accepts one receipt but returns same Ack (64.7803ms)
+鉁?M4 rejects other tenant runId without exposing checkpoint, even with same compiled workflow (50.4427ms)
+鉁?M4 forbids invalid JSON and preserve __proto__ as State data after verified merge (49.1118ms)
+鉁?M4 malformed Host failure message is rejected before receipt CAS and leaves waiting replayable (48.8353ms)
+鉁?M4 an overly permissive validator cannot strand a primitive candidate at commit (62.5123ms)
+鉁?M4 a sparse validator reasons array fails closed without committing invalid State (39.514ms)
+鉁?M4 a successful receipt CAS followed by a lost response is recovered by durable duplicate Ack (53.1683ms)
+鉁?R04 regression: start snapshots caller-owned State before first await (46.7853ms)
+鉁?R04 regression: start snapshots caller-owned startIntent before first await (54.4232ms)
+鈩?tests 23
+鈩?suites 0
+鈩?pass 21
+鈩?fail 2
+鈩?cancelled 0
+鈩?skipped 0
+鈩?todo 0
+鈩?duration_ms 1478.7332
+
+鉁?failing tests:
+
+test at tests\interactive\coordinator.test.mjs:407:1
+鉁?R04 regression: start snapshots caller-owned State before first await (46.7853ms)
+  AssertionError [ERR_ASSERTION]: persisted State must be a deep entry-time snapshot
+  + actual - expected
+  
+    {
+      context: {
+  +     request: 'modified-after-start'
+  -     request: 'before-await'
+      },
+  +   existing: 'modified-after-start',
+  -   existing: 'hello',
+      ready: true
+    }
+  
+      at TestContext.<anonymous> (file:///D:/Worker/flowkit-pr17-verify/tests/interactive/coordinator.test.mjs:417:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { context: { request: 'modified-after-start' }, existing: 'modified-after-start', ready: true },
+    expected: { ready: true, existing: 'hello', context: { request: 'before-await' } },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\interactive\coordinator.test.mjs:421:1
+鉁?R04 regression: start snapshots caller-owned startIntent before first await (54.4232ms)
+  Error: FK_I_START_CONFLICT: startKey belongs to different intent
+      at failure (file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:24:24)
+      at file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:313:19
+      at transaction (file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:142:22)
+      at Object.createRun (file:///D:/Worker/flowkit-pr17-verify/src/interactive/sqlite-store.mjs:308:14)
+      at Object.start (file:///D:/Worker/flowkit-pr17-verify/src/interactive/coordinator.mjs:551:24)
+      at async TestContext.<anonymous> (file:///D:/Worker/flowkit-pr17-verify/tests/interactive/coordinator.test.mjs:430:24)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    code: 'FK_I_START_CONFLICT'
+  }
