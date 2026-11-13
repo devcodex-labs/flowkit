@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {generateKeyPairSync} from 'node:crypto';
 import {once} from 'node:events';
 import {mkdtemp,rm,stat} from 'node:fs/promises';
-import {createServer} from 'node:http';
+import {createServer,request} from 'node:http';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -100,7 +100,7 @@ test('all entries in the test Store inventory must confirm revocation before res
     firstAttemptHold:held,confirmed:inventory.length,rejectedDeferred:inventory.length,historicalAcks:inventory.length}));
 });
 
-test('bounded Outbox load sends capacity alarms to an independent local receiver',async t=>{
+test('bounded Outbox load sends capacity alarms to a loopback HTTP receiver',async t=>{
   const f=await fixture(t);
   const clock={now:Date.now()};
   const keys=generateKeyPairSync('ed25519');
@@ -121,9 +121,18 @@ test('bounded Outbox load sends capacity alarms to an independent local receiver
   const outbox=openCodexOutbox({database,store,host,now:()=>clock.now,maxRecords:16,retentionMs:1000,
     authorizeCleanup:({subjectId})=>({allowed:subjectId==='fixture-operator',heldRunIds:[]}),
     onCapacity(event) {
-      delivery.push(fetch(`http://127.0.0.1:${server.address().port}/capacity`,{
-        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(event),signal:AbortSignal.timeout(5000),
-      }).then(response=>response.status));
+      delivery.push(new Promise((resolve,reject)=>{
+        const body=JSON.stringify(event);
+        const req=request({hostname:'127.0.0.1',port:server.address().port,path:'/capacity',method:'POST',agent:false,
+          headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)},
+          signal:AbortSignal.timeout(15000)},response=>{
+          response.on('error',reject);
+          response.on('end',()=>resolve(response.statusCode));
+          response.resume();
+        });
+        req.on('error',reject);
+        req.end(body);
+      }));
     }});
   f.resources.push(outbox);
   const physical=async()=>{
