@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {execFileSync,spawn} from 'node:child_process';
 import {generateKeyPairSync,randomUUID,sign} from 'node:crypto';
 import {appendFileSync,mkdirSync} from 'node:fs';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
@@ -42,12 +42,14 @@ const fixture=size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence
 let store,host,program,frame,currentTask,handoff,staged;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
+let hostSid;
 if (profile==='isolated') {
   const node=process.execPath;
   // A pre-authorized, fixture-only launcher must enforce the model uid/gid and
   // pass only stdio. This probe never acquires or transfers account credentials.
   command=process.env.FLOWKIT_CODEX_LAUNCHER;
   assert.ok(path.isAbsolute(command));
+  const sshConfig=process.env.FLOWKIT_CODEX_SSH_CONFIG;
   if (process.platform==='linux') {
     const modelUid=Number(process.env.FLOWKIT_MODEL_UID), modelGid=Number(process.env.FLOWKIT_MODEL_GID);
     const hostUid=Number(process.env.FLOWKIT_HOST_UID), hostGid=Number(process.env.FLOWKIT_HOST_GID);
@@ -61,7 +63,18 @@ if (profile==='isolated') {
     assert.equal(process.platform,'win32');
     assert.ok(process.env.FLOWKIT_HOST_SID && process.env.FLOWKIT_MODEL_SID
       && process.env.FLOWKIT_HOST_SID!==process.env.FLOWKIT_MODEL_SID);
+    const identityHelper=process.env.FLOWKIT_CODEX_WINDOWS_IDENTITY;
+    assert.ok(path.isAbsolute(identityHelper));
+    hostSid=execFileSync(identityHelper,['--host-identity'],{encoding:'utf8',timeout:5000,windowsHide:true}).trim();
+    assert.equal(hostSid,process.env.FLOWKIT_HOST_SID);
     args=[exe,...appArgs];
+  }
+  if (sshConfig) {
+    assert.ok(path.isAbsolute(sshConfig) && ['ssh','ssh.exe'].includes(path.basename(command).toLowerCase()));
+    args=['-F',sshConfig,'-T','-o','HostName=127.0.0.1','-o','BatchMode=yes',
+      '-o','StrictHostKeyChecking=yes','-o','IdentitiesOnly=yes','-o','ForwardAgent=no',
+      '-o','ClearAllForwardings=yes','-o','PermitLocalCommand=no','-o','ProxyCommand=none',
+      '-o','ProxyJump=none','-o','ControlMaster=no','-o','ControlPath=none','flowkit-model'];
   }
 }
 const child=spawn(command,args,
@@ -71,6 +84,8 @@ const pending=new Map(),starts=new Map(),completed=new Set(),successful=[];
 let seq=0,threadId,turnId,turnStatus,failure,inlineObserved;
 let finish;
 const finished=new Promise(resolve=>{finish=resolve;});
+let recordIdentity;
+const identityReady=new Promise(resolve=>{recordIdentity=resolve;});
 child.on('error',error=>{failure=error.message;finish('spawn-error');});
 child.on('close',code=>{journal('exit',{code});finish('closed');});
 child.stdout.on('data',buffer=>record('app-server.stdout.ndjson',buffer));
@@ -243,6 +258,7 @@ lines.on('line',line=>{
     const reported=p;
     try {
       assert.equal(isolatedIdentity,undefined);
+      assert.ok(Number.isSafeInteger(reported.pid) && reported.pid>1);
       if (process.platform==='linux') {
         assert.equal(reported.uid,Number(process.env.FLOWKIT_MODEL_UID));
         assert.equal(reported.gid,Number(process.env.FLOWKIT_MODEL_GID));
@@ -250,19 +266,21 @@ lines.on('line',line=>{
         assert.match(reported.capabilities,/^0+$/);
         assert.equal(reported.noNewPrivs,'1');
       } else {
-        assert.equal(reported.hostSid,process.env.FLOWKIT_HOST_SID);
         assert.equal(reported.modelSid,process.env.FLOWKIT_MODEL_SID);
-        assert.equal(reported.hostElevated,false);
         assert.equal(reported.modelElevated,false);
+        assert.equal(reported.stdioAllowlist,true);
       }
       isolatedIdentity=reported;
-      journal('isolated-identity',{hostUid:process.getuid?.(),hostGid:process.getgid?.(),...reported});
+      journal('isolated-identity',{...reported,hostUid:process.getuid?.(),hostGid:process.getgid?.(),hostSid,
+        ...(hostSid?{hostElevated:false}:{})});
+      recordIdentity();
     } catch(error) {failure=error.message;finish('identity-error');}
   }
 });
 let isolatedIdentity;
 
 async function run() {
+  if (profile==='isolated') await identityReady;
   if (!size) key=await prepareFlowKit();
   await request('initialize',{clientInfo:{name:'flowkit-acceptance',title:'FlowKit acceptance',version:'0.1.0'},
     capabilities:{experimentalApi:true}});
@@ -279,7 +297,8 @@ async function run() {
       : `Only call the three FlowKit tools. Call flowkit_start with nonce "${nonce}". Read its public question and call flowkit_submit using its exact requestId and the answer. Then call flowkit_continue with the runId returned by submit and finish.`;
   const {turn}=await request('turn/start',{threadId,input:[{type:'text',text:prompt}]});
   turnId=turn.id;
-  journal('turn',{model,threadId,turnId,requestedBytes:size,pid:child.pid,observerPid:process.pid});
+  journal('turn',{model,threadId,turnId,requestedBytes:size,pid:isolatedIdentity?.pid??child.pid,
+    launcherPid:child.pid,observerPid:process.pid});
   return finished;
 }
 try {

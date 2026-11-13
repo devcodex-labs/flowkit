@@ -88,6 +88,39 @@ function Wait-Success($Child,[int]$TimeoutMilliseconds) {
   if ($Child.ExitCode -ne 0) { throw "Worker $($Child.Id) exited $($Child.ExitCode)" }
 }
 
+function Test-ModelStdio($Account,[Security.SecureString]$Password) {
+  $nodeCopy = Join-Path $publicDir 'node.exe'
+  $helper = Join-Path $publicDir 'codex-model-stdio.exe'
+  $start = [Diagnostics.ProcessStartInfo]::new()
+  $start.FileName = $nodeCopy
+  $start.Arguments = '"' + (Join-Path $publicDir 'check-stdio.cjs') + '"'
+  $start.WorkingDirectory = $publicDir
+  $start.UseShellExecute = $false
+  $start.CreateNoWindow = $true
+  $start.WindowStyle = 'Hidden'
+  $start.Domain = $env:COMPUTERNAME
+  $start.UserName = $Account.Name
+  $start.Password = $Password
+  $start.EnvironmentVariables.Clear()
+  $start.EnvironmentVariables['SystemRoot'] = $env:SystemRoot
+  $start.EnvironmentVariables['TEMP'] = $modelDir
+  $start.EnvironmentVariables['TMP'] = $modelDir
+  $start.EnvironmentVariables['FLOWKIT_FIXTURE_MODEL_SID'] = $Account.SID.Value
+  $start.EnvironmentVariables['FLOWKIT_FIXTURE_STDIO_EXE'] = $helper
+  $child = [Diagnostics.Process]::Start($start)
+  try {
+    Wait-Success $child 15000
+    $record = Read-Record (Join-Path $modelDir 'stdio-result.json')
+    if ($record.modelSid -ne $Account.SID.Value -or !$record.stdioAllowlist -or !$record.roundTrip) {
+      throw 'Model stdio launcher fixture mismatch'
+    }
+    Write-Host ($record | ConvertTo-Json -Compress)
+  } finally {
+    if (!$child.HasExited) { $child.Kill(); [void]$child.WaitForExit(5000) }
+    $child.Dispose()
+  }
+}
+
 try {
   $hostUser = New-LocalUser -Name "fkh$suffix" -Password $hostPassword -Description 'FlowKit disposable Host profile'
   $modelUser = New-LocalUser -Name "fkm$suffix" -Password $modelPassword -Description 'FlowKit disposable model profile'
@@ -115,6 +148,20 @@ try {
   # Compile before launching either ordinary user. The model runs only the built probe.
   Add-Type -Path (Join-Path $PSScriptRoot 'secure-host-win-process.cs') -OutputType ConsoleApplication `
     -OutputAssembly (Join-Path $publicDir 'process-access.exe')
+  Add-Type -Path (Join-Path $PSScriptRoot 'codex-model-stdio-windows.cs') -OutputType ConsoleApplication `
+    -OutputAssembly (Join-Path $publicDir 'codex-model-stdio.exe')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'codex-model-stdio-fixture.cjs') `
+    -Destination (Join-Path $publicDir 'check-stdio.cjs')
+  [IO.File]::WriteAllText((Join-Path $publicDir 'app-server'), @'
+if (process.argv.slice(2).join('|') !== '--listen|stdio://|-c|web_search="disabled"') {
+  process.exit(2);
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', text => process.stdout.write(text));
+process.stderr.write('fixture stderr');
+'@
+  )
+  Test-ModelStdio $modelUser $modelPassword
   [IO.File]::WriteAllText((Join-Path $publicDir 'task.json'),"flowkit-public-task`n")
 
   $hostProcess = Start-ProfileWorker $hostUser $hostPassword 'host' $hostDir

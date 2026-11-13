@@ -64,6 +64,36 @@ async function finish(workerProcess,timeout) {
   finally {clearTimeout(timer);}
 }
 
+function verifyModelExec() {
+  const input='fixture stdin\n';
+  const child=spawn('/usr/bin/setpriv',[
+    '--reuid='+modelUid,'--regid='+modelUid,'--clear-groups','--inh-caps=-all',
+    '--bounding-set=-all','--no-new-privs',process.execPath,
+    path.join(publicDir,'tests/security/codex-model-identity.mjs'),String(modelUid),String(modelUid),
+    process.execPath,path.join(publicDir,'model-stdio-fixture.cjs'),
+  ],{cwd:publicDir,env:{PATH:'/usr/bin:/bin',LANG:'C'},stdio:['pipe','pipe','pipe']});
+  let stdout='',stderr='';
+  child.stdout.setEncoding('utf8').on('data',data=>{stdout+=data;});
+  child.stderr.setEncoding('utf8').on('data',data=>{stderr+=data;});
+  const finished=new Promise((resolve,reject)=>{
+    child.once('error',reject);
+    child.stdin.once('error',reject);
+    child.once('close',(code,signal)=>resolve({code,signal}));
+  });
+  child.stdin.end(input);
+  return finish({child,finished},5000).then(()=>{
+    const [record,result]=stdout.trim().split('\n').map(line=>JSON.parse(line));
+    assert.equal(record.method,'flowkit/profile/identity');
+    const identity=record.params;
+    assert.equal(identity.pid,child.pid);
+    assert.equal(identity.uid,modelUid);
+    assert.equal(identity.gid,modelUid);
+    assert.deepEqual(result,{pid:identity.pid,uid:identity.uid,gid:identity.gid,input});
+    assert.equal(stderr,'fixture stderr');
+    console.log(JSON.stringify({event:'codex-model-exec-fixture',...identity,roundTrip:true}));
+  });
+}
+
 try {
   await chmod(root,0o755);
   await mkdir(publicDir,{mode:0o755});
@@ -71,12 +101,22 @@ try {
     await mkdir(folder,{mode:0o700});
     await chown(folder,uid,uid);
   }
-  for (const relative of ['tests/security/secure-host-worker.mjs','src/interactive/sqlite-store.mjs','src/interactive/canonical.mjs']) {
+  for (const relative of ['tests/security/secure-host-worker.mjs','tests/security/codex-model-identity.mjs',
+    'src/interactive/sqlite-store.mjs','src/interactive/canonical.mjs']) {
     const destination=path.join(publicDir,relative);
     await mkdir(path.dirname(destination),{recursive:true,mode:0o755});
     await copyFile(path.join(repo,relative),destination);
     await chmod(destination,0o644);
   }
+  await writeFile(path.join(publicDir,'model-stdio-fixture.cjs'),`
+let input='';
+process.stdin.setEncoding('utf8').on('data',data=>{input+=data;});
+process.stdin.on('end',()=>{
+  console.log(JSON.stringify({pid:process.pid,uid:process.getuid(),gid:process.getgid(),input}));
+  process.stderr.write('fixture stderr');
+});
+`,{mode:0o644});
+  await verifyModelExec();
   await writeFile(path.join(publicDir,'task.json'),'flowkit-public-task\n',{mode:0o644});
   host=launch(hostUid,'host');
   const ready=await waitReady();
