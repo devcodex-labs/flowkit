@@ -8,7 +8,7 @@
 - PR：[Draft #12](https://github.com/devcodex-labs/flowkit/pull/12)，基于 main，不修改生产 Core
 - 验证测试提交：**09e14e82b72277ef58b656bf129c9c4bc0b4b779**
 - 完成的 CI：[42968295106 — 7/7 SUCCESS](https://github.com/devcodex-labs/flowkit/actions/runs/42968295106)
-- 关联矩阵：[C01–C12 原矩阵](./interactive-complex-acceptance-c01-c12.md)、[C13–C24 增量矩阵](./interactive-complex-acceptance-extension-c13-c24.md)
+- 关联矩阵：[C01–C12 原矩阵](../../interactive-complex-acceptance-c01-c12.md)、[C13–C24 增量矩阵](../../interactive-complex-acceptance-extension-c13-c24.md)
 - 执行类型：**SCRIPTED_TRUSTED_HOST**，本次新增用例模型调用次数 **0**；不能计入真实模型调用次数
 
 ### 精确跨平台测试清单

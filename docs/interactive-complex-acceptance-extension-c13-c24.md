@@ -48,4 +48,4 @@
 
 阻断（不得合并 M6）：伪造或越权 Ack、双 CAS 成功、State/Journal 不一致、未披露字段泄漏、合法输入无限 waiting、真实宿主来源证明缺失。故障属于 Core 时另开最小修复 PR，不得在验收分支悄然改动生产逻辑。
 
-历史 C01–C12 结果：[2026-11-11 原报告](./interactive-complex-acceptance-results-2026-11-11.md)。M6 独立整体门禁继续按当前主线路线图与验收台账执行；历史 PR #7 已关闭且未合并，其适用测试由 PR #13 纳入 main。C13–C20 精确结果以本分支最新 GitHub Actions 为准，不继承 364/364 的历史测试计数。
+历史 C01–C12 结果：[2026-11-11 原报告](./evidence/history/interactive-complex-acceptance-results-2026-11-11.md)。M6 独立整体门禁继续按当前主线路线图与验收台账执行；历史 PR #7 已关闭且未合并，其适用测试由 PR #13 纳入 main。C13–C20 精确结果以本分支最新 GitHub Actions 为准，不继承 364/364 的历史测试计数。

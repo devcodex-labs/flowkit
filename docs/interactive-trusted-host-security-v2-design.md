@@ -2,7 +2,7 @@
 
 > **阶段：Phase 2 / Design only。2026-11-11。**
 >
-> **代码核对基线：** `main@9bac8f86347a405efe068f96423ae3e501005061`。历史确认的 V0.3 需求与 V0.6-R5 设计原件在当前审查可用文件/仓库中未找到，完整 SHA-256 也不可核验；两份原文的符合性维持 BLOCKED，不以路线图摘要冒充原件。当前可核对基线是 M5 安全契约 [interactive-host-security.md](./interactive-host-security.md)；M6 完整路线 [full-delivery-roadmap](./interactive-full-delivery-roadmap-2026-11-11.md)。
+> **代码核对基线：** `main@9bac8f86347a405efe068f96423ae3e501005061`。历史确认的 V0.3 需求与 V0.6-R5 设计原件在当前审查可用文件/仓库中未找到，完整 SHA-256 也不可核验；两份原文的符合性维持 BLOCKED，不以路线图摘要冒充原件。当前可核对基线是 M5 安全契约 [interactive-host-security.md](./interactive-host-security.md)；M6 完整路线 [full-delivery-roadmap](./evidence/history/interactive-full-delivery-roadmap-2026-11-11.md)。
 >
 > **状态：第三轮 Grok Build 定向复核已关闭 F-01 与 F-R2-01 的设计矛盾；整体仍为 Draft / Phase 2 条件状态，不是已批准实施或已验收功能。** F-02 原生工具绑定、F-04 跨主体句柄隔离仍待实测，F-07 正式 V0.3/V0.6-R5 原文符合性仍 BLOCKED。本文没有批准修改 Core、Program ABI、SQLite Schema 或现有 SDK 导出。发现需求/安全契约冲突时必须先处理差异。
 >
@@ -330,7 +330,7 @@ xAI Grok Build 文档提供：
 ## 10. 官方资料及解释边界
 
 - [FlowKit M5 existing security contract](./interactive-host-security.md)
-- [FlowKit M6 roadmap](./interactive-full-delivery-roadmap-2026-11-11.md)
+- [FlowKit M6 roadmap](./evidence/history/interactive-full-delivery-roadmap-2026-11-11.md)
 - [Microsoft: named pipe security and access rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
 - [Microsoft: CreateNamedPipeW SECURITY_ATTRIBUTES / PIPE_REJECT_REMOTE_CLIENTS](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-createnamedpipew)
 - [Microsoft: icacls / file DACL](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls)

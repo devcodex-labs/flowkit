@@ -8,7 +8,7 @@
 **需求基线：** Requirements V0.3（已确认）  
 **技术基线：** Technical Design V0.6-R5（已确认）  
 **安全补充：** PR #14 Trusted Host V2（已合并的安全设计记录，不覆盖 V0.3/V0.6-R5）  
-**关联：** [正式原件登记](./interactive-phase2-formal-source-register.md) · [完整路线图](./interactive-full-delivery-roadmap-2026-11-11.md)
+**关联：** [正式原件登记](../../interactive-phase2-formal-source-register.md) · [完整路线图](./interactive-full-delivery-roadmap-2026-11-11.md)
 
 ## 0. 本次审查的目标与边界
 

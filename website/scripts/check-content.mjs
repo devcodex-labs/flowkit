@@ -28,12 +28,12 @@ export async function checkContent(args = []) {
   const pages = JSON.parse(await readFile(path.join(website, 'coverage.json'), 'utf8')); checkCoverage(pages);
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   assertVersion(pkg);
-  const readme = await readFile(path.join(root, 'README.md'), 'utf8');
+  const readme = (await readFile(path.join(root, 'README.md'), 'utf8')).replace(/\r\n/g, '\n');
   assert.equal(readme, await expectedReadme(readme), 'Run npm run docs:sync'); assertNoPrivateContent(readme, 'README');
   const bodies = new Map();
   for (const page of pages.slice(0, limit)) {
     const filename = path.join(website, 'content', page.file);
-    const text = await readFile(filename, 'utf8'); bodies.set(page.id, text); assertNoPrivateContent(text, page.file);
+    const text = (await readFile(filename, 'utf8')).replace(/\r\n/g, '\n'); bodies.set(page.id, text); assertNoPrivateContent(text, page.file);
     assert.ok(page.status !== 'planned', `${page.id} remains planned`);
     assert.ok(page.id === 'P01' || text.includes(`# ${page.title}`), `Missing title: ${page.file}`);
     for (const match of text.matchAll(/```\w+\s+file="([^"]+)"/g)) await access(path.resolve(path.dirname(filename), match[1]));

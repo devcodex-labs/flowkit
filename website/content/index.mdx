@@ -39,7 +39,7 @@ import { Mermaid } from '../components/Mermaid';
 
 当任务包含多个业务步骤，并需要明确的分支、校验、重试或人工决策时，可以用 FlowKit 组织控制流。你仍需提供实际模型或业务服务，以及适合业务的结果校验器。
 
-FlowKit 是进程内编排工具。它不内置工作流数据库、跨进程恢复、审批界面或模型服务。并行分支共享状态；选择 `any` 汇合不会自动取消其他分支。先从小流程验证业务边界，再增加节点。
+本站快速开始使用 Standard，它在进程内执行完整流程。并行分支共享状态，`any` 汇合后其他分支仍可继续执行。需要持久化暂停和跨进程续跑时，内部维护者可评估 Interactive P0-A 及其可信 Host 和 SQLite Store。模型服务和审批界面由宿主提供。[宿主接入与模式范围](/guide/host-integration)
 
 [项目介绍](/guide/introduction) · [安装与环境](/guide/installation) · [授权与使用](/community/license)
 

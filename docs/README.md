@@ -2,9 +2,10 @@
 
 | 用途 | 入口 |
 |---|---|
-| 用户指南、示例和 API | [文档站](https://devcodex-labs.github.io/flowkit/)及其[源码](../website/content/) |
+| 用户指南、示例和 API | [站点源码](../website/content/)及[文档站地址](https://devcodex-labs.github.io/flowkit/) |
 | 内部 Interactive P0-A 接入 | [Interactive 接入](./interactive.md)、[可信 Host 安全](./interactive-host-security.md)、[Stage 2 契约](./interactive-stage2-contract.md) |
 | 候选状态和审查 | [P0-A 发布验收矩阵](./evidence/p0a-g07-g12-20261113/release-matrix.md) |
+| 历史验收、审查及路线图 | [历史资料索引](./evidence/history/README.md) |
 | 正式发行与安装 | [发布维护](./releasing.md) |
 
 `docs/evidence/` 保存提交绑定的验收报告、探针、命令和原始日志。文件名含 `attempt` 或 `probe` 的条目可能被证据报告引用。日期化的审查记录描述当时的基线，当前状态以发布验收矩阵为准。暂存输出写到已忽略的 `.tmp/`，需要留存的日志和校验和随对应验收记录归档。

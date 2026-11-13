@@ -35,7 +35,7 @@
 
 ## 3. 真实 ChatGPT 多节点工具桥接的确切边界
 
-使用 [C01 真实工作流定义](../examples/interactive/c01-live-chatgpt.workflow.js)，生成的不可变 Program 哈希：
+使用 [C01 真实工作流定义](../../../examples/interactive/c01-live-chatgpt.workflow.js)，生成的不可变 Program 哈希：
 
 sha256:339425694337fdd24ff005b2d8eab3109d4026ce6bc176f7a8c130421a7cabb5
 
@@ -64,7 +64,7 @@ sha256:339425694337fdd24ff005b2d8eab3109d4026ce6bc176f7a8c130421a7cabb5
 - C07：main Stage2 / M5 tests，以及 PR #13 纳入 main 的 tests/integration/m6-e2e.test.mjs S06 综合 source/Program/Skill drift 脚本测试。
 - C08：main trusted-host.test.mjs + .github/workflows/ci.yml Linux Host OS-user isolation。
 - C09：main s07-capacity.test.mjs 与 host-oversize.test.mjs。
-- C01–C04/C10/C11：本 PR 的 [complex-c01-c12.test.mjs](../tests/interactive/complex-c01-c12.test.mjs) 与 CI JSON 事件。
+- C01–C04/C10/C11：本 PR 的 [complex-c01-c12.test.mjs](../../../tests/interactive/complex-c01-c12.test.mjs) 与 CI JSON 事件。
 
 ## 5. 独立验收裁决与下一步
 
@@ -74,7 +74,7 @@ sha256:339425694337fdd24ff005b2d8eab3109d4026ce6bc176f7a8c130421a7cabb5
 
 **建议：**将此验收分支继续保持 Draft 作为历史证据，不把固定五回合 fixture 作为可永久依赖的生产回归测试。下一步使用用户可授权的 Dot/Grok Build 原生宿主，在真实模型会话和明确 OS 可信边界下优先复验 C01/C03/C05/C08/C12（尤其原生模型来源证明）；不因本次 CI 绿灯宣称 M6 已收口、发布软件或转入 P0-B。
 
-完整的冻结验收目标详见 [C01–C12 矩阵](./interactive-complex-acceptance-c01-c12.md)。
+完整的冻结验收目标详见 [C01–C12 矩阵](../../interactive-complex-acceptance-c01-c12.md)。
 
 
 ## Current-main follow-up — 2026-11-12

@@ -20,9 +20,9 @@
 
 ## 已有能力与宿主责任
 
-FlowKit提供静态DSL编译、图和数据声明检查、可读生成代码、Mermaid、进程内执行、公开Runtime接缝。模型调用、完整JSON Schema校验、业务权限、持久化状态、跨进程恢复、部署和监控均由宿主承担。
+Standard 提供静态 DSL 编译、图和数据声明检查、可读生成代码、Mermaid、进程内执行和 Runtime 接缝。模型调用、完整 JSON Schema 校验、业务权限、部署和监控由宿主负责。内部 Interactive P0-A 候选提供由可信 Host 管理的 SQLite 持久化与跨进程续跑，适用节点和接入方式见[宿主接入](/guide/host-integration)。
 
-并行共享state；any不自动取消其余分支。初始state只做顶层浅复制。默认Skill loader有范围、白名单、完整性和读取限制，自定义loader自行承担对应责任。AOT完整性验证不是执行沙箱。
+Standard 的并行分支共享 state，`any` 汇合后其余分支仍可继续。初始 state 做顶层浅复制。默认 Skill loader 有范围、白名单、完整性和读取限制，自定义 loader 自行承担对应责任。AOT 完整性验证与执行隔离由各自的机制负责。
 
 ## 版本与升级
 

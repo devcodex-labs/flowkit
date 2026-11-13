@@ -4,8 +4,8 @@
 **登记日期：2026-11-12（UTC+8）**  
 **历史源码核验基线：** `ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`  
 **当前 main 快照：** `81c7839e9f0abe6f4db20d0fc242253b0baff0ea`（2026-11-12）  
-**关联当前状态：** [Phase 0 基线/CI 回退记录](./interactive-phase0-current-baseline-ci-fallback-20261112.md) · [P0-A 31 项交叉核对](./interactive-p0a-31-task-crosswalk-20261112.md)
-**关联设计：** [Trusted Host V2](./interactive-trusted-host-security-v2-design.md) · [完整路线图](./interactive-full-delivery-roadmap-2026-11-11.md)
+**关联当前状态：** [Phase 0 基线/CI 回退记录](./evidence/history/interactive-phase0-current-baseline-ci-fallback-20261112.md) · [P0-A 31 项交叉核对](./evidence/history/interactive-p0a-31-task-crosswalk-20261112.md)
+**关联设计：** [Trusted Host V2](./interactive-trusted-host-security-v2-design.md) · [完整路线图](./evidence/history/interactive-full-delivery-roadmap-2026-11-11.md)
 
 ## 1. 目标原件
 
