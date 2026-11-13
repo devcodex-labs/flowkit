@@ -87,37 +87,49 @@ async function spawnAndKill({file,compiled,mode,phase,side,runId,receipt}) {
 }
 
 test('M4 real process SIGKILL before/after Agent enter, prepare and durable publish resumes once',async t=>{
-  for(const phase of ['prepare','dispatch-ready','awaiting']){
-    for(const side of ['before','after']){
+  const phases=['enter','prepare','dispatch-ready','awaiting'];
+  for (const [index,phase] of phases.slice(1).entries()) {
+    for (const side of ['before','after']) {
       const {file,compiled,db,api}=await fixture(t);
       const runId='start-'+phase+'-'+side;
       await spawnAndKill({file,compiled,mode:'start',phase,side,runId});
       const checkpoint=db.load(runId);
-      assert.ok(checkpoint);
-      assert.ok(['enter','prepare','dispatch-ready','awaiting'].includes(checkpoint.phase));
-    const waiting=await api.resume({runId});
-    assert.equal(waiting.status,'waiting');
-    assert.equal(waiting.pending.attempt,1);
-    assert.equal(waiting.pending.nodeId,'worker');
-    const again=await api.resume({runId});
-    assert.equal(again.pending.requestId,waiting.pending.requestId);
-    assert.equal(again.revision,waiting.revision);
-    const done=await api.complete({
-      runId,requestId:waiting.pending.requestId,nodeId:'worker',attempt:1,
-      result:{answer:'complete'},
-    });
-    assert.equal(done.status,'succeeded');
-    assert.equal(done.state.answer,'complete');
-    assert.equal(db.load(runId).receipts.length,1);
-    assert.deepEqual(db.listJournal(runId).map(x=>x.revision),
-      Array.from({length:done.revision+1},(_,i)=>i));
+      const revision=index+(side==='after'?1:0);
+      assert.equal(checkpoint.phase,phases[revision]);
+      assert.equal(checkpoint.revision,revision);
+      assert.equal(checkpoint.receiptCount,0);
+      assert.equal(db.listJournal(runId).length,revision+1);
+      const published=checkpoint.phase==='awaiting';
+      assert.equal(checkpoint.status,published?'waiting':'running');
+      assert.equal(Boolean(checkpoint.pending),published);
+      const waiting=await api.resume({runId});
+      assert.equal(waiting.status,'waiting');
+      assert.equal(waiting.pending.attempt,1);
+      assert.equal(waiting.pending.nodeId,'worker');
+      if (published) {
+        assert.equal(waiting.pending.requestId,checkpoint.pending.requestId);
+        assert.equal(waiting.revision,checkpoint.revision);
+      }
+      const again=await api.resume({runId});
+      assert.equal(again.pending.requestId,waiting.pending.requestId);
+      assert.equal(again.revision,waiting.revision);
+      const done=await api.complete({
+        runId,requestId:waiting.pending.requestId,nodeId:'worker',attempt:1,
+        result:{answer:'complete'},
+      });
+      assert.equal(done.status,'succeeded');
+      assert.equal(done.state.answer,'complete');
+      assert.equal(db.load(runId).receiptCount,1);
+      assert.deepEqual(db.listJournal(runId).map(x=>x.revision),
+        Array.from({length:done.revision+1},(_,i)=>i));
     }
   }
 });
 
 test('M4 real process SIGKILL before/after receipt acceptance, validation and state commit',async t=>{
-  for(const phase of ['validate','commit','route']){
-    for(const side of ['before','after']){
+  const phases=['awaiting','validate','commit','route'];
+  for (const [index,phase] of phases.slice(1).entries()) {
+    for (const side of ['before','after']) {
       const {file,compiled,db,api}=await fixture(t);
       const runId='complete-'+phase+'-'+side;
       const waiting=await api.start({
@@ -131,7 +143,24 @@ test('M4 real process SIGKILL before/after receipt acceptance, validation and st
       };
       await spawnAndKill({file,compiled,mode:'complete',phase,side,runId,receipt});
       const observed=db.load(runId);
-      assert.ok(['waiting','running'].includes(observed.status));
+      const stage=index+(side==='after'?1:0);
+      const revision=waiting.revision+stage;
+      assert.equal(observed.phase,phases[stage]);
+      assert.equal(observed.revision,revision);
+      assert.equal(observed.status,stage===0?'waiting':'running');
+      assert.equal(db.listJournal(runId).length,revision+1);
+      assert.equal(observed.receiptCount,stage===0?0:1);
+      const indexed=db.getReceipt(runId,waiting.pending.requestId);
+      assert.equal(indexed?.acceptedRevision,stage===0?undefined:waiting.revision+1);
+      if (stage===0) assert.equal(observed.pending.requestId,waiting.pending.requestId);
+      else {
+        assert.equal(observed.pending,null);
+        if (stage===1) {
+          assert.equal(observed.receivedSubmission.requestId,waiting.pending.requestId);
+          assert.equal(observed.receivedSubmission.acceptedRevision,indexed.acceptedRevision);
+        }
+      }
+      assert.equal(observed.state.answer,stage===3?'once':undefined);
       let finished;
       if(observed.status==='waiting') finished=await api.complete(receipt);
       else finished=await api.resume({runId});
@@ -139,9 +168,9 @@ test('M4 real process SIGKILL before/after receipt acceptance, validation and st
       assert.deepEqual(finished.state,{preexisting:'constant',answer:'once'});
       const duplicate=await api.complete(receipt);
       assert.equal(duplicate.duplicate,true);
-      assert.equal(duplicate.acceptedRevision,db.load(runId).receipts[0].acceptedRevision);
+      assert.equal(duplicate.acceptedRevision,db.getReceipt(runId,waiting.pending.requestId).acceptedRevision);
       assert.equal(duplicate.revision,finished.revision);
-      assert.equal(db.load(runId).receipts.length,1);
+      assert.equal(db.load(runId).receiptCount,1);
       assert.deepEqual(db.listJournal(runId).map(x=>x.revision),
         Array.from({length:finished.revision+1},(_,i)=>i));
     }
@@ -191,7 +220,7 @@ test('M4 two independent Node processes racing the same complete accept one rece
   assert.deepEqual([first.duplicate,second.duplicate].sort(),[false,true]);
   assert.equal(first.status,'succeeded');
   assert.equal(second.status,'succeeded');
-  assert.equal(db.load(waiting.runId).receipts.length,1);
+  assert.equal(db.load(waiting.runId).receiptCount,1);
   assert.deepEqual(db.load(waiting.runId).state,
     {preexisting:'constant',answer:'once'});
 });

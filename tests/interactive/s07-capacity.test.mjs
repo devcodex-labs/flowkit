@@ -1,3 +1,4 @@
+import {encodeCheckpoint} from '../../src/interactive/checkpoint.mjs';
 import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -80,7 +81,7 @@ function fillWaitingTo(f,original,limit,headroom=75){
     ...current,revision:current.revision+1,
     state:{...current.state,filler:''},
   };
-  const base=canonicalBytes(next).byteLength;
+  const base=canonicalBytes(encodeCheckpoint(next)).byteLength;
   assert.ok(limit-base-headroom>0);
   next.state.filler='x'.repeat(limit-base-headroom);
   return next;
@@ -116,7 +117,7 @@ test('S07 valid 64 KiB receipt at safe active headroom deterministically errors 
   }).committed,true);
   const before=f.store.load(w.runId);
   assert.equal(before.status,'waiting');
-  assert.ok(MAX_ACTIVE_CHECKPOINT_BYTES-canonicalBytes(before).byteLength<=75);
+  assert.ok(MAX_ACTIVE_CHECKPOINT_BYTES-canonicalBytes(encodeCheckpoint(before)).byteLength<=75);
   await assert.rejects(f.api.complete(receipt(w,{answer:'v'.repeat(64*1024)})),
     {code:'FK_I_CHECKPOINT_CAPACITY'});
   const ended=f.store.load(w.runId);
@@ -144,7 +145,7 @@ test('S07 oversized Host-owned inline Agent output is a durable terminal capacit
     assert.equal(snapshot.status,'errored');
     assert.equal(snapshot.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
     assert.deepEqual(snapshot.state,{valuable:'kept'});
-    assert.equal(snapshot.receipts.length,0);
+    assert.equal(snapshot.receiptCount,0);
     assert.equal(f.store.getReceipt(runId,w.pending.requestId),null);
     checkJournal(f.store,runId);
   }
@@ -162,7 +163,7 @@ test('S07 initial State exceeding soft OR hard budget deterministically fails be
   }
 });
 
-test('S07 21 Agent receipts retain a constant-size Checkpoint cache but all old Ack identities in SQLite index',async t=>{
+test('S07 21 Agent receipts keep all Ack identities in the SQLite index',async t=>{
   const f=await fixture(t,21);
   let current=await waiting(f);
   let first,originalReceipt;
@@ -177,8 +178,7 @@ test('S07 21 Agent receipts retain a constant-size Checkpoint cache but all old 
   }
   assert.equal(current.status,'succeeded');
   const final=f.store.load(current.runId);
-  assert.equal(final.receipts.length,16);
-  assert.ok(!final.receipts.some(x=>x.requestId===originalReceipt.requestId));
+  assert.equal(final.receiptCount,21);
   assert.equal(f.store.getReceipt(current.runId,originalReceipt.requestId).acceptedRevision,first);
   const reopened=createSqliteCheckpointStore(f.file,{namespace:'s07'});
   t.after(()=>reopened.close());
@@ -190,7 +190,7 @@ test('S07 21 Agent receipts retain a constant-size Checkpoint cache but all old 
   checkJournal(f.store,current.runId);
 });
 
-test('S07 M5 signed duplicate recovery checks index even after the old receipt leaves Checkpoint cache',async t=>{
+test('S07 M5 signed duplicate recovery checks index even without an inline receipt cache',async t=>{
   const f=await fixture(t,21);
   const keys=generateKeyPairSync('ed25519');
   let clock=1794400000000;
@@ -225,7 +225,7 @@ test('S07 M5 signed duplicate recovery checks index even after the old receipt l
     frame=completed;
   }
   assert.equal(frame.status,'succeeded');
-  assert.equal(f.store.load(frame.runId).receipts.length,16);
+  assert.equal(f.store.load(frame.runId).receiptCount,21);
   clock+=3600000;
   const old=await host.accept({receipt:originalReceipt,attestation:originalSigned});
   assert.equal(old.duplicate,true);
@@ -233,27 +233,28 @@ test('S07 M5 signed duplicate recovery checks index even after the old receipt l
   checkJournal(f.store,frame.runId);
 });
 
-test('S07 pre-upgrade inline receipt history is transactionally indexed before the next receipt is committed',async t=>{
+test('S07 the durable receipt index is authoritative',async t=>{
   const f=await fixture(t,2);
   const first=await waiting(f);
   const receiptA=receipt(first,{answer:'a'});
   const afterA=await f.api.complete(receiptA);
   assert.equal(afterA.status,'waiting');
-  const original=f.store.load(first.runId).receipts[0];
+  const original=f.store.getReceipt(first.runId,receiptA.requestId);
   const db=new DatabaseSync(f.file);
   try {
     const count=db.prepare('DELETE FROM fk_i_receipt_index WHERE namespace=? AND run_id=? AND request_id=?')
       .run('s07',first.runId,receiptA.requestId).changes;
     assert.equal(count,1);
   } finally {db.close()}
-  assert.deepEqual(f.store.getReceipt(first.runId,receiptA.requestId),original);
+  assert.equal(f.store.getReceipt(first.runId,receiptA.requestId),null);
   const afterB=await f.api.complete(receipt(afterA,{answer:'b'}));
   assert.equal(afterB.status,'succeeded');
-  assert.equal(f.store.getReceipt(first.runId,receiptA.requestId).acceptedRevision,original.acceptedRevision);
+  assert.equal(f.store.getReceipt(first.runId,receiptA.requestId),null);
+  assert.equal(original.requestId,receiptA.requestId);
   const db2=new DatabaseSync(f.file);
   try {
     assert.equal(db2.prepare('SELECT COUNT(*) AS n FROM fk_i_receipt_index WHERE namespace=? AND run_id=?')
-      .get('s07',first.runId).n,2);
+      .get('s07',first.runId).n,1);
   }finally{db2.close()}
 });
 
@@ -271,16 +272,17 @@ test('S07 corrupting receipt index identity cannot turn a different body into ac
 });
 
 
-test('S07 pre-upgrade already-durable near-2MiB waiting Run has a terminal recovery exit without discarding State',async t=>{
+test('S07 an already-durable near-2MiB waiting Run has a terminal recovery exit without discarding State',async t=>{
   const f=await fixture(t);
   const w=await waiting(f,{runId:'legacy-near-limit',startKey:'legacy-near-limit'});
   const old=f.store.load(w.runId);
   const next=fillWaitingTo(f,w,MAX_CHECKPOINT_BYTES);
-  const bytes=canonicalBytes(next);
+  const transitionId='sha256:'+'b'.repeat(64);
+  next.lastTransitionId=transitionId;
+  const bytes=canonicalBytes(encodeCheckpoint(next));
   assert.ok(bytes.byteLength > MAX_ACTIVE_CHECKPOINT_BYTES);
   const checkpointHash=sha256Bytes(bytes);
-  const transitionId='pre-upgrade-soft-limit-checkpoint';
-  const entry={kind:'legacy-large-checkpoint-test'};
+  const entry={kind:'large-checkpoint-test'};
   const db=new DatabaseSync(f.file);
   try {
     db.exec('BEGIN IMMEDIATE');
@@ -335,7 +337,7 @@ test('S07 capacity guard at publish and after an accepted receipt uses determini
   assert.equal(ended.status,'errored');
   assert.equal(ended.terminal.causeCode,'FK_I_CHECKPOINT_CAPACITY');
   assert.deepEqual(f.store.load(ended.runId).state,{tiny:'unchanged'});
-  assert.equal(f.store.load(ended.runId).receipts.length,0);
+  assert.equal(f.store.load(ended.runId).receiptCount,0);
   assert.equal(f.store.listJournal(ended.runId).filter(x=>x.entry.kind==='publish-pending').length,0);
 
   const w=await waiting(f,{runId:'commit-cap',startKey:'commit-cap'});

@@ -31,9 +31,10 @@ assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
 
 
 assert.deepEqual(Object.keys(interactive),[
-  'compileInteractive','createAgentReceiptStatement','createInteractiveCoordinator',
-  'createSqliteCheckpointStore','createTrustedInteractiveHost','encodeAgentReceiptStatement',
-  'loadInteractiveProgram','normalizeHostAgentReceipt',
+  'compileInteractive','complete','createAgentReceiptStatement','createInteractiveAdminContext','createInteractiveCoordinator',
+  'createInteractiveHostContext','createSqliteCheckpointStore','createSqliteInteractivePersistence',
+  'createTrustedInteractiveHost','encodeAgentReceiptStatement',
+  'loadInteractiveProgram','normalizeHostAgentReceipt','resume','start',
 ]);
 await writeFile('simple.workflow.js',
   "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
@@ -41,6 +42,21 @@ await writeFile('simple.workflow.js',
 const compiledInteractive=await interactive.compileInteractive('simple.workflow.js',{
   output:'memory',featureStage:'P0-A',
 });
+const versioned=interactive.createSqliteInteractivePersistence('versioned.sqlite',{namespace:'installed'});
+try {
+  const auth=interactive.createInteractiveHostContext({
+    namespace:'installed',subjectId:'test-host',authorize:()=>true,authorizeTask:()=>false,
+  });
+  const frame=await interactive.start('simple.workflow.js',{}, {private:'host-only'},{
+    ...versioned,auth,startKey:'installed-versioned',policy:{
+      id:'consumer',version:'1',bindingManifest:{},disclosePolicyId:'consumer',
+      capabilityStage:'P0-A',canonicalizationVersion:'jcs-rfc8785-v1',
+    },
+  });
+  assert.equal(frame.status,'succeeded');
+  assert.equal(Object.hasOwn(frame,'state'),false);
+  assert.equal((await versioned.store.load(frame.runId)).protocolVersion,1);
+} finally {versioned.close();}
 assert.ok(compiledInteractive.programIdentity?.artifactHash);
 const store=interactive.createSqliteCheckpointStore('interactive-demo.db',{namespace:'consumer'});
 try {
@@ -75,6 +91,7 @@ try {
     allowedInputKeys:['message'],
     disclosurePolicyId:'consumer-disclosure-v1',
     authorizeDisclosure:async()=>true,
+    authorizeTerminalAccess:({action})=>action==='run:read'||action==='result:read',
     now:()=>now,
   });
   const pending=await trusted.start({
@@ -96,6 +113,11 @@ try {
   const final=await trusted.accept({receipt,attestation:{statement,signature}});
   assert.equal(final.status,'succeeded');
   assert.deepEqual(final.state,{message:'shareable',hidden:'private',answer:'verified'});
+  const publicTerminal=await trusted.getPublicTerminalFrame({runId:final.runId});
+  assert.equal(Object.hasOwn(publicTerminal,'state'),false);
+  assert.deepEqual(publicTerminal.pending,[]);
+  const trustedResult=await trusted.readTrustedTerminalResult({resultRef:publicTerminal.resultRef});
+  assert.deepEqual(trustedResult.state,final.state);
   assert.equal((await trusted.accept({receipt,attestation:{statement,signature}})).duplicate,true);
 
 } finally {store.close();}

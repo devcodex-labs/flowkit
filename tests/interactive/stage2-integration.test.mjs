@@ -138,6 +138,22 @@ test('S2 compiler refuses unrelated Standard options and accessors before any wr
   assert.equal(await readFile(disk.artifactPath,'utf8'),out.code);
 });
 
+test('CF-08: Interactive lowering uses the feature stage validated at compile entry',async()=>{
+  const {workflows}=await project();
+  const file=path.join(workflows,'snapshot.workflow.js');
+  await writeFile(file,pure);
+  const options={output:'memory',featureStage:'P0-A'};
+  const expected=await compileInteractive(file,options);
+  assert.ok(expected.code.length>0);
+
+  const compilation=compileInteractive(file,options);
+  options.featureStage='P0-B';
+  const actual=await compilation;
+  assert.deepEqual(actual.diagnostics,expected.diagnostics);
+  assert.deepEqual(actual.programIdentity,expected.programIdentity);
+  assert.equal(actual.code,expected.code);
+});
+
 test('S2 harmless shared Host checkStep does not block pure Condition/Terminal, but Agent remains fail-closed',async t=>{
   const {root,workflows}=await project();
   const pureFile=path.join(workflows,'pure.workflow.js');

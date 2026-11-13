@@ -1,5 +1,25 @@
 # FlowKit Interactive — P0-A M4 Coordinator / M5 Trusted Host
 
+The asynchronous Store and the SQLite checkpoint payload use R5
+`RunCheckpointV1`. Initialize a fresh SQLite database for the first release.
+The checkpoint holds the Program and policy identity, execution position,
+pending task and accepted submission when validation is pending. Durable receipt
+history is in the separate receipt index and Journal.
+
+For planned key rotation, configure the outgoing Host with `drainOnly: true`
+and use the new policy for new Runs. SQLite records the drain restriction for
+other Host processes using that Store. For emergency revocation, a trusted
+operator can call `revokeKey` with the SHA-256 digest of the public key's DER
+SPKI. Configure the independent `authorizeKeyRevocation` gate. All affected
+workers and the Codex Outbox signer must share the Host Store's trust state.
+Deployments using separate Stores must apply revocation to each Store before
+resuming service. Affected Runs require operator reconciliation.
+
+`readHistoricalAck` uses the separate `authorizeReceiptAudit` gate. It
+requires the namespace, Run, request, node, attempt and exact receipt digest
+and returns the original acceptance revision. Keep both operations on the
+trusted Host, outside model tool exposure.
+
 > **Internal/maintainer integration only.** The Standard root API remains exactly
 > `run / compile / compileSource / check / evalWhen / isControlSignal`.
 > Interactive APIs live under `@devcodex-labs/flowkit/interactive`.
@@ -159,6 +179,14 @@ business-artifact persistence, file GC or Context module is added.
   public-task disclosure checks. This protects only a Host separated from
   model-controlled filesystem/database/credential access; see
   [Trusted Host security](./interactive-host-security.md).
+- Keep the execution frames from `start()`, `resume()`, `load()`, and
+  `accept()` inside the trusted Host. To show a terminal status, call
+  `getPublicTerminalFrame({runId})`. It returns status and a versioned result
+  reference. Only a trusted caller should use
+  `readTrustedTerminalResult({resultRef})` for the full State. Configure
+  `authorizeTerminalAccess` in the Host from its authenticated session.
+  Grant `run:read` and `result:read` independently for the requested namespace
+  and Run. A result reference carries no permissions.
 - Store data is written with `node:sqlite` in WAL mode and
   `synchronous=FULL`, with every transition in one SQLite transaction.
   Do not place this reference Store on an unreliable/shared filesystem.

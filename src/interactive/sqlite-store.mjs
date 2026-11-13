@@ -1,12 +1,18 @@
 import {DatabaseSync} from 'node:sqlite';
 import {Buffer} from 'node:buffer';
+import {closeSync,openSync} from 'node:fs';
 import {
   MAX_CHECKPOINT_BYTES, MAX_ACTIVE_CHECKPOINT_BYTES, MAX_JOURNAL_BYTES, assertSHA256,
   canonicalBytes, decodeCanonical, safeJSONSnapshot, sha256Bytes,
 } from './canonical.mjs';
 
-const TERMINAL = new Set(['succeeded', 'failed', 'errored']);
+import {checkpointPolicy,decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
+
+const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
+export const sqliteAdminTerminate=Symbol('SQLite admin terminate');
+export const sqliteHostTrust=Symbol('SQLite Host trust');
+const digest=value=>sha256Bytes(canonicalBytes(value));
 function boundedCheckpointBytes(input) {
   try { return canonicalBytes(input); }
   catch (error) {
@@ -60,6 +66,9 @@ function immutableIdentity(previous, next) {
       throw failure('FK_I_INVALID_CHECKPOINT', 'immutable field changed: ' + key);
     }
   }
+  if (digest(previous.program)!==digest(next.program) || digest(previous.policyIdentity)!==digest(next.policyIdentity)) {
+    throw failure('FK_I_INVALID_CHECKPOINT','Program and policy identity are immutable');
+  }
 }
 function journalDigest(namespace, runId, revision, transitionId, previousHash, checkpointHash, entry) {
   return sha256Bytes(canonicalBytes({
@@ -88,7 +97,13 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
     if (journalMode !== 'wal' || synchronous !== 2 || foreignKeys !== 1) {
       throw failure('FK_I_STORE_UNSAFE', 'WAL, synchronous FULL and foreign keys are required');
     }
-    db.exec([
+    const version=db.prepare('PRAGMA user_version').get().user_version;
+    if (version!==3) {
+      if (version!==0 || db.prepare("SELECT 1 FROM sqlite_schema WHERE name='fk_i_runs'").get()) {
+        throw failure('FK_I_STORE_SCHEMA','initialize a new R5 SQLite store');
+      }
+      db.exec([
+      'BEGIN IMMEDIATE;',
       'CREATE TABLE IF NOT EXISTS fk_i_artifacts (',
       ' namespace TEXT NOT NULL, artifact_hash TEXT NOT NULL, source_hash TEXT NOT NULL,',
       ' identity_json TEXT NOT NULL, program_bytes BLOB NOT NULL,',
@@ -117,7 +132,27 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' PRIMARY KEY (namespace, run_id, revision), UNIQUE (namespace, run_id, transition_id),',
       ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id)',
       ') STRICT;',
-    ].join('\n'));
+      'CREATE TABLE IF NOT EXISTS fk_i_admin_events (',
+      ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, transition_id TEXT NOT NULL,',
+      ' admin_subject_id TEXT NOT NULL, reason_code TEXT NOT NULL, created_at TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, run_id, transition_id),',
+      ' FOREIGN KEY (namespace, run_id, transition_id) REFERENCES fk_i_journal(namespace, run_id, transition_id)',
+      ') STRICT;',
+      'CREATE TABLE IF NOT EXISTS fk_i_host_policy_keys (',
+      ' namespace TEXT NOT NULL, policy_hash TEXT NOT NULL, key_hash TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, policy_hash, key_hash)',
+      ') STRICT;',
+      'CREATE TABLE IF NOT EXISTS fk_i_revoked_keys (',
+      ' namespace TEXT NOT NULL, key_hash TEXT NOT NULL, revoked_at TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, key_hash)',
+      ') STRICT;',
+      'CREATE TABLE IF NOT EXISTS fk_i_draining_policies (',
+      ' namespace TEXT NOT NULL, policy_hash TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, policy_hash)',
+      ') STRICT;',
+      'PRAGMA user_version = 3; COMMIT;',
+      ].join('\n'));
+    }
   } catch (error) {
     db.close();
     throw error;
@@ -125,7 +160,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
 
   const read = db.prepare('SELECT * FROM fk_i_runs WHERE namespace = ? AND run_id = ?');
   const byStartKey = db.prepare('SELECT * FROM fk_i_runs WHERE namespace = ? AND start_key = ?');
-  const latest = db.prepare('SELECT revision, checkpoint_hash, entry_hash FROM fk_i_journal WHERE namespace = ? AND run_id = ? ORDER BY revision DESC LIMIT 1');
+  const latest = db.prepare('SELECT revision, transition_id, checkpoint_hash, entry_hash FROM fk_i_journal WHERE namespace = ? AND run_id = ? ORDER BY revision DESC LIMIT 1');
   const allEntries = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? ORDER BY revision');
   const artifact = db.prepare('SELECT * FROM fk_i_artifacts WHERE namespace = ? AND artifact_hash = ?');
   const putArtifact = db.prepare('INSERT OR IGNORE INTO fk_i_artifacts(namespace, artifact_hash, source_hash, identity_json, program_bytes) VALUES (?, ?, ?, ?, ?)');
@@ -135,6 +170,24 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const readReceipt = db.prepare('SELECT * FROM fk_i_receipt_index WHERE namespace = ? AND run_id = ? AND request_id = ?');
   const insertReceipt = db.prepare('INSERT OR IGNORE INTO fk_i_receipt_index(namespace, run_id, request_id, node_id, attempt, digest, accepted_revision, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const journalAtRevision = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND revision = ?');
+  const journalById = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND transition_id = ?');
+  const addAdminEvent=db.prepare(`INSERT INTO fk_i_admin_events
+    (namespace,run_id,transition_id,admin_subject_id,reason_code,created_at) VALUES (?,?,?,?,?,?)`);
+  const registerKey=db.prepare('INSERT OR IGNORE INTO fk_i_host_policy_keys VALUES (?,?,?)');
+  const revokeKey=db.prepare('INSERT OR IGNORE INTO fk_i_revoked_keys VALUES (?,?,?)');
+  const revokedPolicy=db.prepare(`SELECT 1 FROM fk_i_host_policy_keys AS p JOIN fk_i_revoked_keys AS r
+    USING (namespace,key_hash) WHERE p.namespace=? AND p.policy_hash=? LIMIT 1`);
+  const registeredKey=db.prepare('SELECT 1 FROM fk_i_host_policy_keys WHERE namespace=? AND policy_hash=? AND key_hash=?');
+  const setDraining=db.prepare('INSERT OR IGNORE INTO fk_i_draining_policies VALUES (?,?)');
+  const isDraining=db.prepare('SELECT 1 FROM fk_i_draining_policies WHERE namespace=? AND policy_hash=?');
+
+  function assertActive(policyHash) {
+    if (revokedPolicy.get(namespace,policyHash)) throw failure('FK_I_HOST_DENIED','Host policy has been revoked');
+  }
+  function assertStartAllowed(policyHash) {
+    assertActive(policyHash);
+    if (isDraining.get(namespace,policyHash)) throw failure('FK_I_HOST_DENIED','Host policy only drains existing Runs');
+  }
 
   function transaction(mode, work) {
     db.exec(mode === 'write' ? 'BEGIN IMMEDIATE' : 'BEGIN');
@@ -149,13 +202,14 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   }
   function decodeRow(row) {
     if (!row) return null;
-    const cp = decodeCanonical(row.checkpoint_json, row.checkpoint_hash, MAX_CHECKPOINT_BYTES);
+    const cp = decodeCheckpoint(decodeCanonical(row.checkpoint_json, row.checkpoint_hash, MAX_CHECKPOINT_BYTES));
     assertCheckpoint(cp, namespace, row.run_id, row.revision, row.artifact_hash);
     if (cp.startKey !== row.start_key || cp.startIntentHash !== row.start_intent_hash) {
       throw failure('FK_I_STORE_CORRUPT', 'run identity differs from checkpoint');
     }
     const tail = latest.get(namespace, row.run_id);
-    if (!tail || tail.revision !== row.revision || tail.checkpoint_hash !== row.checkpoint_hash) {
+    if (!tail || tail.revision !== row.revision || tail.checkpoint_hash !== row.checkpoint_hash
+      || cp.lastTransitionId!==(tail.transition_id.startsWith('sha256:')?tail.transition_id:digest(['store-cas',tail.transition_id]))) {
       throw failure('FK_I_STORE_CORRUPT', 'journal does not match latest checkpoint');
     }
     return cp;
@@ -193,22 +247,6 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       throw failure('FK_I_RECEIPT_CONFLICT', 'accepted request identity changed');
     }
   }
-  function legacyIndexBackfill(runId, receipts) {
-    for (const receipt of receipts ?? []) {
-      if (!receipt || !Number.isSafeInteger(receipt.acceptedRevision)) {
-        throw failure('FK_I_STORE_CORRUPT', 'invalid legacy receipt index');
-      }
-      const entry = journalAtRevision.get(namespace, runId, receipt.acceptedRevision);
-      if (!entry) throw failure('FK_I_STORE_CORRUPT', 'legacy receipt journal missing');
-      const record = {
-        requestId:receipt.requestId,nodeId:receipt.nodeId,attempt:receipt.attempt,
-        digest:receipt.digest,acceptedRevision:receipt.acceptedRevision,
-        entryHash:entry.entry_hash,
-      };
-      receiptProof(runId, record);
-      putReceiptIndex(runId, record, entry.entry_hash);
-    }
-  }
   function appendJournal(runId, revision, transitionId, checkpointHash, previousHash, entry) {
     identifier(transitionId, 'transitionId');
     const detail = safeJSONSnapshot(entry, MAX_JOURNAL_BYTES);
@@ -221,6 +259,56 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   return Object.freeze({
     namespace,
     close() { db.close(); },
+    [sqliteHostTrust]:Object.freeze({
+      register(policyHash,keys,drainOnly) {
+        transaction('write',()=>{
+          for (const key of keys) registerKey.run(namespace,policyHash,key);
+          if (drainOnly) setDraining.run(namespace,policyHash);
+        });
+      },
+      assertActive,
+      assertStartAllowed,
+      sign(policyHash,keyHash,sign) {
+        return transaction('write',()=>{
+          assertActive(policyHash);
+          if (!registeredKey.get(namespace,policyHash,keyHash)) {
+            throw failure('FK_I_HOST_DENIED','signing key is outside the Run policy');
+          }
+          return sign();
+        });
+      },
+      revoke(keyHash) {
+        assertSHA256(keyHash);
+        return transaction('write',()=>revokeKey.run(namespace,keyHash,new Date().toISOString()).changes===1);
+      },
+    }),
+    [sqliteAdminTerminate](runId,reason,subjectId) {
+      identifier(runId,'runId');
+      identifier(subjectId,'subjectId');
+      return transaction('write',()=>{
+        const current=decodeRow(read.get(namespace,runId));
+        if (!current) throw failure('FK_I_HOST_DENIED','Run is not accessible');
+        if (TERMINAL.has(current.status)) return current;
+        if (current.revision>=Number.MAX_SAFE_INTEGER) throw failure('FK_I_REVISION_EXHAUSTED','revision range exceeded');
+        const next={...current,status:'cancelled',revision:current.revision+1,
+          pending:null,prepared:null,candidate:null,receivedSubmission:null,terminal:null,pauseReason:null};
+        const eventDigest=digest({kind:'admin-terminate',subjectId,reason});
+        const proposalDigest=digest({kind:'admin-tombstone',status:'cancelled'});
+        const transitionId=digest([namespace,runId,current.revision,current.blockId,eventDigest,current.artifactHash,proposalDigest]);
+        const committedAt=new Date().toISOString();
+        const transition={namespace,runId,transitionId,fromRevision:current.revision,toRevision:next.revision,
+          fromBlockId:current.blockId,toBlockId:null,programHash:current.artifactHash,eventDigest,proposalDigest,committedAt};
+        next.lastTransitionId=transitionId;
+        const bytes=boundedCheckpointBytes(encodeCheckpoint(next)), checkpointHash=sha256Bytes(bytes);
+        const previous=latest.get(namespace,runId);
+        if (updateRun.run(next.revision,bytes.toString('utf8'),checkpointHash,namespace,runId,current.revision).changes!==1) {
+          throw failure('FK_I_CAS_CONFLICT','revision changed during admin transaction');
+        }
+        appendJournal(runId,next.revision,transitionId,checkpointHash,previous.entry_hash,{kind:'admin-terminate',transition});
+        addAdminEvent.run(namespace,runId,transitionId,subjectId,reason,committedAt);
+        return next;
+      });
+    },
 
     /** Preserve exact compiler-produced bytes, keyed by their content hash. */
     putArtifact({programIdentity, bytes}) {
@@ -287,11 +375,12 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
      * Durable idempotent start: the server computes the intent fingerprint,
      * including tenant, artifact, initial State and caller options.
      */
-    createRun({startKey, startIntent = null, checkpoint}) {
+    createRun({startKey, startIntent = null, checkpoint, genesis}) {
       identifier(startKey, 'startKey');
       const base = boundedCheckpoint(checkpoint);
       identifier(base?.runId, 'checkpoint.runId');
       assertCheckpoint(base, namespace, base.runId, 0);
+      if (base.status==='cancelled') throw failure('FK_I_INVALID_TRANSITION','cancelled requires management authorization');
       if (base.startKey !== undefined || base.startIntentHash !== undefined) {
         throw failure('FK_I_INVALID_CHECKPOINT', 'start identity is store-generated');
       }
@@ -300,12 +389,25 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         namespace, startKey, artifactHash:base.artifactHash, state:base.state,
         policyHash:base.policyHash ?? null, intent,
       }));
-      const initial = {...base, startKey, startIntentHash};
-      const checkpointBytes = boundedCheckpointBytes(initial);
-      // The reserve must already exist before a Run can publish its first Pending.
-      // Read/duplicate-start of a pre-upgrade Run is not blocked by this check.
-      const checkpointHash = sha256Bytes(checkpointBytes);
       return transaction('write', () => {
+        assertStartAllowed(base.policyHash??digest({}));
+        const registered=artifact.get(namespace,base.artifactHash);
+        if (!registered) throw failure('FK_I_PROGRAM_MISMATCH','Program bytes must be registered first');
+        const program=JSON.parse(registered.identity_json);
+        if (base.program && digest(base.program)!==digest(program)) throw failure('FK_I_PROGRAM_MISMATCH','Program identity mismatch');
+        const initial={...base,startKey,startIntentHash,program,activationSeq:base.activationSeq??0,
+          policyHash:base.policyHash??digest({}),policyIdentity:base.policyIdentity??checkpointPolicy({},base.policyHash??digest({})),
+          receivedSubmission:null,stageCount:0,receiptCount:0};
+        const eventDigest=digest(['genesis',startIntentHash]);
+        const proposalDigest=digest(['create',initial.blockId]);
+        const transitionId=digest([namespace,initial.runId,null,null,eventDigest,initial.artifactHash,proposalDigest]);
+        if (genesis && genesis.transitionId!==transitionId) throw failure('FK_I_INVALID_TRANSITION','invalid genesis');
+        const transition=genesis??{namespace,runId:initial.runId,programHash:initial.artifactHash,
+          fromRevision:null,toRevision:0,fromBlockId:null,toBlockId:initial.blockId,eventDigest,proposalDigest,
+          transitionId,committedAt:new Date().toISOString()};
+        initial.lastTransitionId=transitionId;
+        const checkpointBytes=boundedCheckpointBytes(encodeCheckpoint(initial));
+        const checkpointHash=sha256Bytes(checkpointBytes);
         const existing = byStartKey.get(namespace, startKey);
         if (existing) {
           const current = decodeRow(existing);
@@ -320,13 +422,10 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         if (checkpointBytes.byteLength > MAX_ACTIVE_CHECKPOINT_BYTES) {
           throw failure('FK_I_CHECKPOINT_CAPACITY', 'initial Run would leave no error reserve');
         }
-        if (!artifact.get(namespace, initial.artifactHash)) {
-          throw failure('FK_I_PROGRAM_MISMATCH', 'Program bytes must be registered first');
-        }
         insertRun.run(namespace, initial.runId, startKey, startIntentHash, 0,
           initial.artifactHash, checkpointBytes.toString('utf8'), checkpointHash);
-        appendJournal(initial.runId, 0, 'start:' + startIntentHash, checkpointHash, null, {kind:'created'});
-        return {created:true, checkpoint:JSON.parse(checkpointBytes.toString('utf8'))};
+        appendJournal(initial.runId,0,transitionId,checkpointHash,null,{kind:'created',transition});
+        return {created:true,checkpoint:decodeCheckpoint(JSON.parse(checkpointBytes.toString('utf8')))};
       });
     },
 
@@ -344,11 +443,13 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         throw new TypeError('expectedRevision must be a nonnegative safe integer');
       }
       const next = boundedCheckpoint(nextCheckpoint);
+      if (next.status==='cancelled') throw failure('FK_I_INVALID_TRANSITION','cancelled requires management authorization');
       const journal = safeJSONSnapshot(journalEntry, MAX_JOURNAL_BYTES);
       return transaction('write', () => {
         const row = read.get(namespace, runId);
         if (!row) throw failure('FK_I_RUN_NOT_FOUND', 'run is not accessible in this namespace');
         const current = decodeRow(row);
+        assertActive(current.policyHash);
         if (row.revision !== expectedRevision) {
           return {committed:false, checkpoint:current};
         }
@@ -360,7 +461,10 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         }
         assertCheckpoint(next, namespace, runId, expectedRevision + 1, row.artifact_hash);
         immutableIdentity(current, next);
-        const bytes = canonicalBytes(next);
+        next.lastTransitionId=transitionId.startsWith('sha256:') ? transitionId : digest(['store-cas',transitionId]);
+        const persisted=encodeCheckpoint(next);
+        const bytes=boundedCheckpointBytes(persisted);
+        const checkpoint=decodeCheckpoint(persisted);
         if (!TERMINAL.has(next.status) && bytes.byteLength > MAX_ACTIVE_CHECKPOINT_BYTES) {
           throw failure('FK_I_CHECKPOINT_CAPACITY', 'nonterminal Checkpoint reserve exhausted');
         }
@@ -373,21 +477,24 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         const entryHash = appendJournal(runId, next.revision, transitionId, checkpointHash,
           last.entry_hash, journal);
         if (journal?.kind === 'receipt-accepted') {
-          // Backfill old inline receipts *before* a future Coordinator may
-          // compact its cache. Every old index row is verified against Journal.
-          legacyIndexBackfill(runId, current.receipts);
           if (current.status !== 'waiting' || next.phase !== 'validate'
             || next.candidate?.requestId !== journal.requestId
             || next.candidate?.nodeId !== journal.nodeId
-            || next.candidate?.attempt !== journal.attempt) {
+            || next.candidate?.attempt !== journal.attempt
+            || next.receivedSubmission?.canonicalDigest!==journal.digest
+            || current.pending?.requestId!==journal.requestId
+            || current.pending.nodeId!==journal.nodeId || current.pending.attempt!==journal.attempt
+            || next.receiptCount!==current.receiptCount+1) {
             throw failure('FK_I_INVALID_RECEIPT', 'receipt transition does not match the Pending');
           }
           putReceiptIndex(runId, {
             requestId:journal.requestId,nodeId:journal.nodeId,attempt:journal.attempt,
             digest:journal.digest,acceptedRevision:next.revision,
           },entryHash);
+        } else if (next.receiptCount!==current.receiptCount || (current.status==='waiting' && next.phase==='validate')) {
+          throw failure('FK_I_INVALID_RECEIPT','receipt acceptance requires the durable index entry');
         }
-        return {committed:true, checkpoint:JSON.parse(bytes.toString('utf8'))};
+        return {committed:true,checkpoint};
       });
     },
 
@@ -398,7 +505,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       return transaction('read', () => {
         const run = read.get(namespace, runId);
         if (!run) return null;
-        const cp = decodeRow(run);
+        decodeRow(run);
         const record = readReceipt.get(namespace, runId, requestId);
         const indexed = record ? {
           requestId:record.request_id,nodeId:record.node_id,attempt:record.attempt,
@@ -412,14 +519,24 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
             digest:indexed.digest,acceptedRevision:indexed.acceptedRevision,
           };
         }
-        // Runs created before the S07 index keep their original inline history
-        // until it is transactionally backfilled by the next accepted receipt.
-        const legacy = cp.receipts?.find(x => x.requestId === requestId);
-        if (!legacy) return null;
-        const historical = journalAtRevision.get(namespace, runId, legacy.acceptedRevision);
-        if (!historical) throw failure('FK_I_STORE_CORRUPT', 'legacy receipt journal missing');
-        receiptProof(runId, {...legacy,entryHash:historical.entry_hash});
-        return safeJSONSnapshot(legacy);
+        return null;
+      });
+    },
+
+    /** Indexed read used by the async Store facade. Old records keep their original IDs. */
+    readJournalRecord(runId, {transitionId,revision}) {
+      identifier(runId, 'runId');
+      if (transitionId!==undefined) identifier(transitionId,'transitionId');
+      return transaction('read',()=>{
+        const cp=decodeRow(read.get(namespace,runId));
+        if (!cp) return null;
+        const row=transitionId===undefined ? journalAtRevision.get(namespace,runId,revision)
+          : journalById.get(namespace,runId,transitionId);
+        if (!row) return null;
+        const entry=JSON.parse(row.entry_json);
+        if (journalDigest(namespace,runId,row.revision,row.transition_id,row.previous_hash,row.checkpoint_hash,entry)
+          !==row.entry_hash) throw failure('FK_I_STORE_CORRUPT','invalid journal record');
+        return {revision:row.revision,transitionId:row.transition_id,entry};
       });
     },
 

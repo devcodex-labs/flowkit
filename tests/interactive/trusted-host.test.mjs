@@ -10,6 +10,7 @@ import {emitInteractive} from '../../src/compiler/interactive/emit.mjs';
 import {createSqliteCheckpointStore} from '../../src/interactive/sqlite-store.mjs';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createTrustedInteractiveHost} from '../../src/interactive/trusted-host.mjs';
+import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 import {
   createAgentReceiptStatement,encodeAgentReceiptStatement,normalizeHostAgentReceipt,
 } from '../../src/interactive/host-attestation.mjs';
@@ -96,6 +97,68 @@ async function rejectUnchanged(f,receipt,attestation) {
   assert.equal(f.store.listJournal(f.frame.runId).length,count);
 }
 
+test('Host drains the old policy, blocks revoked workers across connections, and reads only the exact original Ack',async t=>{
+  let approved=false;
+  const f=await waiting(t,{authorizeReceiptAudit:request=>approved && request.action==='receipt:read-history'});
+  const secondStore=createSqliteCheckpointStore(path.join(f.dir,'run.db'),{namespace:f.store.namespace});
+  t.after(()=>secondStore.close());
+  const oldWorker=createTrustedInteractiveHost({...f.hostOptions,store:secondStore});
+  const pending=await oldWorker.start({...f.program,startKey:'pending-old',state:{ready:true}});
+  const nextKeys=generateKeyPairSync('ed25519');
+  const nextHost=createTrustedInteractiveHost({...f.hostOptions,store:secondStore,
+    trustedPublicKeys:{next:nextKeys.publicKey},authorizeKeyRevocation:()=>approved});
+  const drain=createTrustedInteractiveHost({...f.hostOptions,drainOnly:true});
+  await assert.rejects(oldWorker.start({...f.program,startKey:'should-not-start',state:{ready:true}}),
+    {code:'FK_I_HOST_DENIED'});
+  const receipt=agentResult(f.frame);
+  const attestation=proof(f.store.load(receipt.runId),receipt,f.keys.privateKey);
+  const accepted=await drain.accept({receipt,attestation});
+  assert.equal(accepted.status,'succeeded');
+  const next=await nextHost.start({...f.program,startKey:'new-policy',state:{ready:true}});
+  assert.equal(next.status,'waiting');
+  assert.notEqual(f.store.load(next.runId).policyHash,f.store.load(pending.runId).policyHash);
+
+  const oldKeyHash=sha256Bytes(f.keys.publicKey.export({type:'spki',format:'der'}));
+  await assert.rejects(nextHost.revokeKey(oldKeyHash),{code:'FK_I_HOST_DENIED'});
+  const pendingReceipt=agentResult(pending);
+  const pendingProof=proof(f.store.load(pending.runId),pendingReceipt,f.keys.privateKey);
+  const call={threadId:'thread',turnId:'turn',callId:'call',tool:'flowkit_submit',
+    args:{requestId:pendingReceipt.requestId,answer:'safe'}};
+  const outbox=openCodexOutbox({database:path.join(f.dir,'outbox.sqlite'),store:secondStore,host:oldWorker,now:()=>CLOCK});
+  t.after(()=>outbox.close());
+  const pendingTask=await oldWorker.getPublicAgentTask({runId:pending.runId});
+  const observed={task:pendingTask,started:call,callback:call,modelPid:100};
+  let unsigned;
+  approved=true;
+  await assert.rejects(outbox.record(observed,pendingReceipt,f.keys.privateKey,{
+    async afterObserve(row) {
+      unsigned=row.proofId;
+      assert.equal(await nextHost.revokeKey(oldKeyHash),true);
+    },
+  }),{code:'FK_I_HOST_DENIED'});
+  assert.equal(outbox.describe(unsigned).state,'OBSERVED');
+  assert.equal(outbox.describe(unsigned).statementHash,undefined);
+  assert.equal(await nextHost.revokeKey(oldKeyHash),false);
+  await assert.rejects(oldWorker.resume({runId:pending.runId}),{code:'FK_I_HOST_DENIED'});
+  await assert.rejects(oldWorker.accept({receipt:pendingReceipt,attestation:pendingProof}),{code:'FK_I_PROVENANCE_REJECTED'});
+  await assert.rejects(oldWorker.accept({receipt,attestation}),{code:'FK_I_PROVENANCE_REJECTED'});
+  assert.equal(f.store.getReceipt(pending.runId,pendingReceipt.requestId),null);
+  assert.equal((await nextHost.resume({runId:next.runId})).status,'waiting');
+  const {namespace,runId,requestId,nodeId,attempt,receiptHash}=attestation.statement;
+  const query={namespace,runId,requestId,nodeId,attempt,receiptHash};
+  const before=f.store.load(runId);
+  const journal=f.store.listJournal(runId);
+  for (const malformed of [{namespace:'other'},{receiptHash:'sha256:'+'0'.repeat(64)},{attempt:2}]) {
+    await assert.rejects(f.host.readHistoricalAck({...query,...malformed}),{code:'FK_I_HOST_DENIED'});
+  }
+  await assert.rejects(f.host.readHistoricalAck({...query,runId:pending.runId,requestId:pendingReceipt.requestId}),
+    {code:'FK_I_HOST_DENIED'});
+  assert.deepEqual(await f.host.readHistoricalAck(query),{...query,acceptedRevision:accepted.acceptedRevision});
+  assert.deepEqual(await f.host.readHistoricalAck(query),{...query,acceptedRevision:accepted.acceptedRevision});
+  assert.deepEqual(f.store.load(runId),before);
+  assert.deepEqual(f.store.listJournal(runId),journal);
+});
+
 test('M5 authorized public task contains only allowlisted declared input, not State or Host internals',async t=>{
   const f=await waiting(t);
   const task=await f.host.getPublicAgentTask({runId:f.frame.runId});
@@ -112,6 +175,68 @@ test('M5 authorized public task contains only allowlisted declared input, not St
   assert.equal(JSON.stringify(task).includes('Host private data'),false);
   assert.equal((await f.host.getPublicAgentTask({runId:f.frame.runId})).requestId,task.requestId);
   assert.equal(f.store.load(f.frame.runId).revision,f.frame.revision);
+});
+
+test('CF-05: terminal projection and trusted result require separate permissions',async t=>{
+  let allowedAction='run:read';
+  const calls=[];
+  const f=await waiting(t,{
+    authorizeTerminalAccess:async context=>{
+      calls.push(context);
+      return context.action===allowedAction;
+    },
+  });
+  const runId=f.frame.runId;
+  await assert.rejects(f.host.getPublicTerminalFrame({runId}),{code:'FK_I_HOST_DENIED'});
+  const receipt=agentResult(f.frame);
+  const completed=await f.host.accept({receipt,attestation:proof(f.store.load(runId),receipt,f.keys.privateKey)});
+  const resultRef={runId,revision:completed.revision,projectionVersion:1};
+  const before=canonicalBytes(f.store.load(runId));
+  const journal=f.store.listJournal(runId);
+
+  const frame=await f.host.getPublicTerminalFrame({runId});
+  assert.deepEqual(frame,{
+    protocolVersion:1,runId,revision:completed.revision,status:'succeeded',pending:[],
+    checkpointRef:{runId,revision:completed.revision},terminal:{nodeId:'done',status:'succeeded'},resultRef,
+  });
+  await assert.rejects(f.host.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
+  allowedAction='result:read';
+  await assert.rejects(f.host.getPublicTerminalFrame({runId}),{code:'FK_I_HOST_DENIED'});
+  const result=await f.host.readTrustedTerminalResult({resultRef});
+  assert.deepEqual(result,{
+    projectionVersion:1,namespace:'tenant-m5',runId,status:'succeeded',
+    terminal:{nodeId:'done',status:'succeeded'},state:completed.state,contextError:null,
+  });
+  assert.ok(calls.every(context=>Object.isFrozen(context) &&
+    context.namespace==='tenant-m5' && context.runId===runId && context.revision===completed.revision));
+  await assert.rejects(f.host.readTrustedTerminalResult({
+    resultRef:{...resultRef,revision:resultRef.revision-1},
+  }),{code:'FK_I_HOST_DENIED'});
+
+  const unconfigured=createTrustedInteractiveHost({...f.hostOptions,authorizeTerminalAccess:undefined});
+  await assert.rejects(unconfigured.getPublicTerminalFrame({runId}),{code:'FK_I_HOST_DENIED'});
+  const otherStore=createSqliteCheckpointStore(path.join(f.dir,'run.db'),{namespace:'another-tenant'});
+  t.after(()=>otherStore.close());
+  const other=createTrustedInteractiveHost({...f.hostOptions,store:otherStore,authorizeTerminalAccess:()=>true});
+  await assert.rejects(other.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
+  assert.deepEqual(canonicalBytes(f.store.load(runId)),before);
+  assert.deepEqual(f.store.listJournal(runId),journal);
+});
+
+test('CF-05: public error terminal omits the private cause and State',async t=>{
+  const f=await fixture(t,{authorizeTerminalAccess:()=>true});
+  const frame=await f.host.start({
+    ...f.program,startKey:'terminal-with-error',state:{secret:'Host private data'},
+  });
+  assert.equal(frame.status,'errored');
+  const projection=await f.host.getPublicTerminalFrame({runId:frame.runId});
+  assert.equal(projection.status,'errored');
+  assert.equal(Object.hasOwn(projection,'terminal'),false);
+  assert.equal(Object.hasOwn(projection,'causeCode'),false);
+  assert.equal(Object.hasOwn(projection,'state'),false);
+  const result=await f.host.readTrustedTerminalResult({resultRef:projection.resultRef});
+  assert.equal(result.causeCode,'FK_R002');
+  assert.deepEqual(result.state,{secret:'Host private data'});
 });
 
 test('M5 strict disclosure allowlist and authorizer both fail closed with zero CAS writes',async t=>{

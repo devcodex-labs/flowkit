@@ -3,6 +3,7 @@ import {
 } from 'node:crypto';
 import {MAX_CHECKPOINT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {createInteractiveCoordinator} from './coordinator.mjs';
+import {sqliteHostTrust} from './sqlite-store.mjs';
 import {
   createAgentReceiptStatement,encodeAgentReceiptStatement,
   normalizeHostAgentReceipt,
@@ -78,6 +79,14 @@ function numericPolicy(value,label,max) {
   return value;
 }
 
+function terminalNode(checkpoint) {
+  if (checkpoint.status==='succeeded' || checkpoint.status==='failed') {
+    if (typeof checkpoint.terminal?.nodeId!=='string'
+      || checkpoint.terminal.status!==checkpoint.status) throw denied();
+    return {nodeId:checkpoint.terminal.nodeId,status:checkpoint.status};
+  }
+}
+
 /**
  * Trusted Host facade for the existing P0-A Coordinator. The Host keeps
  * SQLite, runtime callbacks, and signing private key outside model access.
@@ -89,7 +98,8 @@ export function createTrustedInteractiveHost({
   store,runtime,policy={},
   trustedPublicKeys,trustedArtifacts,
   allowedInputKeys=[],
-  disclosurePolicyId,authorizeDisclosure,
+  disclosurePolicyId,authorizeDisclosure,authorizeTerminalAccess,
+  authorizeReceiptAudit,authorizeKeyRevocation,drainOnly=false,
   maxProofAgeMs=5*60*1000,clockSkewMs=5000,
   now=()=>Date.now(),maxStagesPerCall=128,
 }={}) {
@@ -100,6 +110,15 @@ export function createTrustedInteractiveHost({
   if (typeof now!=='function' || typeof authorizeDisclosure!=='function') {
     throw new TypeError('Trusted Host clock and disclosure authorizer are required');
   }
+  if (authorizeTerminalAccess!==undefined && typeof authorizeTerminalAccess!=='function') {
+    throw new TypeError('Terminal access authorizer must be a function');
+  }
+  for (const authorize of [authorizeReceiptAudit,authorizeKeyRevocation]) {
+    if (authorize!==undefined && typeof authorize!=='function') throw new TypeError('Host management authorizer required');
+  }
+  if (typeof drainOnly!=='boolean') throw new TypeError('drainOnly must be boolean');
+  const trust=store[sqliteHostTrust];
+  if (authorizeKeyRevocation && !trust) throw new TypeError('Durable Host trust store required');
   name(disclosurePolicyId);
   numericPolicy(maxProofAgeMs,'maxProofAgeMs',3600000);
   if (maxProofAgeMs<1000) throw new TypeError('maxProofAgeMs must be >= 1000');
@@ -132,8 +151,10 @@ export function createTrustedInteractiveHost({
   const coordinator=createInteractiveCoordinator({
     store,runtime,policy:effectivePolicy,maxStagesPerCall,
   });
+  trust?.register(coordinator.policyHash,fingerprints.map(key=>key.publicKeyHash),drainOnly);
 
   function assertPinned(runId) {
+    trust?.assertActive(coordinator.policyHash);
     const cp=store.load(runId);
     if (!cp || cp.namespace!==store.namespace
       || cp.policyHash!==coordinator.policyHash
@@ -145,6 +166,8 @@ export function createTrustedInteractiveHost({
 
   /** No bytes are imported until the Host's compiler artifact allowlist passes. */
   async function start(options={}) {
+    trust?.assertStartAllowed(coordinator.policyHash);
+    if (drainOnly) throw denied('this Host only drains existing Runs');
     if (!options || typeof options!=='object'
       || !options.programIdentity || !approvalSet.has(options.programIdentity.artifactHash)) {
       throw denied('unapproved Program artifact');
@@ -165,6 +188,61 @@ export function createTrustedInteractiveHost({
     if (cp===null) return null;
     assertPinned(runId);
     return coordinator.load({runId});
+  }
+
+  async function loadAuthorizedTerminal(runId, action, revision) {
+    if (!authorizeTerminalAccess || typeof runId!=='string' || runId.length<1
+      || runId.length>256 || /[\u0000-\u001f\u007f]/.test(runId)) throw denied();
+    const checkpoint=assertPinned(runId);
+    if (checkpoint.runId!==runId || !['succeeded','failed','errored','cancelled'].includes(checkpoint.status)
+      || (revision!==undefined && revision!==checkpoint.revision)) throw denied();
+
+    let decision;
+    try {
+      decision=await authorizeTerminalAccess(Object.freeze({
+        action,namespace:checkpoint.namespace,runId,revision:checkpoint.revision,
+      }));
+    } catch {
+      throw denied();
+    }
+    if (decision!==true) throw denied();
+
+    const current=assertPinned(runId);
+    if (current.runId!==runId || current.revision!==checkpoint.revision
+      || current.status!==checkpoint.status) throw denied();
+    return current;
+  }
+
+  async function getPublicTerminalFrame({runId}={}) {
+    const checkpoint=await loadAuthorizedTerminal(runId,'run:read');
+    const {revision,status}=checkpoint;
+    const terminal=terminalNode(checkpoint);
+    return {
+      protocolVersion:1,runId,revision,status,pending:[],
+      checkpointRef:{runId,revision},
+      ...(terminal ? {terminal} : {}),
+      resultRef:{runId,revision,projectionVersion:1},
+    };
+  }
+
+  async function readTrustedTerminalResult(input) {
+    let resultRef;
+    try {
+      resultRef=safeJSONSnapshot(input,2048)?.resultRef;
+    } catch {
+      throw denied();
+    }
+    if (!resultRef || Object.keys(resultRef).length!==3 || resultRef.projectionVersion!==1
+      || !Number.isSafeInteger(resultRef.revision) || resultRef.revision<0) throw denied();
+    const checkpoint=await loadAuthorizedTerminal(resultRef.runId,'result:read',resultRef.revision);
+    const terminal=terminalNode(checkpoint);
+    const causeCode=checkpoint.terminal?.causeCode;
+    return safeJSONSnapshot({
+      projectionVersion:1,namespace:checkpoint.namespace,runId:checkpoint.runId,
+      status:checkpoint.status,state:checkpoint.state,contextError:null,
+      ...(terminal ? {terminal} : {}),
+      ...(typeof causeCode==='string' ? {causeCode} : {}),
+    },MAX_CHECKPOINT_BYTES);
   }
 
   /**
@@ -208,13 +286,42 @@ export function createTrustedInteractiveHost({
     if (decision!==true) throw denied('Host did not approve model disclosure');
     // An async disclosure gate may overlap a successful receipt/commit from a
     // separate Host process. Never hand the model a superseded Pending.
-    const current=store.load(runId);
+    const current=assertPinned(runId);
     if (!current || current.status!=='waiting' || current.revision!==cp.revision
       || current.policyHash!==cp.policyHash
       || current.pending?.requestId!==pending.requestId) {
       throw denied('Pending changed during Host authorization');
     }
     return task;
+  }
+
+  async function authorizeManagement(authorize,request) {
+    let allowed;
+    try { allowed=await authorize?.(Object.freeze(request)); } catch {}
+    if (allowed!==true) throw denied();
+  }
+
+  async function readHistoricalAck(input) {
+    let request;
+    try {
+      request=safeJSONSnapshot(input,2048);
+      strictFields(request,['namespace','runId','requestId','nodeId','attempt','receiptHash']);
+      if (request.namespace!==store.namespace || ![request.runId,request.requestId,request.nodeId].every(
+        value=>typeof value==='string' && value.length>0 && value.length<=256 && !/[\u0000-\u001f\u007f]/.test(value))
+        || !Number.isSafeInteger(request.attempt) || request.attempt<1 || request.attempt>11) throw denied();
+      assertSHA256(request.receiptHash);
+    } catch {throw denied();}
+    await authorizeManagement(authorizeReceiptAudit,{...request,action:'receipt:read-history'});
+    const record=store.getReceipt(request.runId,request.requestId);
+    if (!record || record.digest!==request.receiptHash || record.requestId!==request.requestId
+      || record.nodeId!==request.nodeId || record.attempt!==request.attempt) throw denied();
+    return Object.freeze({...request,acceptedRevision:record.acceptedRevision});
+  }
+
+  async function revokeKey(publicKeyHash) {
+    try {assertSHA256(publicKeyHash);} catch {throw denied();}
+    await authorizeManagement(authorizeKeyRevocation,{action:'host:revoke-key',namespace:store.namespace,publicKeyHash});
+    return trust.revoke(publicKeyHash);
   }
 
   /** Validate the independent Host signature before ANY receipt CAS. */
@@ -237,9 +344,7 @@ export function createTrustedInteractiveHost({
       // introduced. NEW receipts still require fresh proofs and signatures
       // are checked in both cases; raw Coordinator access stays Host-private.
       const receiptDigest=sha256Bytes(canonicalBytes(normalized));
-      const previous=typeof store.getReceipt==='function'
-        ? store.getReceipt(normalized.runId,normalized.requestId)
-        : cp.receipts?.find(r=>r.requestId===normalized.requestId);
+      const previous=store.getReceipt(normalized.runId,normalized.requestId);
       const alreadyAccepted=previous?.requestId===normalized.requestId
         && previous.nodeId===normalized.nodeId
         && previous.attempt===normalized.attempt && previous.digest===receiptDigest;
@@ -273,11 +378,16 @@ export function createTrustedInteractiveHost({
     }
     // The underlying Coordinator retains all M4 identity/CAS/retry checks.
     // The model receives neither this closure nor a raw complete() capability.
-    return coordinator.complete(normalized);
+    try {return await coordinator.complete(normalized);}
+    catch (error) {
+      if (error.code==='FK_I_HOST_DENIED') throw invalidProof();
+      throw error;
+    }
   }
 
   return Object.freeze({
-    start,resume,load,getPublicAgentTask,accept,
+    start,resume,load,getPublicAgentTask,getPublicTerminalFrame,readTrustedTerminalResult,accept,
+    readHistoricalAck,revokeKey,
     policyHash:coordinator.policyHash,
     securityMode:'ed25519-agent-receipt-v1',
   });

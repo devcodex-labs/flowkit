@@ -1,3 +1,4 @@
+import {encodeCheckpoint} from '../../src/interactive/checkpoint.mjs';
 import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -134,7 +135,7 @@ function assertContinuousJournal(snapshot) {
   assert.deepEqual(snapshot.journal.map(item=>item.revision),
     Array.from({length:snapshot.cp.revision+1},(_,i)=>i));
   assert.equal(snapshot.journal.at(-1).checkpointHash,
-    sha256Bytes(canonicalBytes(snapshot.cp)));
+    sha256Bytes(canonicalBytes(encodeCheckpoint(snapshot.cp))));
   for(let i=1;i<snapshot.journal.length;i++)
     assert.equal(snapshot.journal[i].previousHash,snapshot.journal[i-1].entryHash);
 }
@@ -183,8 +184,8 @@ test('M6: real compiler artifact -> Node Host -> separately spawned worker -> au
   assert.equal(persisted.cp.status,'succeeded');
   assert.equal(persisted.cp.state.secret,privateSentinel);
   assert.equal(persisted.cp.state.answer,'external-worker-processed:hello');
-  assert.equal(persisted.cp.receipts.length,1);
-  assert.equal(persisted.cp.receipts[0].acceptedRevision,
+  assert.equal(persisted.cp.receiptCount,1);
+  assert.equal(persisted.journal.find(row=>row.entry.kind==='receipt-accepted').revision,
     host.events.find(x=>x.event==='receipt-accepted').acceptedRevision);
   assert.equal(persisted.cp.artifactHash,f.compiled.programIdentity.artifactHash);
   assert.ok(persisted.artifact.bytes.equals(Buffer.from(f.compiled.code)));
@@ -220,7 +221,7 @@ test('M6: after Pending publish, killing Host and reopening only persisted Progr
   assert.ok(recovered.events.find(x=>x.event==='receipt-accepted').acceptedRevision>revision);
   const done=f.readStore();
   assert.equal(done.cp.status,'succeeded');
-  assert.equal(done.cp.receipts.length,1);
+  assert.equal(done.cp.receiptCount,1);
   assertContinuousJournal(done);
   console.log('M6_RECOVERY_METRICS '+JSON.stringify({
     schemaVersion:1,resumeMs:Math.round(resumeMs),
@@ -238,12 +239,12 @@ test('M6: worker finished but Host crashed before durable receipt; retry preserv
   assert.ok(killed.events.some(e=>e.event==='worker-exited'));
   const before=f.readStore();
   assert.equal(before.cp.status,'waiting');
-  assert.equal(before.cp.receipts.length,0);
+  assert.equal(before.cp.receiptCount,0);
   const sameRequest=before.cp.pending.requestId;
   const resumed=await invoke(f,'resume');
   assert.equal(resumed.code,0,resumed.stderr);
   assert.equal(resumed.events.find(x=>x.event==='task-published').requestId,sameRequest);
-  assert.equal(f.readStore().cp.receipts.length,1);
+  assert.equal(f.readStore().cp.receiptCount,1);
   assert.equal(f.readStore().cp.state.answer,'external-worker-processed:hello');
 });
 
@@ -296,7 +297,7 @@ test('M6: false Condition chooses failure Terminal without launching worker and 
   assert.equal(host.code,0,host.stderr);
   assert.equal(host.events.at(-1).status,'failed');
   assert.equal(host.events.some(x=>x.event==='task-published'),false);
-  assert.equal(f.readStore().cp.receipts.length,0);
+  assert.equal(f.readStore().cp.receiptCount,0);
   const standard=await f.standardResult();
   assert.equal(standard.terminal,'declined');
   assert.equal(sha256Bytes(canonicalBytes(standard.state)),

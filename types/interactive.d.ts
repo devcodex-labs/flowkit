@@ -79,7 +79,8 @@ export interface InteractiveAgentPending {
   overview?: {step: number};
 }
 export type InteractiveRunStatus =
-  'running' | 'waiting' | 'paused' | 'succeeded' | 'failed' | 'errored';
+  'running' | 'waiting' | 'paused' | 'succeeded' | 'failed' | 'errored' | 'cancelled';
+/** Execution frame for trusted Host callers. It can contain private State. */
 export interface InteractiveRunFrame {
   namespace: string;
   runId: string;
@@ -128,7 +129,7 @@ export interface CheckpointStore {
    * Store). Resolves acceptedRevision/digest after a receipt leaves the
    * Checkpoint's bounded recent-receipts cache.
    */
-  getReceipt?(runId: string, requestId: string): {
+  getReceipt(runId: string, requestId: string): {
     requestId: string;
     nodeId: string;
     attempt: number;
@@ -251,6 +252,49 @@ export interface InteractiveDisclosureContext {
   task:PublicInteractiveAgentTask;
   disclosurePolicyId:string;
 }
+export interface InteractiveTerminalAccessContext {
+  action:'run:read'|'result:read';
+  namespace:string;
+  runId:string;
+  revision:number;
+}
+
+export interface InteractiveTerminalResultRef {
+  runId:string;
+  revision:number;
+  projectionVersion:1;
+}
+
+export interface PublicInteractiveTerminalFrame {
+  protocolVersion:1;
+  runId:string;
+  revision:number;
+  status:'succeeded'|'failed'|'errored'|'cancelled';
+  pending:readonly [];
+  checkpointRef:{runId:string;revision:number};
+  terminal?:{nodeId:string;status:'succeeded'|'failed'};
+  resultRef:InteractiveTerminalResultRef;
+}
+
+export interface TrustedInteractiveTerminalResult {
+  projectionVersion:1;
+  namespace:string;
+  runId:string;
+  status:PublicInteractiveTerminalFrame['status'];
+  terminal?:PublicInteractiveTerminalFrame['terminal'];
+  state:Record<string,unknown>;
+  contextError:null;
+  causeCode?:string;
+}
+
+export interface HistoricalAckRequest {
+  namespace:string;
+  runId:string;
+  requestId:string;
+  nodeId:string;
+  attempt:number;
+  receiptHash:string;
+}
 export interface TrustedInteractiveHost {
   readonly policyHash:string;
   readonly securityMode:'ed25519-agent-receipt-v1';
@@ -265,6 +309,15 @@ export interface TrustedInteractiveHost {
     receipt:HostAgentReceipt;
     attestation:HostAgentAttestation;
   }):Promise<InteractiveRunFrame & {acceptedRevision:number;duplicate:boolean}>;
+  readHistoricalAck(input:HistoricalAckRequest):Promise<Readonly<HistoricalAckRequest & {acceptedRevision:number}>>;
+  /** Revoke the SHA-256 fingerprint of a public key's SPKI in the Host Store. */
+  revokeKey(publicKeyHash:string):Promise<boolean>;
+}
+export interface TrustedInteractiveHostWithTerminalAccess extends TrustedInteractiveHost {
+  /** Public terminal projection, subject to the Host's run:read authorization. */
+  getPublicTerminalFrame(input:{runId:string}):Promise<PublicInteractiveTerminalFrame>;
+  /** Host-only result read, subject to a separate result:read authorization. */
+  readTrustedTerminalResult(input:{resultRef:InteractiveTerminalResultRef}):Promise<TrustedInteractiveTerminalResult>;
 }
 export interface TrustedInteractiveHostOptions {
   store:CheckpointStore;
@@ -278,6 +331,11 @@ export interface TrustedInteractiveHostOptions {
   allowedInputKeys?:string[];
   disclosurePolicyId:string;
   authorizeDisclosure(context:Readonly<InteractiveDisclosureContext>):boolean|Promise<boolean>;
+  /** Host-owned authorizer, required for both terminal projection methods. */
+  authorizeTerminalAccess?(context:Readonly<InteractiveTerminalAccessContext>):boolean|Promise<boolean>;
+  authorizeReceiptAudit?(context:Readonly<HistoricalAckRequest & {action:'receipt:read-history'}>):boolean|Promise<boolean>;
+  authorizeKeyRevocation?(context:Readonly<{action:'host:revoke-key';namespace:string;publicKeyHash:string}>):boolean|Promise<boolean>;
+  drainOnly?:boolean;
   maxProofAgeMs?:number;
   clockSkewMs?:number;
   now?:()=>number;
@@ -285,4 +343,190 @@ export interface TrustedInteractiveHostOptions {
 }
 export declare function createTrustedInteractiveHost(
   options:TrustedInteractiveHostOptions
-):TrustedInteractiveHost;
+):TrustedInteractiveHostWithTerminalAccess;
+
+export interface TransitionRecordV1 {
+  namespace:string;
+  runId:string;
+  transitionId:string;
+  fromRevision:number|null;
+  toRevision:number;
+  fromBlockId:string|null;
+  toBlockId:string|null;
+  programHash:string;
+  eventDigest:string;
+  /** Present for the R5 transition identity scheme. */
+  proposalDigest?:string;
+  committedAt:string;
+}
+
+export interface ReceiptRecordV1 {
+  namespace:string;
+  runId:string;
+  requestId:string;
+  kind:'agent';
+  submissionDigest:string;
+  acceptedRevision:number;
+  outcome:'succeeded'|'failed'|'legacy';
+  transitionId:string;
+  /** P0-A execution identity retained by the SQLite compatibility facade. */
+  nodeId?:string;
+  attempt?:number;
+}
+
+export type RunCheckpointV1 = {
+  schemaVersion:1;
+  protocolVersion:1;
+  namespace:string;
+  runId:string;
+  startKey:string;
+  startIntentHash:string;
+  revision:number;
+  status:InteractiveRunStatus;
+  program:InteractiveProgramIdentity;
+  programRef:TrustedProgramRefV1;
+  policyIdentity:{id:string;version:string;policyHash:string;bindingManifestHash:string;skillManifestHash?:string};
+  execution:{blockId:string;phase:'enter'|'prepare'|'dispatch-ready'|'awaiting'|'validate'|'commit'|'route'|'finished';
+    activationSeq:number;agentStepCounter:number;controlStack:readonly Record<string,unknown>[];
+    contextError:{code:string;message:string;retryable?:boolean;origin?:'runtime'|'executor'|'validator'|'store'|'policy'}|null};
+  state:Record<string,unknown>;
+  candidate:{kind:'agent';requestId:string;result:Record<string,unknown>}|null;
+  receivedSubmission:{kind:'agent';requestId:string;activation:number;attempt:number;canonicalDigest:string;
+    acceptedRevision:number;payload:Record<string,unknown>;receivedAt:string}|null;
+  pending:Array<{requestId:string;nodeId:string;kind:'agent';activation:number;attempt:number;issuedRevision:number;
+    intent:'execute';name:string;internalPayload:Record<string,unknown>;publicTask:Record<string,unknown>}>;
+  inFlightOperations:Record<string,unknown>[];
+  terminal:{nodeId:string;status:'succeeded'|'failed'}|null;
+  lastTransitionId:string|null;
+  limits:{stageCount:number;receiptCount:number;bytes:number};
+  causeCode?:string;
+};
+
+export type CASResultV1 =
+  | {committed:true;checkpoint:RunCheckpointV1}
+  | {committed:false;currentRevision:number};
+
+/** All reads must be linearizable within namespace, including history. */
+export interface CheckpointStoreV1 {
+  readonly namespace:string;
+  /** Atomically creates Genesis and protects the registered Program from release. */
+  createIfAbsent(startKey:string,initial:RunCheckpointV1,genesis:TransitionRecordV1):Promise<{created:boolean;checkpoint:RunCheckpointV1}>;
+  load(runId:string):Promise<RunCheckpointV1|null>;
+  compareAndSwap(runId:string,expectedRevision:number,tx:{next:RunCheckpointV1;transition:TransitionRecordV1;receipt?:ReceiptRecordV1}):Promise<CASResultV1>;
+  loadTransition(runId:string,transitionId:string):Promise<TransitionRecordV1|null>;
+  loadReceipt(runId:string,requestId:string):Promise<ReceiptRecordV1|null>;
+}
+
+export interface TrustedProgramRefV1 {
+  namespace:string;
+  artifactHash:string;
+  programId:string;
+}
+
+export interface TrustedProgramRegistryV1 {
+  readonly namespace:string;
+  putImmutable(bytes:Uint8Array,manifest:InteractiveProgramIdentity):Promise<TrustedProgramRefV1>;
+  resolveByHash(artifactHash:string):Promise<Uint8Array>;
+  describe(artifactHash:string):Promise<InteractiveProgramIdentity|null>;
+  retain(runId:string,artifactHash:string):Promise<void>;
+  release(runId:string,artifactHash:string):Promise<void>;
+}
+
+export declare function createSqliteInteractivePersistence(file:string,options:{namespace:string}):{
+  readonly store:CheckpointStoreV1;
+  readonly programRegistry:TrustedProgramRegistryV1;
+  readonly adminController:InteractiveAdminControllerV1;
+  close():void;
+};
+
+declare const adminContextBrand:unique symbol;
+export interface TrustedAdminContextV1 {
+  readonly [adminContextBrand]:true;
+  readonly namespace:string;
+  readonly subjectId:string;
+}
+export interface InteractiveAdminControllerV1 {
+  adminTerminate(runId:string,reasonCode:string,auth:TrustedAdminContextV1):Promise<InteractiveFrameV1>;
+}
+export declare function createInteractiveAdminContext(options:{
+  namespace:string;
+  subjectId:string;
+  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:admin-terminate';runId:string;reasonCode:string}>):boolean|Promise<boolean>;
+}):TrustedAdminContextV1;
+
+declare const hostContextBrand:unique symbol;
+export interface TrustedHostContextV1 {
+  readonly [hostContextBrand]:true;
+  readonly namespace:string;
+  readonly subjectId:string;
+  readTerminalResult(resultRef:InteractiveTerminalResultRef,
+    options:Omit<InteractiveOptionsV1,'auth'>):Promise<TrustedInteractiveTerminalResult>;
+}
+
+export interface PublicPendingV1 {
+  requestId:string;
+  nodeId:string;
+  kind:'agent';
+  attempt:number;
+  activation:number;
+  intent:'execute';
+  task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'>;
+}
+
+export interface InteractiveFrameV1 {
+  protocolVersion:1;
+  runId:string;
+  revision:number;
+  status:Exclude<InteractiveRunStatus,'running'>;
+  pending:ReadonlyArray<PublicPendingV1>;
+  checkpointRef:{runId:string;revision:number};
+  terminal?:{nodeId:string;status:'succeeded'|'failed'};
+  resultRef?:InteractiveTerminalResultRef;
+  acknowledgement?:{requestId:string;acceptedRevision:number;repeated:boolean};
+  diagnostics?:readonly InteractiveDiagnostic[];
+}
+
+export declare function createInteractiveHostContext(options:{
+  namespace:string;
+  subjectId:string;
+  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'result:read';
+    startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number}>):boolean|Promise<boolean>;
+  authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
+    task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
+}):TrustedHostContextV1;
+
+type BindingV1<Mode extends string,F> = {id:string;version:string;mode:Mode;implementation:F};
+export interface InteractiveRuntimeV1 {
+  validateResult?:BindingV1<'pure-local',NonNullable<InteractiveRuntime['validateResult']>>;
+  skillResolver?:BindingV1<'trusted-read',(reference:string,meta?:InteractiveSkillDescriptor)=>string|Promise<string>>;
+}
+
+export interface InteractivePolicyV1 {
+  id:string;
+  version:string;
+  bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
+  disclosePolicyId:string;
+  capabilityStage:'P0-A';
+  canonicalizationVersion:'jcs-rfc8785-v1';
+  requiredSkillManifestHash?:string;
+}
+
+export interface InteractiveOptionsV1 {
+  readonly store:CheckpointStoreV1;
+  readonly programRegistry:TrustedProgramRegistryV1;
+  readonly policy:InteractivePolicyV1;
+  readonly auth:TrustedHostContextV1;
+  maxStagesPerCall?:number;
+  signal?:AbortSignal;
+}
+
+export type HostSubmissionV1 =
+  | {kind:'agent';runId:string;requestId:string;outcome:'succeeded';result:Record<string,unknown>}
+  | {kind:'agent';runId:string;requestId:string;outcome:'failed';error:{code:string;message:string;retryable?:boolean;
+      origin?:'runtime'|'executor'|'validator'|'store'|'policy'}};
+
+export declare function start(source:string|TrustedProgramRefV1,runtime:InteractiveRuntimeV1,
+  initialState:Record<string,unknown>,options:InteractiveOptionsV1&{startKey:string}):Promise<InteractiveFrameV1>;
+export declare function complete(submission:HostSubmissionV1,runtime:InteractiveRuntimeV1,
+  options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
+export declare function resume(runId:string,runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;

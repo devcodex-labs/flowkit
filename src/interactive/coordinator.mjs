@@ -1,14 +1,26 @@
 import {randomUUID} from 'node:crypto';
 import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
+import {checkpointPolicy} from './checkpoint.mjs';
+import {agentFrameRule} from '../compiler/interactive/validate-ir.mjs';
 
-const FINISHED = new Set(['succeeded','failed','errored']);
-// P0-A has at most 500 static nodes and 11 attempts per Agent.
-// Do not cap legitimate 500-node workflows below their worst-case 5,500 receipts.
-const MAX_RECEIPTS = 8192;
-const MAX_INLINE_RECEIPT_CACHE = 16;
+const FINISHED = new Set(['succeeded','failed','errored','cancelled']);
 const MAX_REASONS = 32;
 const MAX_REASON_LENGTH = 512;
+const PROPOSAL_COMMON = ['kind','fromBlockId','nodeId','stackEffect','mergeIntent'];
+const PROPOSAL_TARGET = [...PROPOSAL_COMMON,'toBlockId'];
+const STACK_FIELDS = {
+  none:['kind'],
+  push:['kind','frame'],
+  pop:['kind','expectedKind','expectedNodeId'],
+  update:['kind','expectedKind','expectedNodeId','field','value'],
+};
+
+function hasFields(value, required, optional = []) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && required.every(field=>Object.hasOwn(value,field))
+    && Reflect.ownKeys(value).every(field=>required.includes(field)||optional.includes(field));
+}
 
 function failure(code, message) {
   return Object.assign(new Error(code + ': ' + message), {code});
@@ -25,9 +37,6 @@ function validStageCount(value) {
     throw new RangeError('maxStagesPerCall must be in [1, 128]');
   }
   return value;
-}
-function stableTransitionId(cp, kind) {
-  return 't:' + fingerprint([cp.namespace,cp.runId,cp.revision,cp.blockId,kind]).slice(7);
 }
 function internalEvent(cp, kind, extra = {}) {
   const payload = {
@@ -83,34 +92,76 @@ function confirmCurrentBlock(cp, program) {
   if (cp.prepared != null && cp.phase !== 'dispatch-ready') {
     throw failure('FK_I_INVALID_CHECKPOINT','prepared request outside dispatch-ready phase');
   }
-  if (!Array.isArray(cp.receipts) || cp.receipts.length > MAX_RECEIPTS
-    || !Number.isSafeInteger(cp.activationSeq) || cp.activationSeq < 0) {
-    throw failure('FK_I_INVALID_CHECKPOINT','invalid receipt ledger or activation counter');
+  if (!Number.isSafeInteger(cp.activationSeq) || cp.activationSeq < 0) {
+    throw failure('FK_I_INVALID_CHECKPOINT','invalid activation counter');
   }
   return {block,record};
 }
-function certifiedProposal(cp, program, event, proposal) {
-  const {block} = confirmCurrentBlock(cp,program);
-  if (!block.eventKinds.includes(event.kind)
-    || !proposal || proposal.fromBlockId !== cp.blockId
-    || proposal.nodeId !== block.nodeId
-    || !block.proposalKinds.includes(proposal.kind)) {
-    throw failure('FK_I_INVALID_TRANSITION','Program returned uncertified proposal');
+/** Internal runtime validation of the current P0-A proposal contract. */
+export function validateProposalFields(rawProposal, block, record) {
+  let proposal;
+  try { proposal=copy(rawProposal); }
+  catch { throw failure('FK_I_INVALID_TRANSITION','Program proposal is not canonical data'); }
+  if (!proposal || !block.proposalKinds.includes(proposal.kind)) {
+    throw failure('FK_I_INVALID_TRANSITION','Program returned uncertified proposal kind');
   }
-  if (proposal.kind === 'terminal' || proposal.kind === 'raise-error') {
-    if (proposal.toBlockId != null) {
-      throw failure('FK_I_INVALID_TRANSITION','terminal and error must have no successor');
+  if (proposal.kind === 'terminal') {
+    if (!hasFields(proposal,[...PROPOSAL_COMMON,'terminal'])
+      || !hasFields(proposal.terminal,['status','nodeId'])
+      || proposal.terminal.nodeId!==block.nodeId
+      || proposal.terminal.status!==record.metadata.status) {
+      throw failure('FK_I_INVALID_TRANSITION','invalid terminal proposal fields');
     }
-  } else if (!block.legalTargets.includes(proposal.toBlockId)) {
+  } else if (proposal.kind === 'raise-error') {
+    if (!hasFields(proposal,[...PROPOSAL_COMMON,'causeCode'],['diagnosticCode'])
+      || typeof proposal.causeCode!=='string' || !proposal.causeCode.length
+      || (Object.hasOwn(proposal,'diagnosticCode') && typeof proposal.diagnosticCode!=='string')) {
+      throw failure('FK_I_INVALID_TRANSITION','invalid error proposal fields');
+    }
+  } else if (!hasFields(proposal,PROPOSAL_TARGET,['requestId'])
+    || (Object.hasOwn(proposal,'requestId') && typeof proposal.requestId!=='string')
+    || !block.legalTargets.includes(proposal.toBlockId)) {
     throw failure('FK_I_INVALID_TRANSITION','Program target not in legalTargets');
   }
-  if (proposal.stackEffect?.kind !== 'none'
-    && !['push','pop','update'].includes(proposal.stackEffect?.kind)) {
+  if ((proposal.kind==='retry-agent' && proposal.toBlockId!==block.nodeId+'::prepare')
+    || (proposal.kind==='commit-candidate' && proposal.toBlockId!==block.nodeId+'::commit')) {
+    throw failure('FK_I_INVALID_TRANSITION','proposal kind does not match its successor phase');
+  }
+  const {stackEffect,mergeIntent}=proposal;
+  const stackKind=stackEffect?.kind;
+  let expectedStack='none';
+  if (proposal.kind==='retry-agent') expectedStack='update';
+  if (proposal.kind==='move' && record.kind==='agent') {
+    if (block.phase==='enter') expectedStack='push';
+    if (block.phase==='route') expectedStack='pop';
+  }
+  if (stackKind!==expectedStack || !hasFields(stackEffect,STACK_FIELDS[expectedStack])
+    || (stackKind==='push' && !hasFields(stackEffect.frame,agentFrameRule(block.nodeId).fields))) {
     throw failure('FK_I_INVALID_TRANSITION','invalid control stack effect');
   }
-  if (proposal.mergeIntent?.kind !== 'none'
-    && proposal.mergeIntent?.kind !== 'commit-candidate') {
+  const commits=proposal.kind==='commit-state';
+  if (!hasFields(mergeIntent,commits?['kind','requestId']:['kind'])
+    || mergeIntent.kind!==(commits?'commit-candidate':'none')
+    || (commits && typeof mergeIntent.requestId!=='string')) {
     throw failure('FK_I_INVALID_TRANSITION','invalid merge intent');
+  }
+  return proposal;
+}
+function certifiedProposal(cp, program, event, rawProposal) {
+  const {block,record} = confirmCurrentBlock(cp,program);
+  const proposal=validateProposalFields(rawProposal,block,record);
+  if (!block.eventKinds.includes(event.kind)
+    || proposal.fromBlockId !== cp.blockId || proposal.nodeId !== block.nodeId) {
+    throw failure('FK_I_INVALID_TRANSITION','Program returned uncertified proposal');
+  }
+  if (proposal.stackEffect.kind==='push') {
+    const {frame}=proposal.stackEffect;
+    if (frame.kind!=='agent' || frame.nodeId!==block.nodeId || frame.phase!=='prepare'
+      || frame.attempt!==agentFrameRule(block.nodeId).initialAttempt
+      || frame.activation!==event.activation || frame.overviewStep!==event.activation
+      || !Array.isArray(frame.reasons) || frame.reasons.length) {
+      throw failure('FK_I_INVALID_TRANSITION','invalid initial Agent frame');
+    }
   }
   return proposal;
 }
@@ -142,10 +193,11 @@ function applyStack(cp, effect) {
   return frames;
 }
 function asPublicFrame(cp) {
+  const {issuedRevision:_issuedRevision,...publicPending}=cp.pending??{};
   return copy({
     namespace:cp.namespace,runId:cp.runId,status:cp.status,revision:cp.revision,
     ...(FINISHED.has(cp.status) ? {state:cp.state} : {}),
-    ...(cp.status === 'waiting' ? {pending:cp.pending} : {}),
+    ...(cp.status === 'waiting' ? {pending:publicPending} : {}),
     ...(cp.status === 'paused' ? {pauseReason:cp.pauseReason ?? 'stage-budget'} : {}),
     ...(FINISHED.has(cp.status) ? {terminal:cp.terminal ?? null} : {}),
   });
@@ -189,7 +241,7 @@ function assertRuntime(program,runtime) {
     }
   }
 }
-function initialCheckpoint(namespace, runId, program, policyHash, state) {
+function initialCheckpoint(namespace, runId, program, policyIdentity, state) {
   let snapshot;
   try { snapshot=copy(state); }
   catch(error) {
@@ -200,12 +252,13 @@ function initialCheckpoint(namespace, runId, program, policyHash, state) {
   }
   return {
     schemaVersion:1,namespace,runId,revision:0,
-    artifactHash:program.artifactHash,policyHash,status:'running',
+    artifactHash:program.artifactHash,program:{...program.interactiveProgram.identity,artifactHash:program.artifactHash},
+    policyHash:policyIdentity.policyHash,policyIdentity,status:'running',
     blockId:program.programTable.entryBlockId,
     phase:'enter',state:snapshot,
-    controlStack:[],activationSeq:0,receipts:[],
+    controlStack:[],activationSeq:0,stageCount:0,receiptCount:0,lastTransitionId:null,
     pending:null,prepared:null,candidate:null,terminal:null,
-    contextError:null,
+    contextError:null,receivedSubmission:null,
   };
 }
 
@@ -217,12 +270,16 @@ function initialCheckpoint(namespace, runId, program, policyHash, state) {
  * Only the trusted Host may call start/complete/resume and provide bindings.
  * Host identity/provenance adapters are added in M5, NOT simulated here.
  */
-export function createInteractiveCoordinator({store, runtime, policy = {}, maxStagesPerCall = 128} = {}) {
+export function createInteractiveCoordinator(options) {
+  return buildCoordinator(options, false);
+}
+
+export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall = 128, signal} = {}, versioned) {
   if (!store || typeof store.load !== 'function'
     || typeof store.createRun !== 'function'
     || typeof store.compareAndSwap !== 'function'
     || typeof store.putArtifact !== 'function'
-    || typeof store.getArtifact !== 'function') {
+    || typeof store.getArtifact !== 'function' || typeof store.getReceipt !== 'function') {
     throw new TypeError('A CheckpointStore with atomic CAS and artifact retention is required');
   }
   nonempty(store.namespace,'store.namespace');
@@ -236,6 +293,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
   });
   const policySnapshot = copy(policy);
   const policyHash = fingerprint(policySnapshot);
+  const policyIdentity=checkpointPolicy(policySnapshot,policyHash);
   const stageBudget = validStageCount(maxStagesPerCall);
   // Only verified immutable Program objects are cached, never Store records.
   // Even on a cache hit every stage re-reads the Host's Store, checks exact
@@ -243,13 +301,14 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
   // Small fixed LRU avoids a broad, implicit process-global cache.
   const verifiedPrograms = new Map();
   const MAX_VERIFIED_PROGRAMS = 4;
+  function checkSignal() { signal?.throwIfAborted(); }
 
   async function loadPinned(cp) {
     if (cp.namespace !== store.namespace || cp.policyHash !== policyHash) {
       throw failure('FK_I_POLICY_MISMATCH','Run policy and namespace must match');
     }
     assertSHA256(cp.artifactHash);
-    const saved = store.getArtifact(cp.artifactHash);
+    const saved = versioned ? await store.getArtifact(cp.artifactHash) : store.getArtifact(cp.artifactHash);
     if (!saved || saved.programIdentity?.artifactHash !== cp.artifactHash
       || !(saved.bytes instanceof Uint8Array)
       || sha256Bytes(saved.bytes) !== cp.artifactHash) {
@@ -277,45 +336,61 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       }
     }
     assertRuntime(program,execution);
-    confirmCurrentBlock(cp,program);
+    if (!FINISHED.has(cp.status)) confirmCurrentBlock(cp,program);
     return program;
   }
 
   function advanceSafely(cp, program, event) {
     try {
       const proposal = program.advance(programView(cp),event);
-      return certifiedProposal(cp,program,event,proposal);
+      return {event,proposal:certifiedProposal(cp,program,event,proposal)};
     } catch(error) {
       if (error?.code === 'FK_R002') {
-        return certifiedProposal(cp,program,internalEvent(cp,'deterministic-failure',{error:{code:'FK_R002'}}),
-          program.advance(programView(cp),internalEvent(cp,'deterministic-failure',{error:{code:'FK_R002'}})));
+        const rejected=internalEvent(cp,'deterministic-failure',{error:{code:'FK_R002'}});
+        return {event:rejected,proposal:certifiedProposal(cp,program,rejected,program.advance(programView(cp),rejected))};
       }
       throw error;
     }
   }
-  function failCapacity(cp) {
+  async function writeTransition(cp,args,event,proposal,receiptOutcome) {
+    checkSignal();
+    const eventDigest=event.eventDigest ?? fingerprint(event);
+    const proposalDigest=fingerprint(proposal);
+    const transitionId=fingerprint([cp.namespace,cp.runId,cp.revision,cp.blockId,
+      eventDigest,cp.artifactHash,proposalDigest]);
+    const transition={
+      namespace:cp.namespace,runId:cp.runId,transitionId,
+      fromRevision:cp.revision,toRevision:args.nextCheckpoint.revision,
+      fromBlockId:cp.blockId,toBlockId:proposal.kind==='terminal'||proposal.kind==='raise-error'
+        || proposal.kind==='capacity-terminal' ? null : args.nextCheckpoint.blockId,
+      programHash:cp.artifactHash,eventDigest,proposalDigest,committedAt:new Date().toISOString(),
+    };
+    return store.compareAndSwap({...args,transitionId,nextCheckpoint:{...args.nextCheckpoint,lastTransitionId:transitionId},journalEntry:{
+      ...args.journalEntry,transition,...(receiptOutcome ? {receiptOutcome} : {}),
+    }});
+  }
+  async function failCapacity(cp) {
     if (FINISHED.has(cp.status)) return {committed:false,checkpoint:cp};
     const nodeId=cp.blockId.slice(0,cp.blockId.lastIndexOf('::'));
     const next={
       ...cp,revision:cp.revision+1,status:'errored',
       terminal:{status:'errored',nodeId,causeCode:'FK_I_CHECKPOINT_CAPACITY'},
-      pending:null,prepared:null,candidate:null,
+      pending:null,prepared:null,candidate:null,receivedSubmission:null,
       pauseReason:null,
     };
     // This terminal transition may use the Store's reserved 256 KiB; it
     // never drops State or accepted receipt identities.
-    return store.compareAndSwap({
+    return writeTransition(cp,{
       runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
-      transitionId:stableTransitionId(cp,'capacity-terminal'),
       journalEntry:{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY',
         from:cp.blockId},
-    });
+    },{kind:'capacity-terminal'},{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY'});
   }
-  function casOrCapacityExit(cp, args) {
-    try { return store.compareAndSwap(args); }
+  async function casOrCapacityExit(cp, args, event, proposal, receiptOutcome) {
+    try { return await writeTransition(cp,args,event,proposal,receiptOutcome); }
     catch(error) {
       if (error?.code!=='FK_I_CHECKPOINT_CAPACITY') throw error;
-      const terminal=failCapacity(cp);
+      const terminal=await failCapacity(cp);
       return {...terminal,capacityExit:terminal.committed};
     }
   }
@@ -329,8 +404,8 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     }
   }
 
-  function stepCAS(cp, proposal, eventKind, extras={}) {
-    const next = {...cp,revision:cp.revision+1};
+  function stepCAS(cp, proposal, event, legacyEventKind, extras={}) {
+    const next = {...cp,revision:cp.revision+1,stageCount:cp.stageCount+1,receivedSubmission:null};
     if (proposal.kind === 'raise-error') {
       next.status='errored';
       next.terminal={status:'errored',nodeId:proposal.nodeId,causeCode:proposal.causeCode};
@@ -347,7 +422,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     }
     if (proposal.kind === 'publish-pending') {
       if (cp.prepared == null) throw failure('FK_I_INVALID_CHECKPOINT','publish without prepared request');
-      next.pending=cp.prepared;next.prepared=null;
+      next.pending={...cp.prepared,issuedRevision:next.revision};next.prepared=null;
     }
     if (proposal.kind === 'commit-state') {
       if (proposal.mergeIntent.kind !== 'commit-candidate'
@@ -377,14 +452,15 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       && proposal.stackEffect.kind === 'push') {
       next.activationSeq=cp.activationSeq+1;
     }
-    const transitionId=stableTransitionId(cp,eventKind + '/' + proposal.kind);
     const write=casOrCapacityExit(cp,{
-      runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,transitionId,
+      runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
       journalEntry:{
-        kind:proposal.kind,event:eventKind,from:cp.blockId,
+        kind:proposal.kind,event:legacyEventKind,from:cp.blockId,
         to:proposal.toBlockId ?? null,causeCode:proposal.causeCode ?? null,
       },
-    });
+    },Object.keys(extras).length ? {
+      eventDigest:fingerprint([event.eventDigest,extras]),
+    } : event,proposal);
     return write;
   }
 
@@ -450,16 +526,18 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
 
   async function drive(runId) {
     for (let count=0; count < stageBudget; ) {
-      const cp=store.load(runId);
+      checkSignal();
+      const cp=versioned ? await store.load(runId) : store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible in this namespace');
+      if (cp.status==='cancelled' && cp.namespace===store.namespace && cp.policyHash===policyHash) return asPublicFrame(cp);
       const program=await loadPinned(cp);
       if (FINISHED.has(cp.status) || cp.status==='waiting') return asPublicFrame(cp);
       if (cp.status === 'paused') {
         if (!['stage-budget','skill-temporary'].includes(cp.pauseReason)) return asPublicFrame(cp);
         const unpause={...cp,status:'running',revision:cp.revision+1,pauseReason:null};
-        const committed=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-          nextCheckpoint:unpause,transitionId:stableTransitionId(cp,'resume-budget'),
-          journalEntry:{kind:'resume-budget'}});
+        const committed=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
+          nextCheckpoint:unpause,
+          journalEntry:{kind:'resume-budget'}},{kind:'resume-budget'},{kind:'resume-budget'});
         if (!committed.committed) continue;
         // Budget unpause is a control action, not a Program stage.
         continue;
@@ -468,7 +546,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       if (cp.phase === 'awaiting') {
         throw failure('FK_I_INVALID_CHECKPOINT','awaiting without waiting Pending');
       }
-      let event,proposal,extras={};
+      let event,extras={};
       if (cp.phase === 'prepare') {
         let prepared;
         try { prepared=await makePrepared(cp,program); }
@@ -476,20 +554,19 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
           if (['FK_R014','FK_I_TEMPORARY_SKILL'].includes(error?.code)) {
             const paused={...cp,revision:cp.revision+1,status:'paused',
               pauseReason:'skill-temporary'};
-            const result=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-              nextCheckpoint:paused,transitionId:stableTransitionId(cp,'pause-skill'),
-              journalEntry:{kind:'pause',reason:'skill-temporary'}});
+            const result=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
+              nextCheckpoint:paused,
+              journalEntry:{kind:'pause',reason:'skill-temporary'}},
+              {kind:'skill-temporary'},{kind:'pause',reason:'skill-temporary'});
             if (!result.committed) continue;
             return asPublicFrame(result.checkpoint);
           }
           const causeCode=error?.code==='FK_R010' || error?.code==='FK_R011'
             ? error.code : 'FK_I_SKILL_CONTRACT';
           event=internalEvent(cp,'deterministic-failure',{error:{code:causeCode}});
-          proposal=advanceSafely(cp,program,event);
         }
         if (prepared) {
           event=internalEvent(cp,'internal-step');
-          proposal=advanceSafely(cp,program,event);
           extras.prepared=prepared;
         }
       } else if (cp.phase === 'validate') {
@@ -497,7 +574,6 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
         event=evaluation.kind === 'deterministic-failure'
           ? internalEvent(cp,'deterministic-failure',{error:{code:evaluation.causeCode}})
           : internalEvent(cp,evaluation.kind);
-        proposal=advanceSafely(cp,program,event);
         if (evaluation.reasons?.length) extras.retryReasons=evaluation.reasons;
       } else {
         const kind=cp.phase==='dispatch-ready' ? 'pending-prepared' : 'internal-step';
@@ -505,9 +581,9 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
           && program.programTable.nodes[block.nodeId].kind==='agent'
           ? {activation:cp.activationSeq+1} : {};
         event=internalEvent(cp,kind,extra);
-        proposal=advanceSafely(cp,program,event);
       }
-      const advanced=stepCAS(cp,proposal,event.kind,extras);
+      const certified=advanceSafely(cp,program,event);
+      const advanced=await stepCAS(cp,certified.proposal,certified.event,event.kind,extras);
       if (!advanced.committed) continue;
       count++;
       if (FINISHED.has(advanced.checkpoint.status) || advanced.checkpoint.status==='waiting') {
@@ -516,22 +592,26 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     }
     // A stage budget is observable and resumable. Never misreport it as waiting.
     for (;;) {
-      const cp=store.load(runId);
+      checkSignal();
+      const cp=versioned ? await store.load(runId) : store.load(runId);
+      if (cp.status==='cancelled' && cp.namespace===store.namespace && cp.policyHash===policyHash) return asPublicFrame(cp);
       const program=await loadPinned(cp);
       if (FINISHED.has(cp.status) || cp.status==='waiting' || cp.status==='paused') {
         return asPublicFrame(cp);
       }
       const paused={...cp,revision:cp.revision+1,status:'paused',
         pauseReason:'stage-budget'};
-      const result=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-        nextCheckpoint:paused,transitionId:stableTransitionId(cp,'pause-budget'),
-        journalEntry:{kind:'pause',reason:'stage-budget'}});
+      const result=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
+        nextCheckpoint:paused,
+        journalEntry:{kind:'pause',reason:'stage-budget'}},
+        {kind:'budget-exhausted'},{kind:'pause',reason:'stage-budget'});
       if (result.committed) return asPublicFrame(result.checkpoint);
     }
   }
 
   /** Register compiler-verified bytes before the idempotent start transaction. */
-  async function start({programBytes,programIdentity,startKey,runId=randomUUID(),state={},startIntent=null}={}) {
+  async function start({programBytes,programIdentity,startKey,runId=randomUUID(),state={},startIntent=null,
+    authorizeExisting}={}) {
     nonempty(startKey,'startKey');nonempty(runId,'runId');
     if (!(programBytes instanceof Uint8Array) || !programIdentity) {
       throw new TypeError('Compiler Program bytes and identity are required');
@@ -557,14 +637,20 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       throw failure('FK_I_PROGRAM_MISMATCH','identity and verified Program differ');
     }
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
-    const initial=initialCheckpoint(store.namespace,runId,program,policyHash,stateSnapshot);
-    store.putArtifact({programIdentity:declared,bytes:byteSnapshot});
-    const opened=store.createRun({startKey,startIntent:intentSnapshot,checkpoint:initial});
+    const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
+    checkSignal();
+    const registered=store.putArtifact({programIdentity:declared,bytes:byteSnapshot});
+    if (versioned) await registered;
+    checkSignal();
+    const opening=store.createRun({startKey,startIntent:intentSnapshot,checkpoint:initial});
+    const opened=versioned ? await opening : opening;
+    if (versioned && !opened.created) await authorizeExisting(opened.checkpoint.runId);
     return drive(opened.checkpoint.runId);
   }
 
   /** Only a trusted Host may call complete; M5 will bind provenance/transport. */
-  async function complete({runId,requestId,nodeId,attempt,kind='agent-result',result,failure:callFailure}={}) {
+  async function complete({runId,requestId,nodeId,attempt,kind='agent-result',result,failure:callFailure,
+    submissionDigest,receivedPayload}={}) {
     nonempty(runId,'runId');nonempty(requestId,'requestId');nonempty(nodeId,'nodeId');
     if (!Number.isSafeInteger(attempt) || attempt < 1) throw new TypeError('Invalid Agent attempt');
     if (!['agent-result','agent-call-failed'].includes(kind)) {
@@ -590,16 +676,19 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
     const inlineTooLarge=kind==='agent-result'
       && (oversizedInline(result) || oversizedInline(rawSubmission));
     const submission=inlineTooLarge ? null : copy(rawSubmission);
-    const digest=inlineTooLarge ? null : fingerprint(submission);
+    if (versioned) assertSHA256(submissionDigest);
+    const digest=inlineTooLarge ? null : (submissionDigest??fingerprint(submission));
     for (;;) {
-      const cp=store.load(runId);
+      checkSignal();
+      const cp=versioned ? await store.load(runId) : store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
+      if (cp.status==='cancelled') throw failure('FK_I_STALE_RECEIPT','Run has been terminated');
       const program=await loadPinned(cp);
-      const indexed=typeof store.getReceipt==='function';
-      const already=(indexed ? store.getReceipt(runId,requestId) : null)
-        ?? cp.receipts.find(r=>r.requestId===requestId);
+      const receiptLookup=store.getReceipt(runId,requestId);
+      const already=versioned ? await receiptLookup : receiptLookup;
       if (already) {
-        if (already.digest!==digest || already.nodeId!==nodeId || already.attempt!==attempt) {
+        if (already.digest!==digest || (already.nodeId!==undefined && already.nodeId!==nodeId)
+          || (already.attempt!==undefined && already.attempt!==attempt)) {
           throw failure('FK_I_RECEIPT_CONFLICT','Different receipt with accepted requestId');
         }
         const current=await drive(runId);
@@ -614,8 +703,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       if (!pending || !frame || pending.kind!=='agent'
         || pending.requestId!==requestId || pending.nodeId!==nodeId
         || pending.attempt!==attempt || frame.nodeId!==nodeId
-        || frame.attempt!==attempt || block.nodeId!==nodeId
-        || (!indexed && cp.receipts.length >= MAX_RECEIPTS)) {
+        || frame.attempt!==attempt || block.nodeId!==nodeId) {
         throw failure('FK_I_STALE_RECEIPT','Wrong request, node, attempt, or exhausted ledger');
       }
       const accept=block.acceptTarget;
@@ -626,7 +714,7 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       // reference. FlowKit never stores oversized inline results or invents
       // an external business-data provider. The durable failure is NOT an Ack.
       if (inlineTooLarge) {
-        const terminal=failCapacity(cp);
+        const terminal=await failCapacity(cp);
         if (!terminal.committed) continue;
         throw failure('FK_I_CHECKPOINT_CAPACITY',
           'inline result exceeds the configured execution budget; Run is errored');
@@ -634,18 +722,21 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
       const ledgerEntry={requestId,nodeId,attempt,digest,acceptedRevision:cp.revision+1};
       const next={
         ...cp,revision:cp.revision+1,blockId:accept,phase:'validate',
-        status:'running',pending:null,prepared:null,
+        status:'running',pending:null,prepared:null,receiptCount:cp.receiptCount+1,
+        receivedSubmission:{kind:'agent',requestId,activation:frame.activation,attempt,
+          canonicalDigest:digest,acceptedRevision:cp.revision+1,payload:receivedPayload??submission,
+          receivedAt:new Date().toISOString()},
         candidate:{kind:'agent',requestId,nodeId,attempt,
           submissionKind:kind,
           ...(kind==='agent-result'?{result:submission.result}
             :{failure:submission.failure}),validated:false},
-        receipts:indexed
-          ? [...cp.receipts.slice(-(MAX_INLINE_RECEIPT_CACHE-1)),ledgerEntry]
-          : [...cp.receipts,ledgerEntry],
       };
-      const persisted=casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-        nextCheckpoint:next,transitionId:stableTransitionId(cp,'receipt:'+requestId),
-        journalEntry:{kind:'receipt-accepted',nodeId,attempt,requestId,digest}});
+      const persisted=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
+        nextCheckpoint:next,
+        journalEntry:{kind:'receipt-accepted',nodeId,attempt,requestId,digest}},
+        {kind:'receipt-accepted',requestId,nodeId,attempt,submissionDigest:digest},
+        {kind:'accept-receipt',toBlockId:accept,submissionDigest:digest},
+        kind==='agent-result'?'succeeded':'failed');
       if (!persisted.committed) continue;
       if (persisted.capacityExit) {
         throw failure('FK_I_CHECKPOINT_CAPACITY',
@@ -659,9 +750,10 @@ export function createInteractiveCoordinator({store, runtime, policy = {}, maxSt
   async function resume({runId}={}) { nonempty(runId,'runId');return drive(runId); }
   async function load({runId}={}) {
     nonempty(runId,'runId');
-    const cp=store.load(runId);
+    checkSignal();
+    const cp=versioned ? await store.load(runId) : store.load(runId);
     if (!cp) return null;
-    await loadPinned(cp);
+    if (cp.status!=='cancelled' || cp.namespace!==store.namespace || cp.policyHash!==policyHash) await loadPinned(cp);
     return asPublicFrame(cp);
   }
 
