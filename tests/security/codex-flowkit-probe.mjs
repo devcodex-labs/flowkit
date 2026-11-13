@@ -17,7 +17,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 import {createCodexOsAccess} from '../../examples/interactive/codex-os-access.mjs';
 import {serveCodexOsSession} from '../../examples/interactive/codex-os-stdio.mjs';
-import {createOsToolObservations} from './codex-os-tool-observations.mjs';
+import {createOsToolObservations,dispatchObservedOsTool} from './codex-os-tool-observations.mjs';
 import {PassThrough} from 'node:stream';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
@@ -475,14 +475,14 @@ async function osEntryCallback(message) {
   const p=message.params;
   const turn=osTurns.get(p.threadId);
   const context=entrySessions.get(p.threadId);
-  const sameTurn=turn && isolatedIdentity && context?.modelPid===isolatedIdentity.pid && turn.id===p.turnId;
-  const started=sameTurn && !completed.has(p.callId) ? turn.observations.consume(p) : null;
-  if (!started) {
-    journal('os-observation-denied',{callId:p.callId,threadId:p.threadId,turnId:p.turnId});
-    send({id:message.id,result:{success:false,contentItems:[{type:'inputText',
-      text:JSON.stringify({accepted:false,code:'REQUEST_DENIED'})}]}});
-    return;
-  }
+  const sameTurn=turn?.id && isolatedIdentity && context?.modelPid===isolatedIdentity.pid && turn.id===p.turnId;
+  const observations=sameTurn && !completed.has(p.callId) ? turn.observations : null;
+  const response=await dispatchObservedOsTool(observations,p,started=>submitObservedOsTool(p,turn,context,started),
+    ()=>journal('os-observation-denied',{callId:p.callId,threadId:p.threadId,turnId:p.turnId}));
+  send({id:message.id,result:{success:response.accepted,contentItems:[{type:'inputText',text:JSON.stringify(response)}]}});
+}
+
+async function submitObservedOsTool(p,turn,context,started) {
   turn.calls.push(p.tool);
   const target=entryResources.get(p.arguments.requestId);
   let result;
@@ -528,7 +528,7 @@ async function osEntryCallback(message) {
     journal('os-entry-rejected',{case:turn.label,callId:p.callId,subject:context.subject,namespace:context.namespace,
       targetSubject:target?.subject,targetNamespace:target?.namespace,tool:p.tool});
   }
-  send({id:message.id,result:{success:result.accepted,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
+  return result;
 }
 
 async function handleEntryCallback(message) {

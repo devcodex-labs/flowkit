@@ -22,3 +22,10 @@ export function createOsToolObservations() {
     },
   };
 }
+
+export function dispatchObservedOsTool(observations, callback, accept, onDenied) {
+  const started = observations?.consume(callback);
+  if (started) return accept(started);
+  onDenied?.();
+  return {accepted:false,code:'REQUEST_DENIED'};
+}
