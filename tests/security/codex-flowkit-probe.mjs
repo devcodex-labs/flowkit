@@ -58,7 +58,10 @@ if (profile==='isolated') {
     assert.notEqual(hostGid,modelGid);
     assert.equal(process.getuid(),hostUid);
     assert.equal(process.getgid(),hostGid);
-    args=[node,fileURLToPath(new URL('./codex-model-identity.mjs',import.meta.url)),String(modelUid),String(modelGid),exe,...appArgs];
+    const modelExec=process.env.FLOWKIT_CODEX_LINUX_EXEC;
+    if (!sshConfig) assert.ok(path.isAbsolute(modelExec));
+    args=[node,fileURLToPath(new URL('./codex-model-identity.mjs',import.meta.url)),String(modelUid),String(modelGid),
+      modelExec,exe,...appArgs];
   } else {
     assert.equal(process.platform,'win32');
     assert.ok(process.env.FLOWKIT_HOST_SID && process.env.FLOWKIT_MODEL_SID
@@ -90,7 +93,7 @@ child.on('error',error=>{failure=error.message;finish('spawn-error');});
 child.on('close',code=>{journal('exit',{code});finish('closed');});
 child.stdout.on('data',buffer=>record('app-server.stdout.ndjson',buffer));
 child.stderr.on('data',buffer=>record('app-server.stderr',buffer));
-const timer=setTimeout(()=>{finish('timeout');child.kill();},size?95000:65000);
+const timer=setTimeout(()=>finish('timeout'),size?95000:65000);
 
 function send(message) {
   record('app-server.requests.ndjson',JSON.stringify(message)+'\n');
@@ -313,7 +316,15 @@ try {
 finally {
   clearTimeout(timer);
   child.stdin.end();
-  child.kill();
+  if (child.exitCode===null && child.signalCode===null) {
+    if (profile==='isolated') {
+      // The external launcher owns cleanup across OS identities.
+      journal('launcher-cleanup',{pid:child.pid,method:'stdio-eof'});
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+    } else child.kill();
+  }
   handoff?.close();
   store?.close();
   if(fixture) await rm(fixture,{recursive:true,force:true});

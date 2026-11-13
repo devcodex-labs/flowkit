@@ -23,12 +23,20 @@ SSH 固定命令使用此启动器，唯一参数为 Model 可运行的绝对 `c
 
 ## Linux
 
-使用两个不同非零 UID 和 GID 的账户。当前探针支持预先配置的本机受信启动器，也支持回环 SSH。SSH 的固定命令以 Model 身份执行 `setpriv --no-new-privs`，再用绝对 Node 路径执行 `tests/security/codex-model-identity.mjs`，参数为 Model UID、GID、Codex 绝对路径及 `app-server --listen stdio:// -c 'web_search="disabled"'`。Model 账户应无额外组成员关系，命令只使用 Model 的 HOME、私有临时目录和受控 PATH。helper 核对有效 UID/GID、组、能力和 `NoNewPrivs`，再同 PID 切换到 Codex。固定命令及 Model 的 shell 启动环境由测试机操作者保护。
+使用两个不同非零 UID 和 GID 的账户。使用 glibc 2.34+、Linux 5.9+ 的测试机，编译并部署非特权的 exec shim。
 
-在 Host 进程设置 `FLOWKIT_HOST_UID`、`FLOWKIT_HOST_GID`、`FLOWKIT_MODEL_UID`、`FLOWKIT_MODEL_GID`。SSH 模式同时设置 `FLOWKIT_CODEX_LAUNCHER=/usr/bin/ssh` 和 `FLOWKIT_CODEX_SSH_CONFIG`。本机受信启动器模式仅设置 `FLOWKIT_CODEX_LAUNCHER`，探针会传入 Node、身份 helper、Model UID/GID、Codex 和固定 App Server 参数。
+```sh
+cc -O2 -Wall -Wextra -Werror tests/security/codex-model-exec-linux.c -o /path/to/flowkit-model-exec
+```
+
+当前探针支持预先配置的本机受信启动器，也支持回环 SSH。SSH 的固定命令以 Model 身份执行 `setpriv --no-new-privs`，再用绝对 Node 路径执行 `tests/security/codex-model-identity.mjs`。参数依次为 Model UID、GID、exec shim、Codex 绝对路径及 `app-server --listen stdio:// -c 'web_search="disabled"'`。Model 账户应无额外组成员关系，命令只使用 Model 的 HOME、私有临时目录和受控 PATH。身份 helper 核对有效 UID/GID、组、能力和 `NoNewPrivs`，同 PID 交接给 shim。shim 关闭标准流外的描述符、恢复阻塞标准流，再同 PID 执行 Codex。固定命令及 Model 的 shell 启动环境由测试机操作者保护。
+
+在 Host 进程设置 `FLOWKIT_HOST_UID`、`FLOWKIT_HOST_GID`、`FLOWKIT_MODEL_UID`、`FLOWKIT_MODEL_GID`。SSH 模式同时设置 `FLOWKIT_CODEX_LAUNCHER=/usr/bin/ssh` 和 `FLOWKIT_CODEX_SSH_CONFIG`。本机受信启动器模式设置 `FLOWKIT_CODEX_LAUNCHER` 和 `FLOWKIT_CODEX_LINUX_EXEC`，探针会传入 Node、身份 helper、Model UID/GID、exec shim、Codex 和固定 App Server 参数。操作者为启动器设置有界退出和 Model 侧清理。Host 只关闭标准输入，不能凭自身权限可靠终止其他 UID 的进程。
 
 ## 实际验收与留档
 
 在 Host 下分别运行 `node tests/security/codex-flowkit-probe.mjs <绝对Codex路径> <Model工作目录绝对路径> <新证据目录绝对路径> <样本> isolated`。样本为 `loop`、`file-262144` 和 `file-2093056`，每个样本使用不同输出目录。SSH 模式由固定命令决定 Codex 路径，应与记录中的版本和路径一致。对命令、退出码、三个协议原始日志、`observer.ndjson` 和增量 Diff 保存 SHA-256。预期证据包含实际 Host/Model 身份、Model PID、原生开始与回调、同一个 Pending、签收 revision 和最终 `succeeded`。文件样本另核对固定字节数与摘要。
 
 Windows CI 在一次性普通 Model 账户内验证启动器的标准流往返与实际进程 SID。Linux CI 以一次性 Model UID/GID 验证受限身份、同 PID exec 和标准流往返。两者均为 P 级 OS/启动器证据。真实 Windows/Linux 双账户、独立登录和模型签收仍需测试机运行记录。缺少原始记录的项目保持 BLOCKED。
+
+Linux 云任务在基线 `9584184d7098a402a15f3edd8bfb11ea95f7ed49` 拉取后，用专用容器实测 UID/GID 41001/41002。47 项 OS 权限负例通过。用容器内启动器和 stdio 修复，真实 App Server 完成了同 PID 初始化。三个样本均在真实回合返回 401，工具调用、文件登记、签名和接纳均为零。Linux 报告归档 SHA-256 为 `136db4c02521fafaf76d8486d3cfd8cb597f81b39e0d0eceaecac9e61c5c0360`。
