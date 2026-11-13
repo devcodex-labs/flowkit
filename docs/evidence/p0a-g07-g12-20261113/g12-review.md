@@ -48,3 +48,7 @@
 ## Windows 同一 Run 联测复审
 
 **G12 维持 BLOCKED。** 独立角色核对 `8667704a79bd8f572ace969d48c5ef49d1add3ac` 的探针和 Windows 首次启动问题。补齐启动参数后，同一代码候选的真实操作员创建、Codex 签收及审计员收件经离线证据核验。Windows 正向样本为 P/M/T。NAT-14 的原生异常恢复、Linux 隔离双账户目标和完整授权披露证据仍待验。 [同链实测与环境裁决](./operator-model-audit-chain.md)
+
+## Windows 原生取消后续跑复审
+
+**G12 维持 BLOCKED。** 独立角色核对 `1d2d216e919a9d5aa5874123542682e4bca5105a` 的原始日志。实际 App Server 响应标准取消指令，原 Pending 零签名、零 CAS 保留。同一线程下一回合接纳该请求，审计员收件，证据为 P/M/T。缺异常观察后的原生恢复、Linux 双账户目标、完整授权及披露证据和供应商故障证据。 [本批实测及供给裁决](./native-interrupt-recovery.md)

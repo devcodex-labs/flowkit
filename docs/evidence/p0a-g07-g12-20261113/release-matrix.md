@@ -31,6 +31,7 @@
 | E21 | `d6bd8d839fe33d344748ee5d889f4bd901cb958f` | 选定 stdio 的观察拒绝与回合绑定回归，以及常规原生回合复验。[分平台结果、复审与归档](./stdio-observation-recovery.md) |
 | E22 | `2594511d058da47f8cad43e57de48c23db8abf0e` | 共享观察派发与真实 SQLite 的 P 级恢复回归，拒绝后零签名、零 CAS，原 Pending 可由下一模拟回合接纳。[实测与剩余缺口](./stdio-pending-recovery.md) |
 | E23 | `8667704a79bd8f572ace969d48c5ef49d1add3ac` | Windows 同一 Run 的实际操作员进程创建、真实 Codex 签收、审计员进程收件。Linux 双账户沙箱目标仍缺条件。[同链实测、原始归档与环境裁决](./operator-model-audit-chain.md) |
+| E24 | `1d2d216e919a9d5aa5874123542682e4bca5105a` | Windows 真实 App Server 回合在只读工具等待点被受控取消，原 Pending 保留，同一线程下一回合接纳，审计员收件。Linux 缺专用目标与管理员供给入口。[实测、复审及环境证据](./native-interrupt-recovery.md) |
 
 ## SEC · 生产配置与候选入口
 
@@ -75,7 +76,7 @@
 | NAT-11 | BLOCKED，真实模型权限负例 | E6 有跨账户 P 级拒绝。补真实模型会话的密钥、数据库、全量 State 及伪审批负例，再走合法提交。 |
 | NAT-12 | BLOCKED，真实会话和版本换绑 | E5 证明改变公钥集合后的拒绝。补切换会话、模型版本或工作区后的旧调用拒绝及显式重新授权。 |
 | NAT-13 | BLOCKED，V 级 | 已有 Host Ed25519 验签证据。缺供应商可验证的规范、可信公钥和实际签名。按原定义单独裁决。 |
-| NAT-14 | BLOCKED，选定入口的原生异常时序 | E20 验证选定入口正常原生签前事件匹配。E11 验证独立回调路径的异常拒绝。E21 补选定探针的即时拒绝与回合绑定。E22 验证共享派发拒绝后零签名、零 CAS 及原 Pending 后续接纳，证据为 P。所选 App Server 实际异常后的有界结束和同一 Pending 续跑仍缺原生证据。 |
+| NAT-14 | BLOCKED，选定入口的原生异常时序 | E20/E21 验证正常观察和回合绑定。E11 验证独立回调路径的异常拒绝。E22 验证共享派发拒绝后零签名、零 CAS 及原 Pending 后续接纳，证据为 P。E24 验证 Windows 原生受控取消后同一 App Server 接纳原 Pending。观察缺失、迟到或失配时的原生有界结束与续跑仍缺。 |
 | NAT-15 | PASS，双平台 Codex 实测样本 | E2 用原签名、回执和同一 Run 恢复签后 CAS 前切点。E3 增补文件引用与 CAS 后 Ack 修复，E4 增补真实过期拒绝。完整 N 级随 C12／S13 的组合证据复审。 |
 
 ## C01–C24 与阶段收口
