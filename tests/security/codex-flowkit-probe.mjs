@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
+import {DatabaseSync} from 'node:sqlite';
 import {
   compileInteractive,createAgentReceiptStatement,createSqliteCheckpointStore,
   createTrustedInteractiveHost,encodeAgentReceiptStatement,
@@ -17,13 +18,13 @@ import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
 const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay',
-  'outbox-check-revocation'].includes(requested);
+  'outbox-check-revocation','release-check','release-revoke','release-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
 const rotation=['rotate-old','rotate-new','rotate-old-next'].includes(cut);
 const revoked=['revoked-old','revoked-pending','revoked-new'].includes(cut);
 const nextSigner=cut==='rotate-new'||cut==='revoked-new';
-const runRecord=['rotate-new','rotate-old-next','revoked-pending'].includes(cut)?'run-next.json'
+const runRecord=['rotate-new','rotate-old-next','revoked-pending','release-cap-next','release-byte-next'].includes(cut)?'run-next.json'
   :cut==='revoked-new'?'run-new.json':'run.json';
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
@@ -51,7 +52,8 @@ const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
 if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
-  && (!cut || ['after-cas','before-sign','expire','rotate-old','rotate-new','rotate-old-next','revoked-new'].includes(cut)));
+  && (!cut || ['after-cas','before-sign','expire','rotate-old','rotate-new','rotate-old-next','revoked-new',
+    'release-cap','release-cap-next','release-byte-next','release-after-receipt'].includes(cut)));
 let store,host,program,frame,currentTask,handoff,staged,outbox;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
@@ -129,7 +131,7 @@ terminal('done',{name:'Done',status:'succeeded'})
   assert.ok(program.programIdentity,JSON.stringify(program.diagnostics));
   store=createSqliteCheckpointStore(path.join(fixture,'run.sqlite'),{namespace:'codex-proof'});
   let publicKey,privateKey;
-  if (!scenario || requested==='outbox-setup') {
+  if (!scenario || (requested==='outbox-setup' && cut!=='release-shared')) {
     ({publicKey,privateKey}=generateKeyPairSync('ed25519'));
     if (scenario) {
       await writeFile(path.join(fixture,'proof.public.pem'),publicKey.export({type:'spki',format:'pem'}),{mode:0o600,flag:'wx'});
@@ -158,13 +160,28 @@ terminal('done',{name:'Done',status:'succeeded'})
   }
   host=createTrustedInteractiveHost({
     store, runtime:{skillResolver:async()=> 'Read the public question and submit its requested answer.',
-      validateResult:(_schema,value)=>fallback ? validateArtifactResult(value)
-        : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer']},
+      validateResult(_schema,value) {
+        if (worker && cut==='release-after-receipt') {
+          journal('release-validation-barrier',{runId:currentTask.runId,requestId:currentTask.requestId});
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
+          throw new Error('Supervisor did not terminate Host at the validation barrier');
+        }
+        return fallback ? validateArtifactResult(value)
+          : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer'];
+      }},
     trustedPublicKeys,trustedArtifacts:[program.programIdentity.artifactHash],
     allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
     authorizeTerminalAccess:({action})=>action==='run:read',
+    authorizeReceiptAudit:({action})=>offline && action==='receipt:read-history',
+    authorizeKeyRevocation:({action})=>requested==='release-revoke' && action==='host:revoke-key',
   });
-  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host,handoff});
+  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host,handoff,
+    ...(cut.startsWith('release-cap') || requested==='release-clean'?{maxRecords:1,retentionMs:1}:{}),
+    ...(cut==='release-byte-next'?{maxRecords:100,maxBytes:1}:{}),
+    authorizeCleanup:({subjectId})=>({allowed:requested==='release-clean' && subjectId==='operator',
+      heldRunIds:cut==='held'?[answer]:[]}),
+    onCapacity:usage=>journal('outbox-capacity-alert',usage),
+  });
   return privateKey;
 }
 
@@ -198,7 +215,8 @@ async function deliverCandidate(result,name,args,identity,started) {
     attempt:currentTask.attempt,kind:'agent-result',result};
   const details={threadId,turnId,callId:identity.callId,hostPid:process.pid,
     modelPid:isolatedIdentity?.pid??child.pid,requestId:currentTask.requestId};
-  const proofId=await outbox.record({task:currentTask,modelPid:details.modelPid,
+  let proofId;
+  try {proofId=await outbox.record({task:currentTask,modelPid:details.modelPid,
     started:{...started,callId:identity.callId,args:started.arguments},
     callback:{...identity,tool:name,args}},receipt,key,{
     keyId:nextSigner?'next':'proof',
@@ -208,7 +226,12 @@ async function deliverCandidate(result,name,args,identity,started) {
       process.send({event:'observed',...details,...observed});
       await new Promise(()=>{});
     }:undefined,
-  });
+  });} catch(error) {
+    if (!['release-cap-next','release-byte-next'].includes(cut) || error.code!=='FK_OUTBOX_CAPACITY') throw error;
+    journal('release-capacity-rejected',{...details,code:error.code,usage:outbox.usage()});
+    process.send({event:'capacity-rejected',...details,code:error.code,usage:outbox.usage()});
+    return {conflict:true,code:error.code};
+  }
   const signed=outbox.describe(proofId);
   const detail={...details,...signed,
     ...(result.artifact?{artifact:result.artifact}:{})};
@@ -453,6 +476,62 @@ async function runOutboxOffline() {
   const {runId,requestId}=JSON.parse(await readFile(path.join(fixture,runRecord),'utf8'));
   const before=store.load(runId);
   const beforeReceipt=store.getReceipt(runId,requestId);
+  if (requested==='release-revoke') {
+    const pem=createPublicKey(await readFile(path.join(fixture,'proof.public.pem')));
+    const keyHash=sha256Bytes(pem.export({type:'spki',format:'der'}));
+    assert.equal(await host.revokeKey(keyHash),true);
+    assert.equal(await host.revokeKey(keyHash),false);
+    console.log(JSON.stringify({runId,keyHash,revoked:true}));
+    return;
+  }
+  if (requested==='release-check') {
+    const beforeJournal=store.listJournal(runId);
+    if (cut==='active') {
+      assert.equal((await host.load({runId})).revision,before.revision);
+    } else {
+      await assert.rejects(host.load({runId}),{code:'FK_I_HOST_DENIED'});
+      await assert.rejects(host.resume({runId}),{code:'FK_I_HOST_DENIED'});
+      if (answer) await assert.rejects(outbox.deliver(answer),{code:'FK_I_PROVENANCE_REJECTED'});
+    }
+    let ack=null;
+    if (beforeReceipt) {
+      const query={namespace:store.namespace,runId,requestId,nodeId:beforeReceipt.nodeId,
+        attempt:beforeReceipt.attempt,receiptHash:beforeReceipt.digest};
+      await assert.rejects(host.readHistoricalAck({...query,receiptHash:'sha256:'+'0'.repeat(64)}),{code:'FK_I_HOST_DENIED'});
+      await assert.rejects(host.readHistoricalAck({...query,namespace:'other'}),{code:'FK_I_HOST_DENIED'});
+      ack=await host.readHistoricalAck(query);
+      assert.equal(ack.acceptedRevision,beforeReceipt.acceptedRevision);
+    }
+    assert.deepEqual(store.load(runId),before);
+    assert.deepEqual(store.listJournal(runId),beforeJournal);
+    console.log(JSON.stringify({runId,revision:before.revision,active:cut==='active',ack,unchanged:true}));
+    return;
+  }
+  if (requested==='release-clean') {
+    const db=new DatabaseSync(path.join(fixture,'outbox.sqlite'));
+    const beforeUsage=outbox.usage();
+    const beforeJournal=store.listJournal(runId);
+    const request={namespace:store.namespace,subjectId:'operator',reasonCode:'RETENTION'};
+    try {
+      await assert.rejects(outbox.cleanup({...request,subjectId:'unauthorized'}),{code:'FK_OUTBOX_DENIED'});
+      if (cut==='abort-audit') {
+        db.exec("CREATE TRIGGER acceptance_abort BEFORE INSERT ON cleanup_audit BEGIN SELECT RAISE(ABORT,'audit interruption'); END");
+        try {await assert.rejects(outbox.cleanup(request),/audit interruption/);}
+        finally {db.exec('DROP TRIGGER acceptance_abort');}
+        assert.deepEqual(outbox.usage(),beforeUsage);
+      } else {
+        const result=await outbox.cleanup(request);
+        assert.equal(result.deleted,cut==='held'?0:1);
+        if (result.operationId) assert.equal(db.prepare('SELECT deleted_count FROM cleanup_audit WHERE operation_id=?')
+          .get(result.operationId).deleted_count,1);
+      }
+      assert.deepEqual(store.load(runId),before);
+      assert.deepEqual(store.listJournal(runId),beforeJournal);
+      assert.deepEqual(store.getReceipt(runId,requestId),beforeReceipt);
+      console.log(JSON.stringify({runId,cut,beforeUsage,afterUsage:outbox.usage(),receipt:beforeReceipt,unchanged:true}));
+    } finally {db.close();}
+    return;
+  }
   if (requested==='outbox-check-revocation') {
     assert.ok(revoked && before.policyHash!==host.policyHash);
     const rejected={};

@@ -1,7 +1,7 @@
 import {encodeCheckpoint} from '../../src/interactive/checkpoint.mjs';
 import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
-import {appendFileSync,mkdirSync,readFileSync,readdirSync} from 'node:fs';
+import {appendFileSync,copyFileSync,existsSync,mkdirSync,readFileSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
@@ -13,7 +13,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 
 const [exe,cwd,root,profile='isolated',suite='original']=process.argv.slice(2);
 assert.ok([exe,cwd,root].every(path.isAbsolute));
-assert.ok(['original','followup','signing','revocation'].includes(suite));
+assert.ok(['original','followup','signing','revocation','release-r5'].includes(suite));
 mkdirSync(root,{mode:0o700});
 const probe=fileURLToPath(new URL('./codex-flowkit-probe.mjs',import.meta.url));
 const log=(event,data)=>appendFileSync(path.join(root,'supervisor.ndjson'),
@@ -123,6 +123,121 @@ function assertSameStore(before,after) {
   const {rows:beforeRows,...storeBefore}=before;
   const {rows:afterRows,...storeAfter}=after;
   assert.deepEqual(storeAfter,storeBefore);
+}
+
+function readR5(dir,runId) {
+  const db=new DatabaseSync(path.join(dir,'run.sqlite'),{readOnly:true});
+  try {
+    const row=db.prepare('SELECT checkpoint_json,checkpoint_hash FROM fk_i_runs WHERE namespace=? AND run_id=?')
+      .get('codex-proof',runId);
+    const cp=JSON.parse(row.checkpoint_json);
+    assert.equal(sha256Bytes(Buffer.from(row.checkpoint_json)),row.checkpoint_hash);
+    assert.equal(cp.protocolVersion,1);
+    assert.equal(cp.schemaVersion,1);
+    assert.equal(Object.hasOwn(cp,'artifactHash'),false);
+    assert.equal(cp.program.artifactHash,cp.programRef.artifactHash);
+    return cp;
+  } finally {db.close();}
+}
+
+async function r5ValidationRecovery() {
+  const dir=path.join(root,'r5-validate');
+  mkdirSync(dir,{mode:0o700});
+  const setup=await offline('outbox-setup',dir,'setup');
+  const waiting=readR5(dir,setup.runId);
+  assert.equal(waiting.execution.phase,'awaiting');
+  assert.equal(waiting.pending[0].requestId,setup.requestId);
+  const victim=launch('outbox-worker',dir,'victim',{answer:'ready',cut:'release-after-receipt'});
+  const proof=await waitFor(victim,'signed');
+  victim.child.send('deliver');
+  const observer=path.join(dir,'victim','observer.ndjson');
+  const deadline=Date.now()+30000;
+  while (!existsSync(observer) || !readFileSync(observer,'utf8').includes('"event":"release-validation-barrier"')) {
+    if (Date.now()>=deadline || victim.child.exitCode!==null) throw new Error('R5 validation barrier not reached');
+    await delay(50);
+  }
+  const saved=readR5(dir,setup.runId);
+  assert.equal(saved.execution.phase,'validate');
+  assert.equal(saved.revision,setup.revision+1);
+  assert.equal(saved.receivedSubmission.requestId,setup.requestId);
+  assert.equal(saved.receivedSubmission.canonicalDigest,proof.receiptHash);
+  assert.deepEqual(saved.pending,[]);
+  assert.deepEqual(saved.candidate.result,{answer:'ready'});
+  const before=inspect(dir,setup,[proof]);
+  assert.equal(before.indexed.acceptedRevision,saved.revision);
+  assert.equal(before.rows[0].state,'SIGNED');
+  log('r5-validation-before-kill',{setup,proof,checkpoint:saved,before});
+  assert.ok(victim.child.kill('SIGKILL'));
+  assert.equal((await victim.closed).signal,'SIGKILL');
+  assert.deepEqual(readR5(dir,setup.runId),saved);
+  const restored=await offline('outbox-recover',dir,'restart');
+  assert.equal(restored.before.revision,saved.revision);
+  const after=inspect(dir,setup,[proof]);
+  finishedState(after,after.rows[0]);
+  assert.deepEqual(after.indexed,before.indexed);
+  assert.equal(readR5(dir,setup.runId).execution.phase,'finished');
+  log('r5-validation-recovered',{after,restored});
+}
+
+async function crossStoreRevocation() {
+  const first=path.join(root,'revoke-a'),second=path.join(root,'revoke-b');
+  mkdirSync(first,{mode:0o700});
+  mkdirSync(second,{mode:0o700});
+  const a=await offline('outbox-setup',first,'setup');
+  for (const key of ['proof.public.pem','proof.private.pem']) {
+    copyFileSync(path.join(first,key),path.join(second,key));
+  }
+  const b=await offline('outbox-setup',second,'setup',{cut:'release-shared'});
+  const accepted=await acceptLive(first,a,'accepted','','alpha');
+  const bWorker=launch('outbox-worker',second,'pending',{answer:'beta'});
+  const inFlight=await waitFor(bWorker,'signed');
+  const beforeB=inspect(second,b,[inFlight]);
+  pendingState(beforeB,b);
+  assert.ok(bWorker.child.kill('SIGKILL'));
+  assert.equal((await bWorker.closed).signal,'SIGKILL');
+  const revokeA=await offline('release-revoke',first,'revoke');
+  const rejectedA=await offline('release-check',first,'check',{answer:accepted.proofId});
+  assert.equal(rejectedA.ack.acceptedRevision,a.revision+1);
+  const stillActive=await offline('release-check',second,'before-local-revocation',{cut:'active'});
+  assert.equal(stillActive.active,true);
+  const revokeB=await offline('release-revoke',second,'revoke');
+  assert.equal(revokeB.keyHash,revokeA.keyHash);
+  const rejectedB=await offline('release-check',second,'check',{answer:inFlight.proofId});
+  assert.equal(rejectedB.ack,null);
+  assert.ok(Date.now()<inFlight.expiresAt);
+  assert.deepEqual(inspect(second,b,[inFlight]),beforeB);
+  log('cross-store-revocation-passed',{revokeA,rejectedA,stillActive,revokeB,rejectedB,beforeB});
+}
+
+async function capacityAndCleanup() {
+  const dir=path.join(root,'capacity');
+  mkdirSync(dir,{mode:0o700});
+  const first=await offline('outbox-setup',dir,'setup',{cut:'release-cap'});
+  const proof=await acceptLive(dir,first,'fill','release-cap','alpha');
+  const second=await offline('outbox-next',dir,'next',{cut:'release-cap-next'});
+  const before=inspect(dir,second,[]);
+  for (const cut of ['release-cap-next','release-byte-next']) {
+    const worker=launch('outbox-worker',dir,cut,{cut,answer:'beta'});
+    const rejected=await waitFor(worker,'capacity-rejected');
+    assert.equal(rejected.requestId,second.requestId);
+    assert.equal(rejected.code,'FK_OUTBOX_CAPACITY');
+    assert.equal(rejected.usage.records,1);
+    assert.equal((await worker.closed).code,0);
+    assert.deepEqual(inspect(dir,second,[]),before);
+  }
+  const held=await offline('release-clean',dir,'held',{cut:'held',answer:first.runId});
+  assert.equal(held.afterUsage.records,1);
+  const interrupted=await offline('release-clean',dir,'interrupted',{cut:'abort-audit'});
+  assert.equal(interrupted.afterUsage.records,1);
+  const recovered=await offline('release-clean',dir,'clean');
+  assert.equal(recovered.afterUsage.records,0);
+  assert.equal(recovered.receipt.acceptedRevision,first.revision+1);
+  const ack=await offline('release-check',dir,'read-cleaned-ack',{cut:'active'});
+  assert.equal(ack.ack.receiptHash,proof.receiptHash);
+  const retry=await acceptLive(dir,second,'retry','release-cap-next','beta');
+  const after=inspect(dir,second,[retry]);
+  finishedState(after,after.rows[0]);
+  log('outbox-capacity-cleanup-passed',{proof,held,interrupted,recovered,ack,after});
 }
 
 async function originalSuite() {
@@ -374,7 +489,13 @@ async function revocationCase() {
 }
 
 try {
-  const result=suite==='followup'?{
+  let result;
+  if (suite==='release-r5') {
+    await r5ValidationRecovery();
+    await crossStoreRevocation();
+    await capacityAndCleanup();
+    result={r5ValidationRecovery:true,crossStoreRevocation:true,capacityAndCleanup:true};
+  } else result=suite==='followup'?{
     afterCas:await crashCase('after-cas',{cut:'after-cas'}),
     file256:await crashCase('file-262144',{bytes:262144}),
     fileNearLimit:await crashCase('file-2093056',{bytes:2093056}),
