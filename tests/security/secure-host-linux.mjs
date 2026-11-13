@@ -103,7 +103,7 @@ try {
     await chown(folder,uid,uid);
   }
   for (const relative of ['tests/security/secure-host-worker.mjs','tests/security/codex-model-identity.mjs',
-    'src/interactive/sqlite-store.mjs','src/interactive/canonical.mjs']) {
+    'src/interactive/sqlite-store.mjs','src/interactive/checkpoint.mjs','src/interactive/canonical.mjs']) {
     const destination=path.join(publicDir,relative);
     await mkdir(path.dirname(destination),{recursive:true,mode:0o755});
     await copyFile(path.join(repo,relative),destination);
