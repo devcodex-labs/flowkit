@@ -30,6 +30,7 @@
 | E20 | `90e20554ef5ae443fd56a662cea616723c956170`、`f391fd07ff777a72360726ba7fd091f9aad623f5` | Windows／Linux 首发受控 stdio 的原生租户绑定与回执复核，以及 12 个恢复切点的逐点持久化断言。[首发 P0 验收](./selected-stdio-p0.md) |
 | E21 | `d6bd8d839fe33d344748ee5d889f4bd901cb958f` | 选定 stdio 的观察拒绝与回合绑定回归，以及常规原生回合复验。[分平台结果、复审与归档](./stdio-observation-recovery.md) |
 | E22 | `2594511d058da47f8cad43e57de48c23db8abf0e` | 共享观察派发与真实 SQLite 的 P 级恢复回归，拒绝后零签名、零 CAS，原 Pending 可由下一模拟回合接纳。[实测与剩余缺口](./stdio-pending-recovery.md) |
+| E23 | `8667704a79bd8f572ace969d48c5ef49d1add3ac` | Windows 同一 Run 的实际操作员进程创建、真实 Codex 签收、审计员进程收件。Linux 双账户沙箱目标仍缺条件。[同链实测、原始归档与环境裁决](./operator-model-audit-chain.md) |
 
 ## SEC · 生产配置与候选入口
 
@@ -39,19 +40,19 @@
 | SEC-02 | BLOCKED，完整原生负例 | E6 两端保护密钥、配置和 Program 清单的路径访问，Host 签名成功。E1 有标准流继承限制。尚缺生产启动链下实际 Model 进程对密钥及可继承句柄的拒绝证据。 |
 | SEC-03 | BLOCKED，完整原生负例 | E6 两端拒绝数据库、WAL、SHM、备份的路径访问和修改，完整性通过。补实际 Model 进程句柄或映射和实际配置下的保护证据。 |
 | SEC-04 | BLOCKED，最终启动链 | E6 Linux 进程访问、Windows 进程和 Token 权限请求拒绝。补生产启动顺序下的进程权限负例和实际启用的服务控制。 |
-| SEC-05 | BLOCKED，启用入口完整授权 | E10–E13 覆盖真实错请求、缺观察、主体与文件引用错配。E14/E16 补普通 OS 客户端与审计收件，E20 在选定 stdio 验证实际模型身份及回调授权。操作员创建、同一 Run 的真实 Model 回执及审计客户端交付仍需联证。 |
+| SEC-05 | BLOCKED，启用入口完整授权 | E10–E13 覆盖真实错请求、缺观察、主体与文件引用错配。E20 验证实际模型身份及回调授权。E23 的 Windows 同一 Run 正向联测通过，操作员创建、真实 Model 签收和审计员收件已联证。Linux 同链及完整入口拒绝范围待验。 |
 | SEC-06 | BLOCKED，真实入口拒绝 | 补独立 Model 账户用普通进程重放同一提交的拒绝结果，核对没有 Host 签名、接纳索引或状态推进。 |
 | SEC-07 | N/A，当前配置无 TLS/mTLS IPC | 实测为受控 stdio，回环 SSH 负责启动。实际输入路径按 SEC-05 验收。 |
 | SEC-08 | BLOCKED，原生身份和正文负例 | E7 有替换、截断、错 Pending 与会话的定向回归，E5 有真实策略不匹配拒绝。补实际候选入口逐项变更 Run、request、attempt、node、Program、policy 和正文，核对无写入及错误脱敏。 |
 | SEC-09 | BLOCKED，真实自报身份拒绝 | E1/E2 从受保护通道取得调用 ID，由 Host 分配证明。补实际 Model 自报 proof／session 或审批字段的拒绝日志。 |
 | SEC-10 | BLOCKED，选定宿主完整切点 | E2/E3/E4 的签名前、签后 CAS 前和 CAS 后强杀恢复通过，E8 覆盖真实接纳后校验恢复。E19/E20 补 Genesis 前后与 12 个 SQLite 切点逐点验证。选定宿主上的组合证据随 T29 裁决。 |
-| SEC-11 | BLOCKED，完整披露矩阵 | E1/E10 覆盖任务、工具回复、终态投影，E20 复核 E10 原始 Model 协议无 Host 私有标记。完整日志可见性与授权审计的同链覆盖仍缺。 |
+| SEC-11 | BLOCKED，完整披露矩阵 | E1/E10 覆盖任务、工具回复、终态投影，E20 复核 E10 原始 Model 协议。E23 验证 Windows 同一 Run 的审计员收件、操作员读取拒绝以及 Model 协议无私有租户标记。Linux 同链和完整日志可见性仍缺。 |
 | SEC-12 | BLOCKED，真实资源边界 | E1 文件入口两个大小通过。E7 内联 64 KiB 通过，两档更大内联无工具调用。补实际入口异常正文、限流／超时及内联回执上限分类。 |
 | SEC-13 | BLOCKED，完整替换负例 | E7 的文件替换、硬链接、符号链接或目录联接点有 P 级证据。E5 的旧策略拒绝有双平台原生结果。补实际启动链下 Program 和所有已启用配置入口的替换负例。 |
 | SEC-14 | BLOCKED，生产轮换与撤销 | E4/E5/E8/E9 覆盖正常轮换、原 Ack 和分别撤销。E15/E16 补三个测试 Store 的部分撤销、测试入口阻断及逐库确认后的恢复。生产全量清单、入口暂停、实际权限变更及适用的证书／KMS 操作待测。 |
 | SEC-15 | PASS，已选 Windows／Linux 受控 stdio | E20 两个经 OS 核验的主体与租户使用同 startKey、同 RunId 并发接纳，独立回执和 Journal，错租户拒绝且状态不变。完整同链授权与审计交付归 SEC-05／11。 |
 | SEC-16 | N/A，当前 Windows 配置无 Named Pipe 候选入口 | 当前使用标准流。若发行选择 Named Pipe，按原矩阵重新裁决。 |
-| SEC-17 | BLOCKED，Linux 实际 CLI 拒绝 | E6 有 47 项受限进程拒绝。E21 复核实际 Model 身份、零能力和 `no_new_privs=1`。既有双账户容器的命令沙箱无法创建用户命名空间，描述符类型观察受限。E22 在另一托管执行器核对普通账户能启动本地沙箱，仍缺同一双账户目标证据。Windows 不适用。 |
+| SEC-17 | BLOCKED，Linux 实际 CLI 拒绝 | E6 有 47 项受限进程拒绝。E21 复核实际 Model 身份、零能力和 `no_new_privs=1`。E23 确认既有双账户容器的命令沙箱仍无法创建用户命名空间，托管执行器能启动本地沙箱但未配独立 Model 身份、受管启动器及登录。Windows 不适用。 |
 | SEC-18 | PASS，双平台 Outbox 样本 | E2/E3/E4 覆盖签名前、签后 CAS 前及 CAS 后 `ACKED` 前的真实强杀、原字节验签与对账、未接纳过期拒绝和仍受信的历史 Ack。E8 增补 R5 已接纳回执在 validate 阶段强杀后的恢复。 |
 | SEC-19 | BLOCKED，生产有界保留 | E8/E9 覆盖真实工具满额、清理回滚、快照清理强杀和分配块采样。E16 补 128 次接纳、八轮满额与清理、独立回环进程持久化告警。E17/E18 补三库联合恢复、按 Run 自动发现及二次扫描幂等。生产保留期限、持续容量、值班端送达及实际备份系统和启动编排仍待取证。 |
 

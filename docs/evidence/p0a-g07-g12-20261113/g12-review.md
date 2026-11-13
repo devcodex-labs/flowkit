@@ -44,3 +44,7 @@
 ## 受控 stdio Pending 恢复回归复审
 
 **G12 维持 BLOCKED。** 独立角色复核共享观察派发及 SQLite 回归，确认异常观察在签名和 CAS 前被拒绝，原 Pending 保留并可由下一模拟回合接纳。该结果计为 P。实际 App Server 的异常后续跑与 Linux Model 命令沙箱仍单列。 [本批范围、命令和证据](./stdio-pending-recovery.md)
+
+## Windows 同一 Run 联测复审
+
+**G12 维持 BLOCKED。** 独立角色核对 `8667704a79bd8f572ace969d48c5ef49d1add3ac` 的探针和 Windows 首次启动问题。补齐启动参数后，同一代码候选的真实操作员创建、Codex 签收及审计员收件经离线证据核验。Windows 正向样本为 P/M/T。NAT-14 的原生异常恢复、Linux 隔离双账户目标和完整授权披露证据仍待验。 [同链实测与环境裁决](./operator-model-audit-chain.md)
