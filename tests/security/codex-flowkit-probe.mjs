@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {generateKeyPairSync,randomUUID,sign} from 'node:crypto';
 import {appendFileSync,mkdirSync} from 'node:fs';
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createInterface} from 'node:readline';
@@ -12,11 +12,15 @@ import {
   createTrustedInteractiveHost,encodeAgentReceiptStatement,
 } from '../../src/interactive/index.mjs';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
+import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.mjs';
 
 const [exe,cwd,out,requested='loop',profile='direct']=process.argv.slice(2);
-const size=requested==='loop'?0:Number(requested);
+const fallback=requested.startsWith('file-');
+const artifactSize=fallback?Number(requested.slice(5)):0;
+const size=requested==='loop'||fallback?0:Number(requested);
 assert.ok(path.isAbsolute(exe) && path.isAbsolute(cwd) && path.isAbsolute(out));
 assert.ok([0,65536,262144,2093056].includes(size));
+assert.ok(!fallback||[262144,2093056].includes(artifactSize));
 assert.ok(['direct','isolated'].includes(profile));
 mkdirSync(out,{recursive:false});
 const nonce=randomUUID();
@@ -29,11 +33,13 @@ const str={type:'string'};
 const tool=(name,description,inputSchema)=>({type:'function',name,description,inputSchema});
 const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',objectSchema({nonce:str,payload:str}))] : [
   tool('flowkit_start','Start the one provisioned synthetic FlowKit Run and return the current public task',objectSchema({nonce:str})),
-  tool('flowkit_submit','Submit the answer for the exact current FlowKit request',objectSchema({requestId:str,answer:str})),
+  fallback?tool('flowkit_submit_file','Submit the Host-issued artifact reference for the exact current FlowKit request',
+    objectSchema({requestId:str,id:str}))
+    :tool('flowkit_submit','Submit the answer for the exact current FlowKit request',objectSchema({requestId:str,answer:str})),
   tool('flowkit_continue','Read the public terminal state of the provisioned Run',objectSchema({runId:str})),
 ];
 const fixture=size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
-let store,host,program,frame,currentTask;
+let store,host,program,frame,currentTask,handoff,staged;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
 if (profile==='isolated') {
@@ -85,7 +91,7 @@ async function prepareFlowKit() {
   await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'codex-probe',version:'1.0.0',name:'Codex probe',nodes:[
 node('review',{name:'Review',agent:'reviewer',inputs:['question'],
-output:{type:'object',properties:{answer:{type:'string'}}},retries:0,next:'done'}),
+output:{type:'object',properties:${fallback?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'done'}),
 terminal('done',{name:'Done',status:'succeeded'})
 ]});`);
   program=await compileInteractive(file,{output:'memory',featureStage:'P0-A',skillCheck:false});
@@ -94,16 +100,39 @@ terminal('done',{name:'Done',status:'succeeded'})
   const keys=generateKeyPairSync('ed25519');
   host=createTrustedInteractiveHost({
     store, runtime:{skillResolver:async()=> 'Read the public question and submit its requested answer.',
-      validateResult:(_schema,value)=>value.answer==='ready'?[]:['Expected ready']},
+      validateResult:(_schema,value)=>fallback ? (value.artifact?.id===staged?.id?[]:['Expected staged reference'])
+        : value.answer==='ready'?[]:['Expected ready']},
     trustedPublicKeys:{proof:keys.publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
     allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
     authorizeTerminalAccess:({action})=>action==='run:read',
   });
+  if (fallback) {
+    const inbox=path.join(fixture,'inbox');
+    await mkdir(inbox,{mode:0o700});
+    handoff=createFileHandoff({inbox,database:path.join(fixture,'file-handoff.sqlite'),
+      validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
+  }
   return keys.privateKey;
 }
 
 let key;
-async function handleTool(name,args,identity) {
+async function acceptResult(result,identity,pending=currentTask) {
+  const receipt={runId:pending.runId,requestId:pending.requestId,nodeId:pending.nodeId,
+    attempt:pending.attempt,kind:'agent-result',result};
+  const issuedAt=Date.now();
+  const statement=createAgentReceiptStatement({run:store.load(receipt.runId),receipt,keyId:'proof',
+    proofId:identity.callId,issuedAt,expiresAt:issuedAt+30000});
+  const statementBytes=encodeAgentReceiptStatement(statement);
+  journal('signing',{callId:identity.callId,requestId:receipt.requestId,toolInputDigest:identity.digest,
+    statementDigest:sha256Bytes(statementBytes),...(result.artifact?{artifact:result.artifact}:{})});
+  const signature=sign(null,statementBytes,key).toString('base64url');
+  frame=await host.accept({receipt,attestation:{statement,signature}});
+  journal('accepted',{acceptedRevision:frame.acceptedRevision,revision:frame.revision,runId:frame.runId,
+    receipt:store.getReceipt(frame.runId,receipt.requestId)});
+  return {runId:frame.runId,acceptedRevision:frame.acceptedRevision};
+}
+
+async function handleTool(name,args,identity,started) {
   if (size) {
     const canonical=canonicalBytes(args);
     inlineObserved={expected:size,received:canonical.byteLength,matched:canonical.equals(expectedBytes),
@@ -120,30 +149,45 @@ async function handleTool(name,args,identity) {
     currentTask=await host.getPublicAgentTask({runId:frame.runId});
     journal('pending', {runId:frame.runId,requestId:currentTask.requestId,revision:frame.revision,
       programHash:program.programIdentity.artifactHash,taskDigest:sha256Bytes(canonicalBytes(currentTask))});
-    return currentTask;
+    if (!fallback) return currentTask;
+    const sourceId=randomUUID();
+    const bytes=canonicalBytes({answer:'A'.repeat(artifactSize-13)});
+    assert.equal(bytes.length,artifactSize);
+    const ingress=path.join(fixture,'inbox',sourceId+'.json');
+    await writeFile(ingress,bytes,{mode:0o600,flag:'wx'});
+    const checkpoint=store.load(frame.runId);
+    staged=await handoff.stage({sourceId,byteLength:bytes.length,sha256:sha256Bytes(bytes),
+      binding:{namespace:store.namespace,runId:frame.runId,requestId:currentTask.requestId,
+        nodeId:currentTask.nodeId,attempt:currentTask.attempt,threadId:identity.threadId,turnId:identity.turnId,
+        programHash:checkpoint.artifactHash,policyHash:checkpoint.policyHash}});
+    // The inbox is no longer needed once the private BLOB is committed.
+    await rm(ingress);
+    journal('file-staged',{...staged,byteLength:bytes.length,sha256:sha256Bytes(bytes),producer:'trusted-synthetic-fixture'});
+    return {task:currentTask,fileReference:staged};
   }
   if (name==='flowkit_submit') {
     assert.equal(frame?.status,'waiting');
     assert.equal(args.requestId,currentTask.requestId);
-    const receipt={runId:currentTask.runId,requestId:currentTask.requestId,nodeId:currentTask.nodeId,
-      attempt:currentTask.attempt,kind:'agent-result',result:{answer:args.answer}};
-    const issuedAt=Date.now();
-    const statement=createAgentReceiptStatement({run:store.load(receipt.runId),receipt,keyId:'proof',
-      proofId:identity.callId,issuedAt,expiresAt:issuedAt+30000});
-    const statementBytes=encodeAgentReceiptStatement(statement);
-    journal('signing', {callId:identity.callId,requestId:receipt.requestId,toolInputDigest:identity.digest,
-      statementDigest:sha256Bytes(statementBytes)});
-    const signature=sign(null,statementBytes,key).toString('base64url');
-    frame=await host.accept({receipt,attestation:{statement,signature}});
-    journal('accepted',{acceptedRevision:frame.acceptedRevision,revision:frame.revision,runId:frame.runId,
-      receipt:store.getReceipt(frame.runId,receipt.requestId)});
-    return {runId:frame.runId,acceptedRevision:frame.acceptedRevision};
+    return acceptResult({answer:args.answer},identity);
+  }
+  if (name==='flowkit_submit_file') {
+    return handoff.consume({
+      started:{...started,callId:identity.callId},callback:{...identity,tool:name,arguments:args},
+      loadPending:store.load,signAndAccept:({artifact,pending})=>acceptResult({artifact},identity,pending),
+    });
   }
   assert.equal(name,'flowkit_continue');
   assert.equal(args.runId,frame?.runId);
   const final=await host.getPublicTerminalFrame({runId:args.runId});
   assert.equal(final.status,'succeeded');
-  assert.equal(frame.state.answer,'ready');
+  if (fallback) {
+    const snapshot=handoff.readSnapshot(staged.id);
+    assert.equal(snapshot.state,'acked');
+    assert.equal(snapshot.byteLength,artifactSize);
+    assert.deepEqual(frame.state.artifact,{id:staged.id,byteLength:artifactSize,sha256:snapshot.sha256});
+    journal('file-ack',{id:staged.id,byteLength:snapshot.byteLength,sha256:snapshot.sha256,
+      acceptedRevision:snapshot.acceptedRevision});
+  } else assert.equal(frame.state.answer,'ready');
   const rows=store.listJournal(frame.runId);
   assert.equal(rows.length,frame.revision+1);
   journal('terminal',{status:final.status,revision:final.revision,journalRows:rows.length,
@@ -180,7 +224,7 @@ lines.on('line',line=>{
         starts.delete(p.callId);
         const identity={callId:p.callId,threadId,turnId,digest:sha256Bytes(args),bytes:args.byteLength};
         journal('tool-callback',identity);
-        const result=await handleTool(p.tool,p.arguments,identity);
+        const result=await handleTool(p.tool,p.arguments,identity,started);
         successful.push(p.tool);
         send({id:message.id,result:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
       } catch(error) {
@@ -230,7 +274,9 @@ async function run() {
   threadId=thread.id;
   const prompt=size
     ? `Call flowkit_inline exactly once with nonce "${nonce}" and payload containing exactly ${bodyLength} uppercase ASCII A characters as one JSON string. Supply complete inline JSON, without using files, references, code, other tools or a placeholder. If impossible, say so and finish.`
-    : `Only call the three FlowKit tools. Call flowkit_start with nonce "${nonce}". Read its public question and call flowkit_submit using its exact requestId and the answer. Then call flowkit_continue with the runId returned by submit and finish.`;
+    : fallback
+      ? `Call flowkit_start with nonce "${nonce}". Take fileReference.id and fileReference.requestId from its reply, then call flowkit_submit_file with those exact two values. Call flowkit_continue with the returned runId. Use only those three tools.`
+      : `Only call the three FlowKit tools. Call flowkit_start with nonce "${nonce}". Read its public question and call flowkit_submit using its exact requestId and the answer. Then call flowkit_continue with the runId returned by submit and finish.`;
   const {turn}=await request('turn/start',{threadId,input:[{type:'text',text:prompt}]});
   turnId=turn.id;
   journal('turn',{model,threadId,turnId,requestedBytes:size,pid:child.pid,observerPid:process.pid});
@@ -238,17 +284,18 @@ async function run() {
 }
 try {
   const outcome=await Promise.race([run(),finished]);
-  const expected=size?['flowkit_inline']:['flowkit_start','flowkit_submit','flowkit_continue'];
+  const expected=size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
   const passed=outcome==='turn-completed' && turnStatus==='completed' && !failure
     && JSON.stringify(successful)===JSON.stringify(expected) && completed.size===expected.length
     && (profile==='direct'||!!isolatedIdentity);
-  console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,profile,successful,inlineObserved,failure}));
+  console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,artifactSize,profile,successful,inlineObserved,failure}));
   if(!passed)process.exitCode=1;
 } catch(error) {console.error(error.message);process.exitCode=1;}
 finally {
   clearTimeout(timer);
   child.stdin.end();
   child.kill();
+  handoff?.close();
   store?.close();
   if(fixture) await rm(fixture,{recursive:true,force:true});
 }
