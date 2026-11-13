@@ -10,7 +10,7 @@ node tests/security/codex-outbox-live.mjs <Codex绝对路径> <Model工作目录
 - 强杀测试在实际模型回调已持久写入 `SIGNED`、Store 仍为 waiting 且尚无接纳索引时，由独立监督进程终止 Host 子进程。Windows 使用 Node 的强制进程终止，Linux 使用 SIGKILL。监督器确认子进程退出后重开数据库并独立验签，检查签名、回执摘要和 Store revision 均未变化。
 - 新 Host 从持久 Outbox 自动恢复，使用原签名和相同回执，通过既有 Host 验签和 CAS。恢复子进程只读取公钥，且不启动 App Server。复跑扫描没有可重放项。未接纳且已过期的回执进入 `BLOCKED`，历史同内容回执仍通过原 Ack 规则对账。
 
-Outbox 是 Host 示例适配器的独立 SQLite WAL/FULL 数据库。Core、ABI、Store schema 和 Receipt V1 沿用既有契约。此验收使用小内联答案。文件回退引用的崩溃恢复、签名前及 CAS 后强杀、签名轮换、生产保留策略和完整 NAT-14/15、C12/S13 仍待专项证据。实验目录含一次性私钥，导出时只取协议日志、Host 观察、监督器日志和公钥。
+Outbox 是 Host 示例适配器的独立 SQLite WAL/FULL 数据库。Core、ABI、Store schema 和 Receipt V1 沿用既有契约。初始验收使用小内联答案。实验目录含一次性私钥，证据包排除私钥和登录缓存。
 
 ## 实测结果
 
@@ -32,9 +32,19 @@ node tests/security/codex-outbox-live.mjs <Codex绝对路径> <Model工作目录
 - CAS 后强杀由监督器等待 Store 接纳索引已可读、Outbox 仍为 `SIGNED` 后触发。恢复用原回执走历史 Ack，仅补记 `ACKED`，并核对 Checkpoint、Journal 摘要、条数和接纳索引完全相同。
 - 256 KiB 和近 2 MiB 的真实动态工具调用将文件引用绑定当前 Pending、thread、turn 和 call。入口原件在签名前已删除。监督器在私有快照为 `claimed`、Outbox 为 `SIGNED`、Store 尚未接纳时强杀。恢复先核对原快照、引用、绑定及 SHA-256，使用原签名完成 CAS，最后将快照和 Outbox 分别记为 `acked`、`ACKED`。再次恢复无待投递项。若已写快照 Ack 而尚未写 Outbox Ack，允许用相同 call 和 revision 补记。
 
+两端在实现提交 `f01f2b5c008bc3f9dba32ed72d8a5ddca7b01115` 上使用不同系统账户实测了以下三个样本。
+
+| 样本 | Windows | Linux | 持久结果 |
+|---|---|---|---|
+| CAS 后、Outbox Ack 前强杀 | PASS | PASS | 接纳 revision 4，终态 revision 9。重启仅补 `ACKED`，Checkpoint、Journal 与接纳索引保持一致 |
+| 262,144 字节文件引用，签后 CAS 前强杀 | PASS | PASS | 原快照 SHA-256 `a89ec2764412be3284c3b2334a8ba4a484bfb7f6df2a8e274acc782a4e3231bb`，用原签名恢复至 `succeeded` |
+| 2,093,056 字节文件引用，签后 CAS 前强杀 | PASS | PASS | 原快照 SHA-256 `716f7d91c27f9e89e87fa13d2e2d47ba3b4dba942cb42f371610eac0ed83fd87`，用原签名恢复至 `succeeded` |
+
+两端各三份原签名离线验签通过。Linux 另在容器外核验两份快照原字节和三条 Journal 哈希链。Windows 归档 SHA-256 为 `2cd77acf9c571be7d4a0d3f431d4efddac8aae136930ea5e044dd68cb2a1548c`，Linux 为 `779ee3113930cb85fc28dff44d64ca912f53b11a8cbf2b6628e2bdeee71d83eb`。该批产生指定样本的 P/M/T 证据。
+
 | 归档 | SHA-256 |
 |---|---|
 | Windows `flowkit-windows-outbox-live.zip` | `a66e85c0b746538af2f3f93c8a978e963bcc2434af76af9ba50a8fc4d1a2b7a9` |
 | Linux `FlowKit-Linux-Outbox-Live-20261113.zip` | `00ab2b37629076f3ca9eb97b1e3cdd471ebece832274864bc5d14ee3bda3257e` |
 
-归档另含验签所需的声明、签名和回执原始字节，私钥和登录缓存留在各自环境内。过期未接纳回执只做了本地定向回归。完整 G08 的其他故障窗口与 NAT-14/15、C12/S13 仍为 BLOCKED。
+归档另含验签所需的声明、签名和回执原始字节，私钥和登录缓存留在各自环境内。过期未接纳回执、快照字节损坏、快照 Ack 后但 Outbox Ack 前的对账有定向回归。签名前强杀、真实宿主的过期拒绝和签名轮换、生产保留策略以及完整 NAT-14/15、C12/S13 仍为 BLOCKED。
