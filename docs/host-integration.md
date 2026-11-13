@@ -12,6 +12,8 @@ FlowKit v1.0.0的详细中文说明已集中到[文档站](https://devcodex-labs
 
 阅读[首次接入](https://devcodex-labs.github.io/flowkit/guide/host-integration.html)。
 
+内部 Interactive P0-A 部署另见[可信 Host 与 OS 身份配置](./interactive-host-security.md#os-authenticated-operator-and-auditor-sessions)。
+
 <a id="runtime-methods"></a>
 ### Runtime方法
 

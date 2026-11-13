@@ -20,6 +20,7 @@
 | E10 | `0d1da06bb3f8e56ebc54a2d32619c83d3cadea34` | Windows／Linux 双账户各 18 个真实模型回合。4 Agent＋2 Conditions 多阶段续跑、受权终态读取、早拒与缺值零派发、错请求和扣留观察拒绝。[分平台结果、命令和原始归档 SHA-256](../p0a-codex-isolated-20261113/branch-r5-live.md) |
 | E11 | `60b745e1708f2e7c10b88254912fa074b9489d3e` | Windows／Linux 各 7 个真实 Codex 回合，测试主体／租户绑定、同 startKey 和 RunId 隔离、观察失配／超时／迟到与两笔合法接纳。[分平台实测、原始命令与归档 SHA-256](../p0a-codex-isolated-20261113/entry-r5-live.md) |
 | E12 | `2f6a6738c5ffc12459bb271823d2468c3b2731cf` | 真实普通 OS 身份预绑定，两租户 stdio 和文件入口并发，拒绝错配及独立审计权限。[分平台实测、原始命令与归档 SHA-256](../p0a-codex-isolated-20261113/os-r5-live.md) |
+| E13 | `3fd1d2f9fb8a59abf74fca86136cb0bed3eef806` | 已暂存、未消费的有效文件引用跨租户拒绝，以及 Host stdio 授权撤销后旧会话失效。[分平台实测、命令与归档 SHA-256](../p0a-codex-isolated-20261113/session-r5-live.md) |
 
 ## SEC · 生产配置与候选入口
 
@@ -29,7 +30,7 @@
 | SEC-02 | BLOCKED，完整原生负例 | E6 两端保护密钥、配置和 Program 清单的路径访问，Host 签名成功。E1 有标准流继承限制。尚缺生产启动链下实际 Model 进程对密钥及可继承句柄的拒绝证据。 |
 | SEC-03 | BLOCKED，完整原生负例 | E6 两端拒绝数据库、WAL、SHM、备份的路径访问和修改，完整性通过。补实际 Model 进程句柄或映射和实际配置下的保护证据。 |
 | SEC-04 | BLOCKED，最终启动链 | E6 Linux 进程访问、Windows 进程和 Token 权限请求拒绝。补生产启动顺序下的进程权限负例和实际启用的服务控制。 |
-| SEC-05 | BLOCKED，发布入口授权 | E10/E11 覆盖真实错请求、缺观察及测试主体错配。E12 补 OS 身份预绑定、两条入口的错租户／错主体拒绝及审计角色。最终入口接入经 OS 认证的会话和未消费有效文件引用的跨租户验证仍待取证。 |
+| SEC-05 | BLOCKED，发布入口授权 | E10/E11 覆盖真实错请求、缺观察及测试主体错配。E12 补 OS 身份预绑定。E13 以真实 Model 回调拒绝跨租户提交未消费有效文件引用，另在 Host 流中验证撤权。最终发布入口仍需接入经 OS 认证的对端。 |
 | SEC-06 | BLOCKED，真实入口拒绝 | 补独立 Model 账户用普通进程重放同一提交的拒绝结果，核对没有 Host 签名、接纳索引或状态推进。 |
 | SEC-07 | N/A，当前配置无 TLS/mTLS IPC | 实测为受控 stdio，回环 SSH 负责启动。实际输入路径按 SEC-05 验收。 |
 | SEC-08 | BLOCKED，原生身份和正文负例 | E7 有替换、截断、错 Pending 与会话的定向回归，E5 有真实策略不匹配拒绝。补实际候选入口逐项变更 Run、request、attempt、node、Program、policy 和正文，核对无写入及错误脱敏。 |
@@ -113,7 +114,7 @@
 
 - **G07–G08。** Codex 候选入口、签前绑定、双账户闭环和 Outbox 崩溃恢复样本已有实测。生产有界保留和候选入口完整负例为 BLOCKED。
 - **G09–G11。** 签名接纳、唯一 CAS 与恢复已有双平台实测。完整安全矩阵、C12／S13／T27、C23 和 N 级裁决为 BLOCKED。
-- **G12／M6。** 见 [冻结追踪表](../p0a-g01-20261112/traceability.md)、[兼容实现](../p0a-compat-codex-20261113/README.md) 和 [管理终止](../p0a-admin-codex-20261113/README.md)。待核对同一发行候选上的适用 T／R／S 和计划条款、Checkpoint 契约裁决、支持的升级与回滚、发布 Host 的生产验收及独立复审。P0-B／P1／P2 条款按原计划阶段判定 N/A。
+- **G12／M6。** 由独立审查角色只读复核同一发行候选的适用 T／R／S、Checkpoint 契约、升级与回滚、发布 Host 验收和原始证据，记录裁决与剩余 BLOCKED。审查角色与实施角色分开。P0-B／P1／P2 条款按原计划阶段判定 N/A。 [冻结追踪表](../p0a-g01-20261112/traceability.md) · [兼容实现](../p0a-compat-codex-20261113/README.md) · [管理终止](../p0a-admin-codex-20261113/README.md)
 - **G17。** 在 G12 收口后冻结发行范围与候选，验证发行包和安装，再按独立授权办理合并、Tag、发布和部署。
 
 ## 四项已确认的首发契约

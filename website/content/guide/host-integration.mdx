@@ -2,6 +2,8 @@
 
 Runtime 是 FlowKit 与模型、审批界面、业务函数之间的接缝。本页把 Agent、Skill、输出 Schema、业务检查和人工审批放在一个完整例子里。示例使用固定响应，便于先确认编排正确，再替换真实服务。
 
+以下示例适用于 Standard。内部 Interactive P0-A 接入由受信 Host 管理持久化、模型隔离和操作权限。部署时用经 OS 认证的操作员会话固定租户，并为完整结果读取单独授权审计角色。
+
 ## 准备完整目录
 
 按[安装与环境](/guide/installation)建立 ESM 消费者项目。在项目根目录创建 sample.workflow.js、host.mjs 和 skills/writer.md。package.json 所在目录也是默认项目根目录。

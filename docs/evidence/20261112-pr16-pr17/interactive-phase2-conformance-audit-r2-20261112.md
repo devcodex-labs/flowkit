@@ -7,7 +7,7 @@
 - 当前 main（2026-11-12 检查）：`13d573c5ddc4a0ed3502401589c581799c96c5d2`；[main commit](https://github.com/devcodex-labs/flowkit/commit/13d573c5ddc4a0ed3502401589c581799c96c5d2)。
 - R1 使用的旧 main：`ae5fc5a42c67eb6e2c229d72ff4d9ac8e3aab3cd`；对 `src/interactive/coordinator.mjs`、`trusted-host.mjs`、`sqlite-store.mjs`、`compile.mjs`、`types/interactive.d.ts` 逐一读取两版 GitHub 文件并比较 **Git blob SHA 五项完全一致**。因此 R1 的相关代码事实不因 PR #15 文档合并而失效；其他未比较文件不能套用这一结论。
 - 已直接读取正式 V0.3 `FlowKit-Host-Driven-Interactive-Execution-Requirements-V0.3-Confirmed(1).md`（§§1–7、15–19 与关键段落）；其历史登记身份为 56,883 bytes / SHA-256 `3a0adc3edb41869a6309bae29ec5496df00970c815f8dc16330a90cbf26e703e`。
-- 正式 V0.6-R5 的身份为 114,621 bytes / SHA-256 `09f3a5698e238d10b80efb8e26d1c41e51b663ca620efa70815dd7b52f2106ba`，由 [正式原件登记](./interactive-phase2-formal-source-register.md) 及 PR #15 的历史 9/9 校验支持。**本轮当前会话无法直接读取 Library 中该 Markdown 原始正文（原始文件读取接口返回不可访问），因此涉及 §4/§5/§8/§16 的精确规范措辞，仍引用 R1 已抽取的条款并列为独立复核门禁；不能声称本轮已独立全文复读 V0.6-R5。** 不应因此推翻此前原件已找回的事实，也无需重写原件。
+- 正式 V0.6-R5 的身份为 114,621 bytes / SHA-256 `09f3a5698e238d10b80efb8e26d1c41e51b663ca620efa70815dd7b52f2106ba`，由 [正式原件登记](../../interactive-phase2-formal-source-register.md) 及 PR #15 的历史 9/9 校验支持。**本轮当前会话无法直接读取 Library 中该 Markdown 原始正文（原始文件读取接口返回不可访问），因此涉及 §4/§5/§8/§16 的精确规范措辞，仍引用 R1 已抽取的条款并列为独立复核门禁；不能声称本轮已独立全文复读 V0.6-R5。** 不应因此推翻此前原件已找回的事实，也无需重写原件。
 - 证据等级：`SOURCE-CONFIRMED` = 已直接读取具体源码及类型；`SOURCE-INFERRED` = 源码顺序推断、尚未运行反例；`CONTRACT-CONFIRMED-V03` = 已直接读取正式 V0.3；`V06-R1-EXTRACT` = 对应 V0.6 原文由 R1 转录、待独立原文复核；`RUN-BLOCKED` = 未取得该执行场景的原始运行证明。**以上不是测试 PASS 等级。**
 
 ### 1.1 当前关键源码身份

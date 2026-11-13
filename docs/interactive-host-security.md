@@ -61,6 +61,35 @@ checkStep; constructing a string `provenanceRef` or JSON
 5. Use separate OS users/process isolation for the untrusted model worker.
    A shared-UID shell agent must not be treated as a trusted approval origin.
 
+## OS-authenticated operator and auditor sessions
+
+For the first internal deployment, the trusted launcher obtains the operator or
+auditor identity from the Windows token SID or Linux UID of the authenticated
+OS session. Store the identity-to-namespace and role mapping in Host-private
+configuration. Provision the SQLite Store for the namespace assigned by that
+mapping. The Model runs under a separate account and sees only task input and
+submission tools.
+
+Use the [role mapping](../examples/interactive/codex-os-access.mjs) and
+[stdio session](../examples/interactive/codex-os-stdio.mjs) as reference adapters.
+The stdio adapter expects an already authenticated peer and dedicated streams.
+It authorizes each command against the server-side session and closes the grant
+when the stream ends. It rechecks `result:read` before returning a result.
+For writes, authorize again at the mutation boundary after any asynchronous
+preparation. Policy reload cannot undo an operation already committed.
+An operator may start, dispatch and complete in its
+namespace. Grant `result:read` separately to the auditor and route it through
+`readTrustedTerminalResult`. Keep full results on the authorized audit channel.
+Use a trusted configuration reload to remove or change a grant. Removing and
+then restoring it requires a new session. Deployments with multiple Host
+processes must apply the policy update to each affected process.
+
+For file submissions, the authorized Host fixes the original bytes and binds the
+reference to the current namespace, Pending and observed Model call. The Host
+must enforce the operator grant before claiming the snapshot. See the
+[release matrix](./evidence/p0a-g07-g12-20261113/release-matrix.md) for candidate
+verification and the remaining checks on the release deployment.
+
 ## Minimal Host-side integration
 
 ~~~js

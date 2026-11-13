@@ -27,7 +27,9 @@ export async function serveCodexOsSession({access,identity,input,output,dispatch
         const command=JSON.parse(line);
         const {action,namespace}=command;
         access.authorize(session,action,namespace);
-        response={ok:true,result:await dispatch(session,command)};
+        const result=await dispatch(session,command);
+        if (action==='result:read') access.authorize(session,action,namespace);
+        response={ok:true,result};
       } catch {
         response={ok:false,code:'FK_I_HOST_DENIED'};
       }

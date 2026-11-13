@@ -31,8 +31,8 @@ PR #16 / #17 的 HEAD 与任务开始时给出的历史 SHA 一致，执行前�
 
 `git diff --stat 13d573c 90cc0de` 只有：
 
-- `docs/interactive-phase2-conformance-audit-r1-20261112.md`
-- `docs/interactive-phase2-conformance-audit-r2-20261112.md`
+- [Phase 2 R1](./interactive-phase2-conformance-audit-r1-20261112.md)
+- [Phase 2 R2](./interactive-phase2-conformance-audit-r2-20261112.md)
 
 没有生产代码。`git diff ada01c9 -- tests/interactive/coordinator.test.mjs` 在修复分支上为空，说明纳入的回归测试与 PR #17 逐字相同。
 
