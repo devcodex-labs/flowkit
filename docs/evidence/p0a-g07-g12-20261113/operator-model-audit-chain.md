@@ -17,18 +17,22 @@ node <归档目录>/verify-windows-chain.mjs <checkout> <归档目录>
 
 第一次启动遗漏 `RunName` 参数声明，Host 创建证据目录时返回 `EINVAL`。保留第一次退出 1 的原始日志，补齐并校验参数后复跑，同一代码候选退出 0。复跑的标准错误记录一次模型列表刷新超时，正式回合、签收及审计链完成。Windows Node 22.13.0 与 24.22.2 的定向回归各通过 8/8。`FlowKit-Windows-G12-Operator-Audit.zip` SHA-256 为 `f331c89026084c2bfd50915a42f918ca43f4c026c6e665f56891f16f1c5a0f19`，逐项核对 26 个归档文件。
 
-## Linux 隔离双账户条件
+## Linux 同一 Run
 
-托管执行器的普通 UID 1000 执行 `/opt/codex/bin/codex sandbox /usr/bin/true` 退出 0，仍缺专用 Model 账户、受管启动器和独立登录。现有容器的 Host 41001 与 Model 41002 独立，Model 登录有效，命令沙箱仍因无法创建用户命名空间退出 1。两项能力尚未在同一候选环境齐备，条件性拉取未触发。Linux checkout 仍为 `2594511d058da47f8cad43e57de48c23db8abf0e`。隔离双账户沙箱及本轮 Linux 同链验收为 BLOCKED。
+FlowKit 先快进拉取并核对 `5842586a049364fcecc1f8b60df3ba40d5aa90df`，同步验证 75 个测试源文件，复用专用容器内普通 Host UID 41001、已登录 Model UID 41002 和固定 stdio 启动链。受信监督器核对实际普通操作员及审计员进程，将各自的命令转发至 Host 私有 stdio，并记录对端收件。
+
+`chain-aaaf1a243271417d9408b1e600a31d6e` 的操作员收到 revision 3 的等待态。真实 Codex App Server 产生匹配的工具开始与回调，Host 的唯一签名回执在 revision 4 接纳。审计员进程收到同一 Run 的 revision 9 终态，操作员读取被拒。两次读取前后的 SQLite 快照一致。离线复核通过同一 requestId、Ed25519 签名、回执索引、十条 Journal 哈希链和实际收件。监督器首次运行退出 0，耗时 7.94 秒。离线核验退出 0，Host、Model 和测试对端均已回收。样本为 P/M/T。
 
 ```sh
-/opt/codex/bin/codex sandbox /usr/bin/true
-docker --host=unix:///var/run/docker.sock exec --user 41002:41002 flowkit-linux-20261113 /usr/local/bin/flowkit-model-account status
-docker --host=unix:///var/run/docker.sock exec --user 41002:41002 --env HOME=/home/fkmodel --env CODEX_HOME=/home/fkmodel/.codex --workdir /model-work flowkit-linux-20261113 /usr/local/bin/codex sandbox /usr/bin/true
+git -C /workspace/flowkit-linux-test pull --ff-only origin feat/p0a-interactive-20261112
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-os-chain-controller.mjs
+node deliverables/scripts/verify-os-chain-public.mjs "$PWD"
 ```
 
-`FlowKit-Linux-Managed-Dual-Account-Readiness-20261113.zip` SHA-256 为 `24a339fe78ce28457fcf53eec8808d66fc2c83891fbfbd21f2e884b78b978e88`。 [Linux 命令、退出码与原始证据](thread://6af5c6d6-410c-8191-be10-a7ad14d2702a?hostId=durable)
+`FlowKit-Linux-OS-Chain-5842586-20261114.zip` SHA-256 为 `6cde468e651cf36879051b34588a124b8b717f020cc3aa121044125aee96510e`。Linux 端核对 156 个载荷文件与 ZIP 完整性。归档包含真实启动命令、退出码、两向原始协议、普通进程收件、只读快照与逐项 SHA-256。 [Linux 原始记录及归档](thread://6af5c6d6-410c-8191-be10-a7ad14d2702a?hostId=durable)
+
+Linux 命令沙箱 SEC-17 维持 BLOCKED，沿用既有容器的用户命名空间诊断。本轮按已确认范围执行同链实测。早先的环境核对归档 `FlowKit-Linux-Managed-Dual-Account-Readiness-20261113.zip` SHA-256 为 `24a339fe78ce28457fcf53eec8808d66fc2c83891fbfbd21f2e884b78b978e88`。
 
 ## 裁决
 
-独立角色审查了 `os-chain` 的测试范围、受信监督器和首次启动问题。Windows 同一 Run 正向链通过。**NAT-14 原生异常恢复和 G12 仍为 BLOCKED**。E22 保留原 Pending 并在下一模拟回合接纳的 P 级证据有效，本批真实回合仅覆盖正常观察顺序。待补原生异常后有界结束及原 Pending 后续接纳、Linux 隔离双账户的实际命令沙箱、完整授权及披露范围和供应商故障证据。
+**Windows／Linux 同一 Run 正向链通过。** Windows 由独立角色复审，Linux 通过离线验签、哈希链及收件复核。NAT-14 原生异常恢复和 G12 仍为 BLOCKED，剩余门禁见 [发布矩阵](./release-matrix.md)。
