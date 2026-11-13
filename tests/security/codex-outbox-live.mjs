@@ -13,7 +13,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 
 const [exe,cwd,root,profile='isolated',suite='original']=process.argv.slice(2);
 assert.ok([exe,cwd,root].every(path.isAbsolute));
-assert.ok(['original','followup','signing','revocation','release-r5','ops-r5'].includes(suite));
+assert.ok(['original','followup','signing','revocation','release-r5','ops-r5','branch-r5'].includes(suite));
 mkdirSync(root,{mode:0o700});
 const probe=fileURLToPath(new URL('./codex-flowkit-probe.mjs',import.meta.url));
 const log=(event,data)=>appendFileSync(path.join(root,'supervisor.ndjson'),
@@ -588,7 +588,16 @@ async function revocationCase() {
 
 try {
   let result;
-  if (suite==='ops-r5') {
+  if (suite==='branch-r5') {
+    const cases=[];
+    for (const branch of ['approved','refused','closed','missing']) {
+      const observed=await offline('branch-'+branch,root,branch,{});
+      assert.equal(observed.passed,true);
+      assert.equal(observed.branch,branch);
+      cases.push(observed);
+    }
+    result={cases};
+  } else if (suite==='ops-r5') {
     await snapshotCleanupCrash('after-queue',262144);
     await snapshotCleanupCrash('after-unlink',2093056);
     await crossStoreRevocation({coordinated:true});

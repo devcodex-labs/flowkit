@@ -21,6 +21,8 @@ const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','o
   'outbox-check-revocation','release-check','release-revoke','release-clean','ops-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
+const branch=requested.startsWith('branch-')?requested.slice(7):null;
+assert.ok(branch===null || ['approved','refused','closed','missing'].includes(branch));
 const rotation=['rotate-old','rotate-new','rotate-old-next'].includes(cut);
 const revoked=['revoked-old','revoked-pending','revoked-new'].includes(cut);
 const nextSigner=cut==='rotate-new'||cut==='revoked-new';
@@ -29,7 +31,7 @@ const runRecord=['rotate-new','rotate-old-next','revoked-pending','release-cap-n
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
 const clearArtifact=cut==='ops-clear';
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
-const size=requested==='loop'||fallback||scenario?0:Number(requested);
+const size=requested==='loop'||fallback||scenario||branch?0:Number(requested);
 assert.ok(path.isAbsolute(exe) && path.isAbsolute(cwd) && path.isAbsolute(out));
 assert.ok([0,65536,262144,2093056].includes(size));
 assert.ok(!fallback||[262144,2093056].includes(artifactSize));
@@ -43,12 +45,18 @@ const journal=(event,details={})=>record('observer.ndjson',JSON.stringify({event
 const objectSchema=(properties,required=Object.keys(properties))=>({type:'object',properties,required,additionalProperties:false});
 const str={type:'string'};
 const tool=(name,description,inputSchema)=>({type:'function',name,description,inputSchema});
+const branchFields={requirementId:str,designId:str,planId:str,reviewApproved:{type:'boolean'}};
+const branchNodes=['requirements','design','plan','review'];
+const branchInputKeys=['request','requirementId','designId','planId'];
+const branchOutputs={requirementId:'REQ-001',designId:'DES-001',planId:'PLAN-001',reviewApproved:branch==='approved'};
+const branchMarker='HOST-PRIVATE-BRANCH-FIXTURE';
 const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',objectSchema({nonce:str,payload:str}))] : [
   tool('flowkit_start','Start the one provisioned synthetic FlowKit Run and return the current public task',objectSchema({nonce:str})),
   fallback?tool('flowkit_submit_file','Submit the Host-issued artifact reference for the exact current FlowKit request',
     objectSchema({requestId:str,id:str}))
-    :tool('flowkit_submit','Submit the answer for the exact current FlowKit request',objectSchema({requestId:str,answer:str})),
-  tool('flowkit_continue','Read the public terminal state of the provisioned Run',objectSchema({runId:str})),
+    :tool('flowkit_submit','Submit the result for the exact current FlowKit request',objectSchema(branch
+      ?{requestId:str,result:objectSchema(branchFields,[])}:{requestId:str,answer:str})),
+  tool('flowkit_continue',branch?'Read the next public task or terminal frame':'Read the public terminal state of the provisioned Run',objectSchema({runId:str})),
 ];
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
@@ -101,6 +109,8 @@ const child=offline?null:spawn(command,args,
 child?.stdin.on('error',()=>{});
 const pending=new Map(),starts=new Map(),completed=new Set(),successful=[];
 let seq=0,threadId,turnId,turnStatus,failure,inlineObserved;
+let branchTurnDone,branchAccess='model',branchNegative;
+const branchReceipts=[];
 let finish;
 const finished=new Promise(resolve=>{finish=resolve;});
 let recordIdentity;
@@ -109,7 +119,7 @@ child?.on('error',error=>{failure=error.message;finish('spawn-error');});
 child?.on('close',code=>{journal('exit',{code});finish('closed');});
 child?.stdout.on('data',buffer=>record('app-server.stdout.ndjson',buffer));
 child?.stderr.on('data',buffer=>record('app-server.stderr',buffer));
-const timer=offline?null:setTimeout(()=>finish('timeout'),size?95000:65000);
+const timer=offline?null:setTimeout(()=>finish('timeout'),branch?240000:size?95000:65000);
 
 function send(message) {
   record('app-server.requests.ndjson',JSON.stringify(message)+'\n');
@@ -122,7 +132,20 @@ function request(method,params) {
 
 async function prepareFlowKit() {
   const file=path.join(fixture,'probe.workflow.js');
-  if (!scenario || requested==='outbox-setup') await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
+  if (branch) {
+    const agents=branchNodes.map((id,index)=>{
+      const field=Object.keys(branchFields)[index];
+      return `node('${id}',{name:'${id}',agent:'${id}',inputs:['${branchInputKeys[index]}'],
+        output:{type:'object',properties:{${field}:{type:'${branchFields[field].type}'}}},
+        retries:0,next:'${branchNodes[index+1]??'decision'}'})`;
+    });
+    await writeFile(file,`import {defineWorkflow,condition,node,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'codex-branch-probe',version:'1.0.0',name:'Codex branch probe',nodes:[
+condition('gate',{name:'Gate',branches:[{when:'ready',next:'requirements'},{when:'true',next:'declined'}]}),
+${agents.join(',\n')},
+condition('decision',{name:'Decision',branches:[{when:'reviewApproved',next:'done'},{when:'true',next:'declined'}]}),
+terminal('done',{name:'Done',status:'succeeded'}),terminal('declined',{name:'Declined',status:'failed'})]});`);
+  } else if (!scenario || requested==='outbox-setup') await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'codex-probe',version:'1.0.0',name:'Codex probe',nodes:[
 node('review',{name:'Review',agent:'reviewer',inputs:['question'],
 output:{type:'object',properties:${fallback?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'${cut==='ops-file'?'clear':'done'}'}),
@@ -161,8 +184,14 @@ terminal('done',{name:'Done',status:'succeeded'})
       validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
   }
   host=createTrustedInteractiveHost({
-    store, runtime:{skillResolver:async()=> 'Read the public question and submit its requested answer.',
-      validateResult(_schema,value) {
+    store, runtime:{skillResolver:async({nodeId})=>branch
+      ?branchInstruction(nodeId):'Read the public question and submit its requested answer.',
+      validateResult(schema,value) {
+        if (branch) {
+          const fields=Object.keys(schema.properties);
+          return Object.keys(value).length===fields.length && fields.every(field=>Object.hasOwn(value,field)
+            && value[field]===branchOutputs[field])?[]:['Unexpected branch result'];
+        }
         if (worker && cut==='release-after-receipt') {
           journal('release-validation-barrier',{runId:currentTask.runId,requestId:currentTask.requestId});
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
@@ -173,11 +202,13 @@ terminal('done',{name:'Done',status:'succeeded'})
           : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer'];
       }},
     trustedPublicKeys,trustedArtifacts:[program.programIdentity.artifactHash],
-    allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
-    authorizeTerminalAccess:({action})=>action==='run:read',
+    allowedInputKeys:branch?branchInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
+    authorizeTerminalAccess:({action})=>action==='run:read'
+      || (branch!==null && branchAccess==='auditor' && action==='result:read'),
     authorizeReceiptAudit:({action})=>offline && action==='receipt:read-history',
     authorizeKeyRevocation:({action})=>requested==='release-revoke' && cut!=='denied' && action==='host:revoke-key',
   });
+  if (branch) await writeFile(path.join(out,'proof.public.pem'),publicKey.export({type:'spki',format:'pem'}));
   let cleanupHandoff=handoff;
   if (requested==='ops-clean' && cut==='after-unlink') {
     cleanupHandoff={...handoff,reclaimAcknowledged(...args) {
@@ -203,6 +234,13 @@ terminal('done',{name:'Done',status:'succeeded'})
 }
 
 let key;
+function branchInstruction(nodeId) {
+  const index=branchNodes.indexOf(nodeId);
+  assert.ok(index>=0);
+  const field=Object.keys(branchFields)[index];
+  const input=branchInputKeys[index];
+  return `Verify ${input} is ${JSON.stringify(index===0?'software task':branchOutputs[input])}. If it matches, submit result ${JSON.stringify({[field]:branchOutputs[field]})}.`;
+}
 function stopAtCleanupCut() {
   process.send({event:'cleanup-cut',cut,hostPid:process.pid});
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
@@ -227,6 +265,13 @@ async function acceptResult(result,identity,pending=currentTask) {
     statementDigest:sha256Bytes(statementBytes),...(result.artifact?{artifact:result.artifact}:{})});
   const signature=sign(null,statementBytes,key).toString('base64url');
   frame=await host.accept({receipt,attestation:{statement,signature}});
+  if (branch) {
+    const indexed=store.getReceipt(frame.runId,receipt.requestId);
+    assert.equal(indexed.acceptedRevision,frame.acceptedRevision);
+    const proof={receipt,statement,signature,indexed,callId:identity.callId,threadId:identity.threadId,turnId:identity.turnId};
+    branchReceipts.push(proof);
+    journal('branch-proof',proof);
+  }
   journal('accepted',{acceptedRevision:frame.acceptedRevision,revision:frame.revision,runId:frame.runId,
     receipt:store.getReceipt(frame.runId,receipt.requestId)});
   return {runId:frame.runId,acceptedRevision:frame.acceptedRevision};
@@ -275,7 +320,59 @@ async function deliverCandidate(result,name,args,identity,started) {
   return {runId:frame.runId,...outbox.describe(proofId)};
 }
 
+function branchState() {
+  const checkpoint=store.load(frame.runId);
+  const journalRows=store.listJournal(frame.runId);
+  return {checkpoint,journalRows,indexed:currentTask?store.getReceipt(frame.runId,currentTask.requestId):null};
+}
+
+async function branchView() {
+  if (frame.status!=='waiting') return host.getPublicTerminalFrame({runId:frame.runId});
+  currentTask=await host.getPublicAgentTask({runId:frame.runId});
+  const index=branchReceipts.length;
+  const field=branchInputKeys[index];
+  assert.equal(currentTask.nodeId,branchNodes[index]);
+  assert.equal(currentTask.runId,frame.runId);
+  assert.deepEqual(currentTask.missing,[]);
+  assert.deepEqual(currentTask.input,{[field]:index===0?'software task':branchOutputs[field]});
+  assert.ok(!JSON.stringify(currentTask).includes(branchMarker));
+  journal('branch-pending',{runId:currentTask.runId,requestId:currentTask.requestId,nodeId:currentTask.nodeId,
+    revision:frame.revision,input:currentTask.input});
+  return currentTask;
+}
+
+async function branchTool(name,args,identity) {
+  if (name==='flowkit_start') {
+    assert.equal(args.nonce,nonce);
+    assert.equal(frame,undefined);
+    const state={request:'software task',privateMarker:branchMarker};
+    if (branch!=='missing') state.ready=branch!=='closed';
+    frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
+      startKey:nonce,state});
+    return branchView();
+  }
+  if (name==='flowkit_continue') {
+    assert.equal(args.runId,frame.runId);
+    return branchView();
+  }
+  assert.equal(name,'flowkit_submit');
+  const before=branchState();
+  if (args.requestId!==currentTask?.requestId) {
+    assert.equal(branchNegative,'request');
+    assert.deepEqual(branchState(),before);
+    journal('branch-request-denied',{runId:frame.runId,callId:identity.callId,
+      revision:before.checkpoint.revision,receiptCount:before.checkpoint.receiptCount,unchanged:true});
+    return {conflict:true,code:'REQUEST_DENIED'};
+  }
+  assert.equal(branchNegative,undefined);
+  assert.equal(frame.status,'waiting');
+  const field=Object.keys(branchFields)[branchReceipts.length];
+  assert.deepEqual(args.result,{[field]:branchOutputs[field]});
+  return acceptResult(args.result,identity);
+}
+
 async function handleTool(name,args,identity,started) {
+  if (branch) return branchTool(name,args,identity);
   if (size) {
     const canonical=canonicalBytes(args);
     inlineObserved={expected:size,received:canonical.byteLength,matched:canonical.equals(expectedBytes),
@@ -364,7 +461,9 @@ lines?.on('line',line=>{
   }
   const p=message.params;
   if(message.method==='item/started' && p.item.type==='dynamicToolCall') {
-    starts.set(p.item.id,{threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,arguments:p.item.arguments});
+    if (branchNegative!=='observation' || p.item.tool!=='flowkit_submit') {
+      starts.set(p.item.id,{threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,arguments:p.item.arguments});
+    } else journal('branch-start-withheld',{callId:p.item.id,threadId:p.threadId,turnId:p.turnId});
     journal('tool-start',{callId:p.item.id,threadId:p.threadId,turnId:p.turnId,tool:p.item.tool});
   } else if(message.method==='item/completed' && p.item.type==='dynamicToolCall') {
     completed.add(p.item.id);
@@ -372,8 +471,10 @@ lines?.on('line',line=>{
     void (async()=>{
       const started=starts.get(p.callId);
       try {
-        assert.ok((profile==='direct'||isolatedIdentity) && started && !completed.has(p.callId) && p.threadId===threadId && p.turnId===turnId
-          && started.threadId===threadId && started.turnId===turnId && started.tool===p.tool);
+        assert.ok((profile==='direct'||isolatedIdentity) && !completed.has(p.callId) && p.threadId===threadId && p.turnId===turnId);
+        assert.ok(started,'Missing Host observation');
+        assert.ok(
+          started.threadId===threadId && started.turnId===turnId && started.tool===p.tool);
         const args=canonicalBytes(p.arguments);
         assert.ok(args.equals(canonicalBytes(started.arguments)));
         assert.ok(specs.some(spec=>spec.name===p.tool));
@@ -388,6 +489,13 @@ lines?.on('line',line=>{
         successful.push(p.tool);
         send({id:message.id,result:{success:!result.conflict,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
       } catch(error) {
+        if (branchNegative==='observation' && p.tool==='flowkit_submit' && error.message==='Missing Host observation'
+          && p.arguments.requestId===currentTask.requestId) {
+          journal('branch-observation-denied',{callId:p.callId,threadId,turnId,requestId:currentTask.requestId});
+          successful.push(p.tool);
+          send({id:message.id,result:{success:false,contentItems:[{type:'inputText',text:'Missing Host observation'}]}});
+          return;
+        }
         failure=error.message;
         journal('rejected',{callId:p.callId,code:error.code,detail:error.message});
         send({id:message.id,result:{success:false,contentItems:[{type:'inputText',text:'Rejected fixture submission'}]}});
@@ -398,7 +506,8 @@ lines?.on('line',line=>{
   } else if(message.method==='turn/completed') {
     turnStatus=p.turn.status;
     if (p.turn.error) failure=p.turn.error.message;
-    finish('turn-completed');
+    if (branch) branchTurnDone();
+    else finish('turn-completed');
   } else if(message.method==='flowkit/profile/identity' && profile==='isolated') {
     const reported=p;
     try {
@@ -424,6 +533,74 @@ lines?.on('line',line=>{
 });
 let isolatedIdentity;
 
+async function branchTurn(model,prompt,tools) {
+  const start=successful.length;
+  const done=new Promise(resolve=>{branchTurnDone=resolve;});
+  const {turn}=await request('turn/start',{threadId,input:[{type:'text',text:prompt}]});
+  turnId=turn.id;
+  journal('turn',{model,threadId,turnId,pid:isolatedIdentity?.pid??child.pid,observerPid:process.pid});
+  await done;
+  assert.equal(turnStatus,'completed');
+  assert.equal(failure,undefined);
+  assert.deepEqual(successful.slice(start),tools);
+  assert.equal(completed.size,successful.length);
+}
+
+async function runBranch(model) {
+  const active=['approved','refused'].includes(branch);
+  await branchTurn(model,`Call flowkit_start exactly once with nonce "${nonce}". Use no other tool in this turn.`,['flowkit_start']);
+  assert.equal(frame.status,active?'waiting':branch==='missing'?'errored':'failed');
+  if (branch==='approved') {
+    const before=branchState();
+    const signed=branchReceipts.length;
+    branchNegative='request';
+    await branchTurn(model,'Fixture negative test: call flowkit_submit once with requestId "unbound-fixture-request" '
+      +'and result {"requirementId":"REQ-001"}. After the expected rejection finish without retrying.', ['flowkit_submit']);
+    assert.deepEqual(branchState(),before);
+    assert.equal(branchReceipts.length,signed);
+    branchNegative='observation';
+    await branchTurn(model,`Fixture negative test: call flowkit_submit once with requestId "${currentTask.requestId}" `
+      +'and result {"requirementId":"REQ-001"}. After the expected rejection finish without retrying.', ['flowkit_submit']);
+    branchNegative=undefined;
+    assert.deepEqual(branchState(),before);
+    assert.equal(branchReceipts.length,signed);
+  }
+  if (active) {
+    const runId=frame.runId;
+    for (const nodeId of branchNodes) {
+      await branchTurn(model,`Call flowkit_continue with runId "${runId}". It returns the public ${nodeId} task. `
+        +'Read its input and instruction. Call flowkit_submit exactly once using its requestId and the result required by the instruction. Then finish.',
+      ['flowkit_continue','flowkit_submit']);
+      assert.equal(frame.runId,runId);
+    }
+  }
+  const expectedStatus=branch==='approved'?'succeeded':branch==='missing'?'errored':'failed';
+  assert.equal(frame.status,expectedStatus);
+  await branchTurn(model,`Call flowkit_continue once with runId "${frame.runId}" to read its public status. Then finish.`,['flowkit_continue']);
+  const before=branchState();
+  const publicFrame=await host.getPublicTerminalFrame({runId:frame.runId});
+  assert.equal(Object.hasOwn(publicFrame,'state'),false);
+  assert.ok(!JSON.stringify(publicFrame).includes(branchMarker));
+  await assert.rejects(host.readTrustedTerminalResult({resultRef:publicFrame.resultRef}),{code:'FK_I_HOST_DENIED'});
+  branchAccess='auditor';
+  const trusted=await host.readTrustedTerminalResult({resultRef:publicFrame.resultRef});
+  assert.equal(trusted.state.privateMarker,branchMarker);
+  if (active) assert.deepEqual(trusted.state,{ready:true,request:'software task',privateMarker:branchMarker,...branchOutputs});
+  if (branch==='missing') assert.equal(trusted.causeCode,'FK_R002');
+  assert.deepEqual(branchState(),before);
+  assert.equal(before.checkpoint.receiptCount,active?4:0);
+  assert.equal(new Set(branchReceipts.map(p=>p.receipt.requestId)).size,active?4:0);
+  assert.equal(before.journalRows.length,frame.revision+1);
+  assert.equal(before.journalRows.filter(row=>row.entry.kind==='publish-pending').length,active?4:0);
+  for (const [revision,row] of before.journalRows.entries()) {
+    assert.equal(row.revision,revision);
+    if (revision>0) assert.equal(row.previousHash,before.journalRows[revision-1].entryHash);
+  }
+  journal('branch-verified',{branch,programHash:program.programIdentity.artifactHash,publicFrame,trusted,
+    journalRows:before.journalRows,receipts:branchReceipts.length,protectedRead:true,unchanged:true});
+  return 'branch-completed';
+}
+
 async function run() {
   if (profile==='isolated') await identityReady;
   if (!size) key=await prepareFlowKit();
@@ -441,6 +618,7 @@ async function run() {
     multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},
     dynamicTools:worker?specs.filter(spec=>fallback?spec.name!=='flowkit_continue':spec.name==='flowkit_submit'):specs});
   threadId=thread.id;
+  if (branch) return runBranch(model);
   const prompt=worker&&fallback
     ? 'Call flowkit_start with nonce "'+nonce+'". Read its fileReference and call flowkit_submit_file once with its exact id and requestId. Then finish.'
     : worker
@@ -463,10 +641,10 @@ try {
   const outcome=await Promise.race([run(),finished]);
   const expected=worker?(fallback?['flowkit_start','flowkit_submit_file']:['flowkit_submit'])
     :size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
-  const passed=outcome==='turn-completed' && turnStatus==='completed' && !failure
-    && JSON.stringify(successful)===JSON.stringify(expected) && completed.size===expected.length
+  const passed=(branch?outcome==='branch-completed':outcome==='turn-completed' && turnStatus==='completed' && !failure
+    && JSON.stringify(successful)===JSON.stringify(expected) && completed.size===expected.length)
     && (profile==='direct'||!!isolatedIdentity);
-  console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,artifactSize,profile,successful,inlineObserved,failure}));
+  console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,artifactSize,profile,successful,inlineObserved,failure,branch}));
   if(!passed)process.exitCode=1;
   }
 } catch(error) {console.error(error.message);process.exitCode=1;}
