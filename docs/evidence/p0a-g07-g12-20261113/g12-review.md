@@ -40,3 +40,7 @@
 ## 受控 stdio 观察回归复审
 
 **G12 维持 BLOCKED。** 独立角色确认 `d6bd8d839fe33d344748ee5d889f4bd901cb958f` 已同步绑定匹配响应的回合 ID，后续完成事件按线程和回合匹配。缺失、失配和迟到观察的拒绝条件有定向单测。现有探针在异常拒绝后仍可能让当次验收失败，同一 Pending 在同一 App Server 中恢复尚无证据。Linux Model 进程隔离和实际命令沙箱分开裁决。 [本批复审、实测与剩余缺口](./stdio-observation-recovery.md)
+
+## 受控 stdio Pending 恢复回归复审
+
+**G12 维持 BLOCKED。** 独立角色复核共享观察派发及 SQLite 回归，确认异常观察在签名和 CAS 前被拒绝，原 Pending 保留并可由下一模拟回合接纳。该结果计为 P。实际 App Server 的异常后续跑与 Linux Model 命令沙箱仍单列。 [本批范围、命令和证据](./stdio-pending-recovery.md)
