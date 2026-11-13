@@ -11,7 +11,7 @@ import {createSqliteCheckpointStore,createTrustedInteractiveHost} from '../../sr
 import {compileOpsWorkflow,opsRuntime,opsStart} from './p0a-ops-fixture.mjs';
 
 const [executable,cwd,out,mode='retry']=process.argv.slice(2);
-assert.ok(['retry','disconnect'].includes(mode));
+assert.ok(['retry','disconnect','interrupt'].includes(mode));
 assert.ok([executable,cwd,out].every(value=>value&&path.isAbsolute(value)));
 mkdirSync(out,{recursive:false,mode:0o700});
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
@@ -144,7 +144,19 @@ lines.on('line',line=>{
     } else if (message.method==='item/started'&&p.item.type==='dynamicToolCall') {
       observations.set(p.item.id,{threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,callId:p.item.id,args:p.item.arguments});
     } else if (message.method==='item/tool/call') {
-      void submit(message).catch(fail);
+      if (mode==='interrupt') {
+        const started=observations.get(p.callId);
+        assert.ok(active && identity && started && !active.callId);
+        assert.equal(p.threadId,active.threadId);
+        assert.equal(p.turnId,active.turnId);
+        assert.equal(p.tool,'probe_hold');
+        assert.deepEqual(started,{threadId:p.threadId,turnId:p.turnId,tool:p.tool,callId:p.callId,args:p.arguments});
+        assert.deepEqual(p.arguments,{});
+        active.callId=p.callId;
+        // Keep the real model turn waiting on a read-only probe until the client interrupts it.
+        event('turn-held',{threadId:p.threadId,turnId:p.turnId,callId:p.callId});
+        active.held();
+      } else void submit(message).catch(fail);
     } else if (message.method==='turn/completed'&&active&&p.threadId===active.threadId) {
       assert.equal(p.turn.id,active.turnId);
       active.done(p.turn);
@@ -203,14 +215,34 @@ async function run() {
   const {data}=await request('model/list',{limit:30,includeHidden:false});
   const model=data.find(entry=>entry.isDefault)?.model??data[0]?.model;
   assert.ok(model);
-  if (mode==='disconnect') {
+  if (mode==='disconnect' || mode==='interrupt') {
+    const interrupt=mode==='interrupt';
     const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
-      multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}}});
+      multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},...(interrupt?{dynamicTools:[{
+        type:'function',name:'probe_hold',description:'Read-only synthetic test barrier',
+        inputSchema:{type:'object',properties:{},additionalProperties:false},
+      }]}:{})});
     const {runId}=await host.start(opsStart(program,'transport-disconnect'));
     const snapshot=()=>({checkpoint:store.load(runId),journal:store.listJournal(runId),outbox:outbox.usage()});
     const before=snapshot();
     assert.equal(before.checkpoint.status,'waiting');
     assert.equal(before.checkpoint.receiptCount,0);
+    assert.equal(before.outbox.records,0);
+    let turn;
+    if (interrupt) {
+      active={threadId:thread.id};
+      const held=new Promise(resolve=>{active.held=resolve;});
+      const completed=new Promise(resolve=>{active.done=resolve;});
+      await request('turn/start',{threadId:thread.id,input:[{type:'text',
+        text:'Synthetic integration test. Immediately call the probe_hold tool exactly once with an empty object. Wait for its reply.'}]});
+      await Promise.race([held,completed.then(()=>{throw new Error('Model turn completed before the test barrier');})]);
+      assert.deepEqual(snapshot(),before);
+      await request('turn/interrupt',{threadId:thread.id,turnId:active.turnId});
+      turn=await completed;
+      assert.equal(turn.status,'interrupted');
+      event('turn-interrupted',{threadId:thread.id,turnId:turn.id,callId:active.callId,status:turn.status});
+      active=undefined;
+    }
     const closed=new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));
     closingForTest=true;
     child.stdin.end();
@@ -219,7 +251,9 @@ async function run() {
     const resumed=await host.resume({runId});
     assert.equal(resumed.pending.requestId,before.checkpoint.pending.requestId);
     assert.deepEqual(snapshot(),before);
-    const result={passed:true,mode,threadId:thread.id,runId,exit,unchanged:true,receiptCount:0};
+    assert.equal(exit.code,0);
+    const result={passed:true,mode,threadId:thread.id,runId,exit,unchanged:true,receiptCount:0,
+      ...(turn?{turnId:turn.id,turnStatus:turn.status}:{})};
     event('transport-closed',result);
     return result;
   }
