@@ -115,11 +115,20 @@ async function testBackup(t,fileHandoff) {
   const ack=await restored.host.readHistoricalAck({namespace:'staging-backup',runId,requestId,nodeId,attempt,
     receiptHash:ackBefore.receiptHash});
   assert.equal(ack.acceptedRevision,ackBefore.acceptedRevision);
-  const recovered=await restored.outbox.deliver(pending.proofId);
-  assert.equal(recovered.status,'succeeded');
-  const restoredProof=restored.outbox.describe(pending.proofId);
+  assert.deepEqual(await restored.outbox.recover(runId),[]);
+  const recovered=await restored.outbox.recover(pending.task.runId);
+  assert.equal(recovered.length,1);
+  const [restoredProof]=recovered;
+  assert.equal(restoredProof.proofId,pending.proofId);
+  assert.equal(restored.store.load(pending.task.runId).status,'succeeded');
+  assert.equal(restored.store.getReceipt(pending.task.runId,pending.task.requestId).acceptedRevision,
+    restoredProof.acceptedRevision);
   assert.equal(restoredProof.signatureHash,pendingBefore.signatureHash);
   assert.equal(restoredProof.state,'ACKED');
+  const afterRecovery=state(restored.store,pending);
+  assert.deepEqual(await restored.outbox.recover(pending.task.runId),[]);
+  assert.deepEqual(state(restored.store,pending),afterRecovery);
+  assert.deepEqual(state(restored.store,accepted),before[0]);
   if (fileHandoff) {
     const saved=restored.handoff.readSnapshot(pending.fileId);
     assert.deepEqual(saved.bytes,bytes);
@@ -131,7 +140,8 @@ async function testBackup(t,fileHandoff) {
   assert.deepEqual(live.outbox.describe(accepted.proofId),ackBefore);
   assert.deepEqual(live.outbox.describe(pending.proofId),pendingBefore);
   console.log('P0A_BACKUP '+JSON.stringify({integrity:'ok',hashes,originalAck:ack.acceptedRevision,
-    recoveredAck:restoredProof.acceptedRevision,signatureReused:true,sourceUnchanged:true,
+    recoveredAck:restoredProof.acceptedRevision,autoDiscovered:recovered.length,secondScan:0,
+    signatureReused:true,sourceUnchanged:true,
     ...(fileHandoff?{fileBytes:bytes.length,fileSha256:sha256Bytes(bytes)}:{})}));
 }
 
