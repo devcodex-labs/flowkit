@@ -27,4 +27,4 @@
 
 ## 恢复扫描与传输骤断复审
 
-**G12 维持 BLOCKED。** 独立角色核对 `cfe47768194fb8bbaf7e817ee0efddb0e493116b` 的两个测试文件和 Windows 原始证据。已恢复库按已知 Run ID 发现一份待投递回执并复用原签名，复扫为空。真实模型工具回调已到达且尚未应答时，本地传输突然终止。Host 核对同一 Pending 和零新增回执。实际首发的启动编排、身份与跨 Store 联动、外部值班、长时容量与备份系统，以及部署链路断线重连和供应商故障仍待验。 [本批证据与四项待提供输入](../p0a-codex-isolated-20261113/g12-recovery-transport-loss.md)
+**G12 维持 BLOCKED。** 独立角色核对 `cfe47768194fb8bbaf7e817ee0efddb0e493116b` 的两个测试文件及 Windows／Linux 原始证据。已恢复库按已知 Run ID 发现一份待投递回执并复用原签名，复扫为空。真实模型工具回调已到达且尚未应答时，本地传输突然终止。Host 核对同一 Pending 和零新增回执。Linux 另核对 Model 进程退出码和 SQLite 旁读锁错误记录。实际首发的启动编排、身份与跨 Store 联动、外部值班、长时容量与备份系统，以及部署链路断线重连和供应商故障仍待验。 [本批证据与四项待提供输入](../p0a-codex-isolated-20261113/g12-recovery-transport-loss.md)

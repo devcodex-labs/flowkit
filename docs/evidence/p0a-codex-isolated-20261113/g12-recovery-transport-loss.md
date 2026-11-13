@@ -19,7 +19,15 @@ node tests/security/p0a-ops-codex.mjs <codex> <Model工作目录> <新Host私有
 
 ## Linux
 
-同一候选的 Ubuntu CI 在 Node 22.13.0 和 24.22.1 分别通过备份与运维测试 4/4。CI 日志含恢复扫描、三 Store 联动和回环接收端落盘。已派发同一候选的快进拉取、隔离环境复用及实测。独立账户原始记录待取。
+FlowKit 快进拉取并核对同一候选，复用固定启动器、普通 Host／Model 和测试环境。按 Run 恢复测试首次 2/2 通过，首次扫描一份，复扫为空。实际回合等待只读工具期间，探针以 SIGKILL 停止 Host UID 41001 持有的字节转发进程，固定启动器哈希不变。未发送取消 RPC，未收到回合终态，Checkpoint、Journal、Outbox、接纳索引与 Pending 保持一致。独立进程回收记录确认 Model App Server 随后退出 0。SQL 旁读保留瞬时 `database is locked` 日志，四份最终快照与离线校验通过。备份为 P 级，真实回合与传输为 P/M/T 级。
+
+```sh
+git pull --ff-only origin feat/p0a-interactive-20261112
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-transport-loss-controller.mjs local attempt-1
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-transport-loss-controller.mjs codex attempt-1
+```
+
+同一候选的 Ubuntu CI 在 Node 22.13.0 和 24.22.1 分别通过备份与运维测试 4/4。CI 日志含恢复扫描、三 Store 联动和回环接收端落盘。`FlowKit-Linux-Transport-Loss-Autorecover-20261113.zip` 的 SHA-256 为 `da9dbf6c061c5c3c34428d4689717934638c4f3446eb217672d27ff4980f7d61`，173 个载荷文件的哈希、归档完整性与敏感内容扫描由 Linux 端核对。 [Linux 原始执行记录与归档](thread://6af5c6d6-410c-8191-be10-a7ad14d2702a?hostId=durable)
 
 ## 可复用的首发预演配置
 
