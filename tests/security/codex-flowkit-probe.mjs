@@ -145,9 +145,12 @@ function send(message) {
   record('app-server.requests.ndjson',JSON.stringify(message)+'\n');
   child.stdin.write(JSON.stringify(message)+'\n');
 }
-function request(method,params) {
+function request(method,params,beforeResolve) {
   const id=++seq;
-  return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});send({id,method,params});});
+  return new Promise((resolve,reject)=>{
+    pending.set(id,{resolve,reject,beforeResolve});
+    send({id,method,params});
+  });
 }
 
 async function prepareFlowKit() {
@@ -399,7 +402,7 @@ function denyEntry(code) {
 function captureEntryStart(p) {
   if (osEntry) {
     const turn=osTurns.get(p.threadId);
-    if (turn && (turn.id===undefined || turn.id===p.turnId)) turn.observations.record(p);
+    if (turn?.id && turn.id===p.turnId) turn.observations.record(p);
     return;
   }
   const observation={threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,arguments:p.item.arguments};
@@ -636,8 +639,12 @@ lines?.on('line',line=>{
   if (message.id!==undefined && !message.method) {
     const waiter=pending.get(message.id);
     pending.delete(message.id);
-    if(message.error) waiter?.reject(new Error(JSON.stringify(message.error)));
-    else waiter?.resolve(message.result);
+    if (!waiter) return;
+    try {
+      if (message.error) throw new Error(JSON.stringify(message.error));
+      waiter.beforeResolve?.(message.result);
+      waiter.resolve(message.result);
+    } catch (error) {waiter.reject(error);}
     return;
   }
   const p=message.params;
@@ -688,7 +695,11 @@ lines?.on('line',line=>{
   } else if(message.id!==undefined && message.method) {
     send({id:message.id,error:{code:-32601,message:'Unexpected server request'}});
   } else if(message.method==='turn/completed') {
-    if (osEntry) {osTurns.get(p.threadId)?.resolve(p.turn);return;}
+    if (osEntry) {
+      const turn=osTurns.get(p.threadId);
+      if (turn?.id && turn.id===p.turn.id) turn.resolve(p.turn);
+      return;
+    }
     turnStatus=p.turn.status;
     if (p.turn.error) failure=p.turn.error.message;
     if (branch||entry) branchTurnDone();
@@ -790,9 +801,12 @@ async function osTurn(session,target,label,prompt,denial=false) {
   const done=new Promise(resolve=>osTurns.set(session.threadId,
     {label,resolve,target,denial,calls,observations:createOsToolObservations()}));
   const current=osTurns.get(session.threadId);
-  const {turn}=await request('turn/start',{threadId:session.threadId,input:[{type:'text',text:prompt}]});
-  current.id=turn.id;
-  journal('os-turn',{label,threadId:session.threadId,turnId:turn.id,subject:session.subject,namespace:session.namespace});
+  await request('turn/start',{threadId:session.threadId,input:[{type:'text',text:prompt}]},({turn})=>{
+    assert.ok(typeof turn?.id==='string' && turn.id.length>0);
+    // Bind the response before processing another line in the same stdio chunk.
+    current.id=turn.id;
+    journal('os-turn',{label,threadId:session.threadId,turnId:turn.id,subject:session.subject,namespace:session.namespace});
+  });
   assert.equal((await done).status,'completed');
   osTurns.delete(session.threadId);
   assert.deepEqual(calls,osFile&&!denial?['flowkit_file_task','flowkit_submit_file']:[osFile?'flowkit_submit_file':'flowkit_submit']);
