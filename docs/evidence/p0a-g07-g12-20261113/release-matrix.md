@@ -15,6 +15,7 @@
 | E5 | `ab931afe0699ca89d9f5f29aea8263caf1031cba` | 移除旧公钥后拒绝加载、恢复和旧回执重放。Store 原 Ack 和 Outbox 记录仍在。新策略下新 Run 通过。[两端日志、验签和归档哈希](../p0a-codex-isolated-20261113/revocation-retention.md#实测结果) |
 | E6 | `57a39c84934071450fadbe238dcc475f50b84d30` | Windows/Linux 一次性双账户 OS 负例，包含密钥、SQLite/WAL/SHM/备份、进程权限及完整性检查。P 级。[运行命令和平台结果](../p0a-g05-g06-20261112/README.md) |
 | E7 | `eb5823094cdee0f5d8fe8a558a9824e1c712db4d`、`7acdfdd0137bc34cd4407ee9ffb8c2fa1e5a18a7`、`9584184d7098a402a15f3edd8bfb11ea95f7ed49` | 64 KiB 同账户真实内联成功。256 KiB 和近 2 MiB 的内联试验均未发出工具调用。文件替换、链接、截断、摘要和重复消费有定向 P 级回归。[内联记录](../p0a-admin-codex-20261113/README.md) · [文件入口记录](../p0a-codex-file-fallback-20261113/README.md) |
+| E8 | `d3674bca09d305f88828a77b1d3653937fc5da5e`、`5efa127cf8a26081985e454b9719619a39fdc4b2` | R5 恢复基线、validate 阶段恢复、撤销后原 Ack、两个独立 Store 分别撤销、Outbox 满额和清理。[平台裁决、命令、原始日志与 SHA-256](../p0a-codex-isolated-20261113/r5-release-live.md) |
 
 ## SEC · 生产配置与候选入口
 
@@ -33,12 +34,12 @@
 | SEC-11 | BLOCKED，完整披露矩阵 | E1 使用含 Host 私有标记的任务并走公开投影，现有 P 级回归独立检查结果读取权限。补任务、工具回复、终态和生产日志全路径标记检查。 |
 | SEC-12 | BLOCKED，真实资源边界 | E1 文件入口两个大小通过。E7 内联 64 KiB 通过，两档更大内联无工具调用。补实际入口异常正文、限流／超时及内联回执上限分类。 |
 | SEC-13 | BLOCKED，完整替换负例 | E7 的文件替换、硬链接、符号链接或目录联接点有 P 级证据。E5 的旧策略拒绝有双平台原生结果。补实际启动链下 Program 和所有已启用配置入口的替换负例。 |
-| SEC-14 | BLOCKED，生产轮换与撤销 | E4 验证仍受信的两把钥轮换和原 Ack。E5 验证仅信任新钥时旧 Run 拒绝、旧索引保留。补实际权限变更及按部署配置适用的证书／KMS 操作、旧 Run 处置和撤销后历史对账。 |
+| SEC-14 | BLOCKED，生产轮换与撤销 | E4 验证仍受信的两把钥轮换和原 Ack。E5 验证仅信任新钥时旧 Run 拒绝。E8 验证两独立 Store 分别撤销、未接纳旧回执拒绝和受权只读返回历史 Ack。生产全量 Store 协调、实际权限变更及适用的证书／KMS 操作待测。 |
 | SEC-15 | BLOCKED，真实跨租户并发 | E2 是同租户、同 Pending 的两个会话。现有脚本测试有租户拒绝。补实际入口两个租户同 startKey 和 Run 标识的隔离证据。 |
 | SEC-16 | N/A，当前 Windows 配置无 Named Pipe 候选入口 | 当前使用标准流。若发行选择 Named Pipe，按原矩阵重新裁决。 |
 | SEC-17 | BLOCKED，Linux 实际 CLI 拒绝 | E6 记录受限进程的 47 项文件和进程权限拒绝，E1 记录真实 Codex 同 PID 启动、不同 UID/GID 和零能力。补真实 CLI 的相应拒绝日志。Windows 不适用。 |
-| SEC-18 | PASS，双平台 Outbox 样本 | E2/E3/E4 覆盖签名前、签后 CAS 前及 CAS 后 `ACKED` 前的真实强杀、原字节验签与对账、未接纳过期拒绝和仍受信的历史 Ack。E5 单列移除公钥后的拒绝和账本保留。 |
-| SEC-19 | BLOCKED，生产有界保留 | E4/E5 核对重启后原记录仍在。补期限、容量、清理、合规保留和清理后 Ack／Journal 复核，见下方待确认方案。 |
+| SEC-18 | PASS，双平台 Outbox 样本 | E2/E3/E4 覆盖签名前、签后 CAS 前及 CAS 后 `ACKED` 前的真实强杀、原字节验签与对账、未接纳过期拒绝和仍受信的历史 Ack。E8 增补 R5 已接纳回执在 validate 阶段强杀后的恢复。 |
+| SEC-19 | BLOCKED，生产有界保留 | E8 验证真实工具触发记录数及逻辑字节拒绝、保留标记、受权清理、审计写失败回滚和重试。生产期限、真实磁盘占用、告警及双账户文件快照清理中断仍待取证。 |
 
 ## NAT · Codex 等价验收
 
@@ -82,7 +83,7 @@
 | C12 | BLOCKED，E1–E5 补齐多个原生子样本，完整 SEC／NAT 和来源链待复审。 |
 | C13 | PASS，P 级分支与预算。 |
 | C14 | PASS，P 级链中错误与超限拒绝。原生入口负例归 SEC-08/12。 |
-| C15 | PASS，P 级历史重传及 E3/E4 的原生历史 Ack。撤销后的独立对账另列。 |
+| C15 | PASS，P 级历史重传、E3/E4 原生历史 Ack。E8 增补真实回执撤销后及清理后的受权历史对账样本。 |
 | C16 | BLOCKED，P 级可信失败路径已有。缺真实供应商失败。 |
 | C17 | PASS，P 级策略漂移拒绝；E5 补同类原生拒绝样本。 |
 | C18 | PASS，P 级多 Run 交错。 |
@@ -113,7 +114,7 @@
 
 ## 四项已确认的首发契约
 
-首发测试库按 R5 结构重建，开发期归档保留用于证据复核。以下实现的程序回归使用新建 SQLite 库。真实 Codex Windows/Linux 双账户在新实现上的复验及生产运维演练仍为 BLOCKED。
+首发测试库按 R5 结构重建，开发期归档保留用于证据复核。后续真实 Codex 双账户结果和原始日志索引见 [R5 首发候选复验](../p0a-codex-isolated-20261113/r5-release-live.md)。生产运维演练及正式裁决仍为 BLOCKED。
 
 ### 1. Checkpoint 格式
 
@@ -133,6 +134,6 @@ Host 部署配置审计期限和容量上限。保留待投递及未对账的记
 
 | 首发回归 | 可复核的 P 级覆盖 | 仍为 BLOCKED |
 |---|---|---|
-| R5 Checkpoint | SQLite 原字节与异步 Store 回读一致、阶段恢复、首次接纳、管理审计和包消费者。[版本化 SDK 回归](../../../tests/interactive/versioned.test.mjs) | 同一发行候选上的真实 Codex 双平台回归与 G12 独立裁决。 |
-| Ack、轮换与撤销 | 两条 SQLite 连接验证旧策略停止新建、可处理既有 Run、撤销后不能签发或接纳，并可通过受权查询返回原 revision。[Host 回归](../../../tests/interactive/trusted-host.test.mjs) | 真实部署所有 Host 的停用和多 Store 运维演练。 |
-| Outbox 容量和清理 | 两条连接共享配额，满额拒绝并通知。权限、保留窗口、保留标记和审计事务覆盖。文件快照经授权确认可回收后清理，中断可重试。[Outbox 回归](../../../tests/interactive/codex-outbox.test.mjs) | 生产容量和审计窗口、实际告警、清理后的磁盘占用及真实双账户恢复。配额计入活动记录和待清理引用的逻辑字节，数据库页、WAL、文件快照和审计另计。 |
+| R5 Checkpoint | SQLite 原字节与异步 Store 回读一致、首次接纳、管理审计和包消费者。[版本化 SDK 回归](../../../tests/interactive/versioned.test.mjs) · E8 记录真实强杀恢复。 | G12 独立裁决及完整原生故障矩阵。 |
+| Ack、轮换与撤销 | 两条 SQLite 连接验证旧策略停止新建及撤销边界。[Host 回归](../../../tests/interactive/trusted-host.test.mjs) · E8 记录独立 Store 分别撤销及受权历史查询。 | 生产所有 Host／Store 的协调、撤销后签发停止及轮换演练。 |
+| Outbox 容量和清理 | [Outbox 回归](../../../tests/interactive/codex-outbox.test.mjs) 覆盖文件快照回收中断重试。E8 验证真实工具满额、清理回滚及恢复。 | 生产容量和审计窗口、实际告警、清理后磁盘占用及真实双账户快照清理中断。配额计入活动记录和待清理引用的逻辑字节，数据库页、WAL、文件快照和审计另计。 |
