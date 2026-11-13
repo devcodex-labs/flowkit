@@ -16,6 +16,8 @@ import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.mjs';
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 import {createCodexOsAccess} from '../../examples/interactive/codex-os-access.mjs';
+import {serveCodexOsSession} from '../../examples/interactive/codex-os-stdio.mjs';
+import {PassThrough} from 'node:stream';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
 const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay',
@@ -126,6 +128,7 @@ let entrySignatures=0;
 let osAccess,osAuditSession,osFileDb;
 const osTurns=new Map();
 let osOverlap;
+let osStageCheck;
 const observationWaitMs=500;
 let finish;
 const finished=new Promise(resolve=>{finish=resolve;});
@@ -487,6 +490,7 @@ async function osEntryCallback(message) {
           binding:{namespace:turn.target.namespace,runId:task.runId,requestId:task.requestId,nodeId:task.nodeId,
             attempt:task.attempt,threadId:p.threadId,turnId:p.turnId,programHash:checkpoint.artifactHash,policyHash:checkpoint.policyHash}});
       } finally {await rm(source);}
+      await osStageCheck?.(turn,turn.ref);
       result={accepted:true,...turn.ref};
     } else {
       if (!target || target.subject!==context.subject) denyEntry('FK_I_HOST_DENIED');
@@ -494,6 +498,7 @@ async function osEntryCallback(message) {
       assert.equal(target,turn.target);
       journal('os-ready-to-accept',{namespace:target.namespace,subject:context.subject,callId:p.callId});
       await osOverlap();
+      osAccess.authorize(context.grant,'run:complete',target.namespace);
       if (osFile) {
         assert.equal(p.tool,'flowkit_submit_file');
         result=await handoff.consume({started:{...started,callId:p.callId},callback:{...p,arguments:p.arguments},
@@ -836,7 +841,25 @@ async function runOsEntry(model) {
   const positive=({target})=>osFile
     ?'Call flowkit_file_task once with {}. From its tool reply use the exact requestId and id to call flowkit_submit_file once. Then finish.'
     :`Call flowkit_submit once with requestId "${target.task.requestId}" and answer "ready". Then finish.`;
-  const refs=await Promise.all([a,b].map(pair=>osTurn(pair.session,pair.target,'valid',positive(pair))));
+  let releaseFile;
+  const fileChecked=new Promise(resolve=>{releaseFile=resolve;});
+  osStageCheck=async(turn,ref)=>{
+    if (turn.target!==a.target) return;
+    const stagedState=osSnapshot();
+    assert.equal(stagedState.files.find(row=>row.id===ref.id)?.state,'staged');
+    await osTurn(b.session,a.target,'wrong-tenant-staged-reference',negative(a.target,ref),true);
+    assert.equal(entrySignatures,0);
+    assert.deepEqual([a.target.writes(),b.target.writes()],pendingWrites);
+    assert.deepEqual(osSnapshot(),stagedState);
+    journal('os-staged-reference-denial',{id:ref.id,namespace:a.target.namespace,unchanged:true,signatures:0,cas:0});
+    releaseFile();
+  };
+  const first=osTurn(a.session,a.target,'valid',positive(a));
+  const second=async()=>{
+    if (osFile) await fileChecked;
+    return osTurn(b.session,b.target,'valid',positive(b));
+  };
+  const refs=await Promise.all([first,second()]);
   assert.equal(ready,2);
   assert.equal(entrySignatures,2);
   const before=osSnapshot();
@@ -856,9 +879,42 @@ async function runOsEntry(model) {
   assert.deepEqual(before.receipts.map(row=>row.accepted_revision),[4,4]);
   if (osFile) assert.deepEqual(before.files.map(row=>[row.size,row.state,row.accepted_revision]),
     [[262144,'acked',4],[262144,'acked',4]]);
+  await verifyOsSessionRevocation(policy.bindings,a.target,auditors[0].identity,resultRef);
+  assert.deepEqual(before,osSnapshot());
   journal('os-entry-verified',{tool:requested,snapshot:before,signatures:entrySignatures,concurrentReady:ready,
     deniedSignatures:0,deniedCas:0,unchanged:true,programHash:program.programIdentity.artifactHash});
   return 'entry-completed';
+}
+
+async function verifyOsSessionRevocation(bindings,target,identity,resultRef) {
+  const input=new PassThrough(),output=new PassThrough();
+  const lines=createInterface({input:output});
+  const responses=lines[Symbol.asyncIterator]();
+  const run=serveCodexOsSession({access:osAccess,identity,input,output,
+    async dispatch(session,command) {
+      osAuditSession=session;
+      const result=await target.host.readTrustedTerminalResult({resultRef:command.resultRef});
+      return {namespace:result.namespace,status:result.status,marker:result.state.tenantMarker};
+    }});
+  const sendAudit=async()=>{
+    input.write(JSON.stringify({action:'result:read',namespace:target.namespace,resultRef})+'\n');
+    return JSON.parse((await responses.next()).value);
+  };
+  try {
+    const expected={ok:true,result:{namespace:target.namespace,status:'succeeded',marker:target.namespace}};
+    assert.deepEqual(await sendAudit(),expected);
+    osAccess.replaceBindings(bindings.filter(item=>item.identity!==identity));
+    assert.deepEqual(await sendAudit(),{ok:false,code:'FK_I_HOST_DENIED'});
+    osAccess.replaceBindings(bindings);
+    assert.deepEqual(await sendAudit(),{ok:false,code:'FK_I_HOST_DENIED'});
+    assert.equal(osAccess.authorize(osAccess.bind(identity),'result:read',target.namespace),true);
+    journal('os-session-revocation',{identity,namespace:target.namespace,oldSessionDenied:true,regrantDidNotRevive:true});
+  } finally {
+    input.end();
+    await run;
+    lines.close();
+    output.end();
+  }
 }
 
 async function entryTurn(model,session,target,test,expectedDenial) {
