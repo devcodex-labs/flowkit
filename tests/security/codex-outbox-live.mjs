@@ -1,7 +1,7 @@
 import {encodeCheckpoint} from '../../src/interactive/checkpoint.mjs';
 import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
-import {appendFileSync,copyFileSync,existsSync,mkdirSync,readFileSync,readdirSync} from 'node:fs';
+import {appendFileSync,copyFileSync,existsSync,mkdirSync,readFileSync,readdirSync,statSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
@@ -13,7 +13,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 
 const [exe,cwd,root,profile='isolated',suite='original']=process.argv.slice(2);
 assert.ok([exe,cwd,root].every(path.isAbsolute));
-assert.ok(['original','followup','signing','revocation','release-r5'].includes(suite));
+assert.ok(['original','followup','signing','revocation','release-r5','ops-r5'].includes(suite));
 mkdirSync(root,{mode:0o700});
 const probe=fileURLToPath(new URL('./codex-flowkit-probe.mjs',import.meta.url));
 const log=(event,data)=>appendFileSync(path.join(root,'supervisor.ndjson'),
@@ -179,7 +179,7 @@ async function r5ValidationRecovery() {
   log('r5-validation-recovered',{after,restored});
 }
 
-async function crossStoreRevocation() {
+async function crossStoreRevocation({coordinated=false}={}) {
   const first=path.join(root,'revoke-a'),second=path.join(root,'revoke-b');
   mkdirSync(first,{mode:0o700});
   mkdirSync(second,{mode:0o700});
@@ -200,6 +200,14 @@ async function crossStoreRevocation() {
   assert.equal(rejectedA.ack.acceptedRevision,a.revision+1);
   const stillActive=await offline('release-check',second,'before-local-revocation',{cut:'active'});
   assert.equal(stillActive.active,true);
+  if (coordinated) {
+    const denied=await offline('release-revoke',second,'unauthorized-revocation',{cut:'denied'});
+    assert.equal(denied.revoked,false);
+    assert.equal(denied.code,'FK_I_HOST_DENIED');
+    const active=await offline('release-check',second,'after-failed-revocation',{cut:'active'});
+    assert.equal(active.active,true);
+    log('coordinated-revocation-hold',{confirmed:['A'],missing:['B'],denied,active});
+  }
   const revokeB=await offline('release-revoke',second,'revoke');
   assert.equal(revokeB.keyHash,revokeA.keyHash);
   const rejectedB=await offline('release-check',second,'check',{answer:inFlight.proofId});
@@ -207,6 +215,7 @@ async function crossStoreRevocation() {
   assert.ok(Date.now()<inFlight.expiresAt);
   assert.deepEqual(inspect(second,b,[inFlight]),beforeB);
   log('cross-store-revocation-passed',{revokeA,rejectedA,stillActive,revokeB,rejectedB,beforeB});
+  if (coordinated) log('coordinated-revocation-verified',{confirmed:['A','B'],keyHash:revokeA.keyHash});
 }
 
 async function capacityAndCleanup() {
@@ -223,6 +232,16 @@ async function capacityAndCleanup() {
     assert.equal(rejected.code,'FK_OUTBOX_CAPACITY');
     assert.equal(rejected.usage.records,1);
     assert.equal((await worker.closed).code,0);
+    if (suite==='ops-r5') {
+      const events=readFileSync(path.join(dir,cut,'observer.ndjson'),'utf8').trim().split('\n').map(JSON.parse);
+      const [alert,...other]=events.filter(event=>event.event==='outbox-capacity-alert');
+      assert.ok(alert);
+      assert.equal(other.length,0);
+      assert.equal(alert.namespace,'codex-proof');
+      assert.equal(alert.records,1);
+      assert.equal(cut==='release-cap-next'?alert.maxRecords:alert.maxBytes,1);
+      log('capacity-alert-verified',{cut,alert,disk:diskSample(dir)});
+    }
     assert.deepEqual(inspect(dir,second,[]),before);
   }
   const held=await offline('release-clean',dir,'held',{cut:'held',answer:first.runId});
@@ -353,8 +372,8 @@ async function crashCase(label,{cut='',bytes}={}) {
   return {after,snapshot:recoveredSnapshot};
 }
 
-async function acceptLive(dir,setup,label,cut,answer) {
-  const worker=launch('outbox-worker',dir,label,{cut,answer});
+async function acceptLive(dir,setup,label,cut,answer,bytes) {
+  const worker=launch('outbox-worker',dir,label,{cut,answer,bytes});
   const proof=await waitFor(worker,'signed');
   assert.equal(proof.requestId,setup.requestId);
   const delivery=waitFor(worker,'delivered');
@@ -362,6 +381,85 @@ async function acceptLive(dir,setup,label,cut,answer) {
   assert.equal((await delivery).state,'ACKED');
   assert.equal((await worker.closed).code,0);
   return proof;
+}
+
+function diskSample(dir) {
+  const files={};
+  for (const database of ['run.sqlite','outbox.sqlite','file-handoff.sqlite']) {
+    for (const suffix of ['','-wal','-shm']) {
+      const name=database+suffix;
+      const entry=statSync(path.join(dir,name),{throwIfNoEntry:false});
+      if (entry) files[name]={length:entry.size,allocatedBytes:entry.blocks===undefined?null:entry.blocks*512};
+    }
+  }
+  const entries=Object.values(files);
+  return {files,totalLength:entries.reduce((sum,file)=>sum+file.length,0),
+    totalAllocatedBytes:entries.some(file=>file.allocatedBytes===null)?null
+      :entries.reduce((sum,file)=>sum+file.allocatedBytes,0)};
+}
+
+function cleanupState(dir,artifact) {
+  const outbox=new DatabaseSync(path.join(dir,'outbox.sqlite'),{readOnly:true});
+  const snapshot=new DatabaseSync(path.join(dir,'file-handoff.sqlite'),{readOnly:true});
+  try {
+    return {
+      queue:outbox.prepare('SELECT proof_id,artifact,accepted_revision FROM snapshot_cleanup').all(),
+      fileReceipts:outbox.prepare("SELECT COUNT(*) AS n FROM delivery WHERE json_extract(CAST(observation AS TEXT),'$.tool')='flowkit_submit_file'").get().n,
+      audit:outbox.prepare('SELECT operation_id,deleted_count FROM cleanup_audit').all(),
+      snapshot:snapshot.prepare('SELECT state,size,sha256,accepted_revision FROM file_handoff WHERE id=?').get(artifact.id)??null,
+    };
+  } finally {snapshot.close();outbox.close();}
+}
+
+async function snapshotCleanupCrash(cut,bytes) {
+  const dir=path.join(root,'snapshot-'+cut);
+  mkdirSync(dir,{mode:0o700});
+  const setup=await offline('outbox-setup',dir,'setup',{cut:'ops-file',bytes});
+  const empty=diskSample(dir);
+  const proof=await acceptLive(dir,setup,'file','ops-file','ready',bytes);
+  const artifact=proof.artifact;
+  assert.equal(artifact.byteLength,bytes);
+  assert.equal(inspectSnapshot(dir,artifact).state,'acked');
+  const live=inspect(dir,setup,[proof]);
+  assert.deepEqual(live.artifact,artifact);
+  assert.equal(live.status,'waiting');
+  const retained=await offline('ops-clean',dir,'retained',{bytes});
+  assert.equal(retained.result.deleted,0);
+  assert.equal(retained.result.snapshotsReclaimed,0);
+  const peak=diskSample(dir);
+  const clear=launch('outbox-worker',dir,'clear',{cut:'ops-clear',answer:'ready'});
+  assert.equal((await clear.closed).code,0);
+  const before=inspect(dir,setup,[proof]);
+  assert.equal(before.status,'succeeded');
+  assert.equal(before.artifact,null);
+  const cleaner=launch('ops-clean',dir,'cleaner',{cut,bytes});
+  const barrier=await waitFor(cleaner,'cleanup-cut');
+  assert.equal(barrier.cut,cut);
+  assert.equal(barrier.hostPid,cleaner.child.pid);
+  const atKill=cleanupState(dir,artifact);
+  assert.equal(atKill.queue.length,1);
+  assert.equal(atKill.queue[0].proof_id,proof.proofId);
+  assert.equal(atKill.fileReceipts,0);
+  assert.equal(atKill.audit.length,1);
+  assert.equal(atKill.snapshot?.state??null,cut==='after-queue'?'acked':null);
+  const during=diskSample(dir);
+  log('snapshot-cleanup-before-kill',{cut,artifact,barrier,atKill,during,before});
+  assert.ok(cleaner.child.kill('SIGKILL'));
+  const killed=await cleaner.closed;
+  assert.equal(killed.signal,'SIGKILL');
+  assert.deepEqual(cleanupState(dir,artifact),atKill);
+  log('snapshot-cleanup-kill-confirmed',{cut,pid:killed.pid,signal:killed.signal});
+  const restored=await offline('ops-clean',dir,'restart',{bytes});
+  assert.equal(restored.result.deleted,0);
+  assert.equal(restored.result.snapshotsReclaimed,1);
+  assert.equal(restored.ack.acceptedRevision,setup.revision+1);
+  assert.equal(restored.ack.receiptHash,proof.receiptHash);
+  assert.deepEqual(cleanupState(dir,artifact),{...atKill,queue:[],snapshot:null});
+  const again=await offline('ops-clean',dir,'repeat',{bytes});
+  assert.equal(again.result.snapshotsReclaimed,0);
+  assertSameStore(before,inspect(dir,setup,[]));
+  const after=diskSample(dir);
+  log('snapshot-cleanup-recovered',{cut,artifact,restored,again,disk:{empty,peak,during,after}});
 }
 
 async function beforeSignCase() {
@@ -490,7 +588,13 @@ async function revocationCase() {
 
 try {
   let result;
-  if (suite==='release-r5') {
+  if (suite==='ops-r5') {
+    await snapshotCleanupCrash('after-queue',262144);
+    await snapshotCleanupCrash('after-unlink',2093056);
+    await crossStoreRevocation({coordinated:true});
+    await capacityAndCleanup();
+    result={snapshotCleanupCuts:2,coordinatedRevocation:true,capacityAlerts:true};
+  } else if (suite==='release-r5') {
     await r5ValidationRecovery();
     await crossStoreRevocation();
     await capacityAndCleanup();

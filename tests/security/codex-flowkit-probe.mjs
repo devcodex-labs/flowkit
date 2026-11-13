@@ -18,7 +18,7 @@ import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
 const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay',
-  'outbox-check-revocation','release-check','release-revoke','release-clean'].includes(requested);
+  'outbox-check-revocation','release-check','release-revoke','release-clean','ops-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
 const rotation=['rotate-old','rotate-new','rotate-old-next'].includes(cut);
@@ -27,6 +27,7 @@ const nextSigner=cut==='rotate-new'||cut==='revoked-new';
 const runRecord=['rotate-new','rotate-old-next','revoked-pending','release-cap-next','release-byte-next'].includes(cut)?'run-next.json'
   :cut==='revoked-new'?'run-new.json':'run.json';
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
+const clearArtifact=cut==='ops-clear';
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
 const size=requested==='loop'||fallback||scenario?0:Number(requested);
 assert.ok(path.isAbsolute(exe) && path.isAbsolute(cwd) && path.isAbsolute(out));
@@ -53,7 +54,7 @@ const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'f
 if (scenario) assert.ok(path.isAbsolute(fixture));
 if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
   && (!cut || ['after-cas','before-sign','expire','rotate-old','rotate-new','rotate-old-next','revoked-new',
-    'release-cap','release-cap-next','release-byte-next','release-after-receipt'].includes(cut)));
+    'release-cap','release-cap-next','release-byte-next','release-after-receipt','ops-file','ops-clear'].includes(cut)));
 let store,host,program,frame,currentTask,handoff,staged,outbox;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
@@ -124,7 +125,8 @@ async function prepareFlowKit() {
   if (!scenario || requested==='outbox-setup') await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'codex-probe',version:'1.0.0',name:'Codex probe',nodes:[
 node('review',{name:'Review',agent:'reviewer',inputs:['question'],
-output:{type:'object',properties:${fallback?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'done'}),
+output:{type:'object',properties:${fallback?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'${cut==='ops-file'?'clear':'done'}'}),
+${cut==='ops-file'?"node('clear',{name:'Clear completed reference',agent:'reviewer',inputs:['question'],output:{type:'object',properties:{artifact:{type:'null'}}},retries:0,next:'done'}),":''}
 terminal('done',{name:'Done',status:'succeeded'})
 ]});`);
   program=await compileInteractive(file,{output:'memory',featureStage:'P0-A',skillCheck:false});
@@ -166,26 +168,46 @@ terminal('done',{name:'Done',status:'succeeded'})
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
           throw new Error('Supervisor did not terminate Host at the validation barrier');
         }
-        return fallback ? validateArtifactResult(value)
+        return clearArtifact ? (value.artifact===null?[]:['Expected cleared reference'])
+          : fallback ? validateArtifactResult(value)
           : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer'];
       }},
     trustedPublicKeys,trustedArtifacts:[program.programIdentity.artifactHash],
     allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
     authorizeTerminalAccess:({action})=>action==='run:read',
     authorizeReceiptAudit:({action})=>offline && action==='receipt:read-history',
-    authorizeKeyRevocation:({action})=>requested==='release-revoke' && action==='host:revoke-key',
+    authorizeKeyRevocation:({action})=>requested==='release-revoke' && cut!=='denied' && action==='host:revoke-key',
   });
-  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host,handoff,
+  let cleanupHandoff=handoff;
+  if (requested==='ops-clean' && cut==='after-unlink') {
+    cleanupHandoff={...handoff,reclaimAcknowledged(...args) {
+      assert.equal(handoff.reclaimAcknowledged(...args),true);
+      stopAtCleanupCut();
+    }};
+  }
+  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host,handoff:cleanupHandoff,
     ...(cut.startsWith('release-cap') || requested==='release-clean'?{maxRecords:1,retentionMs:1}:{}),
+    ...(requested==='ops-clean'?{retentionMs:1}:{}),
     ...(cut==='release-byte-next'?{maxRecords:100,maxBytes:1}:{}),
-    authorizeCleanup:({subjectId})=>({allowed:requested==='release-clean' && subjectId==='operator',
-      heldRunIds:cut==='held'?[answer]:[]}),
+    authorizeCleanup:({subjectId})=>({allowed:['release-clean','ops-clean'].includes(requested) && subjectId==='operator',
+      heldRunIds:cut==='held'?[answer]:[],
+      ...(requested==='ops-clean'?{canDeleteSnapshot:({artifact,checkpoint})=>{
+        if (cut==='after-queue') stopAtCleanupCut();
+        return checkpoint?.status==='succeeded' && checkpoint.state.artifact===null
+          && artifact.byteLength===artifactSize;
+      }}:{}),
+    }),
     onCapacity:usage=>journal('outbox-capacity-alert',usage),
   });
   return privateKey;
 }
 
 let key;
+function stopAtCleanupCut() {
+  process.send({event:'cleanup-cut',cut,hostPid:process.pid});
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
+  throw new Error('Supervisor did not stop cleanup at '+cut);
+}
 function validateArtifactResult(value) {
   if (!scenario) return value.artifact?.id===staged?.id?[]:['Expected staged reference'];
   const artifact=value.artifact;
@@ -291,6 +313,10 @@ async function handleTool(name,args,identity,started) {
     return {task:currentTask,fileReference:staged};
   }
   if (name==='flowkit_submit') {
+    if (clearArtifact) {
+      assert.deepEqual(args,{requestId:currentTask.requestId,answer:'ready'});
+      return acceptResult({artifact:null},identity);
+    }
     if (worker) {
       assert.deepEqual(args,{requestId:currentTask.requestId,answer});
       return deliverCandidate({answer},name,args,identity,started);
@@ -479,6 +505,11 @@ async function runOutboxOffline() {
   if (requested==='release-revoke') {
     const pem=createPublicKey(await readFile(path.join(fixture,'proof.public.pem')));
     const keyHash=sha256Bytes(pem.export({type:'spki',format:'der'}));
+    if (cut==='denied') {
+      await assert.rejects(host.revokeKey(keyHash),{code:'FK_I_HOST_DENIED'});
+      console.log(JSON.stringify({runId,keyHash,revoked:false,code:'FK_I_HOST_DENIED'}));
+      return;
+    }
     assert.equal(await host.revokeKey(keyHash),true);
     assert.equal(await host.revokeKey(keyHash),false);
     console.log(JSON.stringify({runId,keyHash,revoked:true}));
@@ -505,6 +536,17 @@ async function runOutboxOffline() {
     assert.deepEqual(store.load(runId),before);
     assert.deepEqual(store.listJournal(runId),beforeJournal);
     console.log(JSON.stringify({runId,revision:before.revision,active:cut==='active',ack,unchanged:true}));
+    return;
+  }
+  if (requested==='ops-clean') {
+    const beforeJournal=store.listJournal(runId);
+    const result=await outbox.cleanup({namespace:store.namespace,subjectId:'operator',reasonCode:'RETENTION'});
+    assert.deepEqual(store.load(runId),before);
+    assert.deepEqual(store.listJournal(runId),beforeJournal);
+    assert.deepEqual(store.getReceipt(runId,requestId),beforeReceipt);
+    const ack=await host.readHistoricalAck({namespace:store.namespace,runId,requestId,nodeId:beforeReceipt.nodeId,
+      attempt:beforeReceipt.attempt,receiptHash:beforeReceipt.digest});
+    console.log(JSON.stringify({result,ack,usage:outbox.usage(),unchanged:true}));
     return;
   }
   if (requested==='release-clean') {
