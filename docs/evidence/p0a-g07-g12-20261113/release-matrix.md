@@ -17,6 +17,7 @@
 | E7 | `eb5823094cdee0f5d8fe8a558a9824e1c712db4d`、`7acdfdd0137bc34cd4407ee9ffb8c2fa1e5a18a7`、`9584184d7098a402a15f3edd8bfb11ea95f7ed49` | 64 KiB 同账户真实内联成功。256 KiB 和近 2 MiB 的内联试验均未发出工具调用。文件替换、链接、截断、摘要和重复消费有定向 P 级回归。[内联记录](../p0a-admin-codex-20261113/README.md) · [文件入口记录](../p0a-codex-file-fallback-20261113/README.md) |
 | E8 | `d3674bca09d305f88828a77b1d3653937fc5da5e`、`5efa127cf8a26081985e454b9719619a39fdc4b2` | R5 恢复基线、validate 阶段恢复、撤销后原 Ack、两个独立 Store 分别撤销、Outbox 满额和清理。[平台裁决、命令、原始日志与 SHA-256](../p0a-codex-isolated-20261113/r5-release-live.md) |
 | E9 | `e0df84b23ec78b49fd8beb8e800076ce27102c74` | Windows／Linux 双账户均通过文件快照清理两处强杀、两 Store 撤销协调演练、磁盘采样和本机容量告警，各 10 个真实会话。[命令、磁盘样本、归档 SHA-256 和参数建议](../p0a-codex-isolated-20261113/ops-r5-live.md) |
+| E10 | `0d1da06bb3f8e56ebc54a2d32619c83d3cadea34` | Windows／Linux 双账户各 18 个真实模型回合。4 Agent＋2 Conditions 多阶段续跑、受权终态读取、早拒与缺值零派发、错请求和扣留观察拒绝。[分平台结果、命令和原始归档 SHA-256](../p0a-codex-isolated-20261113/branch-r5-live.md) |
 
 ## SEC · 生产配置与候选入口
 
@@ -26,7 +27,7 @@
 | SEC-02 | BLOCKED，完整原生负例 | E6 两端保护密钥、配置和 Program 清单的路径访问，Host 签名成功。E1 有标准流继承限制。尚缺生产启动链下实际 Model 进程对密钥及可继承句柄的拒绝证据。 |
 | SEC-03 | BLOCKED，完整原生负例 | E6 两端拒绝数据库、WAL、SHM、备份的路径访问和修改，完整性通过。补实际 Model 进程句柄或映射和实际配置下的保护证据。 |
 | SEC-04 | BLOCKED，最终启动链 | E6 Linux 进程访问、Windows 进程和 Token 权限请求拒绝。补生产启动顺序下的进程权限负例和实际启用的服务控制。 |
-| SEC-05 | BLOCKED，候选入口授权 | E1 真实 stdio 工具通道正常，E7 有错请求、错会话、缺观察的 P 级负例。补实际启用的 stdio、文件入口及其启动入口的错主体、错租户、无观察证据，断言零签名和零 CAS。 |
+| SEC-05 | BLOCKED，候选入口授权 | E1 真实 stdio 工具通道正常。E10 补实际 stdio 工具错 requestId、Host 扣留开始观察时拒绝及零签名、零 CAS。实际启用入口的错主体、错租户和文件分支的完整授权仍待测。 |
 | SEC-06 | BLOCKED，真实入口拒绝 | 补独立 Model 账户用普通进程重放同一提交的拒绝结果，核对没有 Host 签名、接纳索引或状态推进。 |
 | SEC-07 | N/A，当前配置无 TLS/mTLS IPC | 实测为受控 stdio，回环 SSH 负责启动。实际输入路径按 SEC-05 验收。 |
 | SEC-08 | BLOCKED，原生身份和正文负例 | E7 有替换、截断、错 Pending 与会话的定向回归，E5 有真实策略不匹配拒绝。补实际候选入口逐项变更 Run、request、attempt、node、Program、policy 和正文，核对无写入及错误脱敏。 |
@@ -52,7 +53,7 @@
 | NAT-02 | PASS，样本 Public Task | E1 真实工具取得当前 Pending，日志关联 request、任务摘要和 Program。全路径披露按 SEC-11 验收。 |
 | NAT-03 | PASS，小内联模型结果 | E1 普通闭环中模型真实生成并提交答案。两档大文件正文由受信合成生产者提供，模型真实提交引用。 |
 | NAT-04 | PASS，小内联与已批准文件引用样本 | E1 签前核对开始和回调的 thread／turn／call、规范参数；E2/E3 导出原签名。完整大内联、缺开始事件和失配负例分别随 NAT-10、NAT-14 和 SEC-08 裁决。 |
-| NAT-05 | BLOCKED，完整真实续跑与可信读取 | E1 中程序在接纳后达到终态，真实 `flowkit_continue` 读取公开终态。补有非平凡分支或下一 Pending 的真实多阶段续跑，以及单独受权的完整结果读取。 |
+| NAT-05 | PASS，双平台 Codex 实测样本 | E10 同一 Run 依次读取四个合法 Pending，公开终态无私有 State。探针在 Host 私有进程验证普通权限拒绝及受权完整读取。发布启动链和实际审计主体仍待 G12 确认。 |
 | NAT-06 | BLOCKED，普通进程重放 | 对应 SEC-06。补绕过实际 Codex 通道时的拒绝、零签名、零 CAS。 |
 | NAT-07 | BLOCKED，自报来源 | 对应 SEC-09。补伪造来源字段无法替代独立观察的真实入口负例。 |
 | NAT-08 | PASS，强杀恢复与新会话重试样本 | E4 签名前强杀后原 `OBSERVED` 不自动接纳，新会话使用新 call ID 对同一 Pending 成功重试。E2 单独验证使用原证明的自动恢复。 |
@@ -61,7 +62,7 @@
 | NAT-11 | BLOCKED，真实模型权限负例 | E6 有跨账户 P 级拒绝。补真实模型会话的密钥、数据库、全量 State 及伪审批负例，再走合法提交。 |
 | NAT-12 | BLOCKED，真实会话和版本换绑 | E5 证明改变公钥集合后的拒绝。补切换会话、模型版本或工作区后的旧调用拒绝及显式重新授权。 |
 | NAT-13 | BLOCKED，V 级 | 已有 Host Ed25519 验签证据。缺供应商可验证的规范、可信公钥和实际签名。按原定义单独裁决。 |
-| NAT-14 | BLOCKED，完整时序与死锁负例 | E1/E2/E3 正常路径已观察到原生开始事件、匹配规范入参后才签收。补真实候选入口缺失、迟到或失配开始事件，以及有界超时、零签名、零 CAS 的可复验记录。 |
+| NAT-14 | BLOCKED，完整时序与死锁负例 | E1/E2/E3 正常路径匹配原生开始和回调后签收。E10 对实际回调有意扣留开始事件索引，核对拒绝、零签名和零 CAS。迟到、失配和有界超时仍待测。 |
 | NAT-15 | PASS，双平台 Codex 实测样本 | E2 用原签名、回执和同一 Run 恢复签后 CAS 前切点。E3 增补文件引用与 CAS 后 Ack 修复，E4 增补真实过期拒绝。完整 N 级随 C12／S13 的组合证据复审。 |
 
 ## C01–C24 与阶段收口
@@ -70,8 +71,8 @@
 
 | 条款 | 当前裁决与证据 |
 |---|---|
-| C01 | BLOCKED，E1 是单 Agent 闭环。缺真实 4 Agent＋2 Conditions 的原生记录。 |
-| C02 | BLOCKED，条件 false 有 P 证据。缺真实模型拒绝和未派发路径的组合记录。 |
+| C01 | PASS，E10 双平台 4 Agent＋2 Conditions 的真实工具续跑，逐次核对声明输入、四份接纳和终态 State。 |
+| C02 | PASS，E10 双平台真实工具提交审查拒绝后终态 `failed`，初始 false 及缺值均为零 Agent 派发。模型按用例指定的分支值提交。 |
 | C03 | BLOCKED，有受控无效结果重放。缺原生非法输出、按同一 Run 重试并恢复。 |
 | C04 | BLOCKED，重试耗尽有 P 证据。缺真实持续失败及完整工具日志。 |
 | C05 | BLOCKED，E2/E3/E4 的原生强杀和恢复样本 PASS。Pending 发布及纯校验前后的完整原生故障切点归 SEC-10／T29。 |
