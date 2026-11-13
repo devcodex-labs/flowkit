@@ -17,6 +17,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 import {createCodexOsAccess} from '../../examples/interactive/codex-os-access.mjs';
 import {serveCodexOsSession} from '../../examples/interactive/codex-os-stdio.mjs';
+import {createOsToolObservations} from './codex-os-tool-observations.mjs';
 import {PassThrough} from 'node:stream';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
@@ -396,6 +397,11 @@ function denyEntry(code) {
 }
 
 function captureEntryStart(p) {
+  if (osEntry) {
+    const turn=osTurns.get(p.threadId);
+    if (turn && (turn.id===undefined || turn.id===p.turnId)) turn.observations.record(p);
+    return;
+  }
   const observation={threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,arguments:p.item.arguments};
   const callId=p.item.id;
   if (entryCase==='timeout') return;
@@ -466,11 +472,14 @@ async function osEntryCallback(message) {
   const p=message.params;
   const turn=osTurns.get(p.threadId);
   const context=entrySessions.get(p.threadId);
-  const started=entryObservations.get(p.callId);
-  assert.ok(turn && context?.modelPid===isolatedIdentity.pid && turn.id===p.turnId && started
-    && started.threadId===p.threadId && started.turnId===p.turnId && started.tool===p.tool
-    && !completed.has(p.callId) && canonicalBytes(started.arguments).equals(canonicalBytes(p.arguments)));
-  entryObservations.delete(p.callId);
+  const sameTurn=turn && isolatedIdentity && context?.modelPid===isolatedIdentity.pid && turn.id===p.turnId;
+  const started=sameTurn && !completed.has(p.callId) ? turn.observations.consume(p) : null;
+  if (!started) {
+    journal('os-observation-denied',{callId:p.callId,threadId:p.threadId,turnId:p.turnId});
+    send({id:message.id,result:{success:false,contentItems:[{type:'inputText',
+      text:JSON.stringify({accepted:false,code:'REQUEST_DENIED'})}]}});
+    return;
+  }
   turn.calls.push(p.tool);
   const target=entryResources.get(p.arguments.requestId);
   let result;
@@ -778,7 +787,8 @@ async function bindEntrySubject(binding,model) {
 
 async function osTurn(session,target,label,prompt,denial=false) {
   const calls=[];
-  const done=new Promise(resolve=>osTurns.set(session.threadId,{label,resolve,target,denial,calls}));
+  const done=new Promise(resolve=>osTurns.set(session.threadId,
+    {label,resolve,target,denial,calls,observations:createOsToolObservations()}));
   const current=osTurns.get(session.threadId);
   const {turn}=await request('turn/start',{threadId:session.threadId,input:[{type:'text',text:prompt}]});
   current.id=turn.id;
