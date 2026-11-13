@@ -25,8 +25,9 @@ const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','o
   'outbox-check-revocation','release-check','release-revoke','release-clean','ops-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
-const osChain=requested==='os-chain';
-const osEntry=['os-stdio','os-file','os-chain'].includes(requested);
+const osChainRecovery=requested==='os-chain-recovery';
+const osChain=requested==='os-chain'||osChainRecovery;
+const osEntry=requested==='os-stdio'||requested==='os-file'||osChain;
 const entry=requested==='entry-r5'||osEntry;
 const branch=requested.startsWith('branch-')?requested.slice(7):null;
 assert.ok(branch===null || ['approved','refused','closed','missing'].includes(branch));
@@ -71,6 +72,7 @@ const osTools=osFile?[
   tool('flowkit_file_task','Get the current Host-provisioned file task',objectSchema({})),
   tool('flowkit_submit_file','Submit the exact file reference returned by the Host',objectSchema({requestId:str,id:str})),
 ]:specs.filter(spec=>spec.name==='flowkit_submit');
+if (osChainRecovery) osTools.push(tool('probe_hold','Wait at a read-only integration test barrier',objectSchema({})));
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
 if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
@@ -480,11 +482,22 @@ async function osEntryCallback(message) {
   const observations=sameTurn && !completed.has(p.callId) ? turn.observations : null;
   const response=await dispatchObservedOsTool(observations,p,started=>submitObservedOsTool(p,turn,context,started),
     ()=>journal('os-observation-denied',{callId:p.callId,threadId:p.threadId,turnId:p.turnId}));
+  if (response===null) return;
   send({id:message.id,result:{success:response.accepted,contentItems:[{type:'inputText',text:JSON.stringify(response)}]}});
 }
 
 async function submitObservedOsTool(p,turn,context,started) {
   turn.calls.push(p.tool);
+  if (p.tool==='probe_hold') {
+    assert.ok(turn.interrupt);
+    assert.deepEqual(turn.calls,['probe_hold']);
+    assert.deepEqual(p.arguments,{});
+    journal('chain-recovery-held',{threadId:p.threadId,turnId:p.turnId,callId:p.callId});
+    turn.interruptRequest=request('turn/interrupt',{threadId:p.threadId,turnId:p.turnId});
+    await turn.interruptRequest;
+    return null;
+  }
+  assert.equal(turn.interrupt,false);
   const target=entryResources.get(p.arguments.requestId);
   let result;
   try {
@@ -797,10 +810,10 @@ async function bindEntrySubject(binding,model,{runId='entry-shared-run',startKey
   return {session,target,revision:frame.revision};
 }
 
-async function osTurn(session,target,label,prompt,denial=false) {
+async function osTurn(session,target,label,prompt,{denial=false,interrupt=false}={}) {
   const calls=[];
   const done=new Promise(resolve=>osTurns.set(session.threadId,
-    {label,resolve,target,denial,calls,observations:createOsToolObservations()}));
+    {label,resolve,target,denial,interrupt,calls,observations:createOsToolObservations()}));
   const current=osTurns.get(session.threadId);
   await request('turn/start',{threadId:session.threadId,input:[{type:'text',text:prompt}]},({turn})=>{
     assert.ok(typeof turn?.id==='string' && turn.id.length>0);
@@ -808,8 +821,13 @@ async function osTurn(session,target,label,prompt,denial=false) {
     current.id=turn.id;
     journal('os-turn',{label,threadId:session.threadId,turnId:turn.id,subject:session.subject,namespace:session.namespace});
   });
-  assert.equal((await done).status,'completed');
+  assert.equal((await done).status,interrupt?'interrupted':'completed');
   osTurns.delete(session.threadId);
+  if (interrupt) {
+    assert.deepEqual(calls,['probe_hold']);
+    await current.interruptRequest;
+    return current.id;
+  }
   assert.deepEqual(calls,osFile&&!denial?['flowkit_file_task','flowkit_submit_file']:[osFile?'flowkit_submit_file':'flowkit_submit']);
   return current.ref;
 }
@@ -855,8 +873,8 @@ async function runOsEntry(model) {
     return `Synthetic negative test. Call ${osFile?'flowkit_submit_file':'flowkit_submit'} once with ${JSON.stringify(args)}. Finish after the response without retrying.`;
   };
   const probeRef={requestId:a.target.task.requestId,id:randomUUID()};
-  await osTurn(b.session,a.target,'wrong-tenant',negative(a.target,probeRef),true);
-  await osTurn(auditor,a.target,'wrong-subject',negative(a.target,probeRef),true);
+  await osTurn(b.session,a.target,'wrong-tenant',negative(a.target,probeRef),{denial:true});
+  await osTurn(auditor,a.target,'wrong-subject',negative(a.target,probeRef),{denial:true});
   assert.equal(entrySignatures,0);
   assert.deepEqual(pendingWrites,[a.target.writes(),b.target.writes()]);
   assert.deepEqual(pendingBefore,osSnapshot());
@@ -873,7 +891,7 @@ async function runOsEntry(model) {
     if (turn.target!==a.target) return;
     const stagedState=osSnapshot();
     assert.equal(stagedState.files.find(row=>row.id===ref.id)?.state,'staged');
-    await osTurn(b.session,a.target,'wrong-tenant-staged-reference',negative(a.target,ref),true);
+    await osTurn(b.session,a.target,'wrong-tenant-staged-reference',negative(a.target,ref),{denial:true});
     assert.equal(entrySignatures,0);
     assert.deepEqual([a.target.writes(),b.target.writes()],pendingWrites);
     assert.deepEqual(osSnapshot(),stagedState);
@@ -890,7 +908,7 @@ async function runOsEntry(model) {
   assert.equal(entrySignatures,2);
   const before=osSnapshot();
   const counts=[a.target.writes(),b.target.writes()];
-  if (osFile) await osTurn(b.session,a.target,'wrong-tenant-reference',negative(a.target,refs[0]),true);
+  if (osFile) await osTurn(b.session,a.target,'wrong-tenant-reference',negative(a.target,refs[0]),{denial:true});
   const resultRef={runId:a.target.task.runId,revision:9,projectionVersion:1};
   osAuditSession=operators[0];
   await assert.rejects(a.target.host.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
@@ -953,6 +971,20 @@ async function runOsChain(model) {
         assert.equal(terminal,undefined);
         const {session,target}=created;
         const {runId,requestId}=target.task;
+        if (osChainRecovery) {
+          const before=entrySnapshot();
+          const writes=target.writes();
+          assert.equal(entrySignatures,0);
+          assert.equal(target.store.getReceipt(runId,requestId),null);
+          const turnId=await osTurn(session,target,'chain-interrupt',
+            'Call the read-only probe_hold tool once with an empty object and wait for the result.',{interrupt:true});
+          assert.deepEqual(entrySnapshot(),before);
+          assert.deepEqual(await target.host.getPublicAgentTask({runId}),target.task);
+          assert.equal(entrySignatures,0);
+          assert.equal(target.writes(),writes);
+          journal('chain-recovery-pending',{runId,requestId,threadId:session.threadId,turnId,
+            unchanged:true,signatures:0,cas:0,status:'interrupted'});
+        }
         await osTurn(session,target,'chain-valid',`Call flowkit_submit once with requestId "${requestId}" and answer "ready". Then finish.`);
         terminal=target.store.load(runId);
         assert.equal(terminal.status,'succeeded');
