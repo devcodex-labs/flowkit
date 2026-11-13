@@ -123,6 +123,21 @@ export function createFileHandoff({database,inbox,validateArtifact,now=Date.now}
     WHERE id=? AND state='claimed' AND call_id=?`);
   const purge=db.prepare("DELETE FROM file_handoff WHERE expires_at<=? AND state='staged'");
 
+  function checkedBytes(saved) {
+    const bytes=Buffer.from(saved.bytes);
+    if (bytes.length!==saved.size || sha256Bytes(bytes)!==saved.sha256) throw fail('FK_FILE_STORE');
+    return bytes;
+  }
+
+  function acknowledge(id,callId,acceptedRevision) {
+    if (!Number.isSafeInteger(acceptedRevision) || acceptedRevision<1) throw fail('FK_FILE_UNCERTAIN');
+    if (ack.run(acceptedRevision,id,callId).changes===1) return;
+    const saved=read.get(id);
+    if (saved?.state!=='acked' || saved.call_id!==callId || saved.accepted_revision!==acceptedRevision) {
+      throw fail('FK_FILE_UNCERTAIN');
+    }
+  }
+
   return Object.freeze({
     close:()=>db.close(),
     purgeExpired:()=>purge.run(now()).changes,
@@ -130,10 +145,21 @@ export function createFileHandoff({database,inbox,validateArtifact,now=Date.now}
       if (!validId(id)) throw fail('FK_FILE_REFERENCE');
       const saved=read.get(id);
       if (!saved) return null;
-      const bytes=Buffer.from(saved.bytes);
-      if (bytes.length!==saved.size || sha256Bytes(bytes)!==saved.sha256) throw fail('FK_FILE_STORE');
+      const bytes=checkedBytes(saved);
       return {bytes,sha256:saved.sha256,byteLength:saved.size,state:saved.state,acceptedRevision:saved.accepted_revision};
     },
+    // Host-only Outbox reconciliation. A claim without matching durable evidence cannot be reopened.
+    verifyClaim(artifact,binding,callId) {
+      if (!artifact || !validId(artifact.id)) throw fail('FK_FILE_REFERENCE');
+      const saved=read.get(artifact.id);
+      if (!saved || !['claimed','acked'].includes(saved.state) || saved.call_id!==callId
+        || saved.size!==artifact.byteLength || saved.sha256!==artifact.sha256
+        || !canonicalBytes(JSON.parse(saved.binding)).equals(canonicalBytes(bindingOf(binding)))) {
+        throw fail('FK_FILE_BINDING');
+      }
+      checkedBytes(saved);
+    },
+    acknowledge,
     // Only a trusted ingress producer may declare the expected original bytes.
     async stage({sourceId,binding:inputBinding,byteLength,sha256,ttlMs=120000}) {
       if (!validId(sourceId)) throw fail('FK_FILE_SOURCE');
@@ -165,14 +191,12 @@ export function createFileHandoff({database,inbox,validateArtifact,now=Date.now}
         || current.pending.attempt!==binding.attempt) {
         throw fail('FK_FILE_PENDING');
       }
-      const bytes=Buffer.from(saved.bytes);
-      if (bytes.length!==saved.size || sha256Bytes(bytes)!==saved.sha256) throw fail('FK_FILE_STORE');
+      checkedBytes(saved);
       if (claim.run(call.callId,call.id,now()).changes!==1) throw fail('FK_FILE_CONSUMED');
       const artifact=Object.freeze({id:call.id,byteLength:saved.size,sha256:saved.sha256});
       // A persisted claim never re-signs after an ambiguous or failed attempt.
       const result=await signAndAccept({binding,callId:call.callId,artifact,pending:current.pending});
-      if (!Number.isSafeInteger(result?.acceptedRevision) || result.acceptedRevision<1
-        || ack.run(result.acceptedRevision,call.id,call.callId).changes!==1) throw fail('FK_FILE_UNCERTAIN');
+      acknowledge(call.id,call.callId,result?.acceptedRevision);
       return result;
     },
   });

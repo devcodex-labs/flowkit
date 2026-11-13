@@ -19,7 +19,7 @@ function decode(bytes,limit) {
 }
 
 /** A dedicated SQLite file in an operator-protected Host directory. */
-export function openCodexOutbox({database,store,host,now=Date.now}) {
+export function openCodexOutbox({database,store,host,handoff,now=Date.now}) {
   if (!path.isAbsolute(database)) throw new TypeError('Outbox requires an absolute database path');
   try {closeSync(openSync(database,'wx',0o600));}
   catch (error) {if (error.code!=='EEXIST') throw error;}
@@ -43,20 +43,32 @@ export function openCodexOutbox({database,store,host,now=Date.now}) {
   const finish=db.prepare("UPDATE delivery SET state=?,accepted_revision=? WHERE proof_id=? AND state='SIGNED'");
   const signed=db.prepare("SELECT proof_id FROM delivery WHERE namespace=? AND run_id=? AND state='SIGNED' ORDER BY rowid");
 
+  function checkResult(tool,args,result,binding,callId) {
+    if (tool==='flowkit_submit_file' && handoff && Object.keys(result??{}).length===1
+      && result.artifact && Object.keys(result.artifact).length===3 && result.artifact.id===args?.id) {
+      handoff.verifyClaim(result.artifact,binding,callId);
+      return;
+    }
+    if (tool!=='flowkit_submit' || typeof args?.answer!=='string'
+      || Object.keys(result??{}).length!==1 || result.answer!==args.answer) throw fail('FK_OUTBOX_OBSERVATION');
+  }
+
   function record({task,started,callback,modelPid},receipt,key) {
     const normalized=normalizeHostAgentReceipt(receipt);
     const cp=store.load(normalized.runId);
     const {threadId,turnId,callId,tool,args}=callback;
-    if (![threadId,turnId,callId].every(identifier) || tool!=='flowkit_submit'
+    if (![threadId,turnId,callId].every(identifier) || normalized.kind!=='agent-result'
       || !Number.isSafeInteger(modelPid) || modelPid<2
       || ['threadId','turnId','callId','tool'].some(field=>started?.[field]!==callback[field])
       || !canonicalBytes(started?.args,4096).equals(canonicalBytes(args,4096))
-      || args.requestId!==normalized.requestId || normalized.result?.answer!==args.answer
+      || args.requestId!==normalized.requestId
       || cp?.status!=='waiting' || cp.namespace!==store.namespace || task.runId!==normalized.runId
       || task.requestId!==normalized.requestId || cp.pending?.requestId!==normalized.requestId
       || cp.pending?.nodeId!==normalized.nodeId || cp.pending?.attempt!==normalized.attempt) {
       throw fail('FK_OUTBOX_OBSERVATION');
     }
+    checkResult(tool,args,normalized.result,{...normalized,namespace:cp.namespace,threadId,turnId,
+      programHash:cp.artifactHash,policyHash:cp.policyHash},callId);
     const proofId=randomUUID();
     const receiptBytes=canonicalBytes(normalized,MAX_AGENT_RECEIPT_BYTES);
     const receiptHash=sha256Bytes(receiptBytes);
@@ -82,7 +94,7 @@ export function openCodexOutbox({database,store,host,now=Date.now}) {
       ...(row.statement?{statementHash:sha256Bytes(row.statement),signatureHash:sha256Bytes(row.signature)}:{})};
   }
 
-  async function deliver(proofId) {
+  async function deliver(proofId,{afterAccept}={}) {
     const row=get.get(proofId,store.namespace);
     if (!row || !['SIGNED','ACKED'].includes(row.state)) throw fail('FK_OUTBOX_STATE');
     const receipt=decode(row.receipt,MAX_AGENT_RECEIPT_BYTES);
@@ -93,6 +105,12 @@ export function openCodexOutbox({database,store,host,now=Date.now}) {
       || statement.receiptHash!==row.receipt_hash || sha256Bytes(row.receipt)!==row.receipt_hash
       || observation.receiptHash!==row.receipt_hash || observation.callId!==row.call_id
       || observation.threadId!==row.thread_id || observation.turnId!==row.turn_id) throw fail('FK_OUTBOX_CORRUPT');
+    const artifact=observation.tool==='flowkit_submit_file'?receipt.result?.artifact:null;
+    if (observation.tool==='flowkit_submit_file') {
+      if (!handoff) throw fail('FK_OUTBOX_OBSERVATION');
+      handoff.verifyClaim(artifact,{...receipt,namespace:statement.namespace,threadId:row.thread_id,
+        turnId:row.turn_id,programHash:statement.artifactHash,policyHash:statement.policyHash},row.call_id);
+    }
     const indexed=()=>store.getReceipt(row.run_id,row.request_id);
     const matching=ack=>ack?.digest===row.receipt_hash && ack.nodeId===receipt.nodeId && ack.attempt===receipt.attempt;
     const existing=indexed();
@@ -109,6 +127,8 @@ export function openCodexOutbox({database,store,host,now=Date.now}) {
     }
     const ack=indexed();
     if (!matching(ack) || ack.acceptedRevision!==frame.acceptedRevision) throw fail('FK_OUTBOX_ACK');
+    if (afterAccept) await afterAccept(ack);
+    if (artifact) handoff.acknowledge(artifact.id,row.call_id,ack.acceptedRevision);
     finish.run('ACKED',ack.acceptedRevision,proofId);
     const final=describe(proofId);
     if (final.state!=='ACKED' || final.acceptedRevision!==ack.acceptedRevision) throw fail('FK_OUTBOX_ACK');

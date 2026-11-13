@@ -23,6 +23,15 @@ Windows 与 Linux 均验证实现提交 `81a4c6e4400f95ca5dc0b771342411d0f587a46
 
 两个平台在强杀前后均为 waiting revision 3，接纳索引为空，回执、声明和签名摘要一致。新进程使用公钥和原有 Outbox 恢复，revision 4 接纳，revision 9 达到 `succeeded`，Journal 10 条。竞争场景同样只产生一次接纳。每个平台导出的三份原始签名均通过独立验签。证据覆盖指定样本的程序、真实模型和原生 Host 观察（P/M/T）。
 
+## CAS 后强杀和文件引用恢复
+
+```text
+node tests/security/codex-outbox-live.mjs <Codex绝对路径> <Model工作目录> <全新Host私有证据目录> isolated followup
+```
+
+- CAS 后强杀由监督器等待 Store 接纳索引已可读、Outbox 仍为 `SIGNED` 后触发。恢复用原回执走历史 Ack，仅补记 `ACKED`，并核对 Checkpoint、Journal 摘要、条数和接纳索引完全相同。
+- 256 KiB 和近 2 MiB 的真实动态工具调用将文件引用绑定当前 Pending、thread、turn 和 call。入口原件在签名前已删除。监督器在私有快照为 `claimed`、Outbox 为 `SIGNED`、Store 尚未接纳时强杀。恢复先核对原快照、引用、绑定及 SHA-256，使用原签名完成 CAS，最后将快照和 Outbox 分别记为 `acked`、`ACKED`。再次恢复无待投递项。若已写快照 Ack 而尚未写 Outbox Ack，允许用相同 call 和 revision 补记。
+
 | 归档 | SHA-256 |
 |---|---|
 | Windows `flowkit-windows-outbox-live.zip` | `a66e85c0b746538af2f3f93c8a978e963bcc2434af76af9ba50a8fc4d1a2b7a9` |

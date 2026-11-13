@@ -15,12 +15,12 @@ import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.mjs';
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 
-const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer]=process.argv.slice(2);
+const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
 const scenario=['outbox-worker','outbox-recover','outbox-setup'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
-const fallback=requested.startsWith('file-');
-const artifactSize=fallback?Number(requested.slice(5)):0;
+const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
+const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
 const size=requested==='loop'||fallback||scenario?0:Number(requested);
 assert.ok(path.isAbsolute(exe) && path.isAbsolute(cwd) && path.isAbsolute(out));
 assert.ok([0,65536,262144,2093056].includes(size));
@@ -44,7 +44,8 @@ const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',
 ];
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
-if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer));
+if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
+  && (!cut || cut==='after-cas'));
 let store,host,program,frame,currentTask,handoff,staged,outbox;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
@@ -112,7 +113,7 @@ function request(method,params) {
 
 async function prepareFlowKit() {
   const file=path.join(fixture,'probe.workflow.js');
-  await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
+  if (!scenario || requested==='outbox-setup') await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'codex-probe',version:'1.0.0',name:'Codex probe',nodes:[
 node('review',{name:'Review',agent:'reviewer',inputs:['question'],
 output:{type:'object',properties:${fallback?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'done'}),
@@ -132,25 +133,33 @@ terminal('done',{name:'Done',status:'succeeded'})
     publicKey=createPublicKey(await readFile(path.join(fixture,'proof.public.pem')));
     if (worker) privateKey=createPrivateKey(await readFile(path.join(fixture,'proof.private.pem')));
   }
+  if (fallback) {
+    const inbox=path.join(fixture,'inbox');
+    await mkdir(inbox,{mode:0o700,recursive:true});
+    handoff=createFileHandoff({inbox,database:path.join(fixture,'file-handoff.sqlite'),
+      validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
+  }
   host=createTrustedInteractiveHost({
     store, runtime:{skillResolver:async()=> 'Read the public question and submit its requested answer.',
-      validateResult:(_schema,value)=>fallback ? (value.artifact?.id===staged?.id?[]:['Expected staged reference'])
+      validateResult:(_schema,value)=>fallback ? validateArtifactResult(value)
         : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer']},
     trustedPublicKeys:{proof:publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
     allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
     authorizeTerminalAccess:({action})=>action==='run:read',
   });
-  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host});
-  if (fallback) {
-    const inbox=path.join(fixture,'inbox');
-    await mkdir(inbox,{mode:0o700});
-    handoff=createFileHandoff({inbox,database:path.join(fixture,'file-handoff.sqlite'),
-      validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
-  }
+  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host,handoff});
   return privateKey;
 }
 
 let key;
+function validateArtifactResult(value) {
+  if (!scenario) return value.artifact?.id===staged?.id?[]:['Expected staged reference'];
+  const artifact=value.artifact;
+  const snapshot=artifact && handoff.readSnapshot(artifact.id);
+  return snapshot && ['claimed','acked'].includes(snapshot.state) && snapshot.byteLength===artifact.byteLength
+    && snapshot.sha256===artifact.sha256 ? [] : ['Expected claimed snapshot'];
+}
+
 async function acceptResult(result,identity,pending=currentTask) {
   const receipt={runId:pending.runId,requestId:pending.requestId,nodeId:pending.nodeId,
     attempt:pending.attempt,kind:'agent-result',result};
@@ -167,6 +176,34 @@ async function acceptResult(result,identity,pending=currentTask) {
   return {runId:frame.runId,acceptedRevision:frame.acceptedRevision};
 }
 
+async function deliverCandidate(result,name,args,identity,started) {
+  const receipt={runId:currentTask.runId,requestId:currentTask.requestId,nodeId:currentTask.nodeId,
+    attempt:currentTask.attempt,kind:'agent-result',result};
+  const proofId=outbox.record({task:currentTask,modelPid:isolatedIdentity?.pid??child.pid,
+    started:{...started,callId:identity.callId,args:started.arguments},
+    callback:{...identity,tool:name,args}},receipt,key);
+  const signed=outbox.describe(proofId);
+  const detail={...signed,threadId,turnId,callId:identity.callId,hostPid:process.pid,
+    modelPid:isolatedIdentity?.pid??child.pid,requestId:currentTask.requestId,
+    ...(result.artifact?{artifact:result.artifact}:{})};
+  const release=new Promise(resolve=>process.once('message',resolve));
+  journal('outbox-signed',{...identity,...detail});
+  process.send({event:'signed',...detail});
+  assert.equal(await release,'deliver');
+  const afterAccept=cut==='after-cas'?async ack=>{
+    journal('outbox-after-cas',{proofId,ack});
+    process.send({event:'committed',proofId,ack,hostPid:process.pid});
+    // Keep the exact post-CAS cut open until the independent supervisor kills this Host.
+    await new Promise(()=>{});
+  }:undefined;
+  try {frame=await outbox.deliver(proofId,{afterAccept});}
+  catch (error) {
+    if (error.code!=='FK_I_RECEIPT_CONFLICT') throw error;
+    return {conflict:true,...outbox.describe(proofId)};
+  }
+  return {runId:frame.runId,...outbox.describe(proofId)};
+}
+
 async function handleTool(name,args,identity,started) {
   if (size) {
     const canonical=canonicalBytes(args);
@@ -177,12 +214,15 @@ async function handleTool(name,args,identity,started) {
     return {bytes:canonical.byteLength};
   }
   if (name==='flowkit_start') {
-    assert.ok(!worker);
+    assert.ok(!worker || fallback);
     assert.equal(args.nonce,nonce);
-    assert.equal(frame,undefined);
-    frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
-      startKey:nonce,state:{question:'Return the word ready.',privateMarker:'host-only synthetic marker'}});
-    currentTask=await host.getPublicAgentTask({runId:frame.runId});
+    if (worker) assert.equal(staged,undefined);
+    else {
+      assert.equal(frame,undefined);
+      frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
+        startKey:nonce,state:{question:'Return the word ready.',privateMarker:'host-only synthetic marker'}});
+      currentTask=await host.getPublicAgentTask({runId:frame.runId});
+    }
     journal('pending', {runId:frame.runId,requestId:currentTask.requestId,revision:frame.revision,
       programHash:program.programIdentity.artifactHash,taskDigest:sha256Bytes(canonicalBytes(currentTask))});
     if (!fallback) return currentTask;
@@ -204,23 +244,7 @@ async function handleTool(name,args,identity,started) {
   if (name==='flowkit_submit') {
     if (worker) {
       assert.deepEqual(args,{requestId:currentTask.requestId,answer});
-      const receipt={runId:currentTask.runId,requestId:currentTask.requestId,nodeId:currentTask.nodeId,
-        attempt:currentTask.attempt,kind:'agent-result',result:{answer}};
-      const proofId=outbox.record({task:currentTask,modelPid:isolatedIdentity?.pid??child.pid,
-        started:{...started,callId:identity.callId,args:started.arguments},
-        callback:{...identity,tool:name,args}},receipt,key);
-      const signed=outbox.describe(proofId);
-      const release=new Promise(resolve=>process.once('message',resolve));
-      journal('outbox-signed',{...identity,...signed});
-      process.send({event:'signed',...signed,threadId,turnId,callId:identity.callId,hostPid:process.pid,
-        modelPid:isolatedIdentity?.pid??child.pid,requestId:currentTask.requestId});
-      assert.equal(await release,'deliver');
-      try {frame=await outbox.deliver(proofId);}
-      catch (error) {
-        if (error.code!=='FK_I_RECEIPT_CONFLICT') throw error;
-        return {conflict:true,...outbox.describe(proofId)};
-      }
-      return {runId:frame.runId,...outbox.describe(proofId)};
+      return deliverCandidate({answer},name,args,identity,started);
     }
     assert.equal(frame?.status,'waiting');
     assert.equal(args.requestId,currentTask.requestId);
@@ -229,7 +253,8 @@ async function handleTool(name,args,identity,started) {
   if (name==='flowkit_submit_file') {
     return handoff.consume({
       started:{...started,callId:identity.callId},callback:{...identity,tool:name,arguments:args},
-      loadPending:store.load,signAndAccept:({artifact,pending})=>acceptResult({artifact},identity,pending),
+      loadPending:store.load,signAndAccept:({artifact,pending})=>worker
+        ?deliverCandidate({artifact},name,args,identity,started):acceptResult({artifact},identity,pending),
     });
   }
   assert.equal(name,'flowkit_continue');
@@ -281,7 +306,7 @@ lines?.on('line',line=>{
         const identity={callId:p.callId,threadId,turnId,digest:sha256Bytes(args),bytes:args.byteLength};
         journal('tool-callback',identity);
         const result=await handleTool(p.tool,p.arguments,identity,started);
-        if (worker) {
+        if (worker && p.tool!=='flowkit_start') {
           journal('outbox-delivered',result);
           process.send({event:'delivered',...result});
         }
@@ -330,6 +355,7 @@ async function run() {
   if (worker) {
     const {runId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
     currentTask=await host.getPublicAgentTask({runId});
+    frame=store.load(runId);
   }
   await request('initialize',{clientInfo:{name:'flowkit-acceptance',title:'FlowKit acceptance',version:'0.1.0'},
     capabilities:{experimentalApi:true}});
@@ -338,9 +364,11 @@ async function run() {
   const model=data.find(entry=>entry.isDefault)?.model ?? data[0]?.model;
   const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
     multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},
-    dynamicTools:worker?specs.filter(spec=>spec.name==='flowkit_submit'):specs});
+    dynamicTools:worker?specs.filter(spec=>fallback?spec.name!=='flowkit_continue':spec.name==='flowkit_submit'):specs});
   threadId=thread.id;
-  const prompt=worker
+  const prompt=worker&&fallback
+    ? 'Call flowkit_start with nonce "'+nonce+'". Read its fileReference and call flowkit_submit_file once with its exact id and requestId. Then finish.'
+    : worker
     ? 'Call the dynamic tool flowkit_submit exactly once with requestId "'+currentTask.requestId
       +'" and answer "'+answer+'". Use the dynamic tool, then finish.'
     : size
@@ -358,7 +386,8 @@ try {
   if (offline) await runOutboxOffline();
   else {
   const outcome=await Promise.race([run(),finished]);
-  const expected=worker?['flowkit_submit']:size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
+  const expected=worker?(fallback?['flowkit_start','flowkit_submit_file']:['flowkit_submit'])
+    :size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
   const passed=outcome==='turn-completed' && turnStatus==='completed' && !failure
     && JSON.stringify(successful)===JSON.stringify(expected) && completed.size===expected.length
     && (profile==='direct'||!!isolatedIdentity);
@@ -390,18 +419,18 @@ async function runOutboxOffline() {
   if (requested==='outbox-setup') {
     frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
       startKey:nonce,state:{question:'Submit the assigned answer.'}});
-    await writeFile(path.join(fixture,'run.json'),JSON.stringify({runId:frame.runId}),{mode:0o600,flag:'wx'});
     const task=await host.getPublicAgentTask({runId:frame.runId});
+    await writeFile(path.join(fixture,'run.json'),JSON.stringify({runId:frame.runId,requestId:task.requestId}),{mode:0o600,flag:'wx'});
     console.log(JSON.stringify({runId:frame.runId,requestId:task.requestId,revision:frame.revision}));
     return;
   }
-  const {runId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
+  const {runId,requestId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
   const before=store.load(runId);
-  const beforeReceipt=before.pending?store.getReceipt(runId,before.pending.requestId):null;
+  const beforeReceipt=store.getReceipt(runId,requestId);
   const recovered=await outbox.recover(runId);
   assert.deepEqual(await outbox.recover(runId),[]);
   const after=store.load(runId);
   console.log(JSON.stringify({runId,before:{status:before.status,revision:before.revision,receipt:beforeReceipt},
     recovered,after:{status:after.status,revision:after.revision,answer:after.state.answer,
-      journalRows:store.listJournal(runId).length,receipt:before.pending?store.getReceipt(runId,before.pending.requestId):null}}));
+      journalRows:store.listJournal(runId).length,receipt:store.getReceipt(runId,requestId)}}));
 }

@@ -1,24 +1,26 @@
 import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
-import {appendFileSync,mkdirSync,readFileSync} from 'node:fs';
+import {appendFileSync,mkdirSync,readFileSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {createPublicKey,verify} from 'node:crypto';
 import {createSqliteCheckpointStore} from '../../src/interactive/index.mjs';
-import {sha256Bytes} from '../../src/interactive/canonical.mjs';
+import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
+import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.mjs';
 
-const [exe,cwd,root,profile='isolated']=process.argv.slice(2);
+const [exe,cwd,root,profile='isolated',suite='original']=process.argv.slice(2);
 assert.ok([exe,cwd,root].every(path.isAbsolute));
+assert.ok(['original','followup'].includes(suite));
 mkdirSync(root,{mode:0o700});
 const probe=fileURLToPath(new URL('./codex-flowkit-probe.mjs',import.meta.url));
 const log=(event,data)=>appendFileSync(path.join(root,'supervisor.ndjson'),
   JSON.stringify({event,at:Date.now(),supervisorPid:process.pid,...data})+'\n');
 const children=new Set();
 
-function launch(mode,dir,label,answer) {
+function launch(mode,dir,label,{answer='',cut='',bytes}={}) {
   const out=path.join(dir,label);
-  const child=fork(probe,[exe,cwd,out,mode,profile,dir,...(answer?[answer]:[])],
+  const child=fork(probe,[exe,cwd,out,mode,profile,dir,answer,cut,...(bytes?[String(bytes)]:[])],
     {stdio:['ignore','pipe','pipe','ipc'],windowsHide:true});
   children.add(child);
   let stdout='',stderr='';
@@ -53,8 +55,8 @@ async function waitFor(worker,event) {
   } finally {clearTimeout(timer);child.off('message',listener);}
 }
 
-async function offline(mode,dir,label) {
-  const result=await launch(mode,dir,label).closed;
+async function offline(mode,dir,label,options) {
+  const result=await launch(mode,dir,label,options).closed;
   assert.equal(result.code,0,result.stderr);
   return JSON.parse(result.stdout);
 }
@@ -80,11 +82,12 @@ function inspect(dir,setup,proofs) {
       assert.ok(verify(null,row.statement,publicKey,row.signature));
       assert.equal(receipt.runId,setup.runId);
       assert.equal(receipt.requestId,setup.requestId);
-      return {proofId:proof.proofId,state:row.state,receiptHash:row.receipt_hash,answer:receipt.result.answer,
+      return {proofId:proof.proofId,state:row.state,receiptHash:row.receipt_hash,...receipt.result,
         acceptedRevision:row.accepted_revision,statementHash:proof.statementHash,signatureHash:proof.signatureHash};
     });
-    return {status:cp.status,revision:cp.revision,answer:cp.state.answer,checkpointHash:journal.at(-1).checkpointHash,
-      indexed,journalRows:journal.length,rows};
+    return {status:cp.status,revision:cp.revision,answer:cp.state.answer,artifact:cp.state.artifact,
+      checkpointHash:journal.at(-1).checkpointHash,checkpointDigest:sha256Bytes(canonicalBytes(cp)),
+      journalDigest:sha256Bytes(canonicalBytes(journal)),indexed,journalRows:journal.length,rows};
   } finally {store?.close();db.close();}
 }
 
@@ -100,14 +103,15 @@ function finishedState(state,winner) {
   assert.equal(state.indexed.digest,winner.receiptHash);
   assert.equal(state.indexed.acceptedRevision,winner.acceptedRevision);
   assert.equal(state.answer,winner.answer);
+  assert.deepEqual(state.artifact,winner.artifact);
   assert.equal(state.journalRows,state.revision+1);
 }
 
-try {
+async function originalSuite() {
   const raceDir=path.join(root,'race');
   mkdirSync(raceDir,{mode:0o700});
   const race=await offline('outbox-setup',raceDir,'setup');
-  const contenders=['alpha','beta'].map(answer=>launch('outbox-worker',raceDir,answer,answer));
+  const contenders=['alpha','beta'].map(answer=>launch('outbox-worker',raceDir,answer,{answer}));
   const proofs=await Promise.all(contenders.map(worker=>waitFor(worker,'signed')));
   for (const key of ['threadId','turnId','hostPid','modelPid','callId','proofId','receiptHash']) {
     assert.notEqual(proofs[0][key],proofs[1][key],key);
@@ -131,7 +135,7 @@ try {
   const crashDir=path.join(root,'crash');
   mkdirSync(crashDir,{mode:0o700});
   const crash=await offline('outbox-setup',crashDir,'setup');
-  const victim=launch('outbox-worker',crashDir,'victim','ready');
+  const victim=launch('outbox-worker',crashDir,'victim',{answer:'ready'});
   const proof=await waitFor(victim,'signed');
   const beforeCrash=inspect(crashDir,crash,[proof]);
   pendingState(beforeCrash,crash);
@@ -152,7 +156,81 @@ try {
   finishedState(afterCrash,afterCrash.rows[0]);
   assert.equal(afterCrash.indexed.acceptedRevision,crash.revision+1);
   log('recovery-passed',afterCrash);
-  console.log(JSON.stringify({passed:true,profile,race:afterRace,crash:afterCrash}));
+  return {race:afterRace,crash:afterCrash};
+}
+
+function inspectSnapshot(dir,artifact) {
+  const inbox=path.join(dir,'inbox');
+  assert.deepEqual(readdirSync(inbox),[]);
+  const handoff=createFileHandoff({database:path.join(dir,'file-handoff.sqlite'),inbox,
+    validateArtifact:()=>false});
+  try {
+    const {bytes,...snapshot}=handoff.readSnapshot(artifact.id);
+    assert.equal(snapshot.byteLength,artifact.byteLength);
+    assert.equal(snapshot.sha256,artifact.sha256);
+    assert.deepEqual(bytes,canonicalBytes({answer:'A'.repeat(snapshot.byteLength-13)}));
+    return snapshot;
+  } finally {handoff.close();}
+}
+
+async function crashCase(label,{cut='',bytes}={}) {
+  const dir=path.join(root,label);
+  mkdirSync(dir,{mode:0o700});
+  const setup=await offline('outbox-setup',dir,'setup',{bytes});
+  const victim=launch('outbox-worker',dir,'victim',{answer:'ready',cut,bytes});
+  const proof=await waitFor(victim,'signed');
+  assert.equal(proof.hostPid,victim.child.pid);
+  assert.equal(proof.requestId,setup.requestId);
+  if (cut) {
+    const committed=waitFor(victim,'committed');
+    victim.child.send('deliver');
+    assert.equal((await committed).proofId,proof.proofId);
+  }
+  const before=inspect(dir,setup,[proof]);
+  const artifact=before.rows[0].artifact;
+  assert.equal(before.rows[0].state,'SIGNED');
+  assert.equal(before.rows[0].acceptedRevision,null);
+  if (cut) {
+    assert.equal(before.indexed.acceptedRevision,setup.revision+1);
+    finishedState(before,{...before.rows[0],acceptedRevision:before.indexed.acceptedRevision});
+  } else pendingState(before,setup);
+  const snapshot=bytes?inspectSnapshot(dir,artifact):null;
+  if (snapshot) assert.equal(snapshot.state,'claimed');
+  log('followup-before-kill',{label,cut:cut||'before-cas',victimPid:victim.child.pid,before,snapshot});
+  assert.ok(victim.child.kill('SIGKILL'));
+  const killed=await victim.closed;
+  assert.equal(killed.signal,'SIGKILL');
+  assert.deepEqual(inspect(dir,setup,[proof]),before);
+  if (snapshot) assert.deepEqual(inspectSnapshot(dir,artifact),snapshot);
+  log('followup-kill-confirmed',{label,victimPid:killed.pid,signal:killed.signal,before,snapshot});
+  const restarted=await offline('outbox-recover',dir,'restart',{bytes});
+  assert.deepEqual(restarted.before.receipt,before.indexed);
+  assert.equal(restarted.before.revision,before.revision);
+  assert.equal(restarted.recovered.length,1);
+  assert.equal(restarted.recovered[0].proofId,proof.proofId);
+  const after=inspect(dir,setup,[proof]);
+  const winner=after.rows[0];
+  assert.equal(winner.state,'ACKED');
+  finishedState(after,winner);
+  assert.equal(after.indexed.acceptedRevision,setup.revision+1);
+  if (cut) {
+    const {rows,...storeBefore}=before;
+    const {rows:finalRows,...storeAfter}=after;
+    assert.deepEqual(storeAfter,storeBefore);
+  }
+  const recoveredSnapshot=bytes?inspectSnapshot(dir,artifact):null;
+  if (snapshot) assert.deepEqual(recoveredSnapshot,{...snapshot,state:'acked',acceptedRevision:winner.acceptedRevision});
+  log('followup-passed',{label,after,snapshot:recoveredSnapshot});
+  return {after,snapshot:recoveredSnapshot};
+}
+
+try {
+  const result=suite==='followup'?{
+    afterCas:await crashCase('after-cas',{cut:'after-cas'}),
+    file256:await crashCase('file-262144',{bytes:262144}),
+    fileNearLimit:await crashCase('file-2093056',{bytes:2093056}),
+  }:await originalSuite();
+  console.log(JSON.stringify({passed:true,profile,suite,...result}));
 } finally {
   for (const child of children) if (child.exitCode===null && child.signalCode===null) child.kill('SIGKILL');
 }
