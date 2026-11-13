@@ -1,5 +1,7 @@
 # P0-A 管理终止和 Codex 实测
 
+> 此页记录首发方案确认前的 V2 迁移实验。当前首发初始化全新 R5 数据库，参考入口只接收 `namespace` 选项。部署和验收以 [Interactive 接入](../../interactive.md) 和 [当前发布矩阵](../p0a-g07-g12-20261113/release-matrix.md) 为准。
+
 Draft [#22](https://github.com/devcodex-labs/flowkit/pull/22) 的实施基线为 `e1cd5c7c4f89397fbdee50e1a430074c4c610e9d`，基线 [CI](https://github.com/devcodex-labs/flowkit/actions/runs/43331776187) 8/8 通过。
 
 ## R5 管理终止

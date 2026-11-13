@@ -1,5 +1,7 @@
 # P0-A 兼容实现与 Codex 宿主候选
 
+> 此页记录首发方案确认前的兼容实验。当前首发使用 R5 Checkpoint 和全新 SQLite 数据库。旧格式和旧 Run 的描述仅适用于下述历史提交。 [当前首发契约](../p0a-g07-g12-20261113/release-matrix.md#四项已确认的首发契约)
+
 实施基线为 Draft [#22](https://github.com/devcodex-labs/flowkit/pull/22) 的 `70143668394fc5f4e4d1d26f62788c14a66e17e3`。[该提交 CI](https://github.com/devcodex-labs/flowkit/actions/runs/43327790322) 已完成，8/8 成功。
 
 ## 已批准的兼容实现

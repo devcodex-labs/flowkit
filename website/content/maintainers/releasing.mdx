@@ -38,7 +38,7 @@ node scripts/release.mjs verify --tag v1.0.0
 
 从私有 Registry 执行 `docs:private-package`，必须验证确切版本的 `dist.integrity`、tarball 哈希、包名和版本，再运行全部教程消费者用例，不能把无访问权限的 `404` 当作包不存在或发布成功。
 
-**公开文档站已获项目负责人批准**，目标地址为 GitHub Pages `/flowkit/`；FlowKit 仓库和 GitHub Packages 仍保持私有。自动部署前须核对实际 Pages 权限、环境保护和公开内容边界。网站的搜索索引和 sitemap 公开，但不得包含凭据、私有源码、内部资料或要求未授权访问者打开私有仓库的无说明链接。
+**公开文档站已获项目负责人批准**，目标地址为 GitHub Pages `/flowkit/`。GitHub 源码仓库当前公开，仓库可见性与许可证授权范围、GitHub Packages 的包权限分别核对。发行后须确认包为 Private。部署前须核对 Pages 权限、环境保护和公开内容边界。网站的搜索索引和 sitemap 公开，发布内容须排除凭据和内部资料。
 
 ## 失败与恢复
 
