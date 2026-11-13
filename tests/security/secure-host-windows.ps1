@@ -115,6 +115,10 @@ function Test-ModelStdio($Account,[Security.SecureString]$Password) {
       throw 'Model stdio launcher fixture mismatch'
     }
     Write-Host ($record | ConvertTo-Json -Compress)
+  } catch {
+    $errorFile = Join-Path $modelDir 'stdio-error.txt'
+    if ([IO.File]::Exists($errorFile)) { Write-Host (Get-Content -LiteralPath $errorFile -Raw) }
+    throw
   } finally {
     if (!$child.HasExited) { $child.Kill(); [void]$child.WaitForExit(5000) }
     $child.Dispose()
