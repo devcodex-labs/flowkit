@@ -31,7 +31,7 @@ assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
 
 
 assert.deepEqual(Object.keys(interactive),[
-  'compileInteractive','complete','createAgentReceiptStatement','createInteractiveCoordinator',
+  'compileInteractive','complete','createAgentReceiptStatement','createInteractiveAdminContext','createInteractiveCoordinator',
   'createInteractiveHostContext','createSqliteCheckpointStore','createSqliteInteractivePersistence',
   'createTrustedInteractiveHost','encodeAgentReceiptStatement',
   'loadInteractiveProgram','normalizeHostAgentReceipt','resume','start',

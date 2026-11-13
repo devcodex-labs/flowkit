@@ -1,12 +1,17 @@
 import {DatabaseSync} from 'node:sqlite';
 import {Buffer} from 'node:buffer';
+import {closeSync,openSync,existsSync} from 'node:fs';
+import path from 'node:path';
 import {
   MAX_CHECKPOINT_BYTES, MAX_ACTIVE_CHECKPOINT_BYTES, MAX_JOURNAL_BYTES, assertSHA256,
   canonicalBytes, decodeCanonical, safeJSONSnapshot, sha256Bytes,
 } from './canonical.mjs';
 
-const TERMINAL = new Set(['succeeded', 'failed', 'errored']);
+const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
+export const sqliteAdminTerminate=Symbol('SQLite admin terminate');
+const digest=value=>sha256Bytes(canonicalBytes(value));
+const guardedTables=['fk_i_artifacts','fk_i_runs','fk_i_receipt_index','fk_i_journal','fk_i_admin_events'];
 function boundedCheckpointBytes(input) {
   try { return canonicalBytes(input); }
   catch (error) {
@@ -74,9 +79,24 @@ function journalDigest(namespace, runId, revision, transitionId, previousHash, c
  * is experimental on Node 22; the CI matrix tests it as an explicit boundary.
  */
 export function createSqliteCheckpointStore(file, {namespace} = {}) {
+  return openStore(file,namespace);
+}
+
+export function migrateSqliteInteractiveStore(file,{namespace,backupPath}={}) {
+  identifier(file,'SQLite file');
+  identifier(backupPath,'SQLite backup file');
+  if (path.resolve(file)===path.resolve(backupPath)) throw new TypeError('Backup must be a separate new file');
+  if (!existsSync(file)) throw failure('FK_I_STORE_SCHEMA','migration requires an existing SQLite store');
+  return openStore(file,namespace,backupPath);
+}
+
+function openStore(file,namespace,backupPath) {
   identifier(file, 'SQLite file');
   identifier(namespace, 'namespace');
   const db = new DatabaseSync(file);
+  // Only current FlowKit writers provide the function used by the V2 triggers.
+  db.function('fk_i_writer_version', {deterministic:true},()=>2);
+  let schemaVersion;
   try {
     db.exec('PRAGMA busy_timeout = 15000');
     db.exec('PRAGMA foreign_keys = ON');
@@ -89,7 +109,10 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
     if (journalMode !== 'wal' || synchronous !== 2 || foreignKeys !== 1) {
       throw failure('FK_I_STORE_UNSAFE', 'WAL, synchronous FULL and foreign keys are required');
     }
-    db.exec([
+    const version=()=>db.prepare('PRAGMA user_version').get().user_version;
+    schemaVersion=version();
+    if (![0,2].includes(schemaVersion)) throw failure('FK_I_STORE_SCHEMA','unsupported SQLite schema version');
+    if (backupPath===undefined && schemaVersion===0) db.exec([
       'CREATE TABLE IF NOT EXISTS fk_i_artifacts (',
       ' namespace TEXT NOT NULL, artifact_hash TEXT NOT NULL, source_hash TEXT NOT NULL,',
       ' identity_json TEXT NOT NULL, program_bytes BLOB NOT NULL,',
@@ -119,6 +142,50 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id)',
       ') STRICT;',
     ].join('\n'));
+    if (backupPath!==undefined) {
+      if (schemaVersion!==0) throw failure('FK_I_STORE_SCHEMA','database is already migrated');
+      const readVersion=()=>db.prepare('PRAGMA data_version').get().data_version;
+      const before=readVersion();
+      closeSync(openSync(backupPath,'wx',0o600));
+      db.prepare('VACUUM INTO ?').run(backupPath);
+      const backup=new DatabaseSync(backupPath,{readOnly:true});
+      try {
+        if (backup.prepare('PRAGMA integrity_check').get().integrity_check!=='ok') {
+          throw failure('FK_I_STORE_CORRUPT','pre-migration backup failed integrity check');
+        }
+      } finally {backup.close();}
+      db.exec('BEGIN EXCLUSIVE');
+      try {
+        if (version()!==0 || readVersion()!==before) throw failure('FK_I_STORE_SCHEMA','concurrent write during migration backup');
+        const findTable=db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?");
+        if (guardedTables.slice(0,-1).some(table=>!findTable.get(table))) {
+          throw failure('FK_I_STORE_SCHEMA','migration source is not an existing FlowKit store');
+        }
+        db.exec(`
+          CREATE TABLE fk_i_admin_events (
+            namespace TEXT NOT NULL, run_id TEXT NOT NULL, transition_id TEXT NOT NULL,
+            admin_subject_id TEXT NOT NULL, reason_code TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (namespace, run_id, transition_id),
+            FOREIGN KEY (namespace, run_id, transition_id)
+              REFERENCES fk_i_journal(namespace, run_id, transition_id)
+          ) STRICT;
+        `);
+        for (const table of guardedTables) {
+          for (const operation of ['INSERT','UPDATE','DELETE']) {
+            db.exec(`CREATE TRIGGER ${table}_writer_${operation} BEFORE ${operation} ON ${table}
+              WHEN fk_i_writer_version() <> 2 BEGIN SELECT RAISE(ABORT, 'incompatible FlowKit writer'); END;`);
+          }
+        }
+        db.exec('PRAGMA user_version = 2; COMMIT');
+        schemaVersion=2;
+      } catch(error) {db.exec('ROLLBACK');throw error;}
+    }
+    if (schemaVersion===2) {
+      const trigger=db.prepare('SELECT 1 FROM sqlite_schema WHERE type=? AND name=?');
+      if (guardedTables.some(table=>['INSERT','UPDATE','DELETE'].some(op=>!trigger.get('trigger',table+'_writer_'+op)))) {
+        throw failure('FK_I_STORE_SCHEMA','incomplete V2 writer protection');
+      }
+    }
   } catch (error) {
     db.close();
     throw error;
@@ -137,6 +204,8 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const insertReceipt = db.prepare('INSERT OR IGNORE INTO fk_i_receipt_index(namespace, run_id, request_id, node_id, attempt, digest, accepted_revision, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const journalAtRevision = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND revision = ?');
   const journalById = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND transition_id = ?');
+  const addAdminEvent=schemaVersion===2 ? db.prepare(`INSERT INTO fk_i_admin_events
+    (namespace,run_id,transition_id,admin_subject_id,reason_code,created_at) VALUES (?,?,?,?,?,?)`) : null;
 
   function transaction(mode, work) {
     db.exec(mode === 'write' ? 'BEGIN IMMEDIATE' : 'BEGIN');
@@ -223,6 +292,35 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   return Object.freeze({
     namespace,
     close() { db.close(); },
+    [sqliteAdminTerminate](runId,reason,subjectId) {
+      identifier(runId,'runId');
+      identifier(subjectId,'subjectId');
+      if (!addAdminEvent) throw failure('FK_I_STORE_SCHEMA','explicit V2 migration is required');
+      return transaction('write',()=>{
+        const current=decodeRow(read.get(namespace,runId));
+        if (!current) throw failure('FK_I_HOST_DENIED','Run is not accessible');
+        if (TERMINAL.has(current.status)) return current;
+        if (current.revision>=Number.MAX_SAFE_INTEGER) throw failure('FK_I_REVISION_EXHAUSTED','revision range exceeded');
+        const next={...current,status:'cancelled',revision:current.revision+1,
+          pending:null,prepared:null,candidate:null,terminal:null,pauseReason:null};
+        const eventDigest=digest({kind:'admin-terminate',subjectId,reason});
+        const proposalDigest=digest({kind:'admin-tombstone',status:'cancelled'});
+        const transitionId=current.transitionIdVersion===1
+          ? digest([namespace,runId,current.revision,current.blockId,eventDigest,current.artifactHash,proposalDigest])
+          : 't:'+digest([namespace,runId,current.revision,current.blockId,'admin-terminate']).slice(7);
+        const committedAt=new Date().toISOString();
+        const transition={namespace,runId,transitionId,fromRevision:current.revision,toRevision:next.revision,
+          fromBlockId:current.blockId,toBlockId:null,programHash:current.artifactHash,eventDigest,proposalDigest,committedAt};
+        const bytes=boundedCheckpointBytes(next), checkpointHash=sha256Bytes(bytes);
+        const previous=latest.get(namespace,runId);
+        if (updateRun.run(next.revision,bytes.toString('utf8'),checkpointHash,namespace,runId,current.revision).changes!==1) {
+          throw failure('FK_I_CAS_CONFLICT','revision changed during admin transaction');
+        }
+        appendJournal(runId,next.revision,transitionId,checkpointHash,previous.entry_hash,{kind:'admin-terminate',transition});
+        addAdminEvent.run(namespace,runId,transitionId,subjectId,reason,committedAt);
+        return next;
+      });
+    },
 
     /** Preserve exact compiler-produced bytes, keyed by their content hash. */
     putArtifact({programIdentity, bytes}) {
@@ -294,6 +392,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       const base = boundedCheckpoint(checkpoint);
       identifier(base?.runId, 'checkpoint.runId');
       assertCheckpoint(base, namespace, base.runId, 0);
+      if (base.status==='cancelled') throw failure('FK_I_INVALID_TRANSITION','cancelled requires management authorization');
       if (base.startKey !== undefined || base.startIntentHash !== undefined) {
         throw failure('FK_I_INVALID_CHECKPOINT', 'start identity is store-generated');
       }
@@ -350,6 +449,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         throw new TypeError('expectedRevision must be a nonnegative safe integer');
       }
       const next = boundedCheckpoint(nextCheckpoint);
+      if (next.status==='cancelled') throw failure('FK_I_INVALID_TRANSITION','cancelled requires management authorization');
       const journal = safeJSONSnapshot(journalEntry, MAX_JOURNAL_BYTES);
       return transaction('write', () => {
         const row = read.get(namespace, runId);

@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {
-  compileInteractive,complete,createInteractiveCoordinator,createInteractiveHostContext,
+  compileInteractive,complete,createInteractiveAdminContext,createInteractiveCoordinator,createInteractiveHostContext,
   createSqliteCheckpointStore,createSqliteInteractivePersistence,resume,start,
 } from '../../src/interactive/index.mjs';
 
@@ -168,4 +169,99 @@ test('R5 file source works without Agent bindings and honors pre-aborted operati
   assert.equal(result.status,'succeeded');
   assert.equal(Object.hasOwn(result,'state'),false);
   assert.equal(result.terminal.nodeId,'done');
+});
+
+test('S12-A migrates with a recoverable backup, rejects old writers and atomically terminates without the Program',async t=>{
+  const f=await fixture(t);
+  const waiting=await start(f.program,runtime,{message:'hello'},f.options);
+  const before=f.raw.load(waiting.runId);
+  const journal=f.raw.listJournal(waiting.runId);
+  const admin=createInteractiveAdminContext({namespace:ns,subjectId:'ops-1',authorize:()=>true});
+  await assert.rejects(f.persistence.adminController.adminTerminate(waiting.runId,'OPERATOR',admin),
+    {code:'FK_I_STORE_SCHEMA'});
+  const backupPath=path.join(f.dir,'pre-v2.sqlite');
+  assert.throws(()=>createSqliteInteractivePersistence(path.join(f.dir,'missing.sqlite'),
+    {namespace:ns,migrationBackupPath:backupPath}),{code:'FK_I_STORE_SCHEMA'});
+  const migrated=createSqliteInteractivePersistence(f.file,{namespace:ns,migrationBackupPath:backupPath});
+  try {
+    const db=new DatabaseSync(f.file);
+    const audit=()=>db.prepare('SELECT * FROM fk_i_admin_events').all();
+    try {
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version,2);
+      assert.throws(()=>db.prepare('UPDATE fk_i_runs SET revision=revision').run(),/no such function: fk_i_writer_version/);
+      await assert.rejects(migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',{...admin}),
+        {code:'FK_I_HOST_DENIED'});
+      const other=createInteractiveAdminContext({namespace:'another',subjectId:'ops-1',authorize:()=>true});
+      await assert.rejects(migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',other),{code:'FK_I_HOST_DENIED'});
+      assert.deepEqual(audit(),[]);
+      db.exec(`CREATE TRIGGER force_audit_failure BEFORE INSERT ON fk_i_admin_events
+        BEGIN SELECT RAISE(ABORT,'audit fixture failure'); END`);
+      await assert.rejects(migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',admin),/audit fixture failure/);
+      assert.deepEqual(f.raw.load(waiting.runId),before);
+      assert.deepEqual(f.raw.listJournal(waiting.runId),journal);
+      assert.deepEqual(audit(),[]);
+      db.exec('DROP TRIGGER force_audit_failure');
+      // A deliberately broken test fixture models an unavailable artifact.
+      // The management action must not open or verify Program bytes.
+      db.function('fk_i_writer_version',{deterministic:true},()=>2);
+      db.prepare('UPDATE fk_i_artifacts SET program_bytes=? WHERE namespace=? AND artifact_hash=?')
+        .run(Buffer.from('unavailable'),ns,before.artifactHash);
+      const result=await migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',admin);
+      assert.equal(result.status,'cancelled');
+      assert.equal(result.revision,before.revision+1);
+      assert.deepEqual(result.pending,[]);
+      assert.equal(Object.hasOwn(result,'state'),false);
+      const opts={...f.options,...migrated};
+      assert.deepEqual(await resume(waiting.runId,runtime,opts),result);
+      await assert.rejects(complete(submission(waiting),runtime,opts),{code:'FK_I_STALE_RECEIPT'});
+      assert.deepEqual(await migrated.adminController.adminTerminate(waiting.runId,'REPEATED',admin),result);
+      const [record]=audit();
+      assert.equal(record.admin_subject_id,'ops-1');
+      assert.equal(record.reason_code,'OPERATOR');
+      assert.equal((await migrated.store.loadTransition(waiting.runId,record.transition_id)).toRevision,result.revision);
+      assert.equal(audit().length,1);
+    } finally {db.close();}
+    const restored=createSqliteCheckpointStore(backupPath,{namespace:ns});
+    try {
+      assert.deepEqual(restored.load(waiting.runId),before);
+      assert.deepEqual(restored.listJournal(waiting.runId),journal);
+    } finally {restored.close();}
+  } finally {migrated.close();}
+});
+
+test('S12-A terminal completion and management termination have a single final transition',async t=>{
+  const f=await fixture(t);
+  const migrated=createSqliteInteractivePersistence(f.file,{namespace:ns,migrationBackupPath:path.join(f.dir,'backup.sqlite')});
+  try {
+    const opts={...f.options,...migrated};
+    const waiting=await start(f.program,runtime,{message:'hello'},opts);
+    let entered;
+    const gate=new Promise(resolve=>{entered=resolve;});
+    let release;
+    const hold=new Promise(resolve=>{release=resolve;});
+    const controlled={...opts,store:{...opts.store,async compareAndSwap(runId,revision,tx) {
+      if (tx.next.status==='succeeded') {
+        entered();
+        await hold;
+      }
+      return opts.store.compareAndSwap(runId,revision,tx);
+    }}};
+    const completing=complete(submission(waiting),runtime,controlled);
+    await Promise.race([gate,completing.then(()=>assert.fail('terminal barrier not reached'))]);
+    try {
+      const admin=createInteractiveAdminContext({namespace:ns,subjectId:'ops-1',authorize:()=>true});
+      const ended=await migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',admin);
+      assert.equal(ended.status,'cancelled');
+      release();
+      assert.equal((await completing).status,'cancelled');
+      assert.equal(f.raw.listJournal(waiting.runId).at(-1).entry.kind,'admin-terminate');
+      assert.equal(f.raw.listJournal(waiting.runId).filter(row=>row.entry.kind==='admin-terminate').length,1);
+      const another=await start(f.program,runtime,{message:'hello'},{...opts,startKey:'completion-first'});
+      const completed=await complete(submission(another),runtime,opts);
+      const before=f.raw.listJournal(another.runId);
+      assert.equal((await migrated.adminController.adminTerminate(another.runId,'OPERATOR',admin)).status,'succeeded');
+      assert.equal(completed.revision,before.at(-1).revision);
+      assert.deepEqual(f.raw.listJournal(another.runId),before);
+    } finally {release(); await completing.catch(()=>{});}
+  } finally {migrated.close();}
 });

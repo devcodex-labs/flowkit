@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
 
-const FINISHED = new Set(['succeeded','failed','errored']);
+const FINISHED = new Set(['succeeded','failed','errored','cancelled']);
 // P0-A has at most 500 static nodes and 11 attempts per Agent.
 // Do not cap legitimate 500-node workflows below their worst-case 5,500 receipts.
 const MAX_RECEIPTS = 8192;
@@ -482,6 +482,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       checkSignal();
       const cp=versioned ? await store.load(runId) : store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible in this namespace');
+      if (cp.status==='cancelled' && cp.namespace===store.namespace && cp.policyHash===policyHash) return asPublicFrame(cp);
       const program=await loadPinned(cp);
       if (FINISHED.has(cp.status) || cp.status==='waiting') return asPublicFrame(cp);
       if (cp.status === 'paused') {
@@ -546,6 +547,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     for (;;) {
       checkSignal();
       const cp=versioned ? await store.load(runId) : store.load(runId);
+      if (cp.status==='cancelled' && cp.namespace===store.namespace && cp.policyHash===policyHash) return asPublicFrame(cp);
       const program=await loadPinned(cp);
       if (FINISHED.has(cp.status) || cp.status==='waiting' || cp.status==='paused') {
         return asPublicFrame(cp);
@@ -636,6 +638,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       checkSignal();
       const cp=versioned ? await store.load(runId) : store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
+      if (cp.status==='cancelled') throw failure('FK_I_STALE_RECEIPT','Run has been terminated');
       const program=await loadPinned(cp);
       const digest=inlineTooLarge ? null : (cp.transitionIdVersion===1 ? submissionDigest : legacyDigest);
       const indexed=typeof store.getReceipt==='function';
@@ -710,7 +713,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     checkSignal();
     const cp=versioned ? await store.load(runId) : store.load(runId);
     if (!cp) return null;
-    await loadPinned(cp);
+    if (cp.status!=='cancelled' || cp.namespace!==store.namespace || cp.policyHash!==policyHash) await loadPinned(cp);
     return asPublicFrame(cp);
   }
 

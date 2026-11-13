@@ -79,7 +79,7 @@ export interface InteractiveAgentPending {
   overview?: {step: number};
 }
 export type InteractiveRunStatus =
-  'running' | 'waiting' | 'paused' | 'succeeded' | 'failed' | 'errored';
+  'running' | 'waiting' | 'paused' | 'succeeded' | 'failed' | 'errored' | 'cancelled';
 /** Execution frame for trusted Host callers. It can contain private State. */
 export interface InteractiveRunFrame {
   namespace: string;
@@ -269,7 +269,7 @@ export interface PublicInteractiveTerminalFrame {
   protocolVersion:1;
   runId:string;
   revision:number;
-  status:'succeeded'|'failed'|'errored';
+  status:'succeeded'|'failed'|'errored'|'cancelled';
   pending:readonly [];
   checkpointRef:{runId:string;revision:number};
   terminal?:{nodeId:string;status:'succeeded'|'failed'};
@@ -398,11 +398,27 @@ export interface TrustedProgramRegistryV1 {
   release(runId:string,artifactHash:string):Promise<void>;
 }
 
-export declare function createSqliteInteractivePersistence(file:string,options:{namespace:string}):{
+export declare function createSqliteInteractivePersistence(file:string,options:{namespace:string;migrationBackupPath?:string}):{
   readonly store:CheckpointStoreV1;
   readonly programRegistry:TrustedProgramRegistryV1;
+  readonly adminController:InteractiveAdminControllerV1;
   close():void;
 };
+
+declare const adminContextBrand:unique symbol;
+export interface TrustedAdminContextV1 {
+  readonly [adminContextBrand]:true;
+  readonly namespace:string;
+  readonly subjectId:string;
+}
+export interface InteractiveAdminControllerV1 {
+  adminTerminate(runId:string,reasonCode:string,auth:TrustedAdminContextV1):Promise<InteractiveFrameV1>;
+}
+export declare function createInteractiveAdminContext(options:{
+  namespace:string;
+  subjectId:string;
+  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:admin-terminate';runId:string;reasonCode:string}>):boolean|Promise<boolean>;
+}):TrustedAdminContextV1;
 
 declare const hostContextBrand:unique symbol;
 export interface TrustedHostContextV1 {

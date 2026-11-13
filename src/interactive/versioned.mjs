@@ -1,9 +1,10 @@
 import {buildCoordinator} from './coordinator.mjs';
 import {compileInteractive} from './compile.mjs';
-import {createSqliteCheckpointStore} from './sqlite-store.mjs';
+import {createSqliteCheckpointStore,migrateSqliteInteractiveStore,sqliteAdminTerminate} from './sqlite-store.mjs';
 import {assertSHA256,canonicalBytes,safeJSONSnapshot,sha256Bytes} from './canonical.mjs';
 
 const authCallbacks=new WeakMap();
+const adminCallbacks=new WeakMap();
 const hash=value=>sha256Bytes(canonicalBytes(value));
 const fail=(code,message)=>Object.assign(new Error(code+': '+message),{code});
 const uncertain=()=>fail('FK_I_STORE_UNCERTAIN','cannot establish a durable transition outcome');
@@ -32,8 +33,19 @@ function refFor(namespace,identity) {
 }
 
 /** Two asynchronous interfaces over the same SQLite connection and transaction backend. */
-export function createSqliteInteractivePersistence(file,{namespace}={}) {
-  const legacy=createSqliteCheckpointStore(file,{namespace});
+export function createInteractiveAdminContext({namespace,subjectId,authorize}={}) {
+  const identifier=value=>typeof value==='string' && /^[a-zA-Z0-9_.:@-]{1,128}$/.test(value);
+  if (!identifier(subjectId) || typeof namespace!=='string' || !namespace || typeof authorize!=='function') {
+    throw new TypeError('A trusted admin identity and authorizer are required');
+  }
+  const auth=Object.freeze({namespace,subjectId});
+  adminCallbacks.set(auth,authorize);
+  return auth;
+}
+
+export function createSqliteInteractivePersistence(file,{namespace,migrationBackupPath}={}) {
+  const legacy=migrationBackupPath===undefined ? createSqliteCheckpointStore(file,{namespace})
+    : migrateSqliteInteractiveStore(file,{namespace,backupPath:migrationBackupPath});
   const store=Object.freeze({
     namespace,
     async createIfAbsent(startKey,initial,genesis) {
@@ -64,7 +76,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
         assertSHA256(transition.eventDigest); assertSHA256(transition.proposalDigest);
         const id=hash([namespace,runId,expectedRevision,current.blockId,transition.eventDigest,
           current.artifactHash,transition.proposalDigest]);
-        const to=next.status==='succeeded'||next.status==='failed'||next.status==='errored' ? null : next.blockId;
+        const to=['succeeded','failed','errored','cancelled'].includes(next.status) ? null : next.blockId;
         if (id!==transition.transitionId || to!==transition.toBlockId) {
           throw fail('FK_I_INVALID_TRANSITION','transition digest mismatch');
         }
@@ -125,7 +137,28 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       }
     },
   });
-  return Object.freeze({store,programRegistry,close:()=>legacy.close()});
+  const adminController=Object.freeze({
+    async adminTerminate(runId,reason,auth) {
+      const authorize=adminCallbacks.get(auth);
+      if (!authorize || auth.namespace!==namespace || typeof runId!=='string' || !runId
+        || typeof reason!=='string' || !/^[A-Z][A-Z0-9_.-]{0,63}$/.test(reason)) {
+        throw fail('FK_I_HOST_DENIED','invalid management request');
+      }
+      let allowed;
+      try {allowed=await authorize(Object.freeze({action:'run:admin-terminate',namespace,runId,reasonCode:reason,
+        subjectId:auth.subjectId}));} catch {}
+      if (allowed!==true) throw fail('FK_I_HOST_DENIED','management authorization denied');
+      const cp=legacy[sqliteAdminTerminate](runId,reason,auth.subjectId);
+      return terminalFrame(cp.runId,cp.revision,cp.status,cp.terminal);
+    },
+  });
+  return Object.freeze({store,programRegistry,adminController,close:()=>legacy.close()});
+}
+
+function terminalFrame(runId,revision,status,terminal) {
+  return {protocolVersion:1,runId,revision,status,pending:[],checkpointRef:{runId,revision},
+    resultRef:{runId,revision,projectionVersion:1},
+    ...(status==='succeeded'||status==='failed' ? {terminal:{nodeId:terminal.nodeId,status}} : {})};
 }
 
 function sameTransition(saved,expected) {
@@ -249,13 +282,13 @@ async function readTerminalResult(resultRef,options) {
   await checkAccess(options,'result:read',{runId:ref.runId,revision:ref.revision});
   const cp=await options.store.load(ref.runId);
   if (cp?.namespace!==options.auth.namespace || cp.runId!==ref.runId || cp.revision!==ref.revision
-    || cp.policyHash!==hash(options.policy) || !['succeeded','failed','errored'].includes(cp.status)) {
+    || cp.policyHash!==hash(options.policy) || !['succeeded','failed','errored','cancelled'].includes(cp.status)) {
     throw fail('FK_I_HOST_DENIED','result is not accessible');
   }
   return safeJSONSnapshot({
     projectionVersion:1,namespace:cp.namespace,runId:cp.runId,status:cp.status,
     state:cp.state,contextError:null,
-    ...(cp.status!=='errored' ? {terminal:{nodeId:cp.terminal.nodeId,status:cp.status}} : {}),
+    ...(cp.status==='succeeded'||cp.status==='failed' ? {terminal:{nodeId:cp.terminal.nodeId,status:cp.status}} : {}),
     ...(typeof cp.terminal?.causeCode==='string' ? {causeCode:cp.terminal.causeCode} : {}),
   });
 }
@@ -324,9 +357,8 @@ async function publicFrame(frame,options,callbacks) {
       || current.status!=='waiting' || current.pending?.requestId!==requestId) throw uncertain();
     output.pending.push({requestId,nodeId,attempt,activation:checkpoint.controlStack.at(-1).activation,
       kind:'agent',intent:'execute',task});
-  } else if (['succeeded','failed','errored'].includes(status)) {
-    output.resultRef={runId,revision,projectionVersion:1};
-    if (status!=='errored') output.terminal={nodeId:frame.terminal.nodeId,status};
+  } else if (['succeeded','failed','errored','cancelled'].includes(status)) {
+    Object.assign(output,terminalFrame(runId,revision,status,frame.terminal));
   } else if (status!=='paused') throw uncertain();
   return output;
 }
@@ -379,6 +411,7 @@ export async function complete(submission,runtime,options) {
   if (!cp || cp.namespace!==options.auth.namespace || cp.runId!==input.runId) {
     throw fail('FK_I_HOST_DENIED','Run is not accessible');
   }
+  if (cp.status==='cancelled') throw fail('FK_I_STALE_RECEIPT','Run has been terminated');
   const historical=await options.store.loadReceipt(input.runId,input.requestId);
   let task=historical ?? cp.pending;
   if (historical && (typeof historical.nodeId!=='string'||!Number.isSafeInteger(historical.attempt))) {

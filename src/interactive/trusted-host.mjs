@@ -182,7 +182,7 @@ export function createTrustedInteractiveHost({
     if (!authorizeTerminalAccess || typeof runId!=='string' || runId.length<1
       || runId.length>256 || /[\u0000-\u001f\u007f]/.test(runId)) throw denied();
     const checkpoint=assertPinned(runId);
-    if (checkpoint.runId!==runId || !['succeeded','failed','errored'].includes(checkpoint.status)
+    if (checkpoint.runId!==runId || !['succeeded','failed','errored','cancelled'].includes(checkpoint.status)
       || (revision!==undefined && revision!==checkpoint.revision)) throw denied();
 
     let decision;
