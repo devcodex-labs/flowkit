@@ -12,7 +12,12 @@ const TOOL='flowkit_submit_file';
 const fail=code=>Object.assign(new Error(code),{code});
 const validId=value=>typeof value==='string' && UUID.test(value);
 const label=value=>typeof value==='string' && value.length>0 && value.length<=256 && !/[\u0000-\u001f\u007f]/.test(value);
-const sameFile=(a,b)=>a.dev===b.dev && a.ino===b.ino;
+
+function sameFile(named,opened) {
+  // Some Windows Node versions omit the device ID in lstat but report it on the open handle.
+  return named.ino!==0n && named.ino===opened.ino
+    && (named.dev===opened.dev || (process.platform==='win32' && named.dev===0n));
+}
 
 function bindingOf(value) {
   const {namespace,runId,requestId,nodeId,attempt,threadId,turnId,programHash,policyHash}=value;
@@ -33,7 +38,7 @@ async function capture(file,size,hash) {
   try {
     const before=await handle.stat({bigint:true});
     const named=await lstat(file,{bigint:true});
-    if (!before.isFile() || !named.isFile() || before.nlink!==1n
+    if (!before.isFile() || !named.isFile() || before.nlink!==1n || named.nlink!==1n || entry.dev!==named.dev
       || !sameFile(entry,before) || !sameFile(named,before)) throw fail('FK_FILE_SOURCE');
     if (before.size>BigInt(MAX_BYTES)) throw fail('FK_FILE_LIMIT');
     if (before.size!==BigInt(size)) throw fail('FK_FILE_LENGTH');
@@ -45,6 +50,7 @@ async function capture(file,size,hash) {
       length+=bytesRead;
     }
     const after=await handle.stat({bigint:true});
+    if (after.nlink!==1n) throw fail('FK_FILE_SOURCE');
     if (length!==size || after.size!==before.size) throw fail('FK_FILE_LENGTH');
     if (after.mtimeNs!==before.mtimeNs || after.ctimeNs!==before.ctimeNs) throw fail('FK_FILE_CHANGED');
     const snapshot=bytes.subarray(0,length);

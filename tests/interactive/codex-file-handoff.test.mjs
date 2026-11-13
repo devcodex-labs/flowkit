@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdir,mkdtemp,rename,rm,truncate,writeFile} from 'node:fs/promises';
+import {link,mkdir,mkdtemp,rename,rm,symlink,truncate,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -94,6 +94,34 @@ test('file fallback rejects changed, truncated, oversize and invalid bytes befor
   const wrongSchema=await f.put(canonicalBytes({answer:1}));
   await assert.rejects(f.handoff.stage(wrongSchema.request),{code:'FK_FILE_SCHEMA'});
   assert.deepEqual(f.counts(),{signs:0,accepts:0});
+});
+
+test('file fallback rejects hard links and symbolic links before staging',async t=>{
+  const f=await fixture(t);
+  const bytes=canonicalBytes({answer:'hello'});
+  const hardLinked=await f.put(bytes);
+  await link(hardLinked.source,hardLinked.source+'.link');
+  await assert.rejects(f.handoff.stage(hardLinked.request),{code:'FK_FILE_SOURCE'});
+
+  const redirected=await f.put(bytes);
+  const target=redirected.source+'.target';
+  await rename(redirected.source,target);
+  try {
+    await symlink(target,redirected.source,'file');
+  } catch (error) {
+    if (process.platform!=='win32' || !['EPERM','EACCES'].includes(error.code)) throw error;
+    // An unelevated Windows runner may only be able to create a junction.
+    const directory=target+'-directory';
+    await mkdir(directory);
+    await symlink(directory,redirected.source,'junction');
+    t.diagnostic('File symlinks require privileges on this Windows runner. Tested a junction.');
+  }
+  await assert.rejects(f.handoff.stage(redirected.request),{code:'FK_FILE_SOURCE'});
+
+  // All inputs share a request. A regular file can still stage it after both rejections.
+  const regular=await f.put(bytes);
+  const ref=await f.handoff.stage(regular.request);
+  assert.deepEqual(f.handoff.readSnapshot(ref.id).bytes,bytes);
 });
 
 test('file fallback rejects wrong request, wrong session, missing observation and competing consumers',async t=>{

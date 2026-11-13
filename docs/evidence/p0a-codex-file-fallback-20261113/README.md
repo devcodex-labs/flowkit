@@ -14,3 +14,9 @@ Host 在预设入口用受信来源登记字节数、SHA-256、Pending 和会话
 两个样本由受信合成生产者生成。模型实际调用了 App Server 的动态工具并提交引用。Host 在签收前删除入口文件。日志分别记录原生开始事件、回调、快照 SHA-256、签名、接纳和终态。Windows/Linux 双账户原生宿主、生产文件入口的权限部署、真实签后崩溃恢复及 NAT-14/15 仍 BLOCKED。此次文件回退实测的对象是 Host 合成输入和模型提交的真实引用。
 
 定向用例覆盖入口文件在登记前被替换、截断、超限、非法 UTF-8/重复键/schema、错误 Pending 或会话、缺少开始事件、重复或并发消费、过期、已领取后重开。登记成功后替换或删除入口文件，签收使用已固定的原始快照。
+
+## Windows Node 22 文件身份回归
+
+基线 `7acdfdd0137bc34cd4407ee9ffb8c2fa1e5a18a7` 的 [Windows Node 22.13.0 CI](https://github.com/devcodex-labs/flowkit/actions/runs/43345740815/job/131624564355) 将普通入口文件误判为 `FK_FILE_SOURCE`。在 Windows 实测，Node 22.13.0 对同一文件的 `lstat` 返回设备号 0，句柄 `stat` 返回非零设备号，两者的文件 ID 一致。Windows 路径查询缺失设备号时仍要求打开前后路径与句柄的非零文件 ID 一致，并要求两次路径查询的设备号相同。可用的非零设备号仍须匹配。校验同时保留普通文件、单链接、长度、时间戳和原始字节 SHA-256 检查。
+
+P 级回归用真实文件和私有 SQLite 测试。新增硬链接和文件符号链接拒绝用例，Windows 无文件符号链接权限时实测目录联接点。两项拒绝后，同一请求仍能登记合法文件。Windows/Linux 双账户 Codex App Server 仍 BLOCKED。
