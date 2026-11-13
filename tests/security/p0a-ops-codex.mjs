@@ -10,7 +10,8 @@ import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createSqliteCheckpointStore,createTrustedInteractiveHost} from '../../src/interactive/index.mjs';
 import {compileOpsWorkflow,opsRuntime,opsStart} from './p0a-ops-fixture.mjs';
 
-const [executable,cwd,out]=process.argv.slice(2);
+const [executable,cwd,out,mode='retry']=process.argv.slice(2);
+assert.ok(['retry','disconnect'].includes(mode));
 assert.ok([executable,cwd,out].every(value=>value&&path.isAbsolute(value)));
 mkdirSync(out,{recursive:false,mode:0o700});
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
@@ -79,7 +80,10 @@ const identified=new Promise(resolve=>{identify=resolve;});
 const requests=new Map(),observations=new Map();
 const timer=setTimeout(()=>fail(new Error('App Server run timed out')),120000);
 child.once('error',fail);
-child.once('close',code=>fail(new Error(`App Server channel closed early (${code})`)));
+let closingForTest=false;
+child.once('close',code=>{
+  if (!closingForTest) fail(new Error(`App Server channel closed early (${code})`));
+});
 child.stdin.on('error',fail);
 child.stdout.on('data',chunk=>write('app-server.stdout.ndjson',chunk));
 child.stderr.on('data',chunk=>write('app-server.stderr',chunk));
@@ -199,6 +203,26 @@ async function run() {
   const {data}=await request('model/list',{limit:30,includeHidden:false});
   const model=data.find(entry=>entry.isDefault)?.model??data[0]?.model;
   assert.ok(model);
+  if (mode==='disconnect') {
+    const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
+      multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}}});
+    const {runId}=await host.start(opsStart(program,'transport-disconnect'));
+    const snapshot=()=>({checkpoint:store.load(runId),journal:store.listJournal(runId),outbox:outbox.usage()});
+    const before=snapshot();
+    assert.equal(before.checkpoint.status,'waiting');
+    assert.equal(before.checkpoint.receiptCount,0);
+    const closed=new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));
+    closingForTest=true;
+    child.stdin.end();
+    const exit=await closed;
+    assert.deepEqual(snapshot(),before);
+    const resumed=await host.resume({runId});
+    assert.equal(resumed.pending.requestId,before.checkpoint.pending.requestId);
+    assert.deepEqual(snapshot(),before);
+    const result={passed:true,mode,threadId:thread.id,runId,exit,unchanged:true,receiptCount:0};
+    event('transport-closed',result);
+    return result;
+  }
   const recover=await runCase(model,'recover',['invalid','ready']);
   const exhausted=await runCase(model,'exhausted',['invalid','invalid']);
   return {passed:true,model,recover,exhausted,modelTurns:4};

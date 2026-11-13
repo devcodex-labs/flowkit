@@ -53,8 +53,10 @@ if (mode==='linux-supervisor') {
     }
     async function command(id,value) {
       const peer=peers.get(id);
-      const {command}=await peer(value);
-      return (await host({op:'data',id,command})).response;
+      const {command}=await peer({command:value});
+      const {response}=await host({op:'data',id,command});
+      assert.deepEqual(await peer({response}),{received:response});
+      return response;
     }
     for (const [id,uid] of [['a',a],['b',b],['audit',auditor]]) await connect(id,uid);
     await exerciseOsSessions({host,command,connect,operator:a,auditor});
@@ -65,7 +67,11 @@ if (mode==='linux-supervisor') {
 } else if (mode==='peer') {
   // The privileged launcher reads this process's stdout and sends the bytes to
   // the Host using the session ID allocated at OS process creation.
-  for await (const line of incoming) write({command:JSON.parse(line)});
+  for await (const line of incoming) {
+    const message=JSON.parse(line);
+    if (Object.hasOwn(message,'response')) write({received:message.response});
+    else write({command:message.command});
+  }
 } else {
   assert.equal(mode,'host');
   assert.ok(path.isAbsolute(root) && path.isAbsolute(policyFile));
