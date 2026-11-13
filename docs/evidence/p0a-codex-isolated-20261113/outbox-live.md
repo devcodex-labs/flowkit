@@ -58,3 +58,18 @@ node tests/security/codex-outbox-live.mjs <Codex绝对路径> <Model工作目录
 - 签名前强杀在真实工具事件和候选字节已写入 `OBSERVED` 后触发。重启扫描保留原观察，不签署或接纳该记录。另一个真实会话对同一 Pending 重新提交，产生自己的观察和签名。
 - 过期拒绝使用独立测试 Run 的 3 秒证明有效期和真实系统时钟。监督器在 CAS 前强杀，等到期限和 Host 默认时钟容差都过去才重启。Outbox 记录 `BLOCKED`，Store、Journal、接纳索引保持原状。
 - 轮换用两个预先批准的公钥保持 Run 的固定信任策略。旧钥完成一个真实 Run 后，新的真实 Run 由新钥签名。随后用原始已过期的旧签名重放，要求返回原 Ack，两个 Run 的持久状态都保持原样。撤销旧公钥及迁移既有 Run 的策略哈希属于独立场景。
+
+Windows 与 Linux 均在 `ddf8c688abaa6450c615b81e3bd0daaceaed53b8` 使用独立 Host/Model 账户实测，三项各通过一次。
+
+| 场景 | 两端结果 |
+|---|---|
+| 签名前强杀 | 原记录停在 `OBSERVED`，声明和签名均为空，重启后仍是 waiting revision 3。新会话用新的 thread、turn、call 和 proof ID 重试，在 revision 4 接纳，revision 9 成功终结。 |
+| 未接纳回执过期 | 实际时钟超过期限及 5 秒容差后转为 `BLOCKED`，无接纳索引，Checkpoint 和 Journal 保持不变。 |
+| 签名轮换和旧 Ack | 旧钥与新钥分别签署并接纳各自的真实 Run。旧签名过期后重放返回原接纳 revision 4，两个 Run 的 Checkpoint、Journal 和接纳索引均保持不变。 |
+
+两端保存实际工具事件、监督与重启日志，以及用于独立复核的原始签名和公钥。证据为指定样本的 P/M/T。旧公钥撤销、生产保留策略，以及完整 NAT-14/15、C12/S13 和供应商可验证证明仍缺对应证据。
+
+| 原始证据归档 | SHA-256 |
+|---|---|
+| Windows `flowkit-windows-outbox-signing.zip` | `9e4767867b338c26f3656cd42aa8e077b34bfc506b4b39affd19c6dd46cc6e72` |
+| Linux `FlowKit-Linux-Signing-Lifecycle-20261113.zip` | `5d24066d7af6cd868afe1ea53b218651ebd908b827db7f5e148cf4cfef6eb9df` |
