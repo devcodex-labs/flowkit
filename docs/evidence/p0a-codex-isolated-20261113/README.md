@@ -37,6 +37,6 @@ cc -O2 -Wall -Wextra -Werror tests/security/codex-model-exec-linux.c -o /path/to
 
 在 Host 下分别运行 `node tests/security/codex-flowkit-probe.mjs <绝对Codex路径> <Model工作目录绝对路径> <新证据目录绝对路径> <样本> isolated`。样本为 `loop`、`file-262144` 和 `file-2093056`，每个样本使用不同输出目录。SSH 模式由固定命令决定 Codex 路径，应与记录中的版本和路径一致。对命令、退出码、三个协议原始日志、`observer.ndjson` 和增量 Diff 保存 SHA-256。预期证据包含实际 Host/Model 身份、Model PID、原生开始与回调、同一个 Pending、签收 revision 和最终 `succeeded`。文件样本另核对固定字节数与摘要。
 
-Windows CI 在一次性普通 Model 账户内验证启动器的标准流往返与实际进程 SID。Linux CI 以一次性 Model UID/GID 验证受限身份、同 PID exec 和标准流往返。两者均为 P 级 OS/启动器证据。真实 Windows/Linux 双账户、独立登录和模型签收仍需测试机运行记录。缺少原始记录的项目保持 BLOCKED。
+Windows CI 在一次性普通 Model 账户内验证启动器的标准流往返与实际进程 SID。Linux CI 以一次性 Model UID/GID 验证受限身份、同 PID exec 和标准流往返。两者均为 P 级 OS/启动器证据。Windows/Linux 各三个认证后的真实样本见[双账户实测记录](./live-samples.md)。
 
-Linux 云任务在基线 `9584184d7098a402a15f3edd8bfb11ea95f7ed49` 拉取后，用专用容器实测 UID/GID 41001/41002。47 项 OS 权限负例通过。用容器内启动器和 stdio 修复，真实 App Server 完成了同 PID 初始化。三个样本均在真实回合返回 401，工具调用、文件登记、签名和接纳均为零。Linux 报告归档 SHA-256 为 `136db4c02521fafaf76d8486d3cfd8cb597f81b39e0d0eceaecac9e61c5c0360`。
+Linux 云任务在基线 `9584184d7098a402a15f3edd8bfb11ea95f7ed49` 的准备阶段使用专用容器实测 UID/GID 41001/41002。47 项 OS 权限负例通过，真实 App Server 完成同 PID 初始化。独立 Model 登录前，三个样本均返回 401，工具调用、文件登记、签名和接纳均为零。该轮报告归档 SHA-256 为 `136db4c02521fafaf76d8486d3cfd8cb597f81b39e0d0eceaecac9e61c5c0360`。
