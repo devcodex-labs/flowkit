@@ -1,5 +1,7 @@
 # G07–G12 独立验收与待裁决项
 
+后续 Windows/Linux Codex 实测与当前发布裁决见 [P0-A 发布验收矩阵](./release-matrix.md)。下文保留初次 G07–G12 批次的现场和裁决。
+
 本批从 Draft [#22](https://github.com/devcodex-labs/flowkit/pull/22) 的 `57a39c84934071450fadbe238dcc475f50b84d30` 开始。依据 [G01 的冻结契约矩阵](../p0a-g01-20261112/traceability.md)、[G03 的真实能力记录](../p0a-g03-20261112/README.md)、[G04 的裁决清单](../p0a-g04-20261112/README.md) 和 [G05–G06 双账户证据](../p0a-g05-g06-20261112/README.md)。本批测试调用真实 FlowKit JS、Host、SQLite 及独立 Node 进程，模型调用次数为 0。历史模型结果在本批只做重放，原始证据等级不变。
 
 | 阶段 | 裁决 | 已验证事实与继续条件 |

@@ -1,5 +1,7 @@
 # G11 · C01–C24 验收矩阵
 
+后续真实 Codex 结果与当前发布裁决见 [P0-A 发布验收矩阵](./release-matrix.md#c01c24-与阶段收口)。
+
 源场景见 [C01–C12](../../interactive-complex-acceptance-c01-c12.md) 和 [C13–C24](../../interactive-complex-acceptance-extension-c13-c24.md)。本批每行实时模型调用数均为 **0**。P 指实际执行生成 JS、Host/Store 或指定 OS 测试。历史 ChatGPT 结果重放单独列出。未实测的原生证据均保持 BLOCKED。
 
 测试文件缩写：`complex` 为 `tests/interactive/complex-c01-c12.test.mjs`，`crash` 为 `tests/interactive/crash.test.mjs`，`m6` 为 `tests/integration/m6-e2e.test.mjs`。本地证据包的 `matrix.tap` 记录原始测试名、输出和数值，`verify.stdout` 记录包与类型消费者，GitHub Actions 保存 Windows/Linux OS 子项及本批 CI。
