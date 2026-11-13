@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
-import {generateKeyPairSync,randomUUID,sign} from 'node:crypto';
+import {createPrivateKey,createPublicKey,generateKeyPairSync,randomUUID,sign} from 'node:crypto';
 import {appendFileSync,mkdirSync} from 'node:fs';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createInterface} from 'node:readline';
@@ -13,11 +13,15 @@ import {
 } from '../../src/interactive/index.mjs';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.mjs';
+import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 
-const [exe,cwd,out,requested='loop',profile='direct']=process.argv.slice(2);
+const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer]=process.argv.slice(2);
+const scenario=['outbox-worker','outbox-recover','outbox-setup'].includes(requested);
+const worker=requested==='outbox-worker';
+const offline=scenario&&!worker;
 const fallback=requested.startsWith('file-');
 const artifactSize=fallback?Number(requested.slice(5)):0;
-const size=requested==='loop'||fallback?0:Number(requested);
+const size=requested==='loop'||fallback||scenario?0:Number(requested);
 assert.ok(path.isAbsolute(exe) && path.isAbsolute(cwd) && path.isAbsolute(out));
 assert.ok([0,65536,262144,2093056].includes(size));
 assert.ok(!fallback||[262144,2093056].includes(artifactSize));
@@ -38,12 +42,14 @@ const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',
     :tool('flowkit_submit','Submit the answer for the exact current FlowKit request',objectSchema({requestId:str,answer:str})),
   tool('flowkit_continue','Read the public terminal state of the provisioned Run',objectSchema({runId:str})),
 ];
-const fixture=size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
-let store,host,program,frame,currentTask,handoff,staged;
+const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
+if (scenario) assert.ok(path.isAbsolute(fixture));
+if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer));
+let store,host,program,frame,currentTask,handoff,staged,outbox;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
 let hostSid;
-if (profile==='isolated') {
+if (profile==='isolated'&&!offline) {
   const node=process.execPath;
   // A pre-authorized, fixture-only launcher must enforce the model uid/gid and
   // pass only stdio. This probe never acquires or transfers account credentials.
@@ -80,20 +86,20 @@ if (profile==='isolated') {
       '-o','ProxyJump=none','-o','ControlMaster=no','-o','ControlPath=none','flowkit-model'];
   }
 }
-const child=spawn(command,args,
+const child=offline?null:spawn(command,args,
   {cwd,stdio:['pipe','pipe','pipe'],windowsHide:true});
-child.stdin.on('error',()=>{});
+child?.stdin.on('error',()=>{});
 const pending=new Map(),starts=new Map(),completed=new Set(),successful=[];
 let seq=0,threadId,turnId,turnStatus,failure,inlineObserved;
 let finish;
 const finished=new Promise(resolve=>{finish=resolve;});
 let recordIdentity;
 const identityReady=new Promise(resolve=>{recordIdentity=resolve;});
-child.on('error',error=>{failure=error.message;finish('spawn-error');});
-child.on('close',code=>{journal('exit',{code});finish('closed');});
-child.stdout.on('data',buffer=>record('app-server.stdout.ndjson',buffer));
-child.stderr.on('data',buffer=>record('app-server.stderr',buffer));
-const timer=setTimeout(()=>finish('timeout'),size?95000:65000);
+child?.on('error',error=>{failure=error.message;finish('spawn-error');});
+child?.on('close',code=>{journal('exit',{code});finish('closed');});
+child?.stdout.on('data',buffer=>record('app-server.stdout.ndjson',buffer));
+child?.stderr.on('data',buffer=>record('app-server.stderr',buffer));
+const timer=offline?null:setTimeout(()=>finish('timeout'),size?95000:65000);
 
 function send(message) {
   record('app-server.requests.ndjson',JSON.stringify(message)+'\n');
@@ -115,22 +121,33 @@ terminal('done',{name:'Done',status:'succeeded'})
   program=await compileInteractive(file,{output:'memory',featureStage:'P0-A',skillCheck:false});
   assert.ok(program.programIdentity,JSON.stringify(program.diagnostics));
   store=createSqliteCheckpointStore(path.join(fixture,'run.sqlite'),{namespace:'codex-proof'});
-  const keys=generateKeyPairSync('ed25519');
+  let publicKey,privateKey;
+  if (!scenario || requested==='outbox-setup') {
+    ({publicKey,privateKey}=generateKeyPairSync('ed25519'));
+    if (scenario) {
+      await writeFile(path.join(fixture,'proof.public.pem'),publicKey.export({type:'spki',format:'pem'}),{mode:0o600,flag:'wx'});
+      await writeFile(path.join(fixture,'proof.private.pem'),privateKey.export({type:'pkcs8',format:'pem'}),{mode:0o600,flag:'wx'});
+    }
+  } else {
+    publicKey=createPublicKey(await readFile(path.join(fixture,'proof.public.pem')));
+    if (worker) privateKey=createPrivateKey(await readFile(path.join(fixture,'proof.private.pem')));
+  }
   host=createTrustedInteractiveHost({
     store, runtime:{skillResolver:async()=> 'Read the public question and submit its requested answer.',
       validateResult:(_schema,value)=>fallback ? (value.artifact?.id===staged?.id?[]:['Expected staged reference'])
-        : value.answer==='ready'?[]:['Expected ready']},
-    trustedPublicKeys:{proof:keys.publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
+        : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer']},
+    trustedPublicKeys:{proof:publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
     allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
     authorizeTerminalAccess:({action})=>action==='run:read',
   });
+  if (scenario) outbox=openCodexOutbox({database:path.join(fixture,'outbox.sqlite'),store,host});
   if (fallback) {
     const inbox=path.join(fixture,'inbox');
     await mkdir(inbox,{mode:0o700});
     handoff=createFileHandoff({inbox,database:path.join(fixture,'file-handoff.sqlite'),
       validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
   }
-  return keys.privateKey;
+  return privateKey;
 }
 
 let key;
@@ -160,6 +177,7 @@ async function handleTool(name,args,identity,started) {
     return {bytes:canonical.byteLength};
   }
   if (name==='flowkit_start') {
+    assert.ok(!worker);
     assert.equal(args.nonce,nonce);
     assert.equal(frame,undefined);
     frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
@@ -184,6 +202,26 @@ async function handleTool(name,args,identity,started) {
     return {task:currentTask,fileReference:staged};
   }
   if (name==='flowkit_submit') {
+    if (worker) {
+      assert.deepEqual(args,{requestId:currentTask.requestId,answer});
+      const receipt={runId:currentTask.runId,requestId:currentTask.requestId,nodeId:currentTask.nodeId,
+        attempt:currentTask.attempt,kind:'agent-result',result:{answer}};
+      const proofId=outbox.record({task:currentTask,modelPid:isolatedIdentity?.pid??child.pid,
+        started:{...started,callId:identity.callId,args:started.arguments},
+        callback:{...identity,tool:name,args}},receipt,key);
+      const signed=outbox.describe(proofId);
+      const release=new Promise(resolve=>process.once('message',resolve));
+      journal('outbox-signed',{...identity,...signed});
+      process.send({event:'signed',...signed,threadId,turnId,callId:identity.callId,hostPid:process.pid,
+        modelPid:isolatedIdentity?.pid??child.pid,requestId:currentTask.requestId});
+      assert.equal(await release,'deliver');
+      try {frame=await outbox.deliver(proofId);}
+      catch (error) {
+        if (error.code!=='FK_I_RECEIPT_CONFLICT') throw error;
+        return {conflict:true,...outbox.describe(proofId)};
+      }
+      return {runId:frame.runId,...outbox.describe(proofId)};
+    }
     assert.equal(frame?.status,'waiting');
     assert.equal(args.requestId,currentTask.requestId);
     return acceptResult({answer:args.answer},identity);
@@ -213,8 +251,8 @@ async function handleTool(name,args,identity,started) {
   return final;
 }
 
-const lines=createInterface({input:child.stdout});
-lines.on('line',line=>{
+const lines=child&&createInterface({input:child.stdout});
+lines?.on('line',line=>{
   let message;
   try {message=JSON.parse(line);} catch {failure='invalid JSONL';finish('protocol-error');return;}
   if (message.id!==undefined && !message.method) {
@@ -243,8 +281,12 @@ lines.on('line',line=>{
         const identity={callId:p.callId,threadId,turnId,digest:sha256Bytes(args),bytes:args.byteLength};
         journal('tool-callback',identity);
         const result=await handleTool(p.tool,p.arguments,identity,started);
+        if (worker) {
+          journal('outbox-delivered',result);
+          process.send({event:'delivered',...result});
+        }
         successful.push(p.tool);
-        send({id:message.id,result:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
+        send({id:message.id,result:{success:!result.conflict,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
       } catch(error) {
         failure=error.message;
         journal('rejected',{callId:p.callId,code:error.code,detail:error.message});
@@ -285,15 +327,23 @@ let isolatedIdentity;
 async function run() {
   if (profile==='isolated') await identityReady;
   if (!size) key=await prepareFlowKit();
+  if (worker) {
+    const {runId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
+    currentTask=await host.getPublicAgentTask({runId});
+  }
   await request('initialize',{clientInfo:{name:'flowkit-acceptance',title:'FlowKit acceptance',version:'0.1.0'},
     capabilities:{experimentalApi:true}});
   send({method:'initialized'});
   const {data}=await request('model/list',{limit:30,includeHidden:false});
   const model=data.find(entry=>entry.isDefault)?.model ?? data[0]?.model;
   const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
-    multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},dynamicTools:specs});
+    multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},
+    dynamicTools:worker?specs.filter(spec=>spec.name==='flowkit_submit'):specs});
   threadId=thread.id;
-  const prompt=size
+  const prompt=worker
+    ? 'Call the dynamic tool flowkit_submit exactly once with requestId "'+currentTask.requestId
+      +'" and answer "'+answer+'". Use the dynamic tool, then finish.'
+    : size
     ? `Call flowkit_inline exactly once with nonce "${nonce}" and payload containing exactly ${bodyLength} uppercase ASCII A characters as one JSON string. Supply complete inline JSON, without using files, references, code, other tools or a placeholder. If impossible, say so and finish.`
     : fallback
       ? `Call flowkit_start with nonce "${nonce}". Take fileReference.id and fileReference.requestId from its reply, then call flowkit_submit_file with those exact two values. Call flowkit_continue with the returned runId. Use only those three tools.`
@@ -305,18 +355,21 @@ async function run() {
   return finished;
 }
 try {
+  if (offline) await runOutboxOffline();
+  else {
   const outcome=await Promise.race([run(),finished]);
-  const expected=size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
+  const expected=worker?['flowkit_submit']:size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
   const passed=outcome==='turn-completed' && turnStatus==='completed' && !failure
     && JSON.stringify(successful)===JSON.stringify(expected) && completed.size===expected.length
     && (profile==='direct'||!!isolatedIdentity);
   console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,artifactSize,profile,successful,inlineObserved,failure}));
   if(!passed)process.exitCode=1;
+  }
 } catch(error) {console.error(error.message);process.exitCode=1;}
 finally {
   clearTimeout(timer);
-  child.stdin.end();
-  if (child.exitCode===null && child.signalCode===null) {
+  child?.stdin.end();
+  if (child&&child.exitCode===null && child.signalCode===null) {
     if (profile==='isolated') {
       // The external launcher owns cleanup across OS identities.
       journal('launcher-cleanup',{pid:child.pid,method:'stdio-eof'});
@@ -326,6 +379,29 @@ finally {
     } else child.kill();
   }
   handoff?.close();
+  outbox?.close();
   store?.close();
-  if(fixture) await rm(fixture,{recursive:true,force:true});
+  if(fixture&&!scenario) await rm(fixture,{recursive:true,force:true});
+  if (worker&&process.connected) process.disconnect();
+}
+
+async function runOutboxOffline() {
+  await prepareFlowKit();
+  if (requested==='outbox-setup') {
+    frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
+      startKey:nonce,state:{question:'Submit the assigned answer.'}});
+    await writeFile(path.join(fixture,'run.json'),JSON.stringify({runId:frame.runId}),{mode:0o600,flag:'wx'});
+    const task=await host.getPublicAgentTask({runId:frame.runId});
+    console.log(JSON.stringify({runId:frame.runId,requestId:task.requestId,revision:frame.revision}));
+    return;
+  }
+  const {runId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
+  const before=store.load(runId);
+  const beforeReceipt=before.pending?store.getReceipt(runId,before.pending.requestId):null;
+  const recovered=await outbox.recover(runId);
+  assert.deepEqual(await outbox.recover(runId),[]);
+  const after=store.load(runId);
+  console.log(JSON.stringify({runId,before:{status:before.status,revision:before.revision,receipt:beforeReceipt},
+    recovered,after:{status:after.status,revision:after.revision,answer:after.state.answer,
+      journalRows:store.listJournal(runId).length,receipt:before.pending?store.getReceipt(runId,before.pending.requestId):null}}));
 }
