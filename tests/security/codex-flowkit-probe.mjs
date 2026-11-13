@@ -16,11 +16,15 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
-const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay'].includes(requested);
+const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay',
+  'outbox-check-revocation'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
-const rotation=cut==='rotate-old'||cut==='rotate-new';
-const runRecord=cut==='rotate-new'?'run-next.json':'run.json';
+const rotation=['rotate-old','rotate-new','rotate-old-next'].includes(cut);
+const revoked=['revoked-old','revoked-pending','revoked-new'].includes(cut);
+const nextSigner=cut==='rotate-new'||cut==='revoked-new';
+const runRecord=['rotate-new','rotate-old-next','revoked-pending'].includes(cut)?'run-next.json'
+  :cut==='revoked-new'?'run-new.json':'run.json';
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
 const size=requested==='loop'||fallback||scenario?0:Number(requested);
@@ -47,7 +51,7 @@ const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
 if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
-  && (!cut || ['after-cas','before-sign','expire','rotate-old','rotate-new'].includes(cut)));
+  && (!cut || ['after-cas','before-sign','expire','rotate-old','rotate-new','rotate-old-next','revoked-new'].includes(cut)));
 let store,host,program,frame,currentTask,handoff,staged,outbox;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
@@ -134,16 +138,17 @@ terminal('done',{name:'Done',status:'succeeded'})
   } else {
     publicKey=createPublicKey(await readFile(path.join(fixture,'proof.public.pem')));
     if (worker) privateKey=createPrivateKey(await readFile(path.join(fixture,
-      cut==='rotate-new'?'next.private.pem':'proof.private.pem')));
+      nextSigner?'next.private.pem':'proof.private.pem')));
   }
   const trustedPublicKeys={proof:publicKey};
-  if (rotation) {
+  if (rotation || revoked) {
     if (requested==='outbox-setup') {
       const next=generateKeyPairSync('ed25519');
       await writeFile(path.join(fixture,'next.public.pem'),next.publicKey.export({type:'spki',format:'pem'}),{mode:0o600,flag:'wx'});
       await writeFile(path.join(fixture,'next.private.pem'),next.privateKey.export({type:'pkcs8',format:'pem'}),{mode:0o600,flag:'wx'});
     }
     trustedPublicKeys.next=createPublicKey(await readFile(path.join(fixture,'next.public.pem')));
+    if (revoked) delete trustedPublicKeys.proof;
   }
   if (fallback) {
     const inbox=path.join(fixture,'inbox');
@@ -196,7 +201,7 @@ async function deliverCandidate(result,name,args,identity,started) {
   const proofId=await outbox.record({task:currentTask,modelPid:details.modelPid,
     started:{...started,callId:identity.callId,args:started.arguments},
     callback:{...identity,tool:name,args}},receipt,key,{
-    keyId:cut==='rotate-new'?'next':'proof',
+    keyId:nextSigner?'next':'proof',
     ttlMs:cut==='expire'?3000:cut==='rotate-old'?15000:120000,
     afterObserve:cut==='before-sign'?async observed=>{
       journal('outbox-before-sign',{...details,...observed});
@@ -448,6 +453,25 @@ async function runOutboxOffline() {
   const {runId,requestId}=JSON.parse(await readFile(path.join(fixture,runRecord),'utf8'));
   const before=store.load(runId);
   const beforeReceipt=store.getReceipt(runId,requestId);
+  if (requested==='outbox-check-revocation') {
+    assert.ok(revoked && before.policyHash!==host.policyHash);
+    const rejected={};
+    for (const [name,action,code] of [
+      ['load',()=>host.load({runId}),'FK_I_HOST_DENIED'],
+      ['resume',()=>host.resume({runId}),'FK_I_HOST_DENIED'],
+      ['delivery',()=>beforeReceipt?outbox.deliver(answer):outbox.recover(runId),'FK_I_PROVENANCE_REJECTED'],
+    ]) {
+      await assert.rejects(action,error=>{
+        rejected[name]=error.code;
+        return error.code===code;
+      });
+    }
+    assert.deepEqual(store.load(runId),before);
+    assert.deepEqual(store.getReceipt(runId,requestId),beforeReceipt);
+    console.log(JSON.stringify({runId,requestId,rejected,receipt:beforeReceipt,runPolicyHash:before.policyHash,
+      configuredPolicyHash:host.policyHash,outbox:outbox.describe(answer)}));
+    return;
+  }
   if (requested==='outbox-replay') {
     const replay=await outbox.deliver(answer);
     console.log(JSON.stringify({runId:replay.runId,acceptedRevision:replay.acceptedRevision,

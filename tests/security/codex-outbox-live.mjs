@@ -12,7 +12,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 
 const [exe,cwd,root,profile='isolated',suite='original']=process.argv.slice(2);
 assert.ok([exe,cwd,root].every(path.isAbsolute));
-assert.ok(['original','followup','signing'].includes(suite));
+assert.ok(['original','followup','signing','revocation'].includes(suite));
 mkdirSync(root,{mode:0o700});
 const probe=fileURLToPath(new URL('./codex-flowkit-probe.mjs',import.meta.url));
 const log=(event,data)=>appendFileSync(path.join(root,'supervisor.ndjson'),
@@ -330,6 +330,48 @@ async function rotationCase() {
   return {old,newer,replay};
 }
 
+async function revocationCase() {
+  const dir=path.join(root,'revocation');
+  mkdirSync(dir,{mode:0o700});
+  const oldRun=await offline('outbox-setup',dir,'setup',{cut:'rotate-old'});
+  const oldProof=await acceptLive(dir,oldRun,'old','rotate-old','alpha');
+  const accepted=inspect(dir,oldRun,[oldProof]);
+  finishedState(accepted,accepted.rows[0]);
+  assert.equal(accepted.rows[0].keyId,'proof');
+  const pendingRun=await offline('outbox-next',dir,'pending-setup',{cut:'rotate-old-next'});
+  const pendingHost=launch('outbox-worker',dir,'pending',{cut:'rotate-old-next',answer:'beta'});
+  const pendingProof=await waitFor(pendingHost,'signed');
+  assert.equal(pendingProof.requestId,pendingRun.requestId);
+  const pending=inspect(dir,pendingRun,[pendingProof]);
+  pendingState(pending,pendingRun);
+  assert.ok(pendingHost.child.kill('SIGKILL'));
+  assert.equal((await pendingHost.closed).signal,'SIGKILL');
+
+  const historical=await offline('outbox-check-revocation',dir,'revoked-old',
+    {cut:'revoked-old',answer:oldProof.proofId});
+  const inFlight=await offline('outbox-check-revocation',dir,'revoked-pending',
+    {cut:'revoked-pending',answer:pendingProof.proofId});
+  assert.ok(Date.now()<pendingProof.expiresAt);
+  assert.deepEqual(historical.receipt,accepted.indexed);
+  assert.equal(inFlight.receipt,null);
+  assert.equal(historical.outbox.state,'ACKED');
+  assert.equal(inFlight.outbox.state,'SIGNED');
+
+  const newRun=await offline('outbox-next',dir,'new-setup',{cut:'revoked-new'});
+  const newProof=await acceptLive(dir,newRun,'new','revoked-new','ready');
+  const newer=inspect(dir,newRun,[newProof]);
+  finishedState(newer,newer.rows[0]);
+  assert.equal(newer.rows[0].keyId,'next');
+  assert.notEqual(newer.policyHash,accepted.policyHash);
+  assert.equal(newer.policyHash,historical.configuredPolicyHash);
+  assert.equal(newer.policyHash,inFlight.configuredPolicyHash);
+  // Both persistent Outbox rows and the original ledger survive the failed policy change.
+  assert.deepEqual(inspect(dir,oldRun,[oldProof]),accepted);
+  assert.deepEqual(inspect(dir,pendingRun,[pendingProof]),pending);
+  log('revocation-baseline-passed',{oldRun,pendingRun,newRun,historical,inFlight,accepted,pending,newer});
+  return {historical,inFlight,newer};
+}
+
 try {
   const result=suite==='followup'?{
     afterCas:await crashCase('after-cas',{cut:'after-cas'}),
@@ -337,6 +379,8 @@ try {
     fileNearLimit:await crashCase('file-2093056',{bytes:2093056}),
   }:suite==='signing'?{
     beforeSign:await beforeSignCase(),expired:await expiredCase(),rotation:await rotationCase(),
+  }:suite==='revocation'?{
+    revocation:await revocationCase(),beforeSign:await beforeSignCase(),expired:await expiredCase(),
   }:await originalSuite();
   console.log(JSON.stringify({passed:true,profile,suite,...result}));
 } finally {
