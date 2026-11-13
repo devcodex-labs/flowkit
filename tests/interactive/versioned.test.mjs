@@ -6,7 +6,7 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {
-  compileInteractive,complete,createInteractiveAdminContext,createInteractiveCoordinator,createInteractiveHostContext,
+  compileInteractive,complete,createInteractiveAdminContext,createInteractiveHostContext,
   createSqliteCheckpointStore,createSqliteInteractivePersistence,resume,start,
 } from '../../src/interactive/index.mjs';
 
@@ -54,25 +54,8 @@ const submission=(frame,result={answer:'yes'})=>({
   runId:frame.runId,requestId:frame.pending[0].requestId,kind:'agent',outcome:'succeeded',result,
 });
 
-test('R5 facade uses the five async operations, separates disclosure and preserves legacy Run history',async t=>{
+test('R5 uses the same persisted envelope in SQLite and the asynchronous Store',async t=>{
   const f=await fixture(t);
-  const legacy=createInteractiveCoordinator({store:f.raw,policy,runtime:{
-    skillResolver:async()=> 'Skill: writer',validateResult:runtime.validateResult.implementation,
-  }});
-  const old=await legacy.start({programBytes:Buffer.from(f.compiled.code),programIdentity:f.compiled.programIdentity,
-    startKey:'legacy',state:{message:'hello',secret:'private'}});
-  const oldHistory=f.raw.listJournal(old.runId);
-  assert.ok(oldHistory.slice(1).every(row=>row.transitionId.startsWith('t:')));
-  const oldWaiting=await resume(old.runId,runtime,f.options);
-  const oldDone=await complete(submission(oldWaiting),runtime,f.options);
-  const history=f.raw.listJournal(old.runId);
-  assert.equal(oldDone.status,'succeeded');
-  assert.deepEqual(history.slice(0,oldHistory.length),oldHistory);
-  assert.ok(history.slice(1).every(row=>row.transitionId.startsWith('t:')));
-  assert.equal(f.raw.load(old.runId).transitionIdVersion,undefined);
-  const oldAck=await complete(submission(oldWaiting),runtime,f.options);
-  assert.equal(oldAck.acknowledgement.acceptedRevision,oldDone.acknowledgement.acceptedRevision);
-
   const waiting=await start(f.program,runtime,{message:'hello',secret:'private'},f.options);
   assert.equal(waiting.protocolVersion,1);
   assert.equal(waiting.pending.length,1);
@@ -83,7 +66,18 @@ test('R5 facade uses the five async operations, separates disclosure and preserv
   assert.deepEqual(idem,waiting);
   await assert.rejects(start(f.program,runtime,{message:'hello',secret:'private'},
     {...f.options,auth:context({authorize:({action})=>action==='run:create'})}),{code:'FK_I_HOST_DENIED'});
-  await assert.rejects(legacy.resume({runId:waiting.runId}),{code:'FK_I_POLICY_MISMATCH'});
+  const envelope=await f.options.store.load(waiting.runId);
+  const db=new DatabaseSync(f.file,{readOnly:true});
+  try {
+    const row=db.prepare('SELECT checkpoint_json,checkpoint_hash FROM fk_i_runs WHERE run_id=?').get(waiting.runId);
+    assert.deepEqual(JSON.parse(row.checkpoint_json),envelope);
+    assert.equal(row.checkpoint_hash,sha256Bytes(canonicalBytes(envelope)));
+    assert.equal(envelope.execution.phase,'awaiting');
+    assert.equal(envelope.pending[0].issuedRevision,waiting.revision);
+    assert.equal(envelope.policyIdentity.id,policy.id);
+    assert.equal(envelope.program.artifactHash,f.program.artifactHash);
+    assert.equal(Object.hasOwn(envelope,'artifactHash'),false);
+  } finally {db.close();}
   await assert.rejects(start(f.program,runtime,{message:'changed'},f.options),{code:'FK_I_START_CONFLICT'});
   const denied={...f.options,auth:context({authorize:({action})=>action!=='run:complete'})};
   await assert.rejects(complete(submission(waiting),runtime,denied),{code:'FK_I_HOST_DENIED'});
@@ -156,7 +150,7 @@ test('R5 CAS recovers from a lost response only with durable transition evidence
   await assert.rejects(complete(submission(second),runtime,{...f.options,store:unusable}),
     {code:'FK_I_STORE_UNCERTAIN'});
   assert.equal(attempted,1);
-  assert.deepEqual(f.raw.load(second.runId),stale);
+  assert.deepEqual(await f.options.store.load(second.runId),stale);
 });
 
 test('R5 file source works without Agent bindings and honors pre-aborted operations',async t=>{
@@ -171,67 +165,55 @@ test('R5 file source works without Agent bindings and honors pre-aborted operati
   assert.equal(result.terminal.nodeId,'done');
 });
 
-test('S12-A migrates with a recoverable backup, rejects old writers and atomically terminates without the Program',async t=>{
+test('S12-A creates its audit table in a fresh R5 database and atomically terminates without the Program',async t=>{
   const f=await fixture(t);
   const waiting=await start(f.program,runtime,{message:'hello'},f.options);
   const before=f.raw.load(waiting.runId);
   const journal=f.raw.listJournal(waiting.runId);
   const admin=createInteractiveAdminContext({namespace:ns,subjectId:'ops-1',authorize:()=>true});
-  await assert.rejects(f.persistence.adminController.adminTerminate(waiting.runId,'OPERATOR',admin),
-    {code:'FK_I_STORE_SCHEMA'});
-  const backupPath=path.join(f.dir,'pre-v2.sqlite');
-  assert.throws(()=>createSqliteInteractivePersistence(path.join(f.dir,'missing.sqlite'),
-    {namespace:ns,migrationBackupPath:backupPath}),{code:'FK_I_STORE_SCHEMA'});
-  const migrated=createSqliteInteractivePersistence(f.file,{namespace:ns,migrationBackupPath:backupPath});
-  try {
+  const persisted=f.persistence;
+  {
     const db=new DatabaseSync(f.file);
     const audit=()=>db.prepare('SELECT * FROM fk_i_admin_events').all();
     try {
-      assert.equal(db.prepare('PRAGMA user_version').get().user_version,2);
-      assert.throws(()=>db.prepare('UPDATE fk_i_runs SET revision=revision').run(),/no such function: fk_i_writer_version/);
-      await assert.rejects(migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',{...admin}),
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);
+      await assert.rejects(persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',{...admin}),
         {code:'FK_I_HOST_DENIED'});
       const other=createInteractiveAdminContext({namespace:'another',subjectId:'ops-1',authorize:()=>true});
-      await assert.rejects(migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',other),{code:'FK_I_HOST_DENIED'});
+      await assert.rejects(persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',other),{code:'FK_I_HOST_DENIED'});
       assert.deepEqual(audit(),[]);
       db.exec(`CREATE TRIGGER force_audit_failure BEFORE INSERT ON fk_i_admin_events
         BEGIN SELECT RAISE(ABORT,'audit fixture failure'); END`);
-      await assert.rejects(migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',admin),/audit fixture failure/);
+      await assert.rejects(persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',admin),/audit fixture failure/);
       assert.deepEqual(f.raw.load(waiting.runId),before);
       assert.deepEqual(f.raw.listJournal(waiting.runId),journal);
       assert.deepEqual(audit(),[]);
       db.exec('DROP TRIGGER force_audit_failure');
       // A deliberately broken test fixture models an unavailable artifact.
       // The management action must not open or verify Program bytes.
-      db.function('fk_i_writer_version',{deterministic:true},()=>2);
       db.prepare('UPDATE fk_i_artifacts SET program_bytes=? WHERE namespace=? AND artifact_hash=?')
         .run(Buffer.from('unavailable'),ns,before.artifactHash);
-      const result=await migrated.adminController.adminTerminate(waiting.runId,'OPERATOR',admin);
+      const result=await persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',admin);
       assert.equal(result.status,'cancelled');
       assert.equal(result.revision,before.revision+1);
       assert.deepEqual(result.pending,[]);
       assert.equal(Object.hasOwn(result,'state'),false);
-      const opts={...f.options,...migrated};
+      const opts={...f.options,...persisted};
       assert.deepEqual(await resume(waiting.runId,runtime,opts),result);
       await assert.rejects(complete(submission(waiting),runtime,opts),{code:'FK_I_STALE_RECEIPT'});
-      assert.deepEqual(await migrated.adminController.adminTerminate(waiting.runId,'REPEATED',admin),result);
+      assert.deepEqual(await persisted.adminController.adminTerminate(waiting.runId,'REPEATED',admin),result);
       const [record]=audit();
       assert.equal(record.admin_subject_id,'ops-1');
       assert.equal(record.reason_code,'OPERATOR');
-      assert.equal((await migrated.store.loadTransition(waiting.runId,record.transition_id)).toRevision,result.revision);
+      assert.equal((await persisted.store.loadTransition(waiting.runId,record.transition_id)).toRevision,result.revision);
       assert.equal(audit().length,1);
     } finally {db.close();}
-    const restored=createSqliteCheckpointStore(backupPath,{namespace:ns});
-    try {
-      assert.deepEqual(restored.load(waiting.runId),before);
-      assert.deepEqual(restored.listJournal(waiting.runId),journal);
-    } finally {restored.close();}
-  } finally {migrated.close();}
+  }
 });
 
 test('S12-A terminal completion and management termination have a single final transition',async t=>{
   const f=await fixture(t);
-  const migrated=createSqliteInteractivePersistence(f.file,{namespace:ns,migrationBackupPath:path.join(f.dir,'backup.sqlite')});
+  const migrated=createSqliteInteractivePersistence(f.file,{namespace:ns});
   try {
     const opts={...f.options,...migrated};
     const waiting=await start(f.program,runtime,{message:'hello'},opts);

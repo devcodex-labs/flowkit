@@ -111,28 +111,28 @@
 - **G12／M6。** 见 [冻结追踪表](../p0a-g01-20261112/traceability.md)、[兼容实现](../p0a-compat-codex-20261113/README.md) 和 [管理终止](../p0a-admin-codex-20261113/README.md)。待核对同一发行候选上的适用 T／R／S 和计划条款、Checkpoint 契约裁决、支持的升级与回滚、发布 Host 的生产验收及独立复审。P0-B／P1／P2 条款按原计划阶段判定 N/A。
 - **G17。** 在 G12 收口后冻结发行范围与候选，验证发行包和安装，再按独立授权办理合并、Tag、发布和部署。
 
-## 四项待确认契约
+## 四项已确认的首发契约
+
+首发测试库按 R5 结构重建，开发期归档保留用于证据复核。以下实现的程序回归使用新建 SQLite 库。真实 Codex Windows/Linux 双账户在新实现上的复验及生产运维演练仍为 BLOCKED。
 
 ### 1. Checkpoint 格式
 
-**推荐 P0-A 登记现有持久结构为明确的兼容例外。** 当前异步五操作承载现有 P0-A `RunCheckpointV1`，与 R5 §5 的嵌套 `program`、`policyIdentity`、`execution` 等字段有实质差异。发布契约应写清支持的 payload 及兼容矩阵，现有库和历史 Run 可继续使用。代价是接入方不能按 R5 全量结构直接互操作，差异需记入发行说明并留待独立复审。
-
-**备选是本次发行前完成版本化对齐。** 冻结新的格式版本，明确旧读写方、双版本读取或离线迁移、历史回执与 Journal 的处理，再演练备份、升级和回滚。优点是发布契约与 R5 一致，代价是扩大 Store、类型和恢复回归范围。此项需要对格式及版本路径单独授权。 [当前类型声明](../../../types/interactive.d.ts) · [兼容实现范围](../p0a-compat-codex-20261113/README.md)
+首发直接采用 R5 §5 的 `RunCheckpointV1`，包括异步 Store 契约及 SQLite 持久化内容。首发测试库重建。验证新建、暂停和跨进程恢复、首次接纳与历史 Ack、终态及专用管理审计。 [类型声明](../../../types/interactive.d.ts)
 
 ### 2. 旧钥撤销后的历史 Ack
 
-**推荐撤销使旧钥停止签发和接纳，历史 Ack 走独立受权的只读对账。** 按 namespace、Run、request、node、attempt 和规范回执摘要精确匹配持久接纳记录，仅返回原接纳信息。找不到或不匹配时拒绝。发行验收须覆盖跨租户、摘要错配、未接纳旧回执、重复查询及零 CAS／Journal／Checkpoint 写入。代价是新增 Host 权限和审计面，收益是能在关闭旧信任后恢复丢失的 Ack。
-
-**备选仅保留运维对账。** 由受权人员通过 Host 私有 Store 核对原接纳记录，接口面较小，调用方需要人工介入。E4 只证明旧钥仍受信时的过期重放。E5 证明移除旧钥后原接纳入口拒绝且账本仍在。 [当前撤销与对账记录](../p0a-codex-isolated-20261113/revocation-retention.md)
+撤销使旧钥停止签发和接纳。历史 Ack 走独立受权的 Host 私有只读对账，按 namespace、Run、request、node、attempt 和规范回执摘要精确匹配持久接纳记录，仅返回原接纳信息。验证跨租户、摘要错配、未接纳旧回执、重复查询和零 CAS／Journal／Checkpoint 写入。 [撤销实测基线](../p0a-codex-isolated-20261113/revocation-retention.md)
 
 ### 3. 既有 Run 信任策略迁移
 
-**推荐正常轮换让旧 Run 按原批准策略完成，新 Run 使用新策略。** 紧急撤销时停用仍允许旧钥的 Host，既有 Run 保持阻断并交受权人员对账。优点是已冻结的策略身份和历史可完整保留。代价是紧急撤销时在途 Run 可能无法继续。
-
-**备选是本次发行支持受控原地续跑。** 先单独确认带版本、管理授权和审计的原子迁移协议，定义 Pending 重绑、旧签名处置、新钥签发、竞态、故障恢复及旧写入方拒绝。收益是保留同一 Run 的业务连续性。代价是跨策略的恢复和签名校验更复杂，需要重新审查不变量。 [Host 轮换设计](../../interactive-trusted-host-security-v2-design.md#63-错误和恢复) · [E5 现有行为](../p0a-codex-isolated-20261113/revocation-retention.md)
+正常轮换让旧 Run 按原批准策略完成，新 Run 使用新策略。紧急撤销时停用仍允许旧钥的 Host，既有 Run 保持阻断并交受权人员对账。原地换策略续跑留待后续专项设计。生产验收覆盖所有启用 Host 对撤销的生效。 [Host 轮换设计](../../interactive-trusted-host-security-v2-design.md#63-错误和恢复)
 
 ### 4. Outbox 保留与容量
 
-**推荐由 Host 部署配置设定审计期限和容量上限。** 保留待投递的 `SIGNED`、未对账的 `OBSERVED`／`BLOCKED`／`CONFLICT`、受合规保留或有效引用的快照，以及 Store 接纳索引。终态且已对账的数据过审计窗口后才清理可回收正文和快照。达到容量上限时停止接收需要落盘的新工作并告警。具体天数与字节上限按目标部署的合规、吞吐和磁盘预算确认，随后实测容量、清理崩溃恢复和历史对账。
+Host 部署配置审计期限和容量上限。保留待投递及未对账的记录、受合规保留或有效引用的快照和 Store 接纳索引。终态且已对账的数据过审计窗口后，由受权运维触发清理。达到容量上限时停止接收需落盘的新工作并告警。部署期限、容量和真实恢复演练仍需取证。 [Outbox 设计 §6.4](../../interactive-trusted-host-security-v2-design.md#64-host-only-观察证据与签名回执-outbox关闭-dr-13)
 
-**备选由受权人员在同一保留约束下执行清理。** 可减少首版后台清理逻辑，增加值守成本与容量告警响应时间。当前只验证记录留存及过期引用的局部行为。 [Outbox 设计 §6.4](../../interactive-trusted-host-security-v2-design.md#64-host-only-观察证据与签名回执-outbox关闭-dr-13) · [保留实测](../p0a-codex-isolated-20261113/revocation-retention.md)
+| 首发回归 | 可复核的 P 级覆盖 | 仍为 BLOCKED |
+|---|---|---|
+| R5 Checkpoint | SQLite 原字节与异步 Store 回读一致、阶段恢复、首次接纳、管理审计和包消费者。[版本化 SDK 回归](../../../tests/interactive/versioned.test.mjs) | 同一发行候选上的真实 Codex 双平台回归与 G12 独立裁决。 |
+| Ack、轮换与撤销 | 两条 SQLite 连接验证旧策略停止新建、可处理既有 Run、撤销后不能签发或接纳，并可通过受权查询返回原 revision。[Host 回归](../../../tests/interactive/trusted-host.test.mjs) | 真实部署所有 Host 的停用和多 Store 运维演练。 |
+| Outbox 容量和清理 | 两条连接共享配额，满额拒绝并通知。权限、保留窗口、保留标记和审计事务覆盖。文件快照经授权确认可回收后清理，中断可重试。[Outbox 回归](../../../tests/interactive/codex-outbox.test.mjs) | 生产容量和审计窗口、实际告警、清理后的磁盘占用及真实双账户恢复。配额计入活动记录和待清理引用的逻辑字节，数据库页、WAL、文件快照和审计另计。 |

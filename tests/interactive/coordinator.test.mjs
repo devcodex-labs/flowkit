@@ -190,7 +190,7 @@ test('M4 retries invalid Agent outputs at most retries+1, preserving State and F
   assert.equal(new Set(ids).size,3);
   const final=store.load(current.runId);
   assert.equal(final.status,'errored');
-  assert.equal(final.receipts.length,3);
+  assert.equal(final.receiptCount,3);
   assert.equal((await api.resume({runId:current.runId})).revision,final.revision);
 });
 
@@ -306,7 +306,7 @@ test('M4 concurrent complete from two independent Store connections accepts one 
   ]);
   assert.equal(a.acceptedRevision,b.acceptedRevision);
   assert.ok(a.duplicate!==b.duplicate);
-  assert.equal(store.load(waiting.runId).receipts.length,1);
+  assert.equal(store.load(waiting.runId).receiptCount,1);
   assert.equal(store.load(waiting.runId).status,'succeeded');
 });
 
@@ -393,14 +393,14 @@ test('M4 a successful receipt CAS followed by a lost response is recovered by du
   await assert.rejects(original.complete(submitted),/lost CAS response/);
   const accepted=store.load(waiting.runId);
   assert.equal(accepted.phase,'validate');
-  assert.equal(accepted.receipts.length,1);
-  assert.equal(accepted.receipts[0].requestId,waiting.pending.requestId);
+  assert.equal(accepted.receiptCount,1);
+  assert.equal(accepted.receivedSubmission.requestId,waiting.pending.requestId);
   const recovered=await coordinator(store).complete(submitted);
   check(recovered,'succeeded');
   assert.equal(recovered.duplicate,true);
   assert.equal(recovered.acceptedRevision,accepted.revision);
   assert.equal(recovered.state.answer,'once');
-  assert.equal(store.load(waiting.runId).receipts.length,1);
+  assert.equal(store.load(waiting.runId).receiptCount,1);
 });
 
 

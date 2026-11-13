@@ -119,9 +119,12 @@ export function createFileHandoff({database,inbox,validateArtifact,now=Date.now}
   const read=db.prepare('SELECT * FROM file_handoff WHERE id=?');
   const claim=db.prepare(`UPDATE file_handoff SET state='claimed',call_id=?
     WHERE id=? AND state='staged' AND expires_at>?`);
+  const releaseUnwritten=db.prepare("UPDATE file_handoff SET state='staged',call_id=NULL WHERE id=? AND state='claimed' AND call_id=?");
   const ack=db.prepare(`UPDATE file_handoff SET state='acked',accepted_revision=?
     WHERE id=? AND state='claimed' AND call_id=?`);
   const purge=db.prepare("DELETE FROM file_handoff WHERE expires_at<=? AND state='staged'");
+  const reclaim=db.prepare(`DELETE FROM file_handoff WHERE id=? AND namespace=? AND run_id=? AND request_id=?
+    AND call_id=? AND accepted_revision=? AND sha256=? AND size=? AND state='acked'`);
 
   function checkedBytes(saved) {
     const bytes=Buffer.from(saved.bytes);
@@ -141,6 +144,14 @@ export function createFileHandoff({database,inbox,validateArtifact,now=Date.now}
   return Object.freeze({
     close:()=>db.close(),
     purgeExpired:()=>purge.run(now()).changes,
+    // Called by an authorized Outbox cleanup only after Host confirms no live reference or hold.
+    reclaimAcknowledged(artifact,{namespace,runId,requestId,callId,acceptedRevision}) {
+      if (!validId(artifact.id)) throw fail('FK_FILE_REFERENCE');
+      if (reclaim.run(artifact.id,namespace,runId,requestId,callId,acceptedRevision,
+        artifact.sha256,artifact.byteLength).changes===1) return true;
+      if (read.get(artifact.id)) throw fail('FK_FILE_BINDING');
+      return false;
+    },
     readSnapshot(id) {
       if (!validId(id)) throw fail('FK_FILE_REFERENCE');
       const saved=read.get(id);
@@ -195,7 +206,13 @@ export function createFileHandoff({database,inbox,validateArtifact,now=Date.now}
       if (claim.run(call.callId,call.id,now()).changes!==1) throw fail('FK_FILE_CONSUMED');
       const artifact=Object.freeze({id:call.id,byteLength:saved.size,sha256:saved.sha256});
       // A persisted claim never re-signs after an ambiguous or failed attempt.
-      const result=await signAndAccept({binding,callId:call.callId,artifact,pending:current.pending});
+      let result;
+      try {result=await signAndAccept({binding,callId:call.callId,artifact,pending:current.pending});}
+      catch (error) {
+        // The Outbox capacity error is raised before it persists any observation or signature.
+        if (error.code==='FK_OUTBOX_CAPACITY') releaseUnwritten.run(call.id,call.callId);
+        throw error;
+      }
       acknowledge(call.id,call.callId,result?.acceptedRevision);
       return result;
     },

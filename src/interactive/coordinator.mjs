@@ -1,12 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
+import {checkpointPolicy} from './checkpoint.mjs';
 
 const FINISHED = new Set(['succeeded','failed','errored','cancelled']);
-// P0-A has at most 500 static nodes and 11 attempts per Agent.
-// Do not cap legitimate 500-node workflows below their worst-case 5,500 receipts.
-const MAX_RECEIPTS = 8192;
-const MAX_INLINE_RECEIPT_CACHE = 16;
 const MAX_REASONS = 32;
 const MAX_REASON_LENGTH = 512;
 
@@ -25,9 +22,6 @@ function validStageCount(value) {
     throw new RangeError('maxStagesPerCall must be in [1, 128]');
   }
   return value;
-}
-function stableTransitionId(cp, kind) {
-  return 't:' + fingerprint([cp.namespace,cp.runId,cp.revision,cp.blockId,kind]).slice(7);
 }
 function internalEvent(cp, kind, extra = {}) {
   const payload = {
@@ -83,9 +77,8 @@ function confirmCurrentBlock(cp, program) {
   if (cp.prepared != null && cp.phase !== 'dispatch-ready') {
     throw failure('FK_I_INVALID_CHECKPOINT','prepared request outside dispatch-ready phase');
   }
-  if (!Array.isArray(cp.receipts) || cp.receipts.length > MAX_RECEIPTS
-    || !Number.isSafeInteger(cp.activationSeq) || cp.activationSeq < 0) {
-    throw failure('FK_I_INVALID_CHECKPOINT','invalid receipt ledger or activation counter');
+  if (!Number.isSafeInteger(cp.activationSeq) || cp.activationSeq < 0) {
+    throw failure('FK_I_INVALID_CHECKPOINT','invalid activation counter');
   }
   return {block,record};
 }
@@ -142,10 +135,11 @@ function applyStack(cp, effect) {
   return frames;
 }
 function asPublicFrame(cp) {
+  const {issuedRevision:_issuedRevision,...publicPending}=cp.pending??{};
   return copy({
     namespace:cp.namespace,runId:cp.runId,status:cp.status,revision:cp.revision,
     ...(FINISHED.has(cp.status) ? {state:cp.state} : {}),
-    ...(cp.status === 'waiting' ? {pending:cp.pending} : {}),
+    ...(cp.status === 'waiting' ? {pending:publicPending} : {}),
     ...(cp.status === 'paused' ? {pauseReason:cp.pauseReason ?? 'stage-budget'} : {}),
     ...(FINISHED.has(cp.status) ? {terminal:cp.terminal ?? null} : {}),
   });
@@ -189,7 +183,7 @@ function assertRuntime(program,runtime) {
     }
   }
 }
-function initialCheckpoint(namespace, runId, program, policyHash, state) {
+function initialCheckpoint(namespace, runId, program, policyIdentity, state) {
   let snapshot;
   try { snapshot=copy(state); }
   catch(error) {
@@ -200,12 +194,13 @@ function initialCheckpoint(namespace, runId, program, policyHash, state) {
   }
   return {
     schemaVersion:1,namespace,runId,revision:0,
-    artifactHash:program.artifactHash,policyHash,status:'running',
+    artifactHash:program.artifactHash,program:{...program.interactiveProgram.identity,artifactHash:program.artifactHash},
+    policyHash:policyIdentity.policyHash,policyIdentity,status:'running',
     blockId:program.programTable.entryBlockId,
     phase:'enter',state:snapshot,
-    controlStack:[],activationSeq:0,receipts:[],
+    controlStack:[],activationSeq:0,stageCount:0,receiptCount:0,lastTransitionId:null,
     pending:null,prepared:null,candidate:null,terminal:null,
-    contextError:null,
+    contextError:null,receivedSubmission:null,
   };
 }
 
@@ -226,7 +221,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     || typeof store.createRun !== 'function'
     || typeof store.compareAndSwap !== 'function'
     || typeof store.putArtifact !== 'function'
-    || typeof store.getArtifact !== 'function') {
+    || typeof store.getArtifact !== 'function' || typeof store.getReceipt !== 'function') {
     throw new TypeError('A CheckpointStore with atomic CAS and artifact retention is required');
   }
   nonempty(store.namespace,'store.namespace');
@@ -240,6 +235,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   });
   const policySnapshot = copy(policy);
   const policyHash = fingerprint(policySnapshot);
+  const policyIdentity=checkpointPolicy(policySnapshot,policyHash);
   const stageBudget = validStageCount(maxStagesPerCall);
   // Only verified immutable Program objects are cached, never Store records.
   // Even on a cache hit every stage re-reads the Host's Store, checks exact
@@ -250,9 +246,6 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   function checkSignal() { signal?.throwIfAborted(); }
 
   async function loadPinned(cp) {
-    if (!versioned && cp.transitionIdVersion!==undefined) {
-      throw failure('FK_I_POLICY_MISMATCH','versioned Run requires the asynchronous SDK');
-    }
     if (cp.namespace !== store.namespace || cp.policyHash !== policyHash) {
       throw failure('FK_I_POLICY_MISMATCH','Run policy and namespace must match');
     }
@@ -285,7 +278,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
     }
     assertRuntime(program,execution);
-    confirmCurrentBlock(cp,program);
+    if (!FINISHED.has(cp.status)) confirmCurrentBlock(cp,program);
     return program;
   }
 
@@ -303,8 +296,6 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   }
   async function writeTransition(cp,args,event,proposal,receiptOutcome) {
     checkSignal();
-    if (cp.transitionIdVersion===undefined) return store.compareAndSwap(versioned ? {...args,fromBlockId:cp.blockId} : args);
-    if (cp.transitionIdVersion!==1) throw failure('FK_I_INVALID_CHECKPOINT','unknown transition ID version');
     const eventDigest=event.eventDigest ?? fingerprint(event);
     const proposalDigest=fingerprint(proposal);
     const transitionId=fingerprint([cp.namespace,cp.runId,cp.revision,cp.blockId,
@@ -316,7 +307,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         || proposal.kind==='capacity-terminal' ? null : args.nextCheckpoint.blockId,
       programHash:cp.artifactHash,eventDigest,proposalDigest,committedAt:new Date().toISOString(),
     };
-    return store.compareAndSwap({...args,transitionId,journalEntry:{
+    return store.compareAndSwap({...args,transitionId,nextCheckpoint:{...args.nextCheckpoint,lastTransitionId:transitionId},journalEntry:{
       ...args.journalEntry,transition,...(receiptOutcome ? {receiptOutcome} : {}),
     }});
   }
@@ -326,14 +317,13 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     const next={
       ...cp,revision:cp.revision+1,status:'errored',
       terminal:{status:'errored',nodeId,causeCode:'FK_I_CHECKPOINT_CAPACITY'},
-      pending:null,prepared:null,candidate:null,
+      pending:null,prepared:null,candidate:null,receivedSubmission:null,
       pauseReason:null,
     };
     // This terminal transition may use the Store's reserved 256 KiB; it
     // never drops State or accepted receipt identities.
     return writeTransition(cp,{
       runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
-      transitionId:stableTransitionId(cp,'capacity-terminal'),
       journalEntry:{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY',
         from:cp.blockId},
     },{kind:'capacity-terminal'},{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY'});
@@ -357,7 +347,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   }
 
   function stepCAS(cp, proposal, event, legacyEventKind, extras={}) {
-    const next = {...cp,revision:cp.revision+1};
+    const next = {...cp,revision:cp.revision+1,stageCount:cp.stageCount+1,receivedSubmission:null};
     if (proposal.kind === 'raise-error') {
       next.status='errored';
       next.terminal={status:'errored',nodeId:proposal.nodeId,causeCode:proposal.causeCode};
@@ -374,7 +364,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
     if (proposal.kind === 'publish-pending') {
       if (cp.prepared == null) throw failure('FK_I_INVALID_CHECKPOINT','publish without prepared request');
-      next.pending=cp.prepared;next.prepared=null;
+      next.pending={...cp.prepared,issuedRevision:next.revision};next.prepared=null;
     }
     if (proposal.kind === 'commit-state') {
       if (proposal.mergeIntent.kind !== 'commit-candidate'
@@ -404,9 +394,8 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       && proposal.stackEffect.kind === 'push') {
       next.activationSeq=cp.activationSeq+1;
     }
-    const transitionId=stableTransitionId(cp,legacyEventKind + '/' + proposal.kind);
     const write=casOrCapacityExit(cp,{
-      runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,transitionId,
+      runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
       journalEntry:{
         kind:proposal.kind,event:legacyEventKind,from:cp.blockId,
         to:proposal.toBlockId ?? null,causeCode:proposal.causeCode ?? null,
@@ -489,7 +478,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         if (!['stage-budget','skill-temporary'].includes(cp.pauseReason)) return asPublicFrame(cp);
         const unpause={...cp,status:'running',revision:cp.revision+1,pauseReason:null};
         const committed=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-          nextCheckpoint:unpause,transitionId:stableTransitionId(cp,'resume-budget'),
+          nextCheckpoint:unpause,
           journalEntry:{kind:'resume-budget'}},{kind:'resume-budget'},{kind:'resume-budget'});
         if (!committed.committed) continue;
         // Budget unpause is a control action, not a Program stage.
@@ -508,7 +497,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
             const paused={...cp,revision:cp.revision+1,status:'paused',
               pauseReason:'skill-temporary'};
             const result=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-              nextCheckpoint:paused,transitionId:stableTransitionId(cp,'pause-skill'),
+              nextCheckpoint:paused,
               journalEntry:{kind:'pause',reason:'skill-temporary'}},
               {kind:'skill-temporary'},{kind:'pause',reason:'skill-temporary'});
             if (!result.committed) continue;
@@ -555,7 +544,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const paused={...cp,revision:cp.revision+1,status:'paused',
         pauseReason:'stage-budget'};
       const result=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-        nextCheckpoint:paused,transitionId:stableTransitionId(cp,'pause-budget'),
+        nextCheckpoint:paused,
         journalEntry:{kind:'pause',reason:'stage-budget'}},
         {kind:'budget-exhausted'},{kind:'pause',reason:'stage-budget'});
       if (result.committed) return asPublicFrame(result.checkpoint);
@@ -590,13 +579,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       throw failure('FK_I_PROGRAM_MISMATCH','identity and verified Program differ');
     }
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
-    const initial=initialCheckpoint(store.namespace,runId,program,policyHash,stateSnapshot);
+    const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
     checkSignal();
     const registered=store.putArtifact({programIdentity:declared,bytes:byteSnapshot});
-    if (versioned) {
-      await registered;
-      initial.transitionIdVersion=1;
-    }
+    if (versioned) await registered;
     checkSignal();
     const opening=store.createRun({startKey,startIntent:intentSnapshot,checkpoint:initial});
     const opened=versioned ? await opening : opening;
@@ -606,7 +592,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
 
   /** Only a trusted Host may call complete; M5 will bind provenance/transport. */
   async function complete({runId,requestId,nodeId,attempt,kind='agent-result',result,failure:callFailure,
-    submissionDigest}={}) {
+    submissionDigest,receivedPayload}={}) {
     nonempty(runId,'runId');nonempty(requestId,'requestId');nonempty(nodeId,'nodeId');
     if (!Number.isSafeInteger(attempt) || attempt < 1) throw new TypeError('Invalid Agent attempt');
     if (!['agent-result','agent-call-failed'].includes(kind)) {
@@ -633,21 +619,18 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       && (oversizedInline(result) || oversizedInline(rawSubmission));
     const submission=inlineTooLarge ? null : copy(rawSubmission);
     if (versioned) assertSHA256(submissionDigest);
-    const legacyDigest=inlineTooLarge ? null : fingerprint(submission);
+    const digest=inlineTooLarge ? null : (submissionDigest??fingerprint(submission));
     for (;;) {
       checkSignal();
       const cp=versioned ? await store.load(runId) : store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
       if (cp.status==='cancelled') throw failure('FK_I_STALE_RECEIPT','Run has been terminated');
       const program=await loadPinned(cp);
-      const digest=inlineTooLarge ? null : (cp.transitionIdVersion===1 ? submissionDigest : legacyDigest);
-      const indexed=typeof store.getReceipt==='function';
-      const receiptLookup=indexed ? store.getReceipt(runId,requestId) : null;
-      const already=(versioned ? await receiptLookup : receiptLookup)
-        ?? cp.receipts.find(r=>r.requestId===requestId);
+      const receiptLookup=store.getReceipt(runId,requestId);
+      const already=versioned ? await receiptLookup : receiptLookup;
       if (already) {
-        if (already.digest!==digest || (cp.transitionIdVersion===undefined
-          && (already.nodeId!==nodeId || already.attempt!==attempt))) {
+        if (already.digest!==digest || (already.nodeId!==undefined && already.nodeId!==nodeId)
+          || (already.attempt!==undefined && already.attempt!==attempt)) {
           throw failure('FK_I_RECEIPT_CONFLICT','Different receipt with accepted requestId');
         }
         const current=await drive(runId);
@@ -662,8 +645,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (!pending || !frame || pending.kind!=='agent'
         || pending.requestId!==requestId || pending.nodeId!==nodeId
         || pending.attempt!==attempt || frame.nodeId!==nodeId
-        || frame.attempt!==attempt || block.nodeId!==nodeId
-        || (!indexed && cp.receipts.length >= MAX_RECEIPTS)) {
+        || frame.attempt!==attempt || block.nodeId!==nodeId) {
         throw failure('FK_I_STALE_RECEIPT','Wrong request, node, attempt, or exhausted ledger');
       }
       const accept=block.acceptTarget;
@@ -682,17 +664,17 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const ledgerEntry={requestId,nodeId,attempt,digest,acceptedRevision:cp.revision+1};
       const next={
         ...cp,revision:cp.revision+1,blockId:accept,phase:'validate',
-        status:'running',pending:null,prepared:null,
+        status:'running',pending:null,prepared:null,receiptCount:cp.receiptCount+1,
+        receivedSubmission:{kind:'agent',requestId,activation:frame.activation,attempt,
+          canonicalDigest:digest,acceptedRevision:cp.revision+1,payload:receivedPayload??submission,
+          receivedAt:new Date().toISOString()},
         candidate:{kind:'agent',requestId,nodeId,attempt,
           submissionKind:kind,
           ...(kind==='agent-result'?{result:submission.result}
             :{failure:submission.failure}),validated:false},
-        receipts:indexed
-          ? [...cp.receipts.slice(-(MAX_INLINE_RECEIPT_CACHE-1)),ledgerEntry]
-          : [...cp.receipts,ledgerEntry],
       };
       const persisted=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
-        nextCheckpoint:next,transitionId:stableTransitionId(cp,'receipt:'+requestId),
+        nextCheckpoint:next,
         journalEntry:{kind:'receipt-accepted',nodeId,attempt,requestId,digest}},
         {kind:'receipt-accepted',requestId,nodeId,attempt,submissionDigest:digest},
         {kind:'accept-receipt',toBlockId:accept,submissionDigest:digest},

@@ -1,3 +1,4 @@
+import {encodeCheckpoint} from '../../src/interactive/checkpoint.mjs';
 import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
 import {appendFileSync,mkdirSync,readFileSync,readdirSync} from 'node:fs';
@@ -97,7 +98,7 @@ function inspect(dir,setup,proofs) {
         statementHash:proof.statementHash,signatureHash:proof.signatureHash};
     });
     return {status:cp.status,revision:cp.revision,policyHash:cp.policyHash,answer:cp.state.answer,artifact:cp.state.artifact,
-      checkpointHash:journal.at(-1).checkpointHash,checkpointDigest:sha256Bytes(canonicalBytes(cp)),
+      checkpointHash:journal.at(-1).checkpointHash,checkpointDigest:sha256Bytes(canonicalBytes(encodeCheckpoint(cp))),
       journalDigest:sha256Bytes(canonicalBytes(journal)),indexed,journalRows:journal.length,rows};
   } finally {store?.close();db.close();}
 }

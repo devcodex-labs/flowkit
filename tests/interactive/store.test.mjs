@@ -1,3 +1,4 @@
+import {encodeCheckpoint} from '../../src/interactive/checkpoint.mjs';
 import test, {after} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, rm} from 'node:fs/promises';
@@ -13,7 +14,8 @@ const artifactBytes = Buffer.from('// verified compiler bytes fixture\nexport co
 const identity = {
   artifactHash:hash(artifactBytes), sourceHash:'sha256:' + 'a'.repeat(64),
   programAbiVersion:1, semanticsVersion:'interactive-state-machine-v1',
-  implementedStage:'P0-A',
+  implementedStage:'P0-A',workflowId:'store-fixture',workflowVersion:'1.0.0',compilerVersion:'1.0.0',
+  checkpointSchemaVersion:1,canonicalizationVersion:'jcs-rfc8785-v1',
 };
 const checkpoint = (namespace, runId, state = {}) => ({
   schemaVersion:1, namespace, runId, revision:0, status:'running',
@@ -23,6 +25,7 @@ const checkpoint = (namespace, runId, state = {}) => ({
 const next = (cp, status = 'running') => ({
   ...cp, revision:cp.revision + 1,
   status, phase:'route', blockId:'gate::route',
+  ...(status==='succeeded'?{terminal:{status,nodeId:'gate'}}:{}),
 });
 
 // Module teardown runs after every test-specific DatabaseSync.close() hook.
@@ -160,7 +163,7 @@ test('M3 CAS atomically advances revision and hash-chained Journal; stale/duplic
   assert.deepEqual(history.map(v=>v.revision),[0,1,2]);
   assert.equal(history[1].previousHash,history[0].entryHash);
   assert.equal(history[2].previousHash,history[1].entryHash);
-  assert.equal(history[2].checkpointHash,sha256Bytes(canonicalBytes(terminal.checkpoint)));
+  assert.equal(history[2].checkpointHash,sha256Bytes(canonicalBytes(encodeCheckpoint(terminal.checkpoint))));
   assert.equal(store.load('r').revision,2);
 });
 

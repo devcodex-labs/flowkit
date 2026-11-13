@@ -10,7 +10,7 @@ export const packageFiles = [
   ...['source', 'extract', 'validate', 'skill-check', 'analyze', 'graph-algorithms', 'graph', 'dataflow', 'values', 'paths', 'mermaid', 'emit-plan', 'helpers', 'emit', 'compile', 'api', 'output'].map(name => [`src/compiler/${name}.mjs`, `dist/compiler/${name}.mjs`]),
   ...['feature-gate', 'lower', 'validate-ir'].map(name => [`src/compiler/interactive/${name}.mjs`, `dist/compiler/interactive/${name}.mjs`]),
   ['src/compiler/interactive/emit.mjs', 'dist/compiler/interactive/emit.mjs'],
-  ...['compile', 'identity', 'load', 'canonical', 'sqlite-store', 'coordinator', 'index', 'host-attestation', 'trusted-host', 'versioned'].map(name => [`src/interactive/${name}.mjs`, `dist/interactive/${name}.mjs`]),
+  ...['compile', 'identity', 'load', 'canonical', 'checkpoint', 'sqlite-store', 'coordinator', 'index', 'host-attestation', 'trusted-host', 'versioned'].map(name => [`src/interactive/${name}.mjs`, `dist/interactive/${name}.mjs`]),
   ...['parser', 'evaluate'].map(name => [`src/when/${name}.mjs`, `dist/when/${name}.mjs`]),
   ...['context', 'execute', 'load', 'source', 'skills', 'skill-remote', 'run', 'aot', 'dump', 'dump-channel', 'dump-hook'].map(name => [`src/runtime/${name}.mjs`, `dist/runtime/${name}.mjs`]),
   ...['dsl', 'index', 'compiler-api', 'interactive'].map(name => [`types/${name}.d.ts`, `dist/${name}.d.ts`]),

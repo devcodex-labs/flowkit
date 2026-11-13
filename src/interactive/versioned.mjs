@@ -1,7 +1,9 @@
 import {buildCoordinator} from './coordinator.mjs';
 import {compileInteractive} from './compile.mjs';
-import {createSqliteCheckpointStore,migrateSqliteInteractiveStore,sqliteAdminTerminate} from './sqlite-store.mjs';
+import {createSqliteCheckpointStore,sqliteAdminTerminate} from './sqlite-store.mjs';
 import {assertSHA256,canonicalBytes,safeJSONSnapshot,sha256Bytes} from './canonical.mjs';
+
+import {decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 
 const authCallbacks=new WeakMap();
 const adminCallbacks=new WeakMap();
@@ -43,28 +45,33 @@ export function createInteractiveAdminContext({namespace,subjectId,authorize}={}
   return auth;
 }
 
-export function createSqliteInteractivePersistence(file,{namespace,migrationBackupPath}={}) {
-  const legacy=migrationBackupPath===undefined ? createSqliteCheckpointStore(file,{namespace})
-    : migrateSqliteInteractiveStore(file,{namespace,backupPath:migrationBackupPath});
+export function createSqliteInteractivePersistence(file,{namespace}={}) {
+  const backend=createSqliteCheckpointStore(file,{namespace});
   const store=Object.freeze({
     namespace,
     async createIfAbsent(startKey,initial,genesis) {
-      const {startKey:declaredKey,startIntentHash, ...checkpoint}=initial;
+      const {startKey:declaredKey,startIntentHash, ...checkpoint}=decodeCheckpoint(initial);
       const expected=hash({namespace,startKey,artifactHash:checkpoint.artifactHash,
         state:checkpoint.state,policyHash:checkpoint.policyHash,intent:null});
-      const expectedGenesis=genesisFor(initial);
-      if (declaredKey!==startKey || startIntentHash!==expected || initial.transitionIdVersion!==1
+      const expectedGenesis=genesisFor({...checkpoint,startIntentHash});
+      if (declaredKey!==startKey || startIntentHash!==expected
         || genesis?.transitionId!==expectedGenesis.transitionId || genesis.fromRevision!==null
-        || genesis.fromBlockId!==null || genesis.toRevision!==0 || genesis.toBlockId!==initial.blockId
-        || genesis.namespace!==namespace || genesis.runId!==initial.runId || genesis.programHash!==initial.artifactHash
+        || genesis.fromBlockId!==null || genesis.toRevision!==0 || genesis.toBlockId!==checkpoint.blockId
+        || genesis.namespace!==namespace || genesis.runId!==initial.runId || genesis.programHash!==checkpoint.artifactHash
         || genesis.eventDigest!==expectedGenesis.eventDigest || genesis.proposalDigest!==expectedGenesis.proposalDigest) {
         throw fail('FK_I_INVALID_TRANSITION','invalid genesis for versioned Run');
       }
-      return legacy.createRun({startKey,checkpoint,genesis});
+      if (initial.lastTransitionId!==genesis.transitionId) throw fail('FK_I_INVALID_TRANSITION','invalid checkpoint head');
+      const result=backend.createRun({startKey,checkpoint,genesis});
+      return {...result,checkpoint:encodeCheckpoint(result.checkpoint)};
     },
-    async load(runId) {return legacy.load(runId);},
-    async compareAndSwap(runId,expectedRevision,{next,transition,receipt}) {
-      const current=legacy.load(runId);
+    async load(runId) {
+      const cp=backend.load(runId);
+      return cp ? encodeCheckpoint(cp) : null;
+    },
+    async compareAndSwap(runId,expectedRevision,{next:nextEnvelope,transition,receipt}) {
+      const next=decodeCheckpoint(nextEnvelope);
+      const current=backend.load(runId);
       if (!current) throw fail('FK_I_RUN_NOT_FOUND','run is not accessible');
       if (current.revision!==expectedRevision) return {committed:false,currentRevision:current.revision};
       if (transition.namespace!==namespace || transition.runId!==runId
@@ -72,14 +79,13 @@ export function createSqliteInteractivePersistence(file,{namespace,migrationBack
         || transition.fromBlockId!==current.blockId || transition.programHash!==current.artifactHash) {
         throw fail('FK_I_INVALID_TRANSITION','transition identity mismatch');
       }
-      if (current.transitionIdVersion===1) {
-        assertSHA256(transition.eventDigest); assertSHA256(transition.proposalDigest);
-        const id=hash([namespace,runId,expectedRevision,current.blockId,transition.eventDigest,
-          current.artifactHash,transition.proposalDigest]);
-        const to=['succeeded','failed','errored','cancelled'].includes(next.status) ? null : next.blockId;
-        if (id!==transition.transitionId || to!==transition.toBlockId) {
-          throw fail('FK_I_INVALID_TRANSITION','transition digest mismatch');
-        }
+      assertSHA256(transition.eventDigest);
+      assertSHA256(transition.proposalDigest);
+      const id=hash([namespace,runId,expectedRevision,current.blockId,transition.eventDigest,
+        current.artifactHash,transition.proposalDigest]);
+      const to=['succeeded','failed','errored','cancelled'].includes(next.status) ? null : next.blockId;
+      if (id!==transition.transitionId || id!==next.lastTransitionId || to!==transition.toBlockId) {
+        throw fail('FK_I_INVALID_TRANSITION','transition digest mismatch');
       }
       const journalEntry={kind:receipt?'receipt-accepted':'versioned-transition',transition};
       if (receipt) {
@@ -89,7 +95,7 @@ export function createSqliteInteractivePersistence(file,{namespace,migrationBack
           || (receipt.attempt!==undefined && next.candidate?.attempt!==receipt.attempt)
           || receipt.acceptedRevision!==next.revision || receipt.transitionId!==transition.transitionId
           || !['succeeded','failed'].includes(receipt.outcome)
-          || next.receipts.at(-1)?.digest!==receipt.submissionDigest) {
+          || next.receivedSubmission?.canonicalDigest!==receipt.submissionDigest) {
           throw fail('FK_I_INVALID_RECEIPT','receipt identity mismatch');
         }
         Object.assign(journalEntry,{requestId:receipt.requestId,nodeId:next.candidate?.nodeId,
@@ -97,42 +103,43 @@ export function createSqliteInteractivePersistence(file,{namespace,migrationBack
       } else if (current.status==='waiting' && next.phase==='validate') {
         throw fail('FK_I_INVALID_RECEIPT','accepting a Pending requires its atomic receipt');
       }
-      const result=legacy.compareAndSwap({runId,expectedRevision,nextCheckpoint:next,
+      const result=backend.compareAndSwap({runId,expectedRevision,nextCheckpoint:next,
         transitionId:transition.transitionId,journalEntry});
-      return result.committed ? result : {committed:false,currentRevision:result.checkpoint.revision};
+      return result.committed ? {committed:true,checkpoint:encodeCheckpoint(result.checkpoint)}
+        : {committed:false,currentRevision:result.checkpoint.revision};
     },
     async loadTransition(runId,transitionId) {
-      const entry=legacy.readJournalRecord(runId,{transitionId});
+      const entry=backend.readJournalRecord(runId,{transitionId});
       return entry?.entry?.transition ?? null;
     },
     async loadReceipt(runId,requestId) {
-      const receipt=legacy.getReceipt(runId,requestId);
+      const receipt=backend.getReceipt(runId,requestId);
       if (!receipt) return null;
-      const saved=legacy.readJournalRecord(runId,{revision:receipt.acceptedRevision});
+      const saved=backend.readJournalRecord(runId,{revision:receipt.acceptedRevision});
       return {namespace,runId,requestId,kind:'agent',submissionDigest:receipt.digest,
-        acceptedRevision:receipt.acceptedRevision,outcome:saved.entry.receiptOutcome ?? 'legacy',
+        acceptedRevision:receipt.acceptedRevision,outcome:saved.entry.receiptOutcome,
         transitionId:saved.transitionId,nodeId:receipt.nodeId,attempt:receipt.attempt};
     },
   });
   const programRegistry=Object.freeze({
     namespace,
     async putImmutable(bytes,manifest) {
-      legacy.putArtifact({bytes,programIdentity:manifest});
+      backend.putArtifact({bytes,programIdentity:manifest});
       return refFor(namespace,manifest);
     },
     async resolveByHash(artifactHash) {
-      const value=legacy.getArtifact(artifactHash);
+      const value=backend.getArtifact(artifactHash);
       if (!value) throw fail('FK_I_PROGRAM_MISMATCH','Program bytes unavailable');
       return value.bytes;
     },
-    async describe(artifactHash) {return legacy.getArtifact(artifactHash)?.programIdentity ?? null;},
+    async describe(artifactHash) {return backend.getArtifact(artifactHash)?.programIdentity ?? null;},
     async retain(runId,artifactHash) {
-      if (legacy.load(runId)?.artifactHash!==artifactHash) {
+      if (backend.load(runId)?.artifactHash!==artifactHash) {
         throw fail('FK_I_PROGRAM_MISMATCH','retain must come from the atomic create transaction');
       }
     },
     async release(runId,artifactHash) {
-      if (legacy.load(runId)?.artifactHash===artifactHash) {
+      if (backend.load(runId)?.artifactHash===artifactHash) {
         throw fail('FK_I_ARTIFACT_IN_USE','durable Run still retains the Program');
       }
     },
@@ -148,11 +155,11 @@ export function createSqliteInteractivePersistence(file,{namespace,migrationBack
       try {allowed=await authorize(Object.freeze({action:'run:admin-terminate',namespace,runId,reasonCode:reason,
         subjectId:auth.subjectId}));} catch {}
       if (allowed!==true) throw fail('FK_I_HOST_DENIED','management authorization denied');
-      const cp=legacy[sqliteAdminTerminate](runId,reason,auth.subjectId);
+      const cp=backend[sqliteAdminTerminate](runId,reason,auth.subjectId);
       return terminalFrame(cp.runId,cp.revision,cp.status,cp.terminal);
     },
   });
-  return Object.freeze({store,programRegistry,adminController,close:()=>legacy.close()});
+  return Object.freeze({store,programRegistry,adminController,close:()=>backend.close()});
 }
 
 function terminalFrame(runId,revision,status,terminal) {
@@ -173,7 +180,7 @@ function executionStore(store,registry) {
     const cp=await store.load(runId);
     if (cp && (cp.runId!==runId || cp.namespace!==store.namespace || !Number.isSafeInteger(cp.revision)
       || cp.revision<0)) throw uncertain();
-    return cp;
+    return cp ? decodeCheckpoint(cp) : null;
   }
   return {
     namespace:store.namespace,
@@ -198,10 +205,11 @@ function executionStore(store,registry) {
       const startIntentHash=hash({namespace:store.namespace,startKey,artifactHash:checkpoint.artifactHash,
         state:checkpoint.state,policyHash:checkpoint.policyHash,intent:null});
       const initial={...checkpoint,startKey,startIntentHash};
-      const opened=await store.createIfAbsent(startKey,initial,genesisFor(initial));
+      const genesis=genesisFor(initial);
+      const opened=await store.createIfAbsent(startKey,encodeCheckpoint({...initial,lastTransitionId:genesis.transitionId}),genesis);
       if (opened?.checkpoint?.namespace!==store.namespace || opened.checkpoint.startKey!==startKey
         || opened.checkpoint.startIntentHash!==startIntentHash) throw uncertain();
-      return opened;
+      return {...opened,checkpoint:decodeCheckpoint(opened.checkpoint)};
     },
     async getReceipt(runId,requestId) {
       const receipt=await store.loadReceipt(runId,requestId);
@@ -225,12 +233,13 @@ function executionStore(store,registry) {
         outcome:journalEntry.receiptOutcome ?? (nextCheckpoint.candidate.submissionKind==='agent-result'?'succeeded':'failed'),
         transitionId,nodeId:journalEntry.nodeId,attempt:journalEntry.attempt,
       } : undefined;
+      const next=encodeCheckpoint(nextCheckpoint);
       let result;
       try {
-        result=await store.compareAndSwap(runId,expectedRevision,{next:nextCheckpoint,transition,receipt});
+        result=await store.compareAndSwap(runId,expectedRevision,{next,transition,receipt});
       } catch (error) {
         if (['FK_I_CHECKPOINT_CAPACITY','FK_I_INVALID_TRANSITION','FK_I_INVALID_RECEIPT',
-          'FK_I_TERMINAL_IMMUTABLE','FK_I_REVISION_EXHAUSTED','FK_I_RUN_NOT_FOUND'].includes(error?.code)) throw error;
+          'FK_I_TERMINAL_IMMUTABLE','FK_I_REVISION_EXHAUSTED','FK_I_RUN_NOT_FOUND','FK_I_HOST_DENIED'].includes(error?.code)) throw error;
         let saved,latest;
         try {
           saved=await store.loadTransition(runId,transitionId);
@@ -249,7 +258,7 @@ function executionStore(store,registry) {
       }
       if (result?.committed===true && result.checkpoint?.runId===runId
         && result.checkpoint.namespace===store.namespace && result.checkpoint.revision===transition.toRevision
-        && hash(result.checkpoint)===hash(nextCheckpoint)) return result;
+        && hash(result.checkpoint)===hash(next)) return {committed:true,checkpoint:decodeCheckpoint(result.checkpoint)};
       if (result?.committed===false && Number.isSafeInteger(result.currentRevision)
         && result.currentRevision>expectedRevision) {
         const latest=await read(runId);
@@ -282,14 +291,14 @@ async function readTerminalResult(resultRef,options) {
   await checkAccess(options,'result:read',{runId:ref.runId,revision:ref.revision});
   const cp=await options.store.load(ref.runId);
   if (cp?.namespace!==options.auth.namespace || cp.runId!==ref.runId || cp.revision!==ref.revision
-    || cp.policyHash!==hash(options.policy) || !['succeeded','failed','errored','cancelled'].includes(cp.status)) {
+    || cp.policyIdentity.policyHash!==hash(options.policy) || !['succeeded','failed','errored','cancelled'].includes(cp.status)) {
     throw fail('FK_I_HOST_DENIED','result is not accessible');
   }
   return safeJSONSnapshot({
     projectionVersion:1,namespace:cp.namespace,runId:cp.runId,status:cp.status,
     state:cp.state,contextError:null,
     ...(cp.status==='succeeded'||cp.status==='failed' ? {terminal:{nodeId:cp.terminal.nodeId,status:cp.status}} : {}),
-    ...(typeof cp.terminal?.causeCode==='string' ? {causeCode:cp.terminal.causeCode} : {}),
+    ...(typeof cp.causeCode==='string' ? {causeCode:cp.terminal.causeCode} : {}),
   });
 }
 
@@ -343,7 +352,7 @@ async function publicFrame(frame,options,callbacks) {
   if (status==='waiting') {
     const checkpoint=await options.store.load(runId);
     if (checkpoint?.namespace!==options.auth.namespace || checkpoint.revision!==revision
-      || checkpoint.status!=='waiting' || checkpoint.pending?.requestId!==frame.pending?.requestId) throw uncertain();
+      || checkpoint.status!=='waiting' || checkpoint.pending[0]?.requestId!==frame.pending?.requestId) throw uncertain();
     const {requestId,nodeId,attempt,name,instruction,input,missing,resultSchema,reasons,overview}=frame.pending;
     const task=safeJSONSnapshot({name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{})});
     let approved;
@@ -354,8 +363,8 @@ async function publicFrame(frame,options,callbacks) {
     if (approved!==true) throw fail('FK_I_HOST_DENIED','Host task disclosure denied');
     const current=await options.store.load(runId);
     if (current?.namespace!==options.auth.namespace || current.revision!==revision
-      || current.status!=='waiting' || current.pending?.requestId!==requestId) throw uncertain();
-    output.pending.push({requestId,nodeId,attempt,activation:checkpoint.controlStack.at(-1).activation,
+      || current.status!=='waiting' || current.pending[0]?.requestId!==requestId) throw uncertain();
+    output.pending.push({requestId,nodeId,attempt,activation:checkpoint.pending[0].activation,
       kind:'agent',intent:'execute',task});
   } else if (['succeeded','failed','errored','cancelled'].includes(status)) {
     Object.assign(output,terminalFrame(runId,revision,status,frame.terminal));
@@ -413,20 +422,14 @@ export async function complete(submission,runtime,options) {
   }
   if (cp.status==='cancelled') throw fail('FK_I_STALE_RECEIPT','Run has been terminated');
   const historical=await options.store.loadReceipt(input.runId,input.requestId);
-  let task=historical ?? cp.pending;
+  let task=historical ?? cp.pending[0];
   if (historical && (typeof historical.nodeId!=='string'||!Number.isSafeInteger(historical.attempt))) {
-    const indexed=cp.receipts?.find(receipt=>receipt.requestId===input.requestId);
+    const transition=await options.store.loadTransition(input.runId,historical.transitionId);
     const suffix='::validate';
-    if (indexed) task={...historical,nodeId:indexed.nodeId,attempt:indexed.attempt};
-    else {
-      const transition=await options.store.loadTransition(input.runId,historical.transitionId);
-      if (cp.transitionIdVersion!==1 || transition?.namespace!==cp.namespace || transition.runId!==cp.runId
-        || transition.transitionId!==historical.transitionId || transition.toRevision!==historical.acceptedRevision
-        || !transition.toBlockId?.endsWith(suffix)) throw uncertain();
-      // Versioned receipt equality is the canonical public submission hash.
-      // The attempt is used only to enter the shared historical Ack path.
-      task={...historical,nodeId:transition.toBlockId.slice(0,-suffix.length),attempt:1};
-    }
+    if (transition?.namespace!==cp.namespace || transition.runId!==cp.runId
+      || transition.transitionId!==historical.transitionId || transition.toRevision!==historical.acceptedRevision
+      || !transition.toBlockId?.endsWith(suffix)) throw uncertain();
+    task={...historical,nodeId:transition.toBlockId.slice(0,-suffix.length),attempt:1};
   }
   if (!task || task.requestId!==input.requestId || (historical &&
     (historical.runId!==input.runId || historical.namespace!==options.auth.namespace))) {
@@ -434,7 +437,7 @@ export async function complete(submission,runtime,options) {
   }
   const {runId,requestId,outcome}=input;
   const result=await coordinator.complete({runId,requestId,nodeId:task.nodeId,attempt:task.attempt,
-    submissionDigest:hash(input),
+    submissionDigest:hash(input),receivedPayload:input,
     ...(outcome==='succeeded' ? {result:input.result}
       : {kind:'agent-call-failed',failure:{message:input.error.message}})});
   const frame=await publicFrame(result,options,callbacks);

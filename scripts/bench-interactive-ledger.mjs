@@ -98,8 +98,7 @@ async function measure(program,maxStagesPerCall) {
     assert.ok(casCommitted>=2000);
     assert.equal(casCommitted,checkpoint.revision);
     assert.equal(journal.length,checkpoint.revision+1);
-    assert.ok(checkpoint.receipts.length<=16);
-    assert.ok(!checkpoint.receipts.some(receipt=>receipt.requestId===receipts[0].requestId));
+    assert.equal(checkpoint.receiptCount,receipts.length);
     bytes.checkpointFinal=canonicalBytes(checkpoint).byteLength;
     bytes.journalExport=journal.reduce((sum,entry)=>sum+canonicalBytes(entry).byteLength,0);
     const receiptIndex=receipts.map(receipt=>store.getReceipt(runId,receipt.requestId));
@@ -107,7 +106,7 @@ async function measure(program,maxStagesPerCall) {
     bytes.databaseOpen=await fileBytes(database);
     bytes.walAtTerminal=await fileBytes(database+'-wal');
     stats={elapsedMs:Number(elapsedMs.toFixed(3)),latencyMs:latency(samples),pauseCalls,casAttempts,casCommitted,
-      journalRows:journal.length,receiptIndexRows:receiptIndex.length,checkpointReceiptCache:checkpoint.receipts.length};
+      journalRows:journal.length,receiptIndexRows:receiptIndex.length,checkpointReceiptCount:checkpoint.receiptCount};
   } finally {store.close();}
   bytes.databaseClosed=await fileBytes(database);
   bytes.walClosed=await fileBytes(database+'-wal');

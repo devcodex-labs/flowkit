@@ -129,7 +129,7 @@ export interface CheckpointStore {
    * Store). Resolves acceptedRevision/digest after a receipt leaves the
    * Checkpoint's bounded recent-receipts cache.
    */
-  getReceipt?(runId: string, requestId: string): {
+  getReceipt(runId: string, requestId: string): {
     requestId: string;
     nodeId: string;
     attempt: number;
@@ -287,6 +287,14 @@ export interface TrustedInteractiveTerminalResult {
   causeCode?:string;
 }
 
+export interface HistoricalAckRequest {
+  namespace:string;
+  runId:string;
+  requestId:string;
+  nodeId:string;
+  attempt:number;
+  receiptHash:string;
+}
 export interface TrustedInteractiveHost {
   readonly policyHash:string;
   readonly securityMode:'ed25519-agent-receipt-v1';
@@ -301,6 +309,9 @@ export interface TrustedInteractiveHost {
     receipt:HostAgentReceipt;
     attestation:HostAgentAttestation;
   }):Promise<InteractiveRunFrame & {acceptedRevision:number;duplicate:boolean}>;
+  readHistoricalAck(input:HistoricalAckRequest):Promise<Readonly<HistoricalAckRequest & {acceptedRevision:number}>>;
+  /** Revoke the SHA-256 fingerprint of a public key's SPKI in the Host Store. */
+  revokeKey(publicKeyHash:string):Promise<boolean>;
 }
 export interface TrustedInteractiveHostWithTerminalAccess extends TrustedInteractiveHost {
   /** Public terminal projection, subject to the Host's run:read authorization. */
@@ -322,6 +333,9 @@ export interface TrustedInteractiveHostOptions {
   authorizeDisclosure(context:Readonly<InteractiveDisclosureContext>):boolean|Promise<boolean>;
   /** Host-owned authorizer, required for both terminal projection methods. */
   authorizeTerminalAccess?(context:Readonly<InteractiveTerminalAccessContext>):boolean|Promise<boolean>;
+  authorizeReceiptAudit?(context:Readonly<HistoricalAckRequest & {action:'receipt:read-history'}>):boolean|Promise<boolean>;
+  authorizeKeyRevocation?(context:Readonly<{action:'host:revoke-key';namespace:string;publicKeyHash:string}>):boolean|Promise<boolean>;
+  drainOnly?:boolean;
   maxProofAgeMs?:number;
   clockSkewMs?:number;
   now?:()=>number;
@@ -360,12 +374,32 @@ export interface ReceiptRecordV1 {
   attempt?:number;
 }
 
-/** P0-A persistence payload, shared with the legacy SQLite checkpoint format. */
-export type RunCheckpointV1 = InteractiveCheckpoint & {
+export type RunCheckpointV1 = {
+  schemaVersion:1;
+  protocolVersion:1;
+  namespace:string;
+  runId:string;
   startKey:string;
   startIntentHash:string;
-  policyHash:string;
-  transitionIdVersion?:1;
+  revision:number;
+  status:InteractiveRunStatus;
+  program:InteractiveProgramIdentity;
+  programRef:TrustedProgramRefV1;
+  policyIdentity:{id:string;version:string;policyHash:string;bindingManifestHash:string;skillManifestHash?:string};
+  execution:{blockId:string;phase:'enter'|'prepare'|'dispatch-ready'|'awaiting'|'validate'|'commit'|'route'|'finished';
+    activationSeq:number;agentStepCounter:number;controlStack:readonly Record<string,unknown>[];
+    contextError:{code:string;message:string;retryable?:boolean;origin?:'runtime'|'executor'|'validator'|'store'|'policy'}|null};
+  state:Record<string,unknown>;
+  candidate:{kind:'agent';requestId:string;result:Record<string,unknown>}|null;
+  receivedSubmission:{kind:'agent';requestId:string;activation:number;attempt:number;canonicalDigest:string;
+    acceptedRevision:number;payload:Record<string,unknown>;receivedAt:string}|null;
+  pending:Array<{requestId:string;nodeId:string;kind:'agent';activation:number;attempt:number;issuedRevision:number;
+    intent:'execute';name:string;internalPayload:Record<string,unknown>;publicTask:Record<string,unknown>}>;
+  inFlightOperations:Record<string,unknown>[];
+  terminal:{nodeId:string;status:'succeeded'|'failed'}|null;
+  lastTransitionId:string|null;
+  limits:{stageCount:number;receiptCount:number;bytes:number};
+  causeCode?:string;
 };
 
 export type CASResultV1 =
@@ -398,7 +432,7 @@ export interface TrustedProgramRegistryV1 {
   release(runId:string,artifactHash:string):Promise<void>;
 }
 
-export declare function createSqliteInteractivePersistence(file:string,options:{namespace:string;migrationBackupPath?:string}):{
+export declare function createSqliteInteractivePersistence(file:string,options:{namespace:string}):{
   readonly store:CheckpointStoreV1;
   readonly programRegistry:TrustedProgramRegistryV1;
   readonly adminController:InteractiveAdminControllerV1;

@@ -183,7 +183,7 @@ function evidence(id,f,frame,extra={}){
     scenarioId:id,execution:'SCRIPTED_TRUSTED_HOST',modelCalls:0,
     programHash:f.compiled.programIdentity.artifactHash,runId:frame.runId,
     terminalStatus:cp.status,revision:cp.revision,journalRevisions:journal.length,
-    receiptCacheSize:cp.receipts.length,...extra,result:'PASS',
+    receiptCount:cp.receiptCount,...extra,result:'PASS',
   }));
 }
 
@@ -210,14 +210,14 @@ test('C02 false/default/unknown Condition routes do not dispatch unreachable Age
   }});
   assert.equal(early.status,'failed');
   assert.equal(early.terminal.nodeId,'declined');
-  assert.equal(f.store.load('C02-early').receipts.length,0);
+  assert.equal(f.store.load('C02-early').receiptCount,0);
   audit(f,'C02-early');
   const missing=await start(f,{runId:'C02-missing',state:{
     request:'software task',
   }});
   assert.equal(missing.status,'errored');
   assert.equal(missing.terminal.causeCode,'FK_R002');
-  assert.equal(f.store.load('C02-missing').receipts.length,0);
+  assert.equal(f.store.load('C02-missing').receiptCount,0);
   audit(f,'C02-missing');
   const pending=await start(f,{runId:'C02-late'});
   const {frame,trace}=await fourSteps(f,pending,{
@@ -280,7 +280,7 @@ test('C04 repeated invalid review schema consumes exactly retries+1 and FK_R004'
   evidence('C04',f,frame,{attempts,causeCode:'FK_R004'});
 });
 
-test('C10 36 Agent chain keeps 16 recent receipt cache but all 36 Ack identities',async t=>{
+test('C10 36 Agent chain keeps all 36 Ack identities in the receipt index',async t=>{
   const count=36;
   const f=await fixture(t,{
     source:longSource(count),
@@ -301,7 +301,7 @@ test('C10 36 Agent chain keeps 16 recent receipt cache but all 36 Ack identities
   }
   assert.equal(frame.status,'succeeded');
   const {cp}=audit(f,frame.runId);
-  assert.equal(cp.receipts.length,16);
+  assert.equal(cp.receiptCount,count);
   assert.equal(Object.keys(cp.state).length,count+2);
   for(const entry of accepted){
     assert.equal(f.store.getReceipt(frame.runId,entry.p.requestId).acceptedRevision,
@@ -314,7 +314,7 @@ test('C10 36 Agent chain keeps 16 recent receipt cache but all 36 Ack identities
   assert.equal(old.acceptedRevision,accepted[0].acceptedRevision);
   assert.equal(old.revision,frame.revision);
   evidence('C10',f,frame,{agents:count,history:accepted.length,
-    recentCache:cp.receipts.length,historicalAck:true});
+    acceptedReceipts:cp.receiptCount,historicalAck:true});
 });
 
 test('C11 stage budget 1 and 128 produce same final State bytes and node order',async t=>{
@@ -358,13 +358,13 @@ test('C13 cross-budget branch product: true/false/missing and late rejection',as
       state:{ready:false,request:'software task'}});
     assert.equal(declined.status,'failed');
     assert.equal(declined.terminal.nodeId,'declined');
-    assert.equal(f.store.load(declined.runId).receipts.length,0);
+    assert.equal(f.store.load(declined.runId).receiptCount,0);
 
     const missing=await start(f,{runId:'C13-missing-'+budget,
       state:{request:'software task'}});
     assert.equal(missing.status,'errored');
     assert.equal(missing.terminal.causeCode,'FK_R002');
-    assert.equal(f.store.load(missing.runId).receipts.length,0);
+    assert.equal(f.store.load(missing.runId).receiptCount,0);
 
     const falseFirst=await start(f,{runId:'C13-late-false-'+budget});
     const rejected=await fourSteps(f,falseFirst,{
@@ -579,7 +579,7 @@ test('C18 two interleaved Runs isolate branching, start identity and Journal',as
     ready:false,request:'software task'}});
   assert.equal(a.status,'waiting');
   assert.equal(b.status,'failed');
-  assert.equal(f.store.load(b.runId).receipts.length,0);
+  assert.equal(f.store.load(b.runId).receiptCount,0);
   const replay=await f.host.start({...f.compiled,runId:'C18-shadow',
     startKey:'C18-run-A',state:{ready:true,request:'software task'}});
   assert.equal(replay.runId,a.runId);
@@ -590,7 +590,7 @@ test('C18 two interleaved Runs isolate branching, start identity and Journal',as
   a=(await fourSteps(f,a)).frame;
   assert.equal(a.status,'succeeded');
   assert.equal(f.store.load(b.runId).status,'failed');
-  assert.equal(f.store.load(b.runId).receipts.length,0);
+  assert.equal(f.store.load(b.runId).receiptCount,0);
   audit(f,a.runId);audit(f,b.runId);
   evidence('C18',f,a,{parallelRuns:2,
     duplicateStartIdempotent:true,conflictingStartRejected:true});

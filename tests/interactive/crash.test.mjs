@@ -108,7 +108,7 @@ test('M4 real process SIGKILL before/after Agent enter, prepare and durable publ
     });
     assert.equal(done.status,'succeeded');
     assert.equal(done.state.answer,'complete');
-    assert.equal(db.load(runId).receipts.length,1);
+    assert.equal(db.load(runId).receiptCount,1);
     assert.deepEqual(db.listJournal(runId).map(x=>x.revision),
       Array.from({length:done.revision+1},(_,i)=>i));
     }
@@ -139,9 +139,9 @@ test('M4 real process SIGKILL before/after receipt acceptance, validation and st
       assert.deepEqual(finished.state,{preexisting:'constant',answer:'once'});
       const duplicate=await api.complete(receipt);
       assert.equal(duplicate.duplicate,true);
-      assert.equal(duplicate.acceptedRevision,db.load(runId).receipts[0].acceptedRevision);
+      assert.equal(duplicate.acceptedRevision,db.getReceipt(runId,waiting.pending.requestId).acceptedRevision);
       assert.equal(duplicate.revision,finished.revision);
-      assert.equal(db.load(runId).receipts.length,1);
+      assert.equal(db.load(runId).receiptCount,1);
       assert.deepEqual(db.listJournal(runId).map(x=>x.revision),
         Array.from({length:finished.revision+1},(_,i)=>i));
     }
@@ -191,7 +191,7 @@ test('M4 two independent Node processes racing the same complete accept one rece
   assert.deepEqual([first.duplicate,second.duplicate].sort(),[false,true]);
   assert.equal(first.status,'succeeded');
   assert.equal(second.status,'succeeded');
-  assert.equal(db.load(waiting.runId).receipts.length,1);
+  assert.equal(db.load(waiting.runId).receiptCount,1);
   assert.deepEqual(db.load(waiting.runId).state,
     {preexisting:'constant',answer:'once'});
 });

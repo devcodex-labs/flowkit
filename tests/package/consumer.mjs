@@ -55,7 +55,7 @@ try {
   });
   assert.equal(frame.status,'succeeded');
   assert.equal(Object.hasOwn(frame,'state'),false);
-  assert.equal((await versioned.store.load(frame.runId)).transitionIdVersion,1);
+  assert.equal((await versioned.store.load(frame.runId)).protocolVersion,1);
 } finally {versioned.close();}
 assert.ok(compiledInteractive.programIdentity?.artifactHash);
 const store=interactive.createSqliteCheckpointStore('interactive-demo.db',{namespace:'consumer'});
