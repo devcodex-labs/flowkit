@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
-import {createPrivateKey,createPublicKey,generateKeyPairSync,randomUUID,sign} from 'node:crypto';
+import {createPrivateKey,createPublicKey,generateKeyPairSync,randomUUID,sign,verify} from 'node:crypto';
 import {appendFileSync,mkdirSync} from 'node:fs';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -21,6 +21,7 @@ const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','o
   'outbox-check-revocation','release-check','release-revoke','release-clean','ops-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
+const entry=requested==='entry-r5';
 const branch=requested.startsWith('branch-')?requested.slice(7):null;
 assert.ok(branch===null || ['approved','refused','closed','missing'].includes(branch));
 const rotation=['rotate-old','rotate-new','rotate-old-next'].includes(cut);
@@ -31,11 +32,12 @@ const runRecord=['rotate-new','rotate-old-next','revoked-pending','release-cap-n
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
 const clearArtifact=cut==='ops-clear';
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
-const size=requested==='loop'||fallback||scenario||branch?0:Number(requested);
+const size=requested==='loop'||fallback||scenario||branch||entry?0:Number(requested);
 assert.ok(path.isAbsolute(exe) && path.isAbsolute(cwd) && path.isAbsolute(out));
 assert.ok([0,65536,262144,2093056].includes(size));
 assert.ok(!fallback||[262144,2093056].includes(artifactSize));
 assert.ok(['direct','isolated'].includes(profile));
+if (entry) assert.equal(profile,'isolated');
 mkdirSync(out,{recursive:false});
 const nonce=randomUUID();
 const bodyLength=size===0?0:size-Buffer.byteLength(JSON.stringify({nonce,payload:''}));
@@ -111,6 +113,10 @@ const pending=new Map(),starts=new Map(),completed=new Set(),successful=[];
 let seq=0,threadId,turnId,turnStatus,failure,inlineObserved;
 let branchTurnDone,branchAccess='model',branchNegative;
 const branchReceipts=[];
+const entrySessions=new Map(),entryResources=new Map(),entryObservations=new Map();
+let entryCase,entryDenial,entryDone,entryDelay,entryDatabase,entryObservationReady;
+let entrySignatures=0;
+const observationWaitMs=500;
 let finish;
 const finished=new Promise(resolve=>{finish=resolve;});
 let recordIdentity;
@@ -119,7 +125,7 @@ child?.on('error',error=>{failure=error.message;finish('spawn-error');});
 child?.on('close',code=>{journal('exit',{code});finish('closed');});
 child?.stdout.on('data',buffer=>record('app-server.stdout.ndjson',buffer));
 child?.stderr.on('data',buffer=>record('app-server.stderr',buffer));
-const timer=offline?null:setTimeout(()=>finish('timeout'),branch?240000:size?95000:65000);
+const timer=offline?null:setTimeout(()=>finish('timeout'),branch||entry?240000:size?95000:65000);
 
 function send(message) {
   record('app-server.requests.ndjson',JSON.stringify(message)+'\n');
@@ -154,6 +160,7 @@ terminal('done',{name:'Done',status:'succeeded'})
 ]});`);
   program=await compileInteractive(file,{output:'memory',featureStage:'P0-A',skillCheck:false});
   assert.ok(program.programIdentity,JSON.stringify(program.diagnostics));
+  if (entry) return;
   store=createSqliteCheckpointStore(path.join(fixture,'run.sqlite'),{namespace:'codex-proof'});
   let publicKey,privateKey;
   if (!scenario || (requested==='outbox-setup' && cut!=='release-shared')) {
@@ -371,6 +378,95 @@ async function branchTool(name,args,identity) {
   return acceptResult(args.result,identity);
 }
 
+function denyEntry(code) {
+  throw Object.assign(new Error(code),{code});
+}
+
+function captureEntryStart(p) {
+  const observation={threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,arguments:p.item.arguments};
+  const callId=p.item.id;
+  if (entryCase==='timeout') return;
+  if (entryCase==='late') {
+    entryDelay=()=>new Promise(resolve=>setTimeout(()=>{
+      journal('entry-late-observation',{callId,threadId:p.threadId,turnId:p.turnId,discarded:true});
+      resolve();
+    },25));
+    return;
+  }
+  if (entryCase==='mismatch') observation.arguments={...observation.arguments,answer:'different-fixture-value'};
+  entryObservations.set(callId,observation);
+  entryObservationReady?.();
+}
+
+async function submitEntry(p) {
+  const context=entrySessions.get(p.threadId);
+  if (!context || context.modelPid!==isolatedIdentity?.pid || p.threadId!==threadId || p.turnId!==turnId
+    || p.tool!=='flowkit_submit' || completed.has(p.callId)) denyEntry('SESSION_DENIED');
+  const target=entryResources.get(p.arguments.requestId);
+  if (!target || target.namespace!==context.namespace || target.subject!==context.subject) denyEntry('TARGET_DENIED');
+  const {store,task,host,key,publicKey}=target;
+  const checkpoint=store.load(task.runId);
+  if (checkpoint.status!=='waiting' || checkpoint.pending?.requestId!==task.requestId) denyEntry('TARGET_DENIED');
+  if (!entryObservations.has(p.callId)) {
+    const begin=performance.now();
+    await new Promise(resolve=>{
+      const deadline=setTimeout(resolve,observationWaitMs);
+      entryObservationReady=()=>{clearTimeout(deadline);resolve();};
+    });
+    entryObservationReady=undefined;
+    if (!entryObservations.has(p.callId) || performance.now()-begin>=observationWaitMs) {
+      journal('entry-observation-deadline',{callId:p.callId,waitedMs:performance.now()-begin,limitMs:observationWaitMs});
+      denyEntry('OBSERVATION_TIMEOUT');
+    }
+  }
+  const observed=entryObservations.get(p.callId);
+  if (observed.threadId!==p.threadId || observed.turnId!==p.turnId || observed.tool!==p.tool
+    || !canonicalBytes(observed.arguments).equals(canonicalBytes(p.arguments))) denyEntry('OBSERVATION_MISMATCH');
+  assert.deepEqual(p.arguments,{requestId:task.requestId,answer:'ready'});
+  const receipt={runId:task.runId,requestId:task.requestId,nodeId:task.nodeId,attempt:task.attempt,
+    kind:'agent-result',result:{answer:p.arguments.answer}};
+  const issuedAt=Date.now();
+  const statement=createAgentReceiptStatement({run:checkpoint,receipt,keyId:'proof',proofId:p.callId,issuedAt,expiresAt:issuedAt+30000});
+  const statementBytes=encodeAgentReceiptStatement(statement);
+  const signature=sign(null,statementBytes,key);
+  entrySignatures++;
+  journal('entry-signed',{callId:p.callId,subject:target.subject,namespace:target.namespace,receipt,statement,
+    signature:signature.toString('base64url'),publicKey});
+  const result=await host.accept({receipt,attestation:{statement,signature:signature.toString('base64url')}});
+  const indexed=store.getReceipt(task.runId,task.requestId);
+  assert.ok(verify(null,statementBytes,publicKey,signature));
+  assert.equal(indexed.digest,statement.receiptHash);
+  assert.equal(indexed.acceptedRevision,result.acceptedRevision);
+  assert.equal(result.status,'succeeded');
+  assert.equal(result.state.tenantMarker,target.namespace);
+  journal('entry-accepted',{callId:p.callId,subject:target.subject,namespace:target.namespace,indexed,revision:result.revision});
+  return {accepted:true,revision:result.acceptedRevision};
+}
+
+async function handleEntryCallback(message) {
+  const p=message.params;
+  const begin=performance.now();
+  journal('entry-callback',{case:entryCase,callId:p.callId,threadId:p.threadId,turnId:p.turnId});
+  let result;
+  try {
+    result=await submitEntry(p);
+    assert.equal(entryDenial,undefined);
+  } catch(error) {
+    if (entryDenial===undefined || error.code!==entryDenial) {
+      failure=error.message;
+      journal('entry-unexpected',{callId:p.callId,code:error.code,detail:error.message});
+    }
+    journal('entry-rejected',{case:entryCase,callId:p.callId,code:error.code,elapsedMs:performance.now()-begin});
+    result={accepted:false,code:'REQUEST_DENIED'};
+  } finally {
+    entryObservations.delete(p.callId);
+  }
+  assert.equal(entryDone,undefined);
+  entryDone=result;
+  successful.push(p.tool);
+  send({id:message.id,result:{success:result.accepted,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
+}
+
 async function handleTool(name,args,identity,started) {
   if (branch) return branchTool(name,args,identity);
   if (size) {
@@ -461,6 +557,7 @@ lines?.on('line',line=>{
   }
   const p=message.params;
   if(message.method==='item/started' && p.item.type==='dynamicToolCall') {
+    if (entry) {captureEntryStart(p);return;}
     if (branchNegative!=='observation' || p.item.tool!=='flowkit_submit') {
       starts.set(p.item.id,{threadId:p.threadId,turnId:p.turnId,tool:p.item.tool,arguments:p.item.arguments});
     } else journal('branch-start-withheld',{callId:p.item.id,threadId:p.threadId,turnId:p.turnId});
@@ -468,6 +565,7 @@ lines?.on('line',line=>{
   } else if(message.method==='item/completed' && p.item.type==='dynamicToolCall') {
     completed.add(p.item.id);
   } else if (message.method==='item/tool/call') {
+    if (entry) {void handleEntryCallback(message).catch(error=>{failure=error.message;finish('entry-error');});return;}
     void (async()=>{
       const started=starts.get(p.callId);
       try {
@@ -506,7 +604,7 @@ lines?.on('line',line=>{
   } else if(message.method==='turn/completed') {
     turnStatus=p.turn.status;
     if (p.turn.error) failure=p.turn.error.message;
-    if (branch) branchTurnDone();
+    if (branch||entry) branchTurnDone();
     else finish('turn-completed');
   } else if(message.method==='flowkit/profile/identity' && profile==='isolated') {
     const reported=p;
@@ -544,6 +642,101 @@ async function branchTurn(model,prompt,tools) {
   assert.equal(failure,undefined);
   assert.deepEqual(successful.slice(start),tools);
   assert.equal(completed.size,successful.length);
+}
+
+function entrySnapshot() {
+  const db=new DatabaseSync(entryDatabase,{readOnly:true});
+  try {
+    return {
+      runs:db.prepare('SELECT * FROM fk_i_runs ORDER BY namespace,run_id').all(),
+      journal:db.prepare('SELECT * FROM fk_i_journal ORDER BY namespace,run_id,revision').all(),
+      receipts:db.prepare('SELECT * FROM fk_i_receipt_index ORDER BY namespace,run_id,request_id').all(),
+    };
+  } finally {db.close();}
+}
+
+async function openEntrySession(binding,model) {
+  const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
+    multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},dynamicTools:specs.filter(spec=>spec.name==='flowkit_submit')});
+  const session=Object.freeze({...binding,threadId:thread.id,modelPid:isolatedIdentity.pid});
+  entrySessions.set(thread.id,session);
+  journal('entry-session',session);
+  return session;
+}
+
+async function bindEntrySubject(binding,model) {
+  const store=createSqliteCheckpointStore(entryDatabase,{namespace:binding.namespace});
+  let writes=0;
+  const instrumentedStore={...store,compareAndSwap(input){writes++;return store.compareAndSwap(input);}};
+  const pair=generateKeyPairSync('ed25519');
+  const publicKey=pair.publicKey.export({type:'spki',format:'pem'});
+  const host=createTrustedInteractiveHost({store:instrumentedStore,
+    runtime:{skillResolver:async()=> 'Submit ready for the current task.',
+      validateResult:(_schema,value)=>value.answer==='ready'?[]:['Expected ready']},
+    trustedPublicKeys:{proof:pair.publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
+    allowedInputKeys:['question'],disclosurePolicyId:'entry-r5-fixture',authorizeDisclosure:()=>true});
+  const frame=await host.start({runId:'entry-shared-run',startKey:'entry-shared-start',
+    programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
+    state:{question:'Return ready.',tenantMarker:binding.namespace}});
+  assert.equal(frame.status,'waiting');
+  const task=await host.getPublicAgentTask({runId:frame.runId});
+  assert.deepEqual(task.input,{question:'Return ready.'});
+  const session=await openEntrySession(binding,model);
+  const target={...binding,store,host,task,key:pair.privateKey,publicKey,writes:()=>writes};
+  assert.ok(!entryResources.has(task.requestId));
+  entryResources.set(task.requestId,target);
+  journal('entry-binding',{...session,runId:task.runId,requestId:task.requestId,revision:frame.revision});
+  return {session,target};
+}
+
+async function entryTurn(model,session,target,test,expectedDenial) {
+  threadId=session.threadId;
+  entryCase=test;
+  entryDenial=expectedDenial;
+  entryDone=undefined;
+  entryDelay=undefined;
+  const before=entrySnapshot();
+  const signedBefore=entrySignatures;
+  const counts=()=>[...entryResources.values()].map(resource=>resource.writes());
+  const beforeWrites=counts();
+  const requestId=target.task.requestId;
+  await branchTurn(model,`Synthetic fixture. Call flowkit_submit exactly once with requestId "${requestId}" and answer "ready". `
+    +'After the tool response, finish without retrying.', ['flowkit_submit']);
+  assert.equal(entryDone?.accepted,expectedDenial===undefined);
+  if (test==='late') assert.ok(entryDelay);
+  await entryDelay?.();
+  const after=entrySnapshot();
+  assert.equal(entrySignatures-signedBefore,expectedDenial?0:1);
+  if (expectedDenial) {
+    assert.deepEqual(before,after);
+    assert.deepEqual(beforeWrites,counts());
+  }
+  journal('entry-case',{case:test,subject:session.subject,namespace:session.namespace,targetNamespace:target.namespace,
+    targetSubject:target.subject,requestId,accepted:entryDone.accepted,signatures:entrySignatures-signedBefore,
+    beforeWrites,afterWrites:counts(),
+    before:sha256Bytes(canonicalBytes(before)),after:sha256Bytes(canonicalBytes(after))});
+}
+
+async function runEntry(model) {
+  entryDatabase=path.join(fixture,'entry.sqlite');
+  const a=await bindEntrySubject({subject:'tester-a',namespace:'tenant-a'},model);
+  const b=await bindEntrySubject({subject:'tester-b',namespace:'tenant-b'},model);
+  const peer=await openEntrySession({subject:'tester-b',namespace:'tenant-a'},model);
+  await entryTurn(model,peer,a.target,'wrong-subject','TARGET_DENIED');
+  await entryTurn(model,peer,b.target,'wrong-tenant','TARGET_DENIED');
+  await entryTurn(model,a.session,a.target,'mismatch','OBSERVATION_MISMATCH');
+  await entryTurn(model,a.session,a.target,'timeout','OBSERVATION_TIMEOUT');
+  await entryTurn(model,a.session,a.target,'late','OBSERVATION_TIMEOUT');
+  await entryTurn(model,a.session,a.target,'valid-a');
+  await entryTurn(model,b.session,b.target,'valid-b');
+  const end=entrySnapshot();
+  assert.deepEqual(end.runs.map(row=>[row.namespace,row.run_id,row.start_key,row.revision]),
+    [['tenant-a','entry-shared-run','entry-shared-start',9],['tenant-b','entry-shared-run','entry-shared-start',9]]);
+  assert.deepEqual(end.receipts.map(row=>[row.namespace,row.request_id,row.accepted_revision]),
+    [['tenant-a',a.target.task.requestId,4],['tenant-b',b.target.task.requestId,4]]);
+  for (const {store,task} of [a.target,b.target]) assert.equal(store.listJournal(task.runId).length,10);
+  journal('entry-verified',{snapshot:end,programHash:program.programIdentity.artifactHash});
+  return 'entry-completed';
 }
 
 async function runBranch(model) {
@@ -614,6 +807,7 @@ async function run() {
   send({method:'initialized'});
   const {data}=await request('model/list',{limit:30,includeHidden:false});
   const model=data.find(entry=>entry.isDefault)?.model ?? data[0]?.model;
+  if (entry) return runEntry(model);
   const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
     multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},
     dynamicTools:worker?specs.filter(spec=>fallback?spec.name!=='flowkit_continue':spec.name==='flowkit_submit'):specs});
@@ -641,10 +835,10 @@ try {
   const outcome=await Promise.race([run(),finished]);
   const expected=worker?(fallback?['flowkit_start','flowkit_submit_file']:['flowkit_submit'])
     :size?['flowkit_inline']:['flowkit_start',fallback?'flowkit_submit_file':'flowkit_submit','flowkit_continue'];
-  const passed=(branch?outcome==='branch-completed':outcome==='turn-completed' && turnStatus==='completed' && !failure
+  const passed=(entry?outcome==='entry-completed':branch?outcome==='branch-completed':outcome==='turn-completed' && turnStatus==='completed' && !failure
     && JSON.stringify(successful)===JSON.stringify(expected) && completed.size===expected.length)
     && (profile==='direct'||!!isolatedIdentity);
-  console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,artifactSize,profile,successful,inlineObserved,failure,branch}));
+  console.log(JSON.stringify({passed,outcome,turnStatus,requestedBytes:size,artifactSize,profile,successful,inlineObserved,failure,branch,entry}));
   if(!passed)process.exitCode=1;
   }
 } catch(error) {console.error(error.message);process.exitCode=1;}
@@ -663,6 +857,7 @@ finally {
   handoff?.close();
   outbox?.close();
   store?.close();
+  for (const resource of entryResources.values()) resource.store.close();
   if(fixture&&!scenario) await rm(fixture,{recursive:true,force:true});
   if (worker&&process.connected) process.disconnect();
 }
