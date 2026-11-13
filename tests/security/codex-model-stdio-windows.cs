@@ -84,11 +84,14 @@ public static class FlowKitModelStdio {
     if (!OpenProcessToken(process, 8, out token)) throw Win32("Open model token");
     try {
       using (WindowsIdentity user = new WindowsIdentity(token)) {
-        var principal = new WindowsPrincipal(user);
-        int elevationType, length;
+        int elevationType, elevated, length;
         if (!GetTokenInformation(token, 18, out elevationType, sizeof(int), out length))
           throw Win32("Read process token elevation type");
-        if (elevationType != 1 || principal.IsInRole(WindowsBuiltInRole.Administrator)
+        if (!GetTokenInformation(token, 20, out elevated, sizeof(int), out length))
+          throw Win32("Read process token elevation");
+        // Read the queried token directly. IsInRole needs an impersonation token.
+        var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        if (elevationType != 1 || elevated != 0 || user.Groups.Contains(administrators)
           || user.IsSystem || user.User.IsWellKnown(WellKnownSidType.AnonymousSid)
           || user.User.IsWellKnown(WellKnownSidType.LocalServiceSid)
           || user.User.IsWellKnown(WellKnownSidType.NetworkServiceSid))
