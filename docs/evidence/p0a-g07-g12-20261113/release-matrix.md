@@ -19,6 +19,7 @@
 | E9 | `e0df84b23ec78b49fd8beb8e800076ce27102c74` | Windows／Linux 双账户均通过文件快照清理两处强杀、两 Store 撤销协调演练、磁盘采样和本机容量告警，各 10 个真实会话。[命令、磁盘样本、归档 SHA-256 和参数建议](../p0a-codex-isolated-20261113/ops-r5-live.md) |
 | E10 | `0d1da06bb3f8e56ebc54a2d32619c83d3cadea34` | Windows／Linux 双账户各 18 个真实模型回合。4 Agent＋2 Conditions 多阶段续跑、受权终态读取、早拒与缺值零派发、错请求和扣留观察拒绝。[分平台结果、命令和原始归档 SHA-256](../p0a-codex-isolated-20261113/branch-r5-live.md) |
 | E11 | `60b745e1708f2e7c10b88254912fa074b9489d3e` | Windows／Linux 各 7 个真实 Codex 回合，测试主体／租户绑定、同 startKey 和 RunId 隔离、观察失配／超时／迟到与两笔合法接纳。[分平台实测、原始命令与归档 SHA-256](../p0a-codex-isolated-20261113/entry-r5-live.md) |
+| E12 | `2f6a6738c5ffc12459bb271823d2468c3b2731cf` | 真实普通 OS 身份预绑定，两租户 stdio 和文件入口并发，拒绝错配及独立审计权限。[分平台实测、原始命令与归档 SHA-256](../p0a-codex-isolated-20261113/os-r5-live.md) |
 
 ## SEC · 生产配置与候选入口
 
@@ -28,7 +29,7 @@
 | SEC-02 | BLOCKED，完整原生负例 | E6 两端保护密钥、配置和 Program 清单的路径访问，Host 签名成功。E1 有标准流继承限制。尚缺生产启动链下实际 Model 进程对密钥及可继承句柄的拒绝证据。 |
 | SEC-03 | BLOCKED，完整原生负例 | E6 两端拒绝数据库、WAL、SHM、备份的路径访问和修改，完整性通过。补实际 Model 进程句柄或映射和实际配置下的保护证据。 |
 | SEC-04 | BLOCKED，最终启动链 | E6 Linux 进程访问、Windows 进程和 Token 权限请求拒绝。补生产启动顺序下的进程权限负例和实际启用的服务控制。 |
-| SEC-05 | BLOCKED，发布入口授权 | E10 的错请求和缺观察已验证。E11 用真实 stdio 工具回调实测 Host 配置的错主体／错租户，统一拒绝且零签名、零 CAS。发布主体认证、实际审计身份和启用的文件入口仍待实测。 |
+| SEC-05 | BLOCKED，发布入口授权 | E10/E11 覆盖真实错请求、缺观察及测试主体错配。E12 补 OS 身份预绑定、两条入口的错租户／错主体拒绝及审计角色。最终入口接入经 OS 认证的会话和未消费有效文件引用的跨租户验证仍待取证。 |
 | SEC-06 | BLOCKED，真实入口拒绝 | 补独立 Model 账户用普通进程重放同一提交的拒绝结果，核对没有 Host 签名、接纳索引或状态推进。 |
 | SEC-07 | N/A，当前配置无 TLS/mTLS IPC | 实测为受控 stdio，回环 SSH 负责启动。实际输入路径按 SEC-05 验收。 |
 | SEC-08 | BLOCKED，原生身份和正文负例 | E7 有替换、截断、错 Pending 与会话的定向回归，E5 有真实策略不匹配拒绝。补实际候选入口逐项变更 Run、request、attempt、node、Program、policy 和正文，核对无写入及错误脱敏。 |
@@ -38,7 +39,7 @@
 | SEC-12 | BLOCKED，真实资源边界 | E1 文件入口两个大小通过。E7 内联 64 KiB 通过，两档更大内联无工具调用。补实际入口异常正文、限流／超时及内联回执上限分类。 |
 | SEC-13 | BLOCKED，完整替换负例 | E7 的文件替换、硬链接、符号链接或目录联接点有 P 级证据。E5 的旧策略拒绝有双平台原生结果。补实际启动链下 Program 和所有已启用配置入口的替换负例。 |
 | SEC-14 | BLOCKED，生产轮换与撤销 | E4 验证仍受信的两把钥轮换和原 Ack。E5 验证仅信任新钥时旧 Run 拒绝。E8 验证两独立 Store 分别撤销、未接纳旧回执拒绝和受权只读返回历史 Ack。E9 演练部分完成时保留待确认 Store、授权补撤销及逐库验收。生产全量清单、入口暂停、实际权限变更及适用的证书／KMS 操作待测。 |
-| SEC-15 | BLOCKED，真实跨租户并发 | E11 使用同一 SQLite 文件，两个租户同 startKey 和 RunId，独立回执和 Journal。真实模型回合顺序提交，待补发布入口跨租户并发。 |
+| SEC-15 | BLOCKED，最终发布入口 | E12 实测同一 SQLite 文件内两个租户同 startKey、同 RunId 的 stdio 和文件回调并发，独立回执和 Journal。发布入口的主体认证和会话生命周期仍待验证。 |
 | SEC-16 | N/A，当前 Windows 配置无 Named Pipe 候选入口 | 当前使用标准流。若发行选择 Named Pipe，按原矩阵重新裁决。 |
 | SEC-17 | BLOCKED，Linux 实际 CLI 拒绝 | E6 记录受限进程的 47 项文件和进程权限拒绝，E1 记录真实 Codex 同 PID 启动、不同 UID/GID 和零能力。补真实 CLI 的相应拒绝日志。Windows 不适用。 |
 | SEC-18 | PASS，双平台 Outbox 样本 | E2/E3/E4 覆盖签名前、签后 CAS 前及 CAS 后 `ACKED` 前的真实强杀、原字节验签与对账、未接纳过期拒绝和仍受信的历史 Ack。E8 增补 R5 已接纳回执在 validate 阶段强杀后的恢复。 |
