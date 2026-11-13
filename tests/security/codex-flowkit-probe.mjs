@@ -16,9 +16,11 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
-const scenario=['outbox-worker','outbox-recover','outbox-setup'].includes(requested);
+const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
+const rotation=cut==='rotate-old'||cut==='rotate-new';
+const runRecord=cut==='rotate-new'?'run-next.json':'run.json';
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
 const size=requested==='loop'||fallback||scenario?0:Number(requested);
@@ -45,7 +47,7 @@ const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
 if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
-  && (!cut || cut==='after-cas'));
+  && (!cut || ['after-cas','before-sign','expire','rotate-old','rotate-new'].includes(cut)));
 let store,host,program,frame,currentTask,handoff,staged,outbox;
 const appArgs=['app-server','--listen','stdio://','-c','web_search="disabled"'];
 let command=exe,args=appArgs;
@@ -131,7 +133,17 @@ terminal('done',{name:'Done',status:'succeeded'})
     }
   } else {
     publicKey=createPublicKey(await readFile(path.join(fixture,'proof.public.pem')));
-    if (worker) privateKey=createPrivateKey(await readFile(path.join(fixture,'proof.private.pem')));
+    if (worker) privateKey=createPrivateKey(await readFile(path.join(fixture,
+      cut==='rotate-new'?'next.private.pem':'proof.private.pem')));
+  }
+  const trustedPublicKeys={proof:publicKey};
+  if (rotation) {
+    if (requested==='outbox-setup') {
+      const next=generateKeyPairSync('ed25519');
+      await writeFile(path.join(fixture,'next.public.pem'),next.publicKey.export({type:'spki',format:'pem'}),{mode:0o600,flag:'wx'});
+      await writeFile(path.join(fixture,'next.private.pem'),next.privateKey.export({type:'pkcs8',format:'pem'}),{mode:0o600,flag:'wx'});
+    }
+    trustedPublicKeys.next=createPublicKey(await readFile(path.join(fixture,'next.public.pem')));
   }
   if (fallback) {
     const inbox=path.join(fixture,'inbox');
@@ -143,7 +155,7 @@ terminal('done',{name:'Done',status:'succeeded'})
     store, runtime:{skillResolver:async()=> 'Read the public question and submit its requested answer.',
       validateResult:(_schema,value)=>fallback ? validateArtifactResult(value)
         : (scenario?['alpha','beta','ready'].includes(value.answer):value.answer==='ready')?[]:['Unexpected answer']},
-    trustedPublicKeys:{proof:publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
+    trustedPublicKeys,trustedArtifacts:[program.programIdentity.artifactHash],
     allowedInputKeys:['question'],disclosurePolicyId:'probe-v1',authorizeDisclosure:()=>true,
     authorizeTerminalAccess:({action})=>action==='run:read',
   });
@@ -179,12 +191,21 @@ async function acceptResult(result,identity,pending=currentTask) {
 async function deliverCandidate(result,name,args,identity,started) {
   const receipt={runId:currentTask.runId,requestId:currentTask.requestId,nodeId:currentTask.nodeId,
     attempt:currentTask.attempt,kind:'agent-result',result};
-  const proofId=outbox.record({task:currentTask,modelPid:isolatedIdentity?.pid??child.pid,
+  const details={threadId,turnId,callId:identity.callId,hostPid:process.pid,
+    modelPid:isolatedIdentity?.pid??child.pid,requestId:currentTask.requestId};
+  const proofId=await outbox.record({task:currentTask,modelPid:details.modelPid,
     started:{...started,callId:identity.callId,args:started.arguments},
-    callback:{...identity,tool:name,args}},receipt,key);
+    callback:{...identity,tool:name,args}},receipt,key,{
+    keyId:cut==='rotate-new'?'next':'proof',
+    ttlMs:cut==='expire'?3000:cut==='rotate-old'?15000:120000,
+    afterObserve:cut==='before-sign'?async observed=>{
+      journal('outbox-before-sign',{...details,...observed});
+      process.send({event:'observed',...details,...observed});
+      await new Promise(()=>{});
+    }:undefined,
+  });
   const signed=outbox.describe(proofId);
-  const detail={...signed,threadId,turnId,callId:identity.callId,hostPid:process.pid,
-    modelPid:isolatedIdentity?.pid??child.pid,requestId:currentTask.requestId,
+  const detail={...details,...signed,
     ...(result.artifact?{artifact:result.artifact}:{})};
   const release=new Promise(resolve=>process.once('message',resolve));
   journal('outbox-signed',{...identity,...detail});
@@ -353,7 +374,7 @@ async function run() {
   if (profile==='isolated') await identityReady;
   if (!size) key=await prepareFlowKit();
   if (worker) {
-    const {runId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
+    const {runId}=JSON.parse(await readFile(path.join(fixture,runRecord),'utf8'));
     currentTask=await host.getPublicAgentTask({runId});
     frame=store.load(runId);
   }
@@ -416,17 +437,23 @@ finally {
 
 async function runOutboxOffline() {
   await prepareFlowKit();
-  if (requested==='outbox-setup') {
+  if (requested==='outbox-setup'||requested==='outbox-next') {
     frame=await host.start({programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
       startKey:nonce,state:{question:'Submit the assigned answer.'}});
     const task=await host.getPublicAgentTask({runId:frame.runId});
-    await writeFile(path.join(fixture,'run.json'),JSON.stringify({runId:frame.runId,requestId:task.requestId}),{mode:0o600,flag:'wx'});
+    await writeFile(path.join(fixture,runRecord),JSON.stringify({runId:frame.runId,requestId:task.requestId}),{mode:0o600,flag:'wx'});
     console.log(JSON.stringify({runId:frame.runId,requestId:task.requestId,revision:frame.revision}));
     return;
   }
-  const {runId,requestId}=JSON.parse(await readFile(path.join(fixture,'run.json'),'utf8'));
+  const {runId,requestId}=JSON.parse(await readFile(path.join(fixture,runRecord),'utf8'));
   const before=store.load(runId);
   const beforeReceipt=store.getReceipt(runId,requestId);
+  if (requested==='outbox-replay') {
+    const replay=await outbox.deliver(answer);
+    console.log(JSON.stringify({runId:replay.runId,acceptedRevision:replay.acceptedRevision,
+      receipt:store.getReceipt(runId,requestId),status:replay.status}));
+    return;
+  }
   const recovered=await outbox.recover(runId);
   assert.deepEqual(await outbox.recover(runId),[]);
   const after=store.load(runId);

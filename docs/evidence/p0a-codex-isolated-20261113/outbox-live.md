@@ -47,4 +47,14 @@ node tests/security/codex-outbox-live.mjs <Codex绝对路径> <Model工作目录
 | Windows `flowkit-windows-outbox-live.zip` | `a66e85c0b746538af2f3f93c8a978e963bcc2434af76af9ba50a8fc4d1a2b7a9` |
 | Linux `FlowKit-Linux-Outbox-Live-20261113.zip` | `00ab2b37629076f3ca9eb97b1e3cdd471ebece832274864bc5d14ee3bda3257e` |
 
-归档另含验签所需的声明、签名和回执原始字节，私钥和登录缓存留在各自环境内。过期未接纳回执、快照字节损坏、快照 Ack 后但 Outbox Ack 前的对账有定向回归。签名前强杀、真实宿主的过期拒绝和签名轮换、生产保留策略以及完整 NAT-14/15、C12/S13 仍为 BLOCKED。
+归档另含验签所需的声明、签名和回执原始字节，私钥和登录缓存留在各自环境内。快照字节损坏、快照 Ack 后但 Outbox Ack 前的对账有定向回归。生产保留策略以及完整 NAT-14/15、C12/S13 仍为 BLOCKED。
+
+## 签名前强杀、过期和轮换
+
+```text
+node tests/security/codex-outbox-live.mjs <Codex绝对路径> <Model工作目录> <全新Host私有证据目录> isolated signing
+```
+
+- 签名前强杀在真实工具事件和候选字节已写入 `OBSERVED` 后触发。重启扫描保留原观察，不签署或接纳该记录。另一个真实会话对同一 Pending 重新提交，产生自己的观察和签名。
+- 过期拒绝使用独立测试 Run 的 3 秒证明有效期和真实系统时钟。监督器在 CAS 前强杀，等到期限和 Host 默认时钟容差都过去才重启。Outbox 记录 `BLOCKED`，Store、Journal、接纳索引保持原状。
+- 轮换用两个预先批准的公钥保持 Run 的固定信任策略。旧钥完成一个真实 Run 后，新的真实 Run 由新钥签名。随后用原始已过期的旧签名重放，要求返回原 Ack，两个 Run 的持久状态都保持原样。撤销旧公钥及迁移既有 Run 的策略哈希属于独立场景。

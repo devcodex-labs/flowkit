@@ -53,7 +53,8 @@ export function openCodexOutbox({database,store,host,handoff,now=Date.now}) {
       || Object.keys(result??{}).length!==1 || result.answer!==args.answer) throw fail('FK_OUTBOX_OBSERVATION');
   }
 
-  function record({task,started,callback,modelPid},receipt,key) {
+  async function record({task,started,callback,modelPid},receipt,key,
+    {keyId='proof',ttlMs=120000,afterObserve}={}) {
     const normalized=normalizeHostAgentReceipt(receipt);
     const cp=store.load(normalized.runId);
     const {threadId,turnId,callId,tool,args}=callback;
@@ -78,9 +79,10 @@ export function openCodexOutbox({database,store,host,handoff,now=Date.now}) {
       toolInputDigest:sha256Bytes(canonicalBytes(args,4096)),receiptHash,source:'HOST_OBSERVED'},4096);
     insert.run(proofId,cp.namespace,normalized.runId,normalized.requestId,threadId,turnId,callId,
       observation,receiptBytes,receiptHash);
+    if (afterObserve) await afterObserve(describe(proofId));
     const issuedAt=now();
-    const statement=createAgentReceiptStatement({run:cp,receipt:normalized,keyId:'proof',
-      proofId,issuedAt,expiresAt:issuedAt+120000});
+    const statement=createAgentReceiptStatement({run:cp,receipt:normalized,keyId,
+      proofId,issuedAt,expiresAt:issuedAt+ttlMs});
     const statementBytes=encodeAgentReceiptStatement(statement);
     const signature=sign(null,statementBytes,key);
     if (save.run(statementBytes,signature,proofId).changes!==1) throw fail('FK_OUTBOX_STATE');
@@ -91,7 +93,8 @@ export function openCodexOutbox({database,store,host,handoff,now=Date.now}) {
     const row=get.get(proofId,store.namespace);
     if (!row) throw fail('FK_OUTBOX_STATE');
     return {proofId,state:row.state,receiptHash:row.receipt_hash,acceptedRevision:row.accepted_revision,
-      ...(row.statement?{statementHash:sha256Bytes(row.statement),signatureHash:sha256Bytes(row.signature)}:{})};
+      ...(row.statement?{statementHash:sha256Bytes(row.statement),signatureHash:sha256Bytes(row.signature),
+        expiresAt:decode(row.statement,4096).expiresAt}:{})};
   }
 
   async function deliver(proofId,{afterAccept}={}) {

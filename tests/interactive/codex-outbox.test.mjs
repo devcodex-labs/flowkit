@@ -34,10 +34,18 @@ test('Codex Outbox replays exact signed bytes, reconciles historical Ack and blo
   let outbox=open();
   t.after(()=>{outbox.close();rmSync(directory,{recursive:true,force:true});});
   const observed=(callback=call,started=callback)=>({task,modelPid:100,callback,started});
-  assert.throws(()=>outbox.record(observed(call,{...call,turnId:'other'}),receipt,keys.privateKey),
+  await assert.rejects(outbox.record(observed(call,{...call,turnId:'other'}),receipt,keys.privateKey),
     {code:'FK_OUTBOX_OBSERVATION'});
-  const id=outbox.record(observed(),receipt,keys.privateKey);
-  assert.throws(()=>outbox.record(observed(),receipt,keys.privateKey));
+  let unsigned;
+  await assert.rejects(outbox.record(observed({...call,callId:'unsigned'}),receipt,keys.privateKey,{
+    afterObserve(row) {unsigned=row;throw new Error('before signing');},
+  }),/before signing/);
+  assert.equal(unsigned.state,'OBSERVED');
+  assert.equal(unsigned.statementHash,undefined);
+  assert.deepEqual(await outbox.recover('run'),[]);
+  assert.equal(accepts,0);
+  const id=await outbox.record(observed(),receipt,keys.privateKey);
+  await assert.rejects(outbox.record(observed(),receipt,keys.privateKey));
   const signed=outbox.describe(id);
   assert.equal(signed.state,'SIGNED');
   assert.equal(accepts,0);
@@ -50,8 +58,8 @@ test('Codex Outbox replays exact signed bytes, reconciles historical Ack and blo
   assert.deepEqual(await outbox.recover('run'),[]);
   assert.equal(accepts,2);
 
-  const retry=outbox.record(observed({...call,callId:'retry'}),receipt,keys.privateKey);
-  const expired=outbox.record(observed({...call,callId:'expired',args:{...call.args,answer:'stale'}}),
+  const retry=await outbox.record(observed({...call,callId:'retry'}),receipt,keys.privateKey);
+  const expired=await outbox.record(observed({...call,callId:'expired',args:{...call.args,answer:'stale'}}),
     {...receipt,result:{answer:'stale'}},keys.privateKey);
   now+=120001;
   assert.deepEqual((await outbox.recover('run')).map(row=>[row.proofId,row.state]),[[retry,'ACKED'],[expired,'BLOCKED']]);
@@ -89,12 +97,12 @@ test('file Outbox recovery verifies the claimed bytes and replays an already-rec
   const call={...event,arguments:reference};
   let proofId;
   await assert.rejects(handoff.consume({started:call,callback:call,loadPending:store.load,
-    signAndAccept({artifact}) {
+    async signAndAccept({artifact}) {
       const observed={...event,args:reference};
       const receipt={...pending,kind:'agent-result',result:{artifact}};
-      assert.throws(()=>outbox.record({task:pending,started:observed,callback:observed,modelPid:100},
+      await assert.rejects(outbox.record({task:pending,started:observed,callback:observed,modelPid:100},
         {...receipt,result:{artifact:{...artifact,sha256:binding.programHash}}},keys.privateKey),{code:'FK_FILE_BINDING'});
-      proofId=outbox.record({task:pending,started:observed,callback:observed,modelPid:100},receipt,keys.privateKey);
+      proofId=await outbox.record({task:pending,started:observed,callback:observed,modelPid:100},receipt,keys.privateKey);
       throw new Error('after signed');
     }}),/after signed/);
   const db=new DatabaseSync(handoffDatabase);
