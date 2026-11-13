@@ -15,13 +15,15 @@ import {
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.mjs';
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
+import {createCodexOsAccess} from '../../examples/interactive/codex-os-access.mjs';
 
 const [exe,cwd,out,requested='loop',profile='direct',scenarioDir,answer,cut,scenarioBytes]=process.argv.slice(2);
 const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','outbox-replay',
   'outbox-check-revocation','release-check','release-revoke','release-clean','ops-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
-const entry=requested==='entry-r5';
+const osEntry=['os-stdio','os-file'].includes(requested);
+const entry=requested==='entry-r5'||osEntry;
 const branch=requested.startsWith('branch-')?requested.slice(7):null;
 assert.ok(branch===null || ['approved','refused','closed','missing'].includes(branch));
 const rotation=['rotate-old','rotate-new','rotate-old-next'].includes(cut);
@@ -29,6 +31,7 @@ const revoked=['revoked-old','revoked-pending','revoked-new'].includes(cut);
 const nextSigner=cut==='rotate-new'||cut==='revoked-new';
 const runRecord=['rotate-new','rotate-old-next','revoked-pending','release-cap-next','release-byte-next'].includes(cut)?'run-next.json'
   :cut==='revoked-new'?'run-new.json':'run.json';
+const osFile=requested==='os-file';
 const fallback=requested.startsWith('file-') || (scenario && scenarioBytes!==undefined);
 const clearArtifact=cut==='ops-clear';
 const artifactSize=fallback?Number(scenario?scenarioBytes:requested.slice(5)):0;
@@ -60,6 +63,10 @@ const specs=size ? [tool('flowkit_inline','Measure an inline synthetic payload',
       ?{requestId:str,result:objectSchema(branchFields,[])}:{requestId:str,answer:str})),
   tool('flowkit_continue',branch?'Read the next public task or terminal frame':'Read the public terminal state of the provisioned Run',objectSchema({runId:str})),
 ];
+const osTools=osFile?[
+  tool('flowkit_file_task','Get the current Host-provisioned file task',objectSchema({})),
+  tool('flowkit_submit_file','Submit the exact file reference returned by the Host',objectSchema({requestId:str,id:str})),
+]:specs.filter(spec=>spec.name==='flowkit_submit');
 const fixture=scenario?scenarioDir:size?null:await mkdtemp(path.join(tmpdir(),'flowkit-codex-evidence-'));
 if (scenario) assert.ok(path.isAbsolute(fixture));
 if (worker) assert.ok(process.send && ['alpha','beta','ready'].includes(answer)
@@ -116,6 +123,9 @@ const branchReceipts=[];
 const entrySessions=new Map(),entryResources=new Map(),entryObservations=new Map();
 let entryCase,entryDenial,entryDone,entryDelay,entryDatabase,entryObservationReady;
 let entrySignatures=0;
+let osAccess,osAuditSession,osFileDb;
+const osTurns=new Map();
+let osOverlap;
 const observationWaitMs=500;
 let finish;
 const finished=new Promise(resolve=>{finish=resolve;});
@@ -154,7 +164,7 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('declined',{name:'Dec
   } else if (!scenario || requested==='outbox-setup') await writeFile(file,`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'codex-probe',version:'1.0.0',name:'Codex probe',nodes:[
 node('review',{name:'Review',agent:'reviewer',inputs:['question'],
-output:{type:'object',properties:${fallback?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'${cut==='ops-file'?'clear':'done'}'}),
+    output:{type:'object',properties:${fallback||osFile?'{artifact:{type:"object"}}':"{answer:{type:'string'}}"}},retries:0,next:'${cut==='ops-file'?'clear':'done'}'}),
 ${cut==='ops-file'?"node('clear',{name:'Clear completed reference',agent:'reviewer',inputs:['question'],output:{type:'object',properties:{artifact:{type:'null'}}},retries:0,next:'done'}),":''}
 terminal('done',{name:'Done',status:'succeeded'})
 ]});`);
@@ -254,7 +264,7 @@ function stopAtCleanupCut() {
   throw new Error('Supervisor did not stop cleanup at '+cut);
 }
 function validateArtifactResult(value) {
-  if (!scenario) return value.artifact?.id===staged?.id?[]:['Expected staged reference'];
+  if (!scenario && !osFile) return value.artifact?.id===staged?.id?[]:['Expected staged reference'];
   const artifact=value.artifact;
   const snapshot=artifact && handoff.readSnapshot(artifact.id);
   return snapshot && ['claimed','acked'].includes(snapshot.state) && snapshot.byteLength===artifact.byteLength
@@ -404,7 +414,7 @@ async function submitEntry(p) {
     || p.tool!=='flowkit_submit' || completed.has(p.callId)) denyEntry('SESSION_DENIED');
   const target=entryResources.get(p.arguments.requestId);
   if (!target || target.namespace!==context.namespace || target.subject!==context.subject) denyEntry('TARGET_DENIED');
-  const {store,task,host,key,publicKey}=target;
+  const {store,task}=target;
   const checkpoint=store.load(task.runId);
   if (checkpoint.status!=='waiting' || checkpoint.pending?.requestId!==task.requestId) denyEntry('TARGET_DENIED');
   if (!entryObservations.has(p.callId)) {
@@ -423,14 +433,20 @@ async function submitEntry(p) {
   if (observed.threadId!==p.threadId || observed.turnId!==p.turnId || observed.tool!==p.tool
     || !canonicalBytes(observed.arguments).equals(canonicalBytes(p.arguments))) denyEntry('OBSERVATION_MISMATCH');
   assert.deepEqual(p.arguments,{requestId:task.requestId,answer:'ready'});
+  return signEntry(target,p.callId,{answer:p.arguments.answer});
+}
+
+async function signEntry(target,callId,value) {
+  const {store,task,host,key,publicKey}=target;
+  const checkpoint=store.load(task.runId);
   const receipt={runId:task.runId,requestId:task.requestId,nodeId:task.nodeId,attempt:task.attempt,
-    kind:'agent-result',result:{answer:p.arguments.answer}};
+    kind:'agent-result',result:value};
   const issuedAt=Date.now();
-  const statement=createAgentReceiptStatement({run:checkpoint,receipt,keyId:'proof',proofId:p.callId,issuedAt,expiresAt:issuedAt+30000});
+  const statement=createAgentReceiptStatement({run:checkpoint,receipt,keyId:'proof',proofId:callId,issuedAt,expiresAt:issuedAt+30000});
   const statementBytes=encodeAgentReceiptStatement(statement);
   const signature=sign(null,statementBytes,key);
   entrySignatures++;
-  journal('entry-signed',{callId:p.callId,subject:target.subject,namespace:target.namespace,receipt,statement,
+  journal('entry-signed',{callId,subject:target.subject,namespace:target.namespace,receipt,statement,
     signature:signature.toString('base64url'),publicKey});
   const result=await host.accept({receipt,attestation:{statement,signature:signature.toString('base64url')}});
   const indexed=store.getReceipt(task.runId,task.requestId);
@@ -439,8 +455,63 @@ async function submitEntry(p) {
   assert.equal(indexed.acceptedRevision,result.acceptedRevision);
   assert.equal(result.status,'succeeded');
   assert.equal(result.state.tenantMarker,target.namespace);
-  journal('entry-accepted',{callId:p.callId,subject:target.subject,namespace:target.namespace,indexed,revision:result.revision});
-  return {accepted:true,revision:result.acceptedRevision};
+  journal('entry-accepted',{callId,subject:target.subject,namespace:target.namespace,indexed,revision:result.revision});
+  return {accepted:true,revision:result.acceptedRevision,acceptedRevision:result.acceptedRevision};
+}
+
+async function osEntryCallback(message) {
+  const p=message.params;
+  const turn=osTurns.get(p.threadId);
+  const context=entrySessions.get(p.threadId);
+  const started=entryObservations.get(p.callId);
+  assert.ok(turn && context?.modelPid===isolatedIdentity.pid && turn.id===p.turnId && started
+    && started.threadId===p.threadId && started.turnId===p.turnId && started.tool===p.tool
+    && !completed.has(p.callId) && canonicalBytes(started.arguments).equals(canonicalBytes(p.arguments)));
+  entryObservations.delete(p.callId);
+  turn.calls.push(p.tool);
+  const target=entryResources.get(p.arguments.requestId);
+  let result;
+  try {
+    if (p.tool==='flowkit_file_task') {
+      osAccess.authorize(context.grant,'task:dispatch',turn.target.namespace);
+      assert.equal(turn.target.subject,context.subject);
+      const {store,task}=turn.target;
+      const checkpoint=store.load(task.runId);
+      const sourceId=randomUUID();
+      const bytes=canonicalBytes({answer:'A'.repeat(262144-13)});
+      assert.equal(bytes.length,262144);
+      const source=path.join(fixture,'inbox',sourceId+'.json');
+      await writeFile(source,bytes,{flag:'wx',mode:0o600});
+      try {
+        turn.ref=await handoff.stage({sourceId,byteLength:bytes.length,sha256:sha256Bytes(bytes),
+          binding:{namespace:turn.target.namespace,runId:task.runId,requestId:task.requestId,nodeId:task.nodeId,
+            attempt:task.attempt,threadId:p.threadId,turnId:p.turnId,programHash:checkpoint.artifactHash,policyHash:checkpoint.policyHash}});
+      } finally {await rm(source);}
+      result={accepted:true,...turn.ref};
+    } else {
+      if (!target || target.subject!==context.subject) denyEntry('FK_I_HOST_DENIED');
+      osAccess.authorize(context.grant,'run:complete',target.namespace);
+      assert.equal(target,turn.target);
+      journal('os-ready-to-accept',{namespace:target.namespace,subject:context.subject,callId:p.callId});
+      await osOverlap();
+      if (osFile) {
+        assert.equal(p.tool,'flowkit_submit_file');
+        result=await handoff.consume({started:{...started,callId:p.callId},callback:{...p,arguments:p.arguments},
+          loadPending:target.store.load,signAndAccept:({artifact})=>signEntry(target,p.callId,{artifact})});
+      } else {
+        assert.equal(p.tool,'flowkit_submit');
+        assert.deepEqual(p.arguments,{requestId:target.task.requestId,answer:'ready'});
+        result=await signEntry(target,p.callId,{answer:p.arguments.answer});
+      }
+    }
+    assert.equal(turn.denial,false);
+  } catch(error) {
+    if (!turn.denial || error.code!=='FK_I_HOST_DENIED') throw error;
+    result={accepted:false,code:'REQUEST_DENIED'};
+    journal('os-entry-rejected',{case:turn.label,callId:p.callId,subject:context.subject,namespace:context.namespace,
+      targetSubject:target?.subject,targetNamespace:target?.namespace,tool:p.tool});
+  }
+  send({id:message.id,result:{success:result.accepted,contentItems:[{type:'inputText',text:JSON.stringify(result)}]}});
 }
 
 async function handleEntryCallback(message) {
@@ -565,6 +636,7 @@ lines?.on('line',line=>{
   } else if(message.method==='item/completed' && p.item.type==='dynamicToolCall') {
     completed.add(p.item.id);
   } else if (message.method==='item/tool/call') {
+    if (osEntry) {void osEntryCallback(message).catch(error=>{failure=error.message;finish('entry-error');});return;}
     if (entry) {void handleEntryCallback(message).catch(error=>{failure=error.message;finish('entry-error');});return;}
     void (async()=>{
       const started=starts.get(p.callId);
@@ -602,6 +674,7 @@ lines?.on('line',line=>{
   } else if(message.id!==undefined && message.method) {
     send({id:message.id,error:{code:-32601,message:'Unexpected server request'}});
   } else if(message.method==='turn/completed') {
+    if (osEntry) {osTurns.get(p.threadId)?.resolve(p.turn);return;}
     turnStatus=p.turn.status;
     if (p.turn.error) failure=p.turn.error.message;
     if (branch||entry) branchTurnDone();
@@ -657,7 +730,8 @@ function entrySnapshot() {
 
 async function openEntrySession(binding,model) {
   const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
-    multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},dynamicTools:specs.filter(spec=>spec.name==='flowkit_submit')});
+    multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},
+    dynamicTools:osEntry?osTools:specs.filter(spec=>spec.name==='flowkit_submit')});
   const session=Object.freeze({...binding,threadId:thread.id,modelPid:isolatedIdentity.pid});
   entrySessions.set(thread.id,session);
   journal('entry-session',session);
@@ -665,6 +739,7 @@ async function openEntrySession(binding,model) {
 }
 
 async function bindEntrySubject(binding,model) {
+  if (osEntry) osAccess.authorize(binding.grant,'run:create',binding.namespace);
   const store=createSqliteCheckpointStore(entryDatabase,{namespace:binding.namespace});
   let writes=0;
   const instrumentedStore={...store,compareAndSwap(input){writes++;return store.compareAndSwap(input);}};
@@ -672,9 +747,16 @@ async function bindEntrySubject(binding,model) {
   const publicKey=pair.publicKey.export({type:'spki',format:'pem'});
   const host=createTrustedInteractiveHost({store:instrumentedStore,
     runtime:{skillResolver:async()=> 'Submit ready for the current task.',
-      validateResult:(_schema,value)=>value.answer==='ready'?[]:['Expected ready']},
+      validateResult:(_schema,value)=>osFile?validateArtifactResult(value):value.answer==='ready'?[]:['Expected ready']},
     trustedPublicKeys:{proof:pair.publicKey},trustedArtifacts:[program.programIdentity.artifactHash],
-    allowedInputKeys:['question'],disclosurePolicyId:'entry-r5-fixture',authorizeDisclosure:()=>true});
+    allowedInputKeys:['question'],disclosurePolicyId:'entry-r5-fixture',
+    authorizeDisclosure:osEntry?({namespace})=>osAccess.authorize(binding.grant,'task:dispatch',namespace):()=>true,
+    ...(osEntry?{authorizeTerminalAccess:({action,namespace,runId,revision})=>{
+      let allowed=false;
+      try {allowed=osAccess.authorize(osAuditSession,action,namespace);return allowed;}
+      finally {journal('os-result-audit',{identity:osAuditSession.identity,action,namespace,runId,revision,allowed});}
+    }}:{}),
+  });
   const frame=await host.start({runId:'entry-shared-run',startKey:'entry-shared-start',
     programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
     state:{question:'Return ready.',tenantMarker:binding.namespace}});
@@ -687,6 +769,96 @@ async function bindEntrySubject(binding,model) {
   entryResources.set(task.requestId,target);
   journal('entry-binding',{...session,runId:task.runId,requestId:task.requestId,revision:frame.revision});
   return {session,target};
+}
+
+async function osTurn(session,target,label,prompt,denial=false) {
+  const calls=[];
+  const done=new Promise(resolve=>osTurns.set(session.threadId,{label,resolve,target,denial,calls}));
+  const current=osTurns.get(session.threadId);
+  const {turn}=await request('turn/start',{threadId:session.threadId,input:[{type:'text',text:prompt}]});
+  current.id=turn.id;
+  journal('os-turn',{label,threadId:session.threadId,turnId:turn.id,subject:session.subject,namespace:session.namespace});
+  assert.equal((await done).status,'completed');
+  osTurns.delete(session.threadId);
+  assert.deepEqual(calls,osFile&&!denial?['flowkit_file_task','flowkit_submit_file']:[osFile?'flowkit_submit_file':'flowkit_submit']);
+  return current.ref;
+}
+
+function osSnapshot() {
+  const state=entrySnapshot();
+  if (!osFile) return state;
+  const db=new DatabaseSync(osFileDb,{readOnly:true});
+  try {return {...state,files:db.prepare('SELECT id,namespace,request_id,sha256,size,state,call_id,accepted_revision FROM file_handoff ORDER BY id').all()};}
+  finally {db.close();}
+}
+
+async function runOsEntry(model) {
+  const policyPath=process.env.FLOWKIT_OS_ACCESS_FIXTURE;
+  assert.ok(policyPath && path.isAbsolute(policyPath));
+  const policy=JSON.parse((await readFile(policyPath,'utf8')).replace(/^\uFEFF/,''));
+  osAccess=createCodexOsAccess(policy.bindings);
+  const grants=policy.bindings.map(binding=>osAccess.bind(binding.identity));
+  const operators=grants.filter(grant=>grant.role==='operator');
+  const auditors=grants.filter(grant=>grant.role==='auditor');
+  assert.equal(operators.length,2);
+  assert.equal(auditors.length,1);
+  assert.notEqual(operators[0].namespace,operators[1].namespace);
+  assert.equal(auditors[0].namespace,operators[0].namespace);
+  for (const grant of grants) assert.notEqual(grant.identity,String(isolatedIdentity.modelSid??isolatedIdentity.uid));
+  journal('os-provisioned-policy',{bindings:grants});
+  entryDatabase=path.join(fixture,'entry.sqlite');
+  if (osFile) {
+    osFileDb=path.join(fixture,'handoff.sqlite');
+    const inbox=path.join(fixture,'inbox');
+    await mkdir(inbox,{mode:0o700});
+    handoff=createFileHandoff({database:osFileDb,inbox,
+      validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
+  }
+  const a=await bindEntrySubject({subject:operators[0].identity,namespace:operators[0].namespace,grant:operators[0]},model);
+  const b=await bindEntrySubject({subject:operators[1].identity,namespace:operators[1].namespace,grant:operators[1]},model);
+  const auditor=await openEntrySession({subject:auditors[0].identity,namespace:auditors[0].namespace,grant:auditors[0]},model);
+  const pendingBefore=osSnapshot();
+  const pendingWrites=[a.target.writes(),b.target.writes()];
+  const negative=(target,ref)=>{
+    const args=osFile?ref:{requestId:target.task.requestId,answer:'ready'};
+    return `Synthetic negative test. Call ${osFile?'flowkit_submit_file':'flowkit_submit'} once with ${JSON.stringify(args)}. Finish after the response without retrying.`;
+  };
+  const probeRef={requestId:a.target.task.requestId,id:randomUUID()};
+  await osTurn(b.session,a.target,'wrong-tenant',negative(a.target,probeRef),true);
+  await osTurn(auditor,a.target,'wrong-subject',negative(a.target,probeRef),true);
+  assert.equal(entrySignatures,0);
+  assert.deepEqual(pendingWrites,[a.target.writes(),b.target.writes()]);
+  assert.deepEqual(pendingBefore,osSnapshot());
+  journal('os-pending-denials-verified',{deniedSignatures:0,deniedCas:0,unchanged:true});
+  let ready=0,release;
+  const overlap=new Promise(resolve=>{release=resolve;});
+  osOverlap=()=>{if (++ready===2) release();return overlap;};
+  const positive=({target})=>osFile
+    ?'Call flowkit_file_task once with {}. From its tool reply use the exact requestId and id to call flowkit_submit_file once. Then finish.'
+    :`Call flowkit_submit once with requestId "${target.task.requestId}" and answer "ready". Then finish.`;
+  const refs=await Promise.all([a,b].map(pair=>osTurn(pair.session,pair.target,'valid',positive(pair))));
+  assert.equal(ready,2);
+  assert.equal(entrySignatures,2);
+  const before=osSnapshot();
+  const counts=[a.target.writes(),b.target.writes()];
+  if (osFile) await osTurn(b.session,a.target,'wrong-tenant-reference',negative(a.target,refs[0]),true);
+  const resultRef={runId:a.target.task.runId,revision:9,projectionVersion:1};
+  osAuditSession=operators[0];
+  await assert.rejects(a.target.host.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
+  osAuditSession=auditors[0];
+  const result=await a.target.host.readTrustedTerminalResult({resultRef});
+  assert.equal(result.state.tenantMarker,operators[0].namespace);
+  await assert.rejects(b.target.host.readTrustedTerminalResult({resultRef}),{code:'FK_I_HOST_DENIED'});
+  assert.equal(entrySignatures,2);
+  assert.deepEqual(counts,[a.target.writes(),b.target.writes()]);
+  assert.deepEqual(before,osSnapshot());
+  assert.deepEqual(before.runs.map(row=>row.revision),[9,9]);
+  assert.deepEqual(before.receipts.map(row=>row.accepted_revision),[4,4]);
+  if (osFile) assert.deepEqual(before.files.map(row=>[row.size,row.state,row.accepted_revision]),
+    [[262144,'acked',4],[262144,'acked',4]]);
+  journal('os-entry-verified',{tool:requested,snapshot:before,signatures:entrySignatures,concurrentReady:ready,
+    deniedSignatures:0,deniedCas:0,unchanged:true,programHash:program.programIdentity.artifactHash});
+  return 'entry-completed';
 }
 
 async function entryTurn(model,session,target,test,expectedDenial) {
@@ -807,6 +979,7 @@ async function run() {
   send({method:'initialized'});
   const {data}=await request('model/list',{limit:30,includeHidden:false});
   const model=data.find(entry=>entry.isDefault)?.model ?? data[0]?.model;
+  if (osEntry) return runOsEntry(model);
   if (entry) return runEntry(model);
   const {thread}=await request('thread/start',{cwd,model,ephemeral:true,approvalPolicy:'never',sandbox:'read-only',
     multiAgentMode:'explicitRequestOnly',config:{mcp_servers:{}},

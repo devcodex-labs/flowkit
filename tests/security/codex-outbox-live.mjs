@@ -13,7 +13,7 @@ import {createFileHandoff} from '../../examples/interactive/codex-file-handoff.m
 
 const [exe,cwd,root,profile='isolated',suite='original']=process.argv.slice(2);
 assert.ok([exe,cwd,root].every(path.isAbsolute));
-assert.ok(['original','followup','signing','revocation','release-r5','ops-r5','branch-r5','entry-r5'].includes(suite));
+assert.ok(['original','followup','signing','revocation','release-r5','ops-r5','branch-r5','entry-r5','os-r5'].includes(suite));
 mkdirSync(root,{mode:0o700});
 const probe=fileURLToPath(new URL('./codex-flowkit-probe.mjs',import.meta.url));
 const log=(event,data)=>appendFileSync(path.join(root,'supervisor.ndjson'),
@@ -588,7 +588,15 @@ async function revocationCase() {
 
 try {
   let result;
-  if (suite==='entry-r5') {
+  if (suite==='os-r5') {
+    const cases=[];
+    for (const mode of ['os-stdio','os-file']) {
+      const observed=await offline(mode,root,mode,{});
+      assert.equal(observed.passed,true);
+      cases.push(observed);
+    }
+    result={cases};
+  } else if (suite==='entry-r5') {
     const observed=await offline('entry-r5',root,'entry',{ });
     assert.equal(observed.passed,true);
     assert.equal(observed.entry,true);
