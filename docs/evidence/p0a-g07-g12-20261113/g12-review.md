@@ -17,6 +17,6 @@
 
 ## 联合预演复审
 
-**裁决维持 BLOCKED。** 独立角色核对 `3847277e5d6339a06e31f20fef576985e3bd1933` 的五个测试文件和 Windows 原始记录，复跑备份及运维测试 3/3 通过。当前证据覆盖普通审计员测试进程收件与会话撤权、三个测试 Store 的入口联动、独立回环进程持久化告警，以及停写后 R5 Store／Outbox 成对恢复。App Server 的 EOF 发生于创建 thread 后、启动模型回合前。 [实测证据与范围](../p0a-codex-isolated-20261113/staging-joint-r5.md)
+**裁决维持 BLOCKED。** 独立角色核对 `3847277e5d6339a06e31f20fef576985e3bd1933` 的五个测试文件和 Windows 原始记录，复跑备份及运维测试 3/3 通过。另核对 Linux `8324e0c9006793cd89eb7c9f2df0db9f9cb9a6c9` 的 11 次真实普通客户端收件、R5 成对备份恢复和受控 EOF。两个平台的 App Server EOF 均发生于创建 thread 后、启动模型回合前。Linux 首次启动前的 SQLite error 14 已归档。仅调整观察包装后复测通过，根因未完全确认。三库入口联动和独立回环告警已通过 Windows 实测及 Ubuntu CI。 [实测证据与范围](../p0a-codex-isolated-20261113/staging-joint-r5.md)
 
 待验范围包括实际发布入口的身份及租户绑定和同链 Model 回执、适用 SEC／NAT／T29 的剩余原生证据、进行中模型回合断线与供应商故障、实际全清单撤权联动、值班告警收件、长时容量及包含文件快照的实际备份恢复。G17 继续等待 G12 放行。

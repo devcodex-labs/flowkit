@@ -23,7 +23,7 @@
 | E13 | `3fd1d2f9fb8a59abf74fca86136cb0bed3eef806` | 已暂存、未消费的有效文件引用跨租户拒绝，以及 Host stdio 授权撤销后旧会话失效。[分平台实测、命令与归档 SHA-256](../p0a-codex-isolated-20261113/session-r5-live.md) |
 | E14 | `9ba894ce702d84e20d9a51a57d015e225774b851` | 独立普通 OS 对端进程的创建和审计命令、会话撤权、新连接恢复。[OS 会话实测与证据](../p0a-codex-isolated-20261113/g12-os-sessions.md) |
 | E15 | `eb52a6f516d54488167481b00f2c6811fca79afb` | 三测试 Store 撤销、96 次接纳与本机 HTTP 告警、Genesis 强杀、真实 Codex 无效结果和重试。[故障与运维实测](../p0a-codex-isolated-20261113/g12-ops-r5.md) |
-| E16 | `8324e0c9006793cd89eb7c9f2df0db9f9cb9a6c9`、`3847277e5d6339a06e31f20fef576985e3bd1933` | 隔离实验室联合预演。普通审计员进程收件、受控 App Server EOF、R5 成对备份、三库撤销联动与独立进程持久化告警。[命令、场景边界和归档哈希](../p0a-codex-isolated-20261113/staging-joint-r5.md) |
+| E16 | `8324e0c9006793cd89eb7c9f2df0db9f9cb9a6c9`、`3847277e5d6339a06e31f20fef576985e3bd1933` | Windows／Linux 隔离实验室联合预演。双平台普通审计员进程收件、受控 App Server EOF 和 R5 成对备份。三库撤销联动与独立进程持久化告警通过 Windows 实测和 Ubuntu CI。[命令、场景边界和归档哈希](../p0a-codex-isolated-20261113/staging-joint-r5.md) |
 
 ## SEC · 生产配置与候选入口
 

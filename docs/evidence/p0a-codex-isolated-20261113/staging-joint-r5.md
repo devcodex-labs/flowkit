@@ -26,7 +26,20 @@ node --test tests/interactive/p0a-staging-ops.test.mjs
 
 ## Linux
 
-独立普通 OS 账户实测证据待收。GitHub Actions 中的程序测试与双账户 Codex 实测分别登记。
+FlowKit 以 `git pull --ff-only origin feat/p0a-interactive-20261112` 快进并核对 `HEAD` 和 `FETCH_HEAD` 均为 `8324e0c9006793cd89eb7c9f2df0db9f9cb9a6c9`。专用容器的普通对端进程回报 11 次收件，逐条与 Host 回复匹配，撤权后旧会话拒绝且新会话恢复。成对备份 1/1 通过，原 Ack 和待对账回执恢复均为 revision 4，原签名复用。两项为 P 级。
+
+真实 App Server 样本通过固定启动链，Host UID 41001、Model UID 41002。创建 thread 后、启动模型回合前关闭 stdin，进程退出 0。复核同一 Pending requestId、Checkpoint 和 Journal 保持一致，回执索引及 Outbox 记录为零。此项为 P/T 级。首次尝试在 App Server 启动前遇到 SQLite error 14。原始失败保留。第二次在新目录延后观察包装的 SQL 旁读，候选代码字节保持一致，复测通过。首次失败根因未完全确认。
+
+```sh
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-staging-os-supervisor.mjs
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-staging-transport-controller.mjs local
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-staging-transport-controller.mjs codex
+docker --host=unix:///var/run/docker.sock exec --user 0:0 flowkit-linux-20261113 /usr/local/bin/node /run/flowkit/run-staging-transport-controller.mjs codex attempt-2
+```
+
+`FlowKit-Linux-Staging-Session-Disconnect-20261113.zip` SHA-256 为 `31d5420df20f77ecdd29b4b9d515839fe242e1ccb32f520a8431533c3ad87d23`。205 份载荷文件由 Linux 任务核对归档完整性和逐项哈希，包含两次断流尝试、进程身份和 SQL 观测、原始命令及独立离线校验。 [FlowKit 任务及归档](thread://6af5c6d6-410c-8191-be10-a7ad14d2702a?hostId=durable)
+
+另核对了 [代码候选 CI](https://github.com/devcodex-labs/flowkit/actions/runs/43406489736) 的 Ubuntu Node 22.13.0 与 24.22.1 两套日志。三个备份及运维程序用例均通过，两套各完成 128 次接纳、8 次独立进程告警和 8 轮清理。此项为 P 级 CI 回归。
 
 ## 发布待验
 
