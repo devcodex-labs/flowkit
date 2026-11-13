@@ -25,7 +25,8 @@ const scenario=['outbox-worker','outbox-recover','outbox-setup','outbox-next','o
   'outbox-check-revocation','release-check','release-revoke','release-clean','ops-clean'].includes(requested);
 const worker=requested==='outbox-worker';
 const offline=scenario&&!worker;
-const osEntry=['os-stdio','os-file'].includes(requested);
+const osChain=requested==='os-chain';
+const osEntry=['os-stdio','os-file','os-chain'].includes(requested);
 const entry=requested==='entry-r5'||osEntry;
 const branch=requested.startsWith('branch-')?requested.slice(7):null;
 assert.ok(branch===null || ['approved','refused','closed','missing'].includes(branch));
@@ -509,7 +510,7 @@ async function submitObservedOsTool(p,turn,context,started) {
       osAccess.authorize(context.grant,'run:complete',target.namespace);
       assert.equal(target,turn.target);
       journal('os-ready-to-accept',{namespace:target.namespace,subject:context.subject,callId:p.callId});
-      await osOverlap();
+      await osOverlap?.();
       osAccess.authorize(context.grant,'run:complete',target.namespace);
       if (osFile) {
         assert.equal(p.tool,'flowkit_submit_file');
@@ -763,7 +764,7 @@ async function openEntrySession(binding,model) {
   return session;
 }
 
-async function bindEntrySubject(binding,model) {
+async function bindEntrySubject(binding,model,{runId='entry-shared-run',startKey='entry-shared-start'}={}) {
   if (osEntry) osAccess.authorize(binding.grant,'run:create',binding.namespace);
   const store=createSqliteCheckpointStore(entryDatabase,{namespace:binding.namespace});
   let writes=0;
@@ -782,7 +783,7 @@ async function bindEntrySubject(binding,model) {
       finally {journal('os-result-audit',{identity:osAuditSession.identity,action,namespace,runId,revision,allowed});}
     }}:{}),
   });
-  const frame=await host.start({runId:'entry-shared-run',startKey:'entry-shared-start',
+  const frame=await host.start({runId,startKey,
     programBytes:Buffer.from(program.code),programIdentity:program.programIdentity,
     state:{question:'Return ready.',tenantMarker:binding.namespace}});
   assert.equal(frame.status,'waiting');
@@ -793,7 +794,7 @@ async function bindEntrySubject(binding,model) {
   assert.ok(!entryResources.has(task.requestId));
   entryResources.set(task.requestId,target);
   journal('entry-binding',{...session,runId:task.runId,requestId:task.requestId,revision:frame.revision});
-  return {session,target};
+  return {session,target,revision:frame.revision};
 }
 
 async function osTurn(session,target,label,prompt,denial=false) {
@@ -843,6 +844,7 @@ async function runOsEntry(model) {
     handoff=createFileHandoff({database:osFileDb,inbox,
       validateArtifact:value=>Object.keys(value).length===1 && typeof value.answer==='string'});
   }
+  if (osChain) return runOsChain(model);
   const a=await bindEntrySubject({subject:operators[0].identity,namespace:operators[0].namespace,grant:operators[0]},model);
   const b=await bindEntrySubject({subject:operators[1].identity,namespace:operators[1].namespace,grant:operators[1]},model);
   const auditor=await openEntrySession({subject:auditors[0].identity,namespace:auditors[0].namespace,grant:auditors[0]},model);
@@ -908,6 +910,70 @@ async function runOsEntry(model) {
   journal('os-entry-verified',{tool:requested,snapshot:before,signatures:entrySignatures,concurrentReady:ready,
     deniedSignatures:0,deniedCas:0,unchanged:true,programHash:program.programIdentity.artifactHash});
   return 'entry-completed';
+}
+
+async function runOsChain(model) {
+  const stdin=createInterface({input:process.stdin});
+  const connections=new Map();
+  const reply=value=>console.log(JSON.stringify(value));
+  let created,terminal;
+  const dispatch=async(grant,command)=>{
+    if (command.action==='run:create') {
+      assert.equal(created,undefined);
+      assert.match(command.runId,/^chain-[a-f0-9]{32}$/);
+      created=await bindEntrySubject({subject:grant.identity,namespace:grant.namespace,grant},model,
+        {runId:command.runId,startKey:command.runId});
+      const {runId}=created.target.task;
+      journal('chain-created',{runId,revision:created.revision,identity:grant.identity,namespace:grant.namespace});
+      return {runId,revision:created.revision,status:'waiting'};
+    }
+    assert.equal(command.action,'result:read');
+    assert.ok(terminal);
+    osAuditSession=grant;
+    const result=await created.target.host.readTrustedTerminalResult({resultRef:command.resultRef});
+    journal('chain-audit-replied',{identity:grant.identity,resultRef:command.resultRef,namespace:result.namespace});
+    return result;
+  };
+  reply({hostSid,pid:process.pid,ready:true});
+  try {
+    for await (const line of stdin) {
+      const {op,id,identity,command}=JSON.parse(line);
+      if (op==='open') {
+        assert.ok(!connections.has(id));
+        const input=new PassThrough(),output=new PassThrough();
+        const responses=createInterface({input:output})[Symbol.asyncIterator]();
+        const running=serveCodexOsSession({access:osAccess,identity,input,output,dispatch});
+        connections.set(id,{input,output,responses,running});
+        reply({opened:id});
+      } else if (op==='data') {
+        const {input,responses}=connections.get(id);
+        input.write(JSON.stringify(command)+'\n');
+        reply({id,response:JSON.parse((await responses.next()).value)});
+      } else if (op==='complete') {
+        assert.equal(terminal,undefined);
+        const {session,target}=created;
+        const {runId,requestId}=target.task;
+        await osTurn(session,target,'chain-valid',`Call flowkit_submit once with requestId "${requestId}" and answer "ready". Then finish.`);
+        terminal=target.store.load(runId);
+        assert.equal(terminal.status,'succeeded');
+        assert.equal(entrySignatures,1);
+        const receipt=target.store.getReceipt(runId,requestId);
+        journal('chain-completed',{runId,requestId,receipt,journal:target.store.listJournal(runId)});
+        reply({resultRef:{runId,revision:terminal.revision,projectionVersion:1}});
+      } else {
+        assert.equal(op,'finish');
+        assert.ok(terminal);
+        reply({finished:true});
+        return 'entry-completed';
+      }
+    }
+    throw new Error('Supervisor closed before completing the chain');
+  } finally {
+    stdin.close();
+    for (const {input} of connections.values()) input.end();
+    for (const {running,output} of connections.values()) {await running;output.end();}
+    process.stdin.pause();
+  }
 }
 
 async function verifyOsSessionRevocation(bindings,target,identity,resultRef) {
