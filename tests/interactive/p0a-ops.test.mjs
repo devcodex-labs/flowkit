@@ -7,6 +7,7 @@ import {createServer,request} from 'node:http';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
 import {openCodexOutbox} from '../../examples/interactive/codex-outbox.mjs';
 import {sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {createSqliteCheckpointStore,createTrustedInteractiveHost} from '../../src/interactive/index.mjs';
@@ -171,7 +172,7 @@ test('bounded Outbox load sends capacity alarms to a loopback HTTP receiver',asy
     elapsedMs:Math.round(performance.now()-started),samples}));
 });
 
-test('real process termination immediately after durable Genesis allows idempotent reopening',async t=>{
+async function verifyGenesisCut(t,side) {
   const f=await fixture(t);
   const file=path.join(f.root,'crash.sqlite');
   const moduleUrl=new URL('../../src/interactive/index.mjs',import.meta.url).href;
@@ -179,25 +180,47 @@ test('real process termination immediately after durable Genesis allows idempote
   const worker=`import {writeSync} from 'node:fs';
 import {createInteractiveCoordinator,createSqliteCheckpointStore} from ${JSON.stringify(moduleUrl)};
 import {opsRuntime,opsStart} from ${JSON.stringify(fixtureUrl)};
-const [file,bytes,identity]=process.argv.slice(1);
+const [file,bytes,identity,side]=process.argv.slice(1);
 const db=createSqliteCheckpointStore(file,{namespace:'genesis'});
 const store={...db,createRun(args){
-  db.createRun(args);
-  writeSync(1,'GENESIS_COMMITTED\\n');
+  if (side==='after') db.createRun(args);
+  writeSync(1,JSON.stringify({side,runId:args.checkpoint.runId})+'\\n');
   process.kill(process.pid,'SIGKILL');
 }};
 await createInteractiveCoordinator({store,runtime:opsRuntime}).start(opsStart({programBytes:Buffer.from(bytes,'base64'),programIdentity:JSON.parse(identity)},'stable-start'));`;
   const child=spawn(process.execPath,['--input-type=module','-e',worker,file,f.program.programBytes.toString('base64'),
-    JSON.stringify(f.program.programIdentity)],{stdio:['ignore','pipe','pipe']});
+    JSON.stringify(f.program.programIdentity),side],{stdio:['ignore','pipe','pipe']});
   let stdout='',stderr='';
   child.stdout.on('data',chunk=>{stdout+=chunk;});
   child.stderr.on('data',chunk=>{stderr+=chunk;});
   const [exitCode,signal]=await once(child,'close');
-  assert.equal(stdout.trim(),'GENESIS_COMMITTED',stderr);
+  assert.ok(stdout.trim(),stderr);
+  const cut=JSON.parse(stdout);
+  assert.equal(cut.side,side);
+  assert.ok(cut.runId);
   assert.ok(signal==='SIGKILL'||(process.platform==='win32'&&exitCode!==0));
   const {createInteractiveCoordinator}=await import('../../src/interactive/index.mjs');
   const store=createSqliteCheckpointStore(file,{namespace:'genesis'});
   f.resources.push(store);
+  const checkpoint=store.load(cut.runId);
+  const journal=store.listJournal(cut.runId);
+  // R5 SQLite pins the artifact through the Run's foreign key.
+  const readback=new DatabaseSync(file,{readOnly:true});
+  let retains;
+  try {
+    retains=readback.prepare('SELECT artifact_hash FROM fk_i_runs WHERE namespace=? AND run_id=?')
+      .all('genesis',cut.runId).map(row=>row.artifact_hash);
+  } finally {readback.close();}
+  if (side==='before') {
+    assert.ok(!checkpoint);
+    assert.deepEqual(journal,[]);
+    assert.deepEqual(retains,[]);
+  } else {
+    assert.equal(checkpoint.revision,0);
+    assert.equal(journal.length,1);
+    assert.equal(journal[0].revision,0);
+    assert.deepEqual(retains,[f.program.programIdentity.artifactHash]);
+  }
   const api=createInteractiveCoordinator({store,runtime:opsRuntime});
   const first=await api.start(opsStart(f.program,'stable-start'));
   const second=await api.start(opsStart(f.program,'stable-start'));
@@ -206,6 +229,11 @@ await createInteractiveCoordinator({store,runtime:opsRuntime}).start(opsStart({p
   assert.equal(second.pending.requestId,first.pending.requestId);
   assert.equal(second.revision,first.revision);
   assert.equal(store.load(first.runId).receiptCount,0);
-  console.log('P0A_OPS '+JSON.stringify({case:'genesis-after-commit',exitCode,signal,runId:first.runId,
+  if (side==='after') assert.equal(first.runId,cut.runId);
+  else assert.ok(!store.load(cut.runId));
+  console.log('P0A_OPS '+JSON.stringify({case:'genesis-'+side+'-commit',exitCode,signal,runId:first.runId,
     revision:first.revision,journalRows:store.listJournal(first.runId).length}));
-});
+}
+
+test('real process termination before Genesis leaves no Run or Journal',t=>verifyGenesisCut(t,'before'));
+test('real process termination immediately after durable Genesis allows idempotent reopening',t=>verifyGenesisCut(t,'after'));

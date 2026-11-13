@@ -8,7 +8,7 @@ import {analyzeSource} from '../../src/compiler/analyze.mjs';
 import {lowerInteractive} from '../../src/compiler/interactive/lower.mjs';
 import {emitInteractive} from '../../src/compiler/interactive/emit.mjs';
 import {createSqliteCheckpointStore} from '../../src/interactive/sqlite-store.mjs';
-import {createInteractiveCoordinator} from '../../src/interactive/coordinator.mjs';
+import {createInteractiveCoordinator,validateProposalFields} from '../../src/interactive/coordinator.mjs';
 import {canonicalBytes} from '../../src/interactive/canonical.mjs';
 
 const dirs=[];
@@ -47,6 +47,32 @@ const bindings={
     && typeof result.answer==='string' ? [] : ['answer must be string'],
 };
 const check=(result, expected)=>assert.equal(result.status,expected,JSON.stringify(result));
+
+test('proposal field validation enforces the P0-A discriminated shapes',()=>{
+  const block={nodeId:'done',legalTargets:['next::enter'],proposalKinds:['move','terminal','raise-error']};
+  const record={metadata:{status:'succeeded'}};
+  const common={fromBlockId:'done::route',nodeId:'done',stackEffect:{kind:'none'},mergeIntent:{kind:'none'}};
+  const move={...common,kind:'move',toBlockId:'next::enter'};
+  const terminal={...common,kind:'terminal',terminal:{status:'succeeded',nodeId:'done'}};
+  const raised={...common,kind:'raise-error',causeCode:'FK_R002'};
+  for (const proposal of [move,terminal,raised]) {
+    assert.deepEqual(validateProposalFields(proposal,block,record),proposal);
+  }
+  for (const proposal of [
+    {...move,unexpected:true},
+    {...move,mergeIntent:{kind:'none',requestId:'unexpected'}},
+    {...terminal,terminal:{status:'succeeded'}},
+    {...raised,causeCode:null},
+  ]) {
+    assert.throws(()=>validateProposalFields(proposal,block,record),{code:'FK_I_INVALID_TRANSITION'});
+  }
+  const validateBlock={nodeId:'agent',phase:'validate',legalTargets:['agent::prepare','agent::commit'],
+    proposalKinds:['retry-agent','commit-candidate']};
+  const commit={...common,nodeId:'agent',fromBlockId:'agent::validate',kind:'commit-candidate',toBlockId:'agent::commit'};
+  assert.deepEqual(validateProposalFields(commit,validateBlock,{kind:'agent'}),commit);
+  assert.throws(()=>validateProposalFields({...commit,toBlockId:'agent::prepare'},validateBlock,{kind:'agent'}),
+    {code:'FK_I_INVALID_TRANSITION'});
+});
 function coordinator(store,{runtime=bindings,policy={},maxStagesPerCall}={}) {
   return createInteractiveCoordinator({store,runtime,policy,
     ...(maxStagesPerCall===undefined?{}:{maxStagesPerCall})});

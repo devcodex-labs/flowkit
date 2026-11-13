@@ -2,10 +2,25 @@ import {randomUUID} from 'node:crypto';
 import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
 import {checkpointPolicy} from './checkpoint.mjs';
+import {agentFrameRule} from '../compiler/interactive/validate-ir.mjs';
 
 const FINISHED = new Set(['succeeded','failed','errored','cancelled']);
 const MAX_REASONS = 32;
 const MAX_REASON_LENGTH = 512;
+const PROPOSAL_COMMON = ['kind','fromBlockId','nodeId','stackEffect','mergeIntent'];
+const PROPOSAL_TARGET = [...PROPOSAL_COMMON,'toBlockId'];
+const STACK_FIELDS = {
+  none:['kind'],
+  push:['kind','frame'],
+  pop:['kind','expectedKind','expectedNodeId'],
+  update:['kind','expectedKind','expectedNodeId','field','value'],
+};
+
+function hasFields(value, required, optional = []) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && required.every(field=>Object.hasOwn(value,field))
+    && Reflect.ownKeys(value).every(field=>required.includes(field)||optional.includes(field));
+}
 
 function failure(code, message) {
   return Object.assign(new Error(code + ': ' + message), {code});
@@ -82,28 +97,71 @@ function confirmCurrentBlock(cp, program) {
   }
   return {block,record};
 }
-function certifiedProposal(cp, program, event, proposal) {
-  const {block} = confirmCurrentBlock(cp,program);
-  if (!block.eventKinds.includes(event.kind)
-    || !proposal || proposal.fromBlockId !== cp.blockId
-    || proposal.nodeId !== block.nodeId
-    || !block.proposalKinds.includes(proposal.kind)) {
-    throw failure('FK_I_INVALID_TRANSITION','Program returned uncertified proposal');
+/** Internal runtime validation of the current P0-A proposal contract. */
+export function validateProposalFields(rawProposal, block, record) {
+  let proposal;
+  try { proposal=copy(rawProposal); }
+  catch { throw failure('FK_I_INVALID_TRANSITION','Program proposal is not canonical data'); }
+  if (!proposal || !block.proposalKinds.includes(proposal.kind)) {
+    throw failure('FK_I_INVALID_TRANSITION','Program returned uncertified proposal kind');
   }
-  if (proposal.kind === 'terminal' || proposal.kind === 'raise-error') {
-    if (proposal.toBlockId != null) {
-      throw failure('FK_I_INVALID_TRANSITION','terminal and error must have no successor');
+  if (proposal.kind === 'terminal') {
+    if (!hasFields(proposal,[...PROPOSAL_COMMON,'terminal'])
+      || !hasFields(proposal.terminal,['status','nodeId'])
+      || proposal.terminal.nodeId!==block.nodeId
+      || proposal.terminal.status!==record.metadata.status) {
+      throw failure('FK_I_INVALID_TRANSITION','invalid terminal proposal fields');
     }
-  } else if (!block.legalTargets.includes(proposal.toBlockId)) {
+  } else if (proposal.kind === 'raise-error') {
+    if (!hasFields(proposal,[...PROPOSAL_COMMON,'causeCode'],['diagnosticCode'])
+      || typeof proposal.causeCode!=='string' || !proposal.causeCode.length
+      || (Object.hasOwn(proposal,'diagnosticCode') && typeof proposal.diagnosticCode!=='string')) {
+      throw failure('FK_I_INVALID_TRANSITION','invalid error proposal fields');
+    }
+  } else if (!hasFields(proposal,PROPOSAL_TARGET,['requestId'])
+    || (Object.hasOwn(proposal,'requestId') && typeof proposal.requestId!=='string')
+    || !block.legalTargets.includes(proposal.toBlockId)) {
     throw failure('FK_I_INVALID_TRANSITION','Program target not in legalTargets');
   }
-  if (proposal.stackEffect?.kind !== 'none'
-    && !['push','pop','update'].includes(proposal.stackEffect?.kind)) {
+  if ((proposal.kind==='retry-agent' && proposal.toBlockId!==block.nodeId+'::prepare')
+    || (proposal.kind==='commit-candidate' && proposal.toBlockId!==block.nodeId+'::commit')) {
+    throw failure('FK_I_INVALID_TRANSITION','proposal kind does not match its successor phase');
+  }
+  const {stackEffect,mergeIntent}=proposal;
+  const stackKind=stackEffect?.kind;
+  let expectedStack='none';
+  if (proposal.kind==='retry-agent') expectedStack='update';
+  if (proposal.kind==='move' && record.kind==='agent') {
+    if (block.phase==='enter') expectedStack='push';
+    if (block.phase==='route') expectedStack='pop';
+  }
+  if (stackKind!==expectedStack || !hasFields(stackEffect,STACK_FIELDS[expectedStack])
+    || (stackKind==='push' && !hasFields(stackEffect.frame,agentFrameRule(block.nodeId).fields))) {
     throw failure('FK_I_INVALID_TRANSITION','invalid control stack effect');
   }
-  if (proposal.mergeIntent?.kind !== 'none'
-    && proposal.mergeIntent?.kind !== 'commit-candidate') {
+  const commits=proposal.kind==='commit-state';
+  if (!hasFields(mergeIntent,commits?['kind','requestId']:['kind'])
+    || mergeIntent.kind!==(commits?'commit-candidate':'none')
+    || (commits && typeof mergeIntent.requestId!=='string')) {
     throw failure('FK_I_INVALID_TRANSITION','invalid merge intent');
+  }
+  return proposal;
+}
+function certifiedProposal(cp, program, event, rawProposal) {
+  const {block,record} = confirmCurrentBlock(cp,program);
+  const proposal=validateProposalFields(rawProposal,block,record);
+  if (!block.eventKinds.includes(event.kind)
+    || proposal.fromBlockId !== cp.blockId || proposal.nodeId !== block.nodeId) {
+    throw failure('FK_I_INVALID_TRANSITION','Program returned uncertified proposal');
+  }
+  if (proposal.stackEffect.kind==='push') {
+    const {frame}=proposal.stackEffect;
+    if (frame.kind!=='agent' || frame.nodeId!==block.nodeId || frame.phase!=='prepare'
+      || frame.attempt!==agentFrameRule(block.nodeId).initialAttempt
+      || frame.activation!==event.activation || frame.overviewStep!==event.activation
+      || !Array.isArray(frame.reasons) || frame.reasons.length) {
+      throw failure('FK_I_INVALID_TRANSITION','invalid initial Agent frame');
+    }
   }
   return proposal;
 }
