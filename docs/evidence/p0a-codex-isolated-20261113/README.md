@@ -13,8 +13,8 @@
 在指定 Windows 测试机上准备两个普通本地账户。编译受信启动器，在账户可读、仅管理员可修改的目录放置结果。
 
 ```powershell
-Add-Type -Path .\tests\security\codex-model-stdio-windows.cs `
-  -OutputType ConsoleApplication -OutputAssembly C:\FlowKitLab\codex-model-stdio.exe
+& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /warnaserror /target:exe `
+  /out:C:\FlowKitLab\codex-model-stdio.exe (Resolve-Path .\tests\security\codex-model-stdio-windows.cs).Path
 ```
 
 SSH 固定命令使用此启动器，唯一参数为 Model 可运行的绝对 `codex.exe` 路径。Model 启动器从实际 Codex 进程令牌读取 SID 并拒绝提升及受 UAC 过滤的管理员令牌，使用 Windows 句柄列表限定继承的三个标准流。Host 在本地通过同一程序的 `--host-identity` 核对自己的 SID。[Windows 句柄继承文档](https://learn.microsoft.com/windows/win32/procthread/creating-processes)

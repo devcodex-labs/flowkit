@@ -152,8 +152,10 @@ try {
   # Compile before launching either ordinary user. The model runs only the built probe.
   Add-Type -Path (Join-Path $PSScriptRoot 'secure-host-win-process.cs') -OutputType ConsoleApplication `
     -OutputAssembly (Join-Path $publicDir 'process-access.exe')
-  Add-Type -Path (Join-Path $PSScriptRoot 'codex-model-stdio-windows.cs') -OutputType ConsoleApplication `
-    -OutputAssembly (Join-Path $publicDir 'codex-model-stdio.exe')
+  $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+  $modelStdio = Join-Path $publicDir 'codex-model-stdio.exe'
+  & $compiler /nologo /warnaserror /target:exe "/out:$modelStdio" (Join-Path $PSScriptRoot 'codex-model-stdio-windows.cs')
+  if ($LASTEXITCODE -ne 0) { throw 'Model stdio launcher compile failed' }
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'codex-model-stdio-fixture.cjs') `
     -Destination (Join-Path $publicDir 'check-stdio.cjs')
   [IO.File]::WriteAllText((Join-Path $publicDir 'app-server'), @'

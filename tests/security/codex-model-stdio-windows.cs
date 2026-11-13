@@ -163,6 +163,6 @@ public static class FlowKitModelStdio {
       if (!String.Equals(executable, args[0], StringComparison.OrdinalIgnoreCase)) return 2;
       return Run(executable);
     }
-    catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
+    catch (Exception error) { Console.Error.WriteLine(error.ToString()); return 1; }
   }
 }
