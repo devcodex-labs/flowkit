@@ -1,0 +1,56 @@
+# Interactive 完整示例
+
+本例用同一“已批准资料→生成→交付”目标展示P0-A的条件、Agent及终点。只用公开包入口，业务执行器与角色均为固定夹具；没有真实Codex调用、OS登录或进程隔离证明。已选首发stdio接入和生产条件见[接入指南](/guide/interactive)。
+
+## 准备文件与环境
+
+按[安装](/guide/installation)建立ESM消费者项目，安装授权的FlowKit 1.0.0，使用Node.js 22.13+的node:sqlite环境。保存以下文件，package.json为`{"private":true,"type":"module"}`。脚本在操作系统临时目录建立Host存储并在finally关闭/清理；POSIX目录权限设0700，Windows部署仍须配置实际ACL。
+
+```js file="../../../examples/docs/interactive/sample.workflow.js" title="sample.workflow.js"
+```
+
+```md file="../../../examples/docs/interactive/skills/writer.md" title="skills/writer.md"
+```
+
+## Trusted Host：签收与授权投影
+
+```js file="../../../examples/docs/interactive/trusted.mjs" title="trusted.mjs"
+```
+
+```sh
+node trusted.mjs approved
+node trusted.mjs closed
+node trusted.mjs retry
+```
+
+approved预期succeeded/done、modelCalls为1、signatureVerified为true、answer为“已生成：FlowKit”；closed预期failed/closed、modelCalls为0、signatureVerified为false，不派发Agent。retry首个固定结果不合Schema，第二次正常，最终succeeded且modelCalls为2。
+
+编译产物哈希由本次受信编译固定；Store、Runtime、密钥与策略留Host。Skill resolver只读取本例固定文件；getPublicAgentTask只披露topic，不把privateNote交给执行器。Host观察固定调用并从权威请求标识构造receipt，规范编码后签名、accept；审计回调经resultRef读取终态，再只输出本例允许的摘要。
+
+一次性私钥只在进程内，用于展示签名接口，不是生产密钥配置。真实stdio集成必须把开始/工具回调观察与这次Run/请求关联后签署，不能直接给任意模型文本盖章。字符串operator/auditor是Host代码夹具，不是用户可声明的真实OS身份，也不证明两者同一进程就隔离。
+
+## 版本化接口：另一套协议
+
+```js file="../../../examples/docs/interactive/versioned.mjs" title="versioned.mjs"
+```
+
+```sh
+node versioned.mjs
+```
+
+预期succeeded/done、pending为0、samePendingOnResume为true、answer为“已生成：FlowKit”。注册表先固定Program；Runtime描述符与policy.bindingManifest相同；工厂创建绑定回调的上下文。resume保留同一请求，Host完成固定执行后complete，审计上下文另读结果。
+
+这个例子的异步Store、pending数组和submission不能传给Trusted Host。版本化complete是Host特权接口，不接受签名attestation对象，也不自动替代真实来源认证；首发所选受控stdio链仍按Trusted Host路线接入。
+
+## 复验与恢复边界
+
+```js file="../../../examples/docs/interactive/verify.mjs" title="verify.mjs"
+```
+
+```sh
+node verify.mjs
+```
+
+核对批准、关闭零派发、Schema重试及两类接口结果；数据库和一次性密钥不交付到模型或包中。需要真实重启恢复时，Host保留自己的私有DB、已固定产物/策略、签名安排及Outbox，不使用本例每次新建/清理的临时目录作为生产存储。
+
+遇到diagnostics、身份/策略失配或存储错误，按[API](/reference/interactive)与[Host/Store说明](/guide/interactive-host-store)处理。当前不支持的节点应先改变设计或选择Standard；不要删除校验或改成另一个Run来伪装恢复。

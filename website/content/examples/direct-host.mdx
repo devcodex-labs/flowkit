@@ -1,0 +1,49 @@
+# 直接 Host 完整示例
+
+业务目标沿用[接入自己的宿主](/guide/host-integration)：根据topic生成草稿，经结构/业务检查和审批后交付。模型与审批均为固定响应，用来核对接口与控制流。参考版本为FlowKit 1.0.0；编译侧按[安装说明](/guide/installation)取得包，执行侧具备Node.js 22.13+ ESM。
+
+## 保存完整文件
+
+在编译者的独立ESM项目保存以下文件及`skills`目录。package.json使用`{"private":true,"type":"module"}`并安装授权FlowKit版本。
+
+```js file="../../../examples/docs/direct-host/sample.workflow.js" title="sample.workflow.js"
+```
+
+```md file="../../../examples/docs/direct-host/skills/writer.md" title="skills/writer.md"
+```
+
+```js file="../../../examples/docs/direct-host/host.mjs" title="host.mjs（执行侧）"
+```
+
+```js file="../../../examples/docs/direct-host/prepare.mjs" title="prepare.mjs（编译侧）"
+```
+
+```js file="../../../examples/docs/direct-host/run-deployment.mjs" title="run-deployment.mjs（编译侧便捷入口）"
+```
+
+```js file="../../../examples/docs/direct-host/verify.mjs" title="verify.mjs（编译侧验收）"
+```
+
+## 编译、交付、运行
+
+```sh
+node prepare.mjs
+node run-deployment.mjs
+node verify.mjs
+```
+
+第一条编译trace开启的JS，在操作系统临时目录建立新的deploymentDir并输出绝对位置；同时写本地deployment.json供第二条读取。默认使用独立目录，避免执行模块从编译项目借用node_modules。也可给prepare.mjs传**尚不存在**的绝对目录；已存在会拒绝覆盖。
+
+实际执行者只需取得prepare输出中的四个文件，保持`skills/writer.md`相对布局，在该目录运行`node host.mjs`。无需复制编译侧的package依赖、prepare脚本或原DSL源码；这是本例的直接模块路径，SDK AOT仍需源码。
+
+预期结果：`result.status`为succeeded、terminal为done，state.draft包含“FlowKit 入门”，审批comment为“可以交付”；events依次为skill、agent、validate、checkStep、verify、human，`flowkitPackageResolvable:false`、`sdkRunUsed:false`，trace含正常结束事件。checkStep断言尚未提交draft，verify读取候选draft，ctx.state最终保留它。
+
+第三条验证新建的另一套临时交付并清理该临时目录；它调用prepare时设置publishLocator:false，断言本地deployment.json保持原字节或继续不存在。前两条供人工查看的交付和定位不会被它替换或删除，验证后仍可运行node run-deployment.mjs。使用者完成检查后可根据prepare输出的位置删除自己创建的交付目录及本地deployment.json，不删除项目/依赖目录。
+
+## 每段代码的责任
+
+prepare调用公开compile、检查diagnostics、复制生成模块及业务文件并记录当前编译器版本。Host先确认这个参考版本、交付字节与依赖隔离，再import生成函数；Runtime实现业务能力，Host手动创建上下文与组装结果。run-deployment只用Node内建模块启动隔离执行目录，不传递模型登录环境。
+
+示例Schema检查只实现draft这一字段的规则，审批直接批准。换成真实模型/校验器/人工服务时，保持[Runtime输入输出](/reference/runtime)契约并提供自己的错误、取消和副作用处理。这里没有真实模型、生产审批或OS双账户证明。
+
+失败处理、可信产物和版本限制见[直接执行契约](/guide/direct-host)。缺源/旧源的SDK AOT行为由[独立AOT示例](/examples/aot)覆盖，不能从本例推断SDK跳过了校验。

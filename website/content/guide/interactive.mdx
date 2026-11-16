@@ -1,0 +1,39 @@
+# Interactive P0-A 接入
+
+Interactive是Host持有状态和执行权限的独立接口，适合Agent暂停等待、同Run续跑、持久化接纳及授权读取。当前P0-A支持**Agent、Condition、Terminal**；Human、Action、Verification、Loop、Parallel以及Agent verify未开放。Agent绑定也不接受Standard的checkStep能力；不能通过忽略它来假装已校验。
+
+从`@devcodex-labs/flowkit/interactive`导入。它不自动提供模型、Codex登录、OS身份源、受信启动器或业务Schema校验器。先取得授权包与Node环境，再读[完整示例](/examples/interactive)、[分层API](/reference/interactive)和[Host/Store责任](/guide/interactive-host-store)。
+
+## 选择接口层
+
+| 层 | 入口 | 状态与用途 |
+| --- | --- | --- |
+| Host内部核心 | compileInteractive、loadInteractiveProgram、createSqliteCheckpointStore、createInteractiveCoordinator | 编译/加载、同步Store及协调器。原始frame/状态只留Host，不暴露给Model |
+| Trusted Host | createTrustedInteractiveHost及三个receipt辅助函数 | Ed25519签收、任务披露、可信产物/策略固定、历史Ack与授权终态读取。已选首发受控stdio链使用这一层 |
+| 版本化Host API | start、complete、resume、createInteractiveHostContext、createInteractiveAdminContext、createSqliteInteractivePersistence | 另一组协议：异步Store/ProgramRegistry、描述符绑定和不透明授权上下文；不是上述方法的别名 |
+
+两种高级入口的Pending、receipt、Store和Runtime形状不同。版本化frame的pending是数组；同步协调器/Trusted Host的内部frame.pending是单个对象。不能因为名字相似就在不同层之间传递。
+
+## 首发受控stdio的接入责任
+
+首发选择现有Windows/Linux Codex App Server受控stdio路线。Host启动固定受信入口，并从自己的真实进程/传输观察关联操作员创建、Model开始、回调及签收；Model只取得已授权任务，不能持有Store、原始complete、签名私钥或最终结果读取权。操作员按受保护配置绑定租户，审计读取另行授权。
+
+集成者需在自己的Host提供：OS身份与租户绑定、固定启动器及独立Model环境、所选Codex版本的正常App Server连接/回调适配、Schema检查、Host持久存储及签名/授权策略。配置放在Host可控制且Model不可写的位置；登录由独立Model主体按官方入口完成，凭据不进入DSL/工作流state/文档或模型任务。
+
+这些是外围Host能力，不是npm包会安装的后台服务。所选平台/版本的既有正向证据按原范围引用；当前G12/SEC-17等未满足条款、生产配置和供应商故障证明不由教学例或合并状态升级为通过。本页没有宣称生产stdio部署已启用。
+
+## 一个完整回合
+
+1. Host用compileInteractive检查源码，保留code与programIdentity，审批并固定产物哈希；Skill读取/校验实现由Host供给。
+2. 在Host私有存储创建或恢复同Run。startKey表示这次业务启动意图；相同key配不同意图不能当普通重试。
+3. 协调器停在Agent，Host通过getPublicAgentTask取得经过白名单和authorizeDisclosure检查的任务，再交给执行器。
+4. Host关联真实请求/回调，规范化receipt并签署规范字节。通过accept验证并接纳后继续推进；未选条件分支不派发Agent。
+5. 终态投影不返回完整state。审计主体经授权读取resultRef；存储、签名、收件重试及资源回收仍属Host。
+
+完整可运行例使用合成业务和固定执行器，演示上述SDK契约。它不会把“在同一进程调用回调”包装成真实OS隔离或App Server认证。
+
+## 失败与恢复
+
+先区分编译diagnostics、参数违约、运行/存储错误和授权拒绝。请求标识、节点/尝试、产物、策略及租户应来自Host已观察的当前Pending；不要通过更换runId或构造新请求掩盖失配。
+
+恢复时使用原Run、原策略/产物、持久存储和适用的原签收记录；重新派发前核对当前Pending。接纳幂等不等于业务副作用自动回滚。容量、签名时钟、撤销、Outbox和备份边界见[Host与Store](/guide/interactive-host-store)。若需要当前未支持的节点，选择合适Standard流程或明确限制，不把它写进P0-A后静默跳过。

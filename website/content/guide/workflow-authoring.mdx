@@ -1,0 +1,79 @@
+# 编写工作流与能力选型
+
+本页为人类作者及开发宿主模型提供同一份编写依据：从业务目的选择现有能力，形成合法DSL和必要Host绑定，再检查业务结果。自然语言编写工作流Skill、MCP/插件封装和“流程图→DSL”接口属于后续迭代；当前可调用的是已列出的DSL、编译/检查和Host执行入口。
+
+## 从业务目的到可执行交付
+
+以“根据topic写草稿，经检查和审批再交付”为主线，先明确输入、结构化输出、审批必须由谁作出、失败/修订出口及终态判据。对应[完整Host例](/guide/host-integration)已有DSL/Skill/Runtime；[直接Host例](/examples/direct-host)继续关联编译JS、trace和最终state。
+
+作者应先列业务验收，再选择Standard或P0-A，读取对应字段/结构约束，准备每个必要文件及Host方法。编译者使用compile/compileSource或CLI编译/检查，执行者按选定Host路径运行并核对输出/分支/副作用及失败处理。编译通过与业务目的正确分别判断。
+
+## 图谱任务对应哪些说明
+
+| 能力ID | 使用时先读 | 交付与限制 |
+| --- | --- | --- |
+| flowkit::define-workflow | [工作流模型](/guide/workflow-model)、[DSL](/dsl/index)、[JS/TS](/guide/javascript-typescript)、下表场景 | 静态字面量DSL；先选模式。八种Standard节点不等于P0-A全支持 |
+| flowkit::compile-workflow | [compile/compileSource](/reference/sdk#compile)、[配置](/reference/options)、[产物](/guide/compile-artifacts) | code/可选Mermaid/diagnostics；compileSource接收DSL文本和filename，不接收自然语言，也不自动保存源码 |
+| flowkit::check-workflow | [check](/reference/sdk#check)、[CLI](/reference/cli)、[诊断](/troubleshooting/compiler) | 只读诊断；没有compiled文件时无错误不等于已经构建；不比较Mermaid |
+| flowkit::run-workflow | [Runtime](/reference/runtime)、[SDK](/reference/sdk#run)、[直接模块](/guide/direct-host)、[Interactive选型](/guide/interactive) | Host显式提供执行能力；不同接口层不混用。CLI没有run命令 |
+| flowkit::render-mermaid | [编译产物](/guide/compile-artifacts)、[工作流模型](/guide/workflow-model) | 从合法DSL生成控制流图；不反向生成DSL，也不证明实际执行正确 |
+
+取得Provider、listCatalog/getCapabilities/resolve和关闭Graph的方法见[能力声明](/guide/capability-provider)。Graph的requires表示能力依赖，不是工作流后继；解析成功不执行依赖或业务函数。DSL的agent是Skill映射，不能直接填图谱能力ID充当已有模型执行器。
+
+需要业务能力时，由Host按[Graph绑定示例](/examples/capability-graph)显式解析并绑定执行。适用性、完整性与权限都需满足；缺绑定不能让模型自行编造实现。
+
+## 场景、组合与必要Host能力
+
+| 目标 | 当前可用路径与规则 | 应检查的结果/边界 |
+| --- | --- | --- |
+| 顺序或条件分流 | [模型](/guide/workflow-model)、[condition](/dsl/condition)；首个节点是入口，后继引用决定次序 | 只执行首个命中支路；默认路/输入缺失和布尔类型明确，不能把undefined随意当false |
+| 结构化Agent生成 | [Agent](/dsl/agent)、[结果校验与重试](/guide/validation-retries) | inputs/Skill/Schema/重试次数；Host实现校验器。checkStep读取提交前state，verify读取候选state；P0-A不支持这两项Standard Agent能力 |
+| 业务动作及判断 | [action](/dsl/action)、[verification](/dsl/verification) | Host有真实函数和写入责任；verification需boolean。声明writes不等于阻止所有外部副作用 |
+| 同时做独立工作 | [parallel](/dsl/parallel)、[并行例](/examples/parallel-review) | 成员限Agent/action/verification单节点，不是任意子图。all_succeeded是Promise正常完成，any不取消剩余工作；false不等于reject |
+| 有界检查修复 | [loop](/dsl/loop)、[修复例](/examples/verification-repair) | body是verification，失败修复链回到body；上限是检查次数。不能放parallel、嵌套loop或human修复链 |
+| 人工决定及驳回 | [human](/dsl/human)、[审批例](/examples/human-approval) | 审批服务由Host提供；驳回链只能Agent/action并回同一human。不能用Agent自评宣称等价人工审批 |
+| 错误、取消、观测与缓存 | [取消](/guide/cancellation)、[观测](/guide/observability)、[SDK缓存](/reference/sdk#run) | failed终点可正常resolve；异常/控制信号分开。取消需协作、trace需编译开启，编译缓存不是结果/进度恢复 |
+| Skill和外部前提 | [本地](/guide/local-skills)、[远程](/guide/remote-skills) | 必要文件、白名单、完整性和读取权限；自定义loader承担相应责任，文档不是访问许可 |
+| 交付编译JS | [AOT](/guide/aot)、[直接Host](/guide/direct-host) | 选择SDK或自供Ctx/Runtime；版本、源码/产物、Skill及结果组装准确，不借用未说明的上层依赖 |
+| 暂停与持久续跑 | [Interactive](/guide/interactive)、[Host/Store](/guide/interactive-host-store) | 当前P0-A子集、同Run/Pending、签收/授权/存储；不把Standard全部节点搬进去或把新Run当恢复 |
+| 从图谱发现并执行业务能力 | [Provider](/guide/capability-provider)、[Host绑定](/examples/capability-graph) | 图谱依赖图与控制流图区分；绑定、上下文、依赖、权限与业务执行各有负责人 |
+| 类型、复杂度与不支持目标 | [类型](/reference/types)、[结构/错误](/troubleshooting/compiler)、[兼容](/community/compatibility) | 字面量JS/可擦除TS、已定义/可达后继、字段及数量限制；编写时可生成文本，提交的DSL本身不能藏任意动态计算 |
+
+复杂场景按**有业务意义的合法组合**验证，复用上述完整例；不要求所有模式交叉组合。需要当前不支持的语义时，说明具体限制，选择合适Standard路径或经用户认可的业务拆分；不能静默跳过审批/校验，或发明嵌套并行、自由回边、P0-B开关。
+
+## 参数、状态和结果不能靠猜
+
+每个输入写清来源、类型、是否必需和缺失处理；每个输出声明结构和业务含义。初始state、Agent提交、Action写入、Human决策及共享并行state各有规则，见[状态](/guide/state-data)。TypeScript推导有边界，readonly类型不构成运行隔离；Schema也不自动证明业务事实。
+
+生成物应包括所选DSL、必要Skill/Host文件、依赖/版本、配置与回调来源、执行命令、成功/失败的可观察判据、资源清理和尚缺条件。概念片段可引用完整入口，但不能以未定义变量或隐藏函数充当完整教程。
+
+## 验证和纠错顺序
+
+先核角色/权限与版本，再核文件、绑定、模式和图；编译error先修，不使用失败后残留的旧产物。warning按其实际含义检查，例如分支可达输入与Host初始state，不能一概忽略或把所有warning说成执行失败。
+
+用成功、相关业务失败和边界输入核对路线、尝试数、提交时点、状态与终态。类型/compile/check证明各自范围，不证明自然语言意图被正确理解。固定响应、真实模型、专家走读和真实用户分别记录；未来Skill完成后另验真实生成表现。
+
+读取不到对应版本文档、缺权限/Skill/绑定或业务约束不明确时，指出具体缺项并补信息；不从其它版本猜接口、虚构能力ID或把不可访问的页面当已读。当前站点内容与授权版本、支持矩阵共同核对，公开部署/Registry/技术门禁分别验收。
+
+未来Skill宜引用这套同源契约和适用版本，保留任务说明、文档出处、生成物与验证结果的追溯；不在Skill内再复制一套会与网站漂移的API说明。
+
+当前站点针对1.0.0，没有按包版本切换的多版本路由。旧包不能只凭同一个URL把将来的最新内容当作自己的契约。后续发布应保留可取得的对应版本说明；Skill评估先记录实际文档版本/提交并与包核对，不能确认一致时停止依赖该说明生成，补齐受信版本材料后再继续。
+
+## 作者任务的核对记录
+
+后续评估Skill时，可选一个已有业务主线作为任务：只给定业务目标、输入和验收标准，记录作者实际能取得的文档与Host能力。先做批准路径，再选择与该目标有关的失败/缺信息条件；不要为覆盖率制造无限场景。下面是**评估记录模板**，不是新增API或DSL配置：
+
+```text
+业务目标、输入/权限与成功/失败判据：
+FlowKit/Graph版本、运行环境、选定模式及理由：
+实际可读的文档版本/提交、页面/锚点、必要文件：
+Host已有能力、缺少的绑定/Skill/人工服务及处理方式：
+作者/模型版本、任务说明、是否预先看过源码：
+生成的DSL/Skill/Host文件及编译JS/图：
+实际compile/check/类型检查命令、退出与diagnostics：
+实际运行的输入、调用/分支/尝试、终态与业务结果：
+与原业务判据的逐项对照、失败原因及需用户澄清事项：
+证据文件/摘要、未验证项与保留的限制：
+```
+
+作者已经看过源码时标作专家/AI走读；固定响应例证明接口和控制流；真实模型任务记录实际模型与提示；真实读者另记参与者和任务结果。未运行未来Skill，就不能填“Skill生成通过”或宣称所有用户都能理解。文档改动使旧证据失效时，补受影响任务即可。

@@ -60,3 +60,9 @@ checkStep只得到id/name/attempt这一较小的step对象，而不是完整Agen
 ## 可选 Graph 宿主绑定
 
 `createCapabilityGraphActionAdapter({ graph, bindings, getContext })` 返回一个 `runAction`，可由现有 Runtime 显式组合。它在调用业务函数前检查 Graph 的权限（由 Graph SDK 执行）、依赖完整性和所有已解析节点的适用性。其缺少绑定/不完整依赖/不适用错误码分别为 `FK_CG_BINDING_MISSING`、`FK_CG_DEPENDENCIES_INCOMPLETE`、`FK_CG_NOT_APPLICABLE`，不属于内建的 61 个 `FK_C`/`FK_R` 编译运行诊断码。参考[完整示例](/examples/capability-graph)。
+
+getContext默认同步返回空对象；bindings按action字段显式映射，不由Graph依赖自动生成实现。完整参数、回调、构造/调用错误和返回行为见[桥接API](/reference/sdk#createCapabilityGraphActionAdapter)。
+
+## 直接Host及Interactive的区别
+
+以上Ctx/Runtime是Standard约定。SDK会创建Ctx与默认Skill loader；直接import生成模块时由Host显式提供，详见[职责差异](/guide/direct-host)。Interactive的裸Runtime、Trusted Host和版本化描述符是另外的接口，参见[分层API](/reference/interactive)，不要把本页十个方法原样当作所有模式的参数。

@@ -9,7 +9,7 @@ Runtime 是 FlowKit 与模型、审批界面、业务函数之间的接缝。本
 | Standard | 使用根入口 `run`，在同一进程执行完整流程。下方示例覆盖 Agent 校验、验证和人工审批。 |
 | Interactive P0-A | 内部候选通过 `@devcodex-labs/flowkit/interactive` 由可信 Host 调用。Agent、Condition 和 Terminal 可通过 SQLite 保存进度并在进程重启后续跑。Human、Action、Verification、Loop 和 Parallel 属于后续阶段。 |
 
-Interactive 的 Host 负责持久化、模型隔离和权限检查。经 OS 认证的操作员会话绑定租户，完整结果由单独授权的审计角色读取。发行与部署状态以内部验收记录为准。 [Interactive 接入手册（需仓库权限）](https://github.com/devcodex-labs/flowkit/blob/main/docs/interactive.md)
+Interactive 的 Host 负责持久化、模型隔离和权限检查。经 OS 认证的操作员会话绑定租户，完整结果由单独授权的审计角色读取。发行与部署状态以内部验收记录为准。 [Interactive 接入与完整示例](/guide/interactive)
 
 ## 准备完整目录
 
@@ -63,3 +63,6 @@ isControlSignal 始终必需。Agent 需要 runAgent 和 validateResult；action
 ## 使用 capability-graph 检查并绑定能力
 
 若宿主需要 Provider 目录、适用性或跨 Provider 依赖检查，可使用[capability-graph 宿主消费示例](/examples/capability-graph)中的可选动作适配器。FlowKit 自身只负责执行工作流，不会自动执行 Graph 的 `requires` 依赖；宿主必须显式绑定被授权的动作。普通 `runAgent`/Skill 映射规则保持不变。
+
+
+如需将编译JS交给已有JavaScript宿主，见[直接执行契约](/guide/direct-host)与[完整参考Host](/examples/direct-host)。SDK run/AOT仍是独立且正常的使用路径。

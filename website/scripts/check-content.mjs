@@ -16,6 +16,20 @@ export function assertAnchors(body, names, label) {
   const actual = [...body.matchAll(/<a id="([^"]+)"><\/a>|\{#([^}]+)\}/g)].map(match => match[1] ?? match[2]);
   for (const name of names) assert.equal(actual.filter(value => value === name).length, 1, `Missing/duplicate ${label} ${name}`);
 }
+// Presence guards for actual SDK subpath exports; semantic/consumer review is separate.
+export function exportedNames(source) {
+  const names = [];
+  for (const match of source.matchAll(/^export\s*\{([^}]+)\}/gm)) {
+    for (const entry of match[1].split(',').map(value => value.trim()).filter(Boolean)) names.push(entry.split(/\s+as\s+/).at(-1));
+  }
+  for (const match of source.matchAll(/^export\s+(?:async\s+)?(?:const|function)\s+(\w+)/gm)) names.push(match[1]);
+  return [...new Set(names)];
+}
+async function withEmbeddedDeclarations(text, filename) {
+  const parts = [text];
+  for (const match of text.matchAll(/```ts\s+file="([^"]+)"/g)) parts.push(await readFile(path.resolve(path.dirname(filename), match[1]), 'utf8'));
+  return parts.join('\n');
+}
 export function assertVersion(pkg) { assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/); assert.equal(pkg.name, '@devcodex-labs/flowkit'); assert.equal(pkg.license, 'SEE LICENSE IN LICENSE'); assert.equal(pkg.private, false); assert.equal(pkg.publishConfig?.registry, 'https://npm.pkg.github.com/'); }
 export function phaseLimit(args) {
   if (!args.length) return Number.POSITIVE_INFINITY;
@@ -45,6 +59,17 @@ export async function checkContent(args = []) {
     assert.ok(bodies.get('P44').replace(/\r\n/g, '\n').includes(changelog.replace(/\r\n/g, '\n').trim()), 'P44 release body must match CHANGELOG.md');
     const { PUBLIC_FUNCTIONS, DSL_FIELDS, OPTION_KEYS, ERROR_CATALOG } = await import('../../src/shared/contracts.mjs');
     assertAnchors(bodies.get('P27'), PUBLIC_FUNCTIONS, 'SDK');
+    const interactiveExports = exportedNames(await readFile(path.join(root, 'src/interactive/index.mjs'), 'utf8'));
+    const bridgeExports = exportedNames(await readFile(path.join(root, 'src/integrations/capability-graph.mjs'), 'utf8'));
+    assertAnchors(bodies.get('P52'), interactiveExports, 'Interactive');
+    assertAnchors(bodies.get('P27'), bridgeExports, 'Graph bridge');
+    for (const [declarationFile, pageId, pageFile] of [
+      ['interactive.d.ts', 'P52', 'reference/interactive.mdx'], ['capability-graph.d.ts', 'P31', 'reference/types.mdx'],
+    ]) {
+      const declarations = await readFile(path.join(root, 'types', declarationFile), 'utf8');
+      const documented = await withEmbeddedDeclarations(bodies.get(pageId), path.join(website, 'content', pageFile));
+      for (const match of declarations.matchAll(/export (?:interface|type) (\w+)/g)) assert.ok(documented.includes(match[1]), `Missing subpath type ${match[1]}`);
+    }
     assertAnchors(bodies.get('P29'), OPTION_KEYS, 'option');
     for (const file of ['index.d.ts', 'dsl.d.ts']) {
       const declaration = await readFile(path.join(root, 'types', file), 'utf8');

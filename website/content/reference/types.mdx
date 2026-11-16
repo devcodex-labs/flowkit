@@ -1,6 +1,6 @@
 # TypeScript 类型
 
-公开类型与运行时函数位于两个入口：根入口提供SDK/Runtime类型，`@devcodex-labs/flowkit/dsl`提供DSL类型和构造器。使用TypeScript 5.0+；不要通过dist内部路径导入声明。
+类型按根入口、`/dsl`、`/capability-graph`和`/interactive`划分；根入口提供SDK/Runtime类型，`@devcodex-labs/flowkit/dsl`提供DSL类型和构造器。使用TypeScript 5.0+；不要通过dist内部路径导入声明。
 
 ## SDK 类型索引
 
@@ -48,7 +48,7 @@ AgentNode、ActionNode、VerificationNode、ParallelNode、ConditionNode、LoopN
 ```ts file="../../../types/dsl.d.ts" title="公开DSL声明及其类型推导"
 ```
 
-声明文件中的NoExtra、References等未export辅助类型是推导实现，不是额外公共导入。上面列出的公开类型可由指定入口正常导入。
+声明文件中的NoExtra、References等未显式export辅助名称是推导实现，不作为额外受支持公共API；公开参数依赖的结构仍在声明中保留。上面列出的公开类型可由指定入口正常导入。
 
 ## 消费者检查
 
@@ -60,7 +60,7 @@ npm install --save-dev typescript@5.0.4 @types/node@22.13.0
 npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext consumer.ts
 ```
 
-该文件仅用于类型检查，不会自动运行工作流。对实际`.workflow.ts`文件同样执行tsc，再执行flowkit compile/check和宿主。输出Schema的业务正确性、远程响应、审批返回、并行副作用等不可能仅靠声明证明，必须运行对应案例。
+上面的`tsc --noEmit`只检查类型，不执行consumer.ts；该文件含顶层run，转译后执行或导入会运行工作流，需准备对应文件与Runtime。对实际`.workflow.ts`文件同样执行tsc，再执行flowkit compile/check和宿主。输出Schema的业务正确性、远程响应、审批返回、并行副作用等不可能仅靠声明证明，必须运行对应案例。
 
 ## 遇到类型错误时
 
@@ -69,3 +69,13 @@ npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --mod
 ## Graph 适配器类型
 
 `@devcodex-labs/flowkit/capability-graph` 另带 `GraphResolver`、`GraphContext`、`GraphResolution`、`GraphActionBinding` 等结构化 TypeScript 类型。Graph 实例由宿主注入，FlowKit 不把 Graph SDK 添加为强制依赖。参见[Provider 说明](/guide/capability-provider)。
+
+
+Graph子入口完整类型包括GraphContext、GraphResolvedNode、GraphResolution、GraphResolver、GraphActionBinding和FlowkitCapabilityDeclaration；配置默认/错误规则见[桥接参考](/reference/sdk#createCapabilityGraphActionAdapter)。
+
+```ts file="../../../types/capability-graph.d.ts" title="Graph子入口完整声明"
+```
+
+## Interactive类型与不透明上下文
+
+`/interactive`的全部显式类型、各层输入/返回、Store/ProgramRegistry与Runtime描述符见[Interactive API](/reference/interactive)。不要把同步frame、版本化pending数组或签收协议混用；Host/Admin上下文通过工厂取得，不能用JSON伪造。包的`/package.json`是元数据入口，可用于核对版本，不是另一个执行接口。

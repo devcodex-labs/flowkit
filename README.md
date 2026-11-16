@@ -8,7 +8,7 @@
 
 ## 适用场景
 
-适合需要条件分支、并行处理、校验重试、循环修复或人工决策的多步骤任务。模型调用、业务接口、Schema 校验器及人工交互由宿主提供。下方 Standard 示例在同一进程执行，并行分支共享状态，`any` 汇合后其他分支仍可继续。需要持久化暂停和跨进程续跑的内部维护者可查看 [Interactive P0-A 接入](docs/interactive.md)。
+适合需要条件分支、并行处理、校验重试、循环修复或人工决策的多步骤任务。模型调用、业务接口、Schema 校验器及人工交互由宿主提供。下方 Standard 示例在同一进程执行，并行分支共享状态，`any` 汇合后其他分支仍可继续。需要持久化暂停和跨进程续跑的内部维护者可查看 [Interactive P0-A 接入](https://devcodex-labs.github.io/flowkit/guide/interactive)。
 
 ## 运营定位
 
@@ -33,7 +33,7 @@ npm install --save-exact @devcodex-labs/flowkit@1.0.0
 
 ## 内部开发示例：第一个工作流
 
-以下是供内部开发与审查使用的最小示例，公开读者可以阅读其流程，但不获得安装包或源码访问权。示例不需要模型密钥，也不依赖源码仓库。创建以下两个文件。
+以下是供内部开发与审查使用的最小示例，公开读者可阅读流程和公开可见源码；使用/安装/分发仍须符合专有许可及包权限。示例不需要模型密钥，也不依赖源码仓库。创建以下两个文件。
 
 <!-- flowkit:quick-start:start -->
 **sample.workflow.js**
@@ -104,3 +104,6 @@ SDK 根入口提供 `run`、`compile`、`compileSource`、`check`、`evalWhen`�
 从仓库开发：`npm ci`，再运行 `npm run verify`。文档站位于 `website/`，其开发环境为 Node >=24，依赖与 SDK 分开安装。贡献入口见[贡献说明](https://github.com/devcodex-labs/flowkit/blob/main/CONTRIBUTING.md)。
 
 FlowKit 是仅供内部部署的私有专有软件，公开文档并不授予安装权；当前使用 [专有授权协议](https://github.com/devcodex-labs/flowkit/blob/main/LICENSE)，Copyright (c) 2026 devcodex-labs。仓库当前版本为 v1.0.0，实际包发行以 GitHub Packages 记录为准；[更新记录](https://github.com/devcodex-labs/flowkit/blob/main/CHANGELOG.md)说明能力与限制。
+
+
+文档是完整使用入口；参考[直接Host执行](https://devcodex-labs.github.io/flowkit/guide/direct-host)、[Interactive接入](https://devcodex-labs.github.io/flowkit/guide/interactive)及[能力选型与编写](https://devcodex-labs.github.io/flowkit/guide/workflow-authoring)。源码公开可见不改变专有许可、私有包分发或内部部署授权。

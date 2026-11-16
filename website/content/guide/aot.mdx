@@ -51,3 +51,6 @@ run 重新读取 AOT 文件，验证 header、对应源码和生成正文的哈�
 本地 Skill 的内容不是通过工作流 sourceHash 自动冻结的。下一次执行默认 loader 会读取当前 Skill 内容，因此发布时应把 Skill 和工作流作为同一受控版本交付。远程 Skill 则建议使用 integrity 固定原始内容，并保留精确主机白名单。
 
 完整恢复演练见[构建并部署工作流](/examples/aot)；输出目录限制见[编译与检查](/guide/compile-artifacts)，运行缓存和 AOT 行为见 [SDK API](/reference/sdk#run)。
+
+
+需要执行侧不依赖FlowKit的当前版本参考例时，参见[直接Host路径](/guide/direct-host)及[完整文件](/examples/direct-host)。它自行供给上下文/Skill/校验，不自动获得SDK AOT加载检查。

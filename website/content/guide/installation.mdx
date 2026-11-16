@@ -57,7 +57,7 @@ import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@
 import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex-labs/flowkit/dsl';
 ```
 
-根入口提供 SDK，`/dsl` 提供定义构造器，`/capability-graph` 提供可选 Provider 与宿主绑定适配器（使用时另行安装 `@devcodex/capability-graph`）。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 可执行命令只有 `compile` 和 `check`；执行工作流由宿主调用 SDK 的 `run`。
+根入口提供Standard SDK，`/dsl`提供定义构造器，`/capability-graph`提供可选Provider与宿主绑定适配器（使用时另行安装`@devcodex/capability-graph`）。`/interactive`提供独立的P0-A Host/Store协议，按[接入指南](/guide/interactive)选择接口层；`/package.json`只提供包元数据。不要从包的内部`src`或`dist`子路径导入。安装后的`flowkit`命令只有compile/check；执行选择[SDK或直接Host](/guide/direct-host)，Interactive另用其Host协议。
 
 ## 准备文件目录
 

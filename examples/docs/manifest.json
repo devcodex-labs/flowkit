@@ -295,6 +295,78 @@
       "dependencies": [
         "@devcodex/capability-graph@2.1.1"
       ]
+    },
+    {
+      "id": "E14",
+      "directory": "direct-host",
+      "files": [
+        "package.json",
+        "sample.workflow.js",
+        "skills/writer.md",
+        "prepare.mjs",
+        "host.mjs",
+        "run-deployment.mjs",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [],
+      "verify": "verify.mjs"
+    },
+    {
+      "id": "E15",
+      "directory": "interactive",
+      "files": [
+        "package.json",
+        "sample.workflow.js",
+        "skills/writer.md",
+        "trusted.mjs",
+        "versioned.mjs",
+        "verify.mjs"
+      ],
+      "workflows": [
+        "sample.workflow.js"
+      ],
+      "scenarios": [
+        {
+          "entry": "trusted.mjs",
+          "args": [
+            "approved"
+          ],
+          "expected": {
+            "status": "succeeded",
+            "terminal": "done",
+            "modelCalls": 1,
+            "signatureVerified": true,
+            "answer": "已生成：FlowKit"
+          }
+        },
+        {
+          "entry": "trusted.mjs",
+          "args": [
+            "closed"
+          ],
+          "expected": {
+            "status": "failed",
+            "terminal": "closed",
+            "modelCalls": 0,
+            "signatureVerified": false
+          }
+        },
+        {
+          "entry": "versioned.mjs",
+          "args": [],
+          "expected": {
+            "status": "succeeded",
+            "terminal": "done",
+            "pending": 0,
+            "samePendingOnResume": true,
+            "answer": "已生成：FlowKit"
+          }
+        }
+      ],
+      "verify": "verify.mjs"
     }
   ]
 }

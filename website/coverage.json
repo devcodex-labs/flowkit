@@ -478,5 +478,75 @@
     "status": "drafted",
     "scope": "Graph 查询、宿主显式绑定、授权/适用性/依赖失败反例",
     "validation": "E13，G01-G15"
+  },
+  {
+    "id": "P49",
+    "route": "/guide/direct-host",
+    "title": "直接执行编译模块",
+    "file": "guide/direct-host.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "当前版本直接模块契约、执行依赖/上下文/结果与可信交付",
+    "validation": "E14"
+  },
+  {
+    "id": "P50",
+    "route": "/examples/direct-host",
+    "title": "直接 Host 完整示例",
+    "file": "examples/direct-host.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "完整编译/交付/运行文件与无SDK执行侧",
+    "validation": "E14"
+  },
+  {
+    "id": "P51",
+    "route": "/guide/interactive",
+    "title": "Interactive P0-A 接入",
+    "file": "guide/interactive.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "模式/入口/所选stdio及完整回合/失败责任",
+    "validation": "E15"
+  },
+  {
+    "id": "P52",
+    "route": "/reference/interactive",
+    "title": "Interactive API",
+    "file": "reference/interactive.mdx",
+    "group": "SDK 与工具",
+    "status": "drafted",
+    "scope": "14运行导出、42类型及分层参数/结果/错误",
+    "validation": "E15；V-INTERACTIVE"
+  },
+  {
+    "id": "P53",
+    "route": "/guide/interactive-host-store",
+    "title": "Interactive Host 与 Store",
+    "file": "guide/interactive-host-store.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "身份、签名、持久Store/容量/恢复及Host参考组件",
+    "validation": "E15；V-CONTRACT"
+  },
+  {
+    "id": "P54",
+    "route": "/examples/interactive",
+    "title": "Interactive 完整示例",
+    "file": "examples/interactive.mdx",
+    "group": "场景示例",
+    "status": "drafted",
+    "scope": "公开包入口的TrustedHost/版本化两套教学例",
+    "validation": "E15"
+  },
+  {
+    "id": "P55",
+    "route": "/guide/workflow-authoring",
+    "title": "编写工作流与能力选型",
+    "file": "guide/workflow-authoring.mdx",
+    "group": "使用指南",
+    "status": "drafted",
+    "scope": "图谱任务阅读、合法组合、Host前提和业务验收",
+    "validation": "E01–E15；V-CONTENT"
   }
 ]

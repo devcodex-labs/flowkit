@@ -1,0 +1,58 @@
+# Interactive Host 与 Store
+
+FlowKit负责可确定的推进和接纳规则；Host负责身份、模型/业务能力、受信产物、数据披露和运行资源，Store负责持久原子性。开始前准备：授权版本、符合平台要求的Node/SQLite、Host私有存储目录、独立Model环境、受保护的操作员/租户与审计配置、受信构建和签名安排。完整API和文件见[接口参考](/reference/interactive)与[示例](/examples/interactive)。
+
+## 谁持有什么
+
+| 主体 | 应持有 | 不因拿到任务而取得 |
+| --- | --- | --- |
+| 操作员 | 经过Host认证的主体和受保护租户绑定、创建/运行投影权限 | 完整state或审计读取权 |
+| Host | Store、策略/产物批准、运行时校验、签名渠道、真实启动/回调观察 | 不能以模型自报身份代替独立来源 |
+| Model执行器 | 经授权的instruction/input/missing/resultSchema等任务、受限业务工具 | Store/原始complete/私钥/Host配置/完整结果 |
+| 审计主体 | 经独立授权的resultRef读取、必要历史Ack审计 | 不自动取得新签收、撤销或管理员终止权 |
+| 管理员 | 独立管理上下文及授权动作 | 不自动代表业务主体或模型 |
+
+生产主体应来自选定OS登录身份及Host受保护绑定。教学例的字符串角色只是固定夹具。相同进程/UID里仅靠对象封装不是OS沙箱；代码哈希、签名和JSON校验各证明不同事情，不能替代权限隔离。命令沙箱、实际部署和供应商故障证据不足的条款继续保持未验证/BLOCKED。
+
+## 持久数据与原子提交
+
+同步Store/Coordinator和版本化异步Store/ProgramRegistry表达不同接口，底层参考实现使用R5封套。自定义Store必须原子地处理初始Run/Genesis、checkpoint CAS、Journal及接纳索引/可恢复提交结果，保证namespace与expectedRevision、产物和策略一致。不要把公开投影frame覆盖成数据库记录，也不要只存state丢掉Pending/候选/控制栈或版本信息。
+
+startKey关联同一次启动意图；不同意图用相同key应报冲突。回执接纳基于当前请求/节点/尝试与摘要，重复同字节得到原接纳信息，不同内容不能作为幂等重传。CAS竞争输家必须读取当前结果再决定下一步，不能盲目重放业务副作用。
+
+SQLite父目录和DB/WAL/SHM由Host保护，数据库不是模型可编辑文件。参考Store校验封套/Journal/索引，损坏或不确定结果应停在对应错误并查证，不能删库当作普通恢复。调用close释放连接；备份时一致地协调写入者及Host配套Outbox/引用数据，按同一受信版本恢复，不把单个DB文件拷贝当全部运行状态。
+
+## 容量与大结果
+
+当前参考实现checkpoint与Journal规范JSON硬上限为2 MiB；非终态checkpoint预算为1.75 MiB，预留256 KiB给确定的失败/恢复出口。这是**整个封套**预算，包含状态、Pending、候选和最近回执，不是每个Agent都能写1.75 MiB业务结果。没有额外通用的128 KiB/Agent上限。
+
+初始状态过大在创建前拒绝。匹配且已认证的有界结果使推进超过预算时，协调器可持久化errored(FK_I_CHECKPOINT_CAPACITY)，保留原业务state、清Pending/候选并写Journal；不要把这个错误出口记成结果已经接纳。未经认证的超大原始回执被拒绝，不由它决定别人的Run终止。
+
+大业务内容由Host选定存储，校验快照后在现有结果中返回小引用；FlowKit不替你选择文件位置、下载权限、TTL或业务删除规则。参考Store的最近回执摘要有界，历史接纳由持久索引支持；不能随手清索引/Journal/仍被Run引用的Program。
+
+## 签名、撤销、恢复
+
+Host将真实观察关联到当前Pending后，规范化receipt并用encodeAgentReceiptStatement的字节签署。新请求检查签名、租户、策略/产物、时间与尝试；已接纳的同字节重传可对账原Ack，仍须满足现行信任验证。时钟、密钥轮换和持久签收均由Host管理，私钥不进入Model或证据导出。
+
+Trusted Host的revokeKey按SPKI公钥指纹作用于其Store；两个独立SQLite Store没有自动撤销传播，协调方逐一应用并核对。只读历史Ack需独立授权，不能把能查到历史索引理解为旧签名仍可重新接纳。版本化管理员终止另用独立上下文，旧Pending不因重授权自动复活。
+
+重启应恢复相同产物/策略/Run/请求与持久签收；检查Store是否已经提交，再补Ack或继续推进。业务动作幂等、传输重试、签名Outbox及文件快照的原子边界由所选Host实现承担；核心SDK不是业务文件仓库或自动回滚服务。
+
+## 源码中的Host参考组件
+
+下列组件是现有**Host参考实现**，不在npm包的公开子入口中，不应写成`@devcodex-labs/flowkit/outbox`之类的导入。采用它们需要相应源码访问/许可，并固定与应用一致的版本；它们不等于核心SDK自动安装了一个服务。
+
+| 源码组件 | 责任及使用前提 |
+| --- | --- |
+| examples/interactive/codex-outbox.mjs | 记录观察/签名/接纳与恢复、容量和授权清理。当前默认64 MiB、4096条、保留30天；这些是该参考Host的默认配置，不是所有Store或业务数据的统一保留策略 |
+| examples/interactive/codex-file-handoff.mjs | Host固定文件引用/快照、字节与清理的辅助契约；文件访问和生命周期不交给Model自行决定 |
+| examples/interactive/codex-os-access.mjs | Host从已认证身份及受保护绑定决定操作员/审计权限；不提供生产OS身份源 |
+| examples/interactive/codex-os-stdio.mjs | 受控stdio会话/收件与撤权的Host侧适配；必须结合固定启动链、真实对端身份和明确权限 |
+
+运行中引用先保留；终态清理按授权、保留期和原子审计/队列推进。配额满需明确告警并处理，不能静默删除未处理记录，也不把数据库逻辑字节、文件长度、分配块或WAL/SHM混为一个容量指标。组件的具体配置与维护入口随采用的受信源码交付；不要把内部原始验收日志当公开教程。
+
+## 运行前检查与失败处理
+
+先确认模式/节点支持、所有Runtime绑定、产物/策略版本、目录权限、身份/租户来源、任务白名单、模型调用/回调关联和结果读取授权。失败时记录准确code、Run/request/revision及可公开摘要，保留原始证据在受控位置，避免把私有state或登录缓存发进模型或公开站点。
+
+编译error先修定义；授权失败先核Host配置/身份，不通过放宽策略绕过；过期或冲突回执先读当前Pending及原接纳索引；Store不确定/损坏先停止相关写入并对账/恢复。超时与取消按各回调和Host传输的真实能力处理，不声明统一强停保证。

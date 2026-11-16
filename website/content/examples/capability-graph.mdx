@@ -36,3 +36,5 @@ node verify.mjs
 `verify.mjs` 覆盖成功、依赖解析、未知环境、不适用、跨 Provider 未授权和缺少绑定。Graph 的 `match()` 需要显式的 `ModelExecutor`，本示例不额外调用模型。
 
 继续阅读[FlowKit Provider 能力声明](/guide/capability-provider)、[宿主接入](/guide/host-integration)和[SDK 参考](/reference/sdk)。
+
+若复用到自己的业务，先核[完整桥接参数/默认值](/reference/sdk#createCapabilityGraphActionAdapter)：本例主动提供getContext，省略时默认空上下文，不能期待Graph自动从state补facts。bindings的key是DSL action字段；适配器复制绑定后，业务授权/副作用/重试仍由Host控制。通过图谱发现后编写流程的阅读顺序见[作者指南](/guide/workflow-authoring)。

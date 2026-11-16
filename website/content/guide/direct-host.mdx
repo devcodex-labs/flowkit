@@ -1,0 +1,42 @@
+# 直接执行编译模块
+
+FlowKit 1.0.0 的Standard编译产物导出`async workflow(ctx)`。已有JavaScript宿主可提供上下文并调用它；本页的参考环境是Node.js ESM。FlowKit不要求另装一个独立二进制执行引擎。执行环境必须能够运行JavaScript和Host业务回调，把代码文本交给模型本身不等于执行。
+
+这是绑定**当前编译器版本与所选节点**的参考接入，不建立跨版本通用ABI，也不承诺所有模型宿主都能直接运行。首次使用请先完成[SDK宿主接入](/guide/host-integration)，再比较下列责任。
+
+## 选择执行路径
+
+| 路径 | 编译与执行侧依赖 | 上下文与默认能力 | 结果与产物校验 |
+| --- | --- | --- | --- |
+| SDK `run(source)` | 执行侧安装FlowKit，提供Runtime和Skill | SDK创建Ctx、浅复制state、生成默认runId并提供默认Skill读取 | SDK组装status/terminal/state；运行前编译检查 |
+| SDK `run(compiled)` | 执行侧安装FlowKit，保留对应物理源码和Skill | 与SDK源码路径相同 | 每次验证header、源码/正文哈希；编译选项已固化，run不比对或重写构建选项。部署方保持构建配置一致，用相同选项check |
+| 本页直接`workflow(ctx)` | 编译侧安装FlowKit；本例执行侧只需Node内建模块及交付文件 | Host自建Ctx、提供所用Runtime方法、Skill来源、runId及需要的信号/trace | 函数只返回终点信息；Host读取ctx.state并组装结果。不会自动调用SDK AOT校验 |
+| Interactive | 使用独立`/interactive`入口，Host与Store参与 | 不使用Standard的Ctx/Runtime完成协议 | Pending、签收、持久化与授权读取见[Interactive接入](/guide/interactive) |
+
+`flowkit` CLI只有compile/check；运行通过SDK或你的Host进行。直接Host适合能够管理受信模块交付与业务能力的集成者。希望保留SDK加载/校验保障时继续使用[SDK AOT](/guide/aot)。
+
+## Host必须提供什么
+
+`ctx`含`runtime`、`state`及按需的`signal`、`runId`、`error`。本例手动浅复制初始state、设置runId；这些动作不会由直接调用自动补齐。运行结束时检查返回status/terminal，从ctx.state取业务数据；仅在ctx实际有error属性时附加它。
+
+Runtime方法按节点选择。本例使用Agent、校验、审批和修订动作，因此提供loadSkill、runAgent、validateResult、checkStep、runVerification、runHuman、runAction和isControlSignal。使用condition时还需实现evalWhen；使用Agent映射时提供相应Skill读取。默认SDK loader不是可从私有字段借用的公共接口。
+
+异步业务方法返回Promise；validateResult、evalWhen和isControlSignal同步。trace只有编译时开启才被调用，钩子同步且不等待异步日志。Schema业务正确性、审批来源、外部副作用和协作取消由Host承担。完整字段及节点语义继续以[Runtime契约](/reference/runtime)和[状态说明](/guide/state-data)为准；不为直接Host改变failed终点、reject或共享state语义。
+
+## 交付边界
+
+完整步骤见[直接Host示例](/examples/direct-host)：编译者取得授权版本与源/Skill，生成模块，再把host.mjs、sample.compiled.mjs、skills/writer.md和delivery.json交给执行者。编译侧的prepare.mjs与FlowKit依赖不必交付到本例执行目录。
+
+生成文件可在交付目录打开阅读：入口为`export async function workflow(ctx)`，控制流由代码决定，Agent/审批/动作通过ctx.runtime调用；终点返回`{status, terminal}`。`host.mjs`中的调用及结果组装连接这些代码与真实业务输出。
+
+本例先核对交付清单及字节，再加载模块。相邻校验和只用于检测交付一致性，**受信构建、审阅和传输渠道才建立信任**；把任意代码连同自制摘要交进来不构成授权。Host也没有因校验哈希而获得JavaScript沙箱。切换编译器、节点或选项后，重新审阅Host所需接口并验证。
+
+## 失败和恢复
+
+- 编译diagnostics有error：不交付本次产物，修正源/Skill/配置后重编译；已有旧输出不会自动删除。
+- 本例发现可解析FlowKit包：依赖隔离证明不成立。用prepare.mjs默认的新临时目录执行；不代表装过SDK的宿主不能实现自己的适配器。
+- 版本或交付字节不符：恢复已审核的整套交付，或重新编译/审阅/生成清单，不能只改摘要绕过来源检查。
+- 缺Runtime/Skill或业务返回不合约：按实际节点补方法和文件；不要假定直接调用会回退SDK的默认服务。
+- 业务异常：调用可reject，Host应记录错误并处理自己的副作用。取消/超时需业务协作，没有统一强杀或事务回滚保证。
+
+执行者可把示例Host逻辑整合到已有宿主，不必保留相同文件名。维护者升级时同时检查生成契约、SDK路径和这个参考消费者。

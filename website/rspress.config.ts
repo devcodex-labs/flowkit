@@ -16,7 +16,7 @@ export default defineConfig({
   root: fileURLToPath(new URL('./content', import.meta.url)), base, lang: 'zh',
   siteOrigin: new URL(siteUrl).origin,
   title: 'FlowKit', description: '用 JavaScript / TypeScript 编排工作流，通过宿主 Runtime 连接你的业务。',
-  logo: '/logo.svg', icon: '/logo.svg',
+  logo: '/logo.svg', logoText: 'FlowKit 首页', icon: '/logo.svg',
   search: { codeBlocks: true, searchHooks: fileURLToPath(new URL('./search-hooks.mjs', import.meta.url)) },
   head: [route => { const href = publicUrl(route.pureRoutePath); return href ? ['link', { rel: 'canonical', href }] : undefined; }],
   plugins: [sitemap, { name: 'flowkit-search-heading-boundaries', modifySearchIndexData: alignSearchHeadingBoundaries }],

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pageFile, publicUrl } from './routes.mjs';
 import { checkLink, inspectHTML, assertSitemap } from './check-rendered.mjs';
-import { checkCoverage, assertNoPrivateContent, assertAnchors, assertVersion } from './check-content.mjs';
+import { checkCoverage, assertNoPrivateContent, assertAnchors, assertVersion, exportedNames } from './check-content.mjs';
 import { onSearch } from '../search-hooks.mjs';
 import { alignSearchHeadingBoundaries } from '../search-index.mjs';
 test('routes preserve homepage, normalized index and 404 semantics', () => {
@@ -46,6 +46,10 @@ test('missing or duplicate API anchors and incorrect release identity fail', () 
   assert.throws(() => assertAnchors('<a id="run"></a><a id="run"></a>', ['run'], 'SDK'), /duplicate/);
   assertVersion({ name: '@devcodex-labs/flowkit', version: '1.0.0', license: 'SEE LICENSE IN LICENSE', private: false, publishConfig: { registry: 'https://npm.pkg.github.com/' } });
   assert.throws(() => assertVersion({ name: '@devcodex-labs/flowkit', version: 'not-semver', license: 'SEE LICENSE IN LICENSE', private: false, publishConfig: { registry: 'https://npm.pkg.github.com/' } }));
+});
+test('subpath export inventory retains public aliases and excludes unexported names', () => {
+  const source = 'const privateHelper = 1;\nexport { worker as run, compile };\nexport async function start() {}\nexport const provider = {};';
+  assert.deepEqual(exportedNames(source), ['run', 'compile', 'start', 'provider']);
 });
 test('exact heading search hits keep their correct anchor without dropping prose matches', () => {
   const header = { type: 'header', title: 'SDK API', header: 'SDK API > compileSource：编译文本', link: '/reference/sdk#compileSource' };

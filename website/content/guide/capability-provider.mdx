@@ -36,3 +36,11 @@ Graph 的 `requires` 表示能力前置关系（例如 `render-mermaid` 需要 `
 此 Provider 声明版本随 FlowKit 包版本维护，不等于 Graph SDK 版本，也不等于 Graph 的结果 `revision`。`allowedProviders` 限定可见来源；`getCapabilities`、`resolve` 只读声明，不执行业务动作。FlowKit 的 `agent` 参数仍表示 Skill 映射，而非 Graph 能力 ID。
 
 如需将已解析能力绑定到业务操作，参见[宿主消费示例](/examples/capability-graph)。所有模型、动作权限和外部 IO 均由宿主提供。
+
+## 根据任务取得完整使用说明
+
+五项声明是任务目录，不是全部字段或节点组合清单。按[编写工作流与能力选型](/guide/workflow-authoring)逐项找到参数、合法组合、模式、必要Host文件、错误和业务验收；仅拿到能力ID或requires不能推断流程已能执行。
+
+特别注意：八类节点属于Standard；Interactive P0-A只接受其已实现子集，使用[独立Host契约](/guide/interactive)。运行依赖由Host提供，getContext等桥接默认值与类型见[API参考](/reference/sdk#createCapabilityGraphActionAdapter)。
+
+Provider内的id是局部名，查询使用表中的`flowkit::…`完整ID。version是声明随包的版本，阅读对应版本文档；网站可访问性、私有包取得和运行权限分别核实。未能读取、版本不符或缺少绑定/前提时先补信息，不虚构参数或默认模型服务。未来自然语言编写Skill可引用这些同源资料；本页不宣称该Skill或自动模型编写服务已经提供。

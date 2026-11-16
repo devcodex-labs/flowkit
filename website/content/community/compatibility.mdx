@@ -6,7 +6,9 @@
 |---|---|
 | SDK/CLI运行时 | Node.js >=22.13.0，ESM |
 | 工作流源文件 | .workflow.js或.workflow.ts，可静态提取DSL |
-| AOT入口 | .compiled.mjs，保留对应源码与Skill布局 |
+| SDK AOT入口 | .compiled.mjs，保留对应源码与Skill布局 |
+| 直接生成模块 | 本版所选Standard节点由Host自供Ctx/Runtime；见[直接执行](/guide/direct-host)，与SDK AOT校验不同 |
+| Interactive | 独立P0-A Host/Store协议，参考SQLite实现使用node:sqlite；见[接口分层](/guide/interactive) |
 | TypeScript声明 | TypeScript 5.0+，使用const类型参数 |
 | 文档站开发 | Node >=24，website独立依赖与锁文件 |
 | 文档语言 | 简体中文；当前没有英文翻译版本 |
@@ -20,7 +22,7 @@
 
 ## 已有能力与宿主责任
 
-Standard 提供静态 DSL 编译、图和数据声明检查、可读生成代码、Mermaid、进程内执行和 Runtime 接缝。模型调用、完整 JSON Schema 校验、业务权限、部署和监控由宿主负责。内部 Interactive P0-A 候选提供由可信 Host 管理的 SQLite 持久化与跨进程续跑，适用节点和接入方式见[宿主接入](/guide/host-integration)。
+Standard 提供静态 DSL 编译、图和数据声明检查、可读生成代码、Mermaid、进程内执行和 Runtime 接缝。模型调用、完整 JSON Schema 校验、业务权限、部署和监控由宿主负责。内部 Interactive P0-A 候选提供由可信 Host 管理的 SQLite 持久化与跨进程续跑，适用节点和接入方式见[Interactive接入](/guide/interactive)。
 
 Standard 的并行分支共享 state，`any` 汇合后其余分支仍可继续。初始 state 做顶层浅复制。默认 Skill loader 有范围、白名单、完整性和读取限制，自定义 loader 自行承担对应责任。AOT 完整性验证与执行隔离由各自的机制负责。
 
@@ -34,4 +36,4 @@ Standard 的并行分支共享 state，`any` 汇合后其余分支仍可继续�
 
 可选 Provider 与宿主动作适配使用独立的 `@devcodex/capability-graph` v2.1.1 SDK 契约。核心六个 SDK 与八类 DSL 节点不变；Graph 的 Provider schemaVersion、声明版本、结果 revision 不等于 FlowKit 版本。Graph 可能与 Node 20 兼容，但 FlowKit 仍要求 Node >=22.13.0；消费者按两者要求取交集。
 
-文档站已获批准公开展示；FlowKit 源码仓库与 GitHub Packages 安装包仍是私有的。站点公开不代表源码开源或授予包下载权限；GitHub Pages 实际可用性和发布授权需在部署时单独核查。
+文档站已获批准公开展示；FlowKit 源码仓库当前公开可见但采用专有许可，GitHub Packages 安装包仍私有分发。站点公开不代表源码开源或授予包下载权限；GitHub Pages 实际可用性和发布授权需在部署时单独核查。

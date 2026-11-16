@@ -100,3 +100,29 @@ isControlSignal(err: unknown): boolean
 ## 可选 capability-graph 子入口
 
 `@devcodex-labs/flowkit/capability-graph` 单独导出 `flowkitProvider` 和 `createCapabilityGraphActionAdapter`。它不是根 SDK 六个公开函数的一部分；不自动安装或启动 capability-graph，也不接管宿主 Runtime。详见[能力声明](/guide/capability-provider)和[宿主集成](/examples/capability-graph)。
+
+### flowkitProvider {#flowkitProvider}
+
+静态Provider声明，含schemaVersion:1、providerId:flowkit、name、随包维护的version、description及五项capabilities。能力的局部id由Graph规范到`flowkit::…`供查询；不要手工把它当DSL agent或action绑定。usage.instructions关联当前版本文档，requires仅说明能力前提，不自动执行依赖。注册/查询后的Graph实例由调用方关闭，FlowKit没有隐式全局Graph连接。
+
+### createCapabilityGraphActionAdapter {#createCapabilityGraphActionAdapter}
+
+同步构造`{runAction(action,name,ctx):Promise<void>}`，组合到Host的Runtime。参数对象如下：
+
+| 字段 | 类型/必需/默认 | 约束与调用含义 |
+| --- | --- | --- |
+| graph | 必需GraphResolver | 由Host注入具有resolve函数的实例；不自动创建/安装Graph或模型 |
+| bindings | 必需对象 | key对应DSL节点的action字段，不是节点id；每个顶层项须为数据属性，不接受accessor。构造时复制绑定值 |
+| bindings[key].capabilityId | 必需string | 完整`provider::capability`，两段均以小写字母开头，后续为小写字母/数字/`._-` |
+| bindings[key].execute | 必需函数 | 接收`{action,name,ctx,resolution,capability}`；同步void或`Promise<void>`。实际业务/写入及授权由Host承担 |
+| getContext | 可选同步函数；默认`() => ({})` | 从ctx生成GraphContext（facts/notes等所需上下文）；返回非null对象、非数组，不能用异步Promise代替约定 |
+
+省略getContext时传给Graph的是空对象，不是自动从state推导事实。对需要facts的能力，这不保证适用；Host应建立可信业务上下文。bindings的原对象后来被修改，不会更新已经复制的表；需要调整经审核绑定时重建相应适配器。
+
+runAction先按action取绑定，再执行`resolve({ids:[capabilityId],context,relations:['requires']})`；要求complete、unresolved为空、包含所选根能力且全部解析节点applicability为applicable。随后await显式execute，只返回void，业务输出由Host回调按需求写ctx.state。解析不会替你执行依赖或生成业务函数。
+
+构造参数违约同步抛TypeError；回调上下文不合约也可TypeError。调用时缺绑定为FK_CG_BINDING_MISSING，依赖不全/缺根为FK_CG_DEPENDENCIES_INCOMPLETE，不适用或适用性未知为FK_CG_NOT_APPLICABLE。GraphError及execute错误原样传播，不保证归一为FK_C/FK_R，也不回滚已发生的副作用。完整文件和正常失败处理见[Graph例](/examples/capability-graph)，类型见[完整声明](/reference/types)。
+
+## 其他入口与版本
+
+`/dsl`负责静态定义，[`/interactive`](/reference/interactive)提供另一套Host/Store/签收协议。`/package.json`导出包元数据，编译交付工具可用它核对版本，参见[prepare.mjs](/examples/direct-host)；它不提供新的工作流执行方法。直接模块、SDK源码与SDK AOT的依赖/上下文/结果差异见[执行路径表](/guide/direct-host)。

@@ -1,0 +1,160 @@
+# Interactive API
+
+本页对应FlowKit 1.0.0的`@devcodex-labs/flowkit/interactive`。这些导出描述当前P0-A Host能力；发行/生产门禁和平台证据分别判断。先读[接口层选择](/guide/interactive)，可运行文件见[完整示例](/examples/interactive)。不要从dist私有路径导入实现。
+
+## 编译与加载
+
+### compileInteractive {#compileInteractive}
+
+`compileInteractive(file, options)`返回Promise。file为`.workflow.js`或`.workflow.ts`路径，按调用时cwd解析，不接受DSL文本。非法参数/I/O可reject；编译问题返回diagnostics，使用code前检查error。
+
+| options字段 | 必需/默认 | 行为 |
+| --- | --- | --- |
+| output | 必需：memory或file | memory只返回；file另写`<stem>.interactive.mjs`并返回artifactPath |
+| featureStage | 必需：P0-A | 本版不可用配置启用P0-B/P1 |
+| targetVersion | 可省略；若给必须interactive-state-machine-v1 | 指定语义目标，不是软件包版本 |
+| outDir | 源目录；相对cwd | file输出目录；不要套用Standard输出目录的所有限制 |
+| projectRoot | 最近package.json所在目录，找不到回退cwd | 显式值按cwd解析；影响Skill检查 |
+| skillsRoot / skillCheck | skills / true | 静态Skill根/存在性检查；不创建运行时Skill服务 |
+| remoteSkillHosts | 空数组 | 编译允许的HTTPS主机；运行读取仍由Host负责 |
+
+未知/Symbol字段、accessor及不合法类型不静默忽略。成功返回code、diagnostics、programIdentity；失败可返回空code且无identity。programIdentity包含artifact/source/workflow/compiler/ABI/semantics/checkpoint/canonicalization/stage身份，含义见本页完整类型。此接口不返回Mermaid；Standard编译图与Interactive执行产物不可互换。
+
+### loadInteractiveProgram {#loadInteractiveProgram}
+
+`loadInteractiveProgram(bytes, expectedArtifactHash)`验证Uint8Array产物及预期SHA-256并返回Promise，成功得到artifactHash、interactiveProgram、programTable、advance。Host应先从独立受信构建获得并固定哈希。此加载器和哈希检查不构成进程/OS沙箱，不接受Model指定的任意模块。
+
+## 同步Store与Host内部协调器
+
+### createSqliteCheckpointStore {#createSqliteCheckpointStore}
+
+`createSqliteCheckpointStore(file, {namespace})`同步返回CheckpointStore；namespace必需。file指向Host私有SQLite文件，父目录和权限由Host准备；同名Run在不同namespace分别处理。结束调用close。数据库路径、WAL/SHM及存储故障边界见[Host与Store](/guide/interactive-host-store)。
+
+| Store方法 | 输入/返回与责任 |
+| --- | --- |
+| putArtifact / getArtifact / deleteArtifact | 按programIdentity+bytes放入不可变产物，按哈希读取或尝试删除；被Run保留的产物不能任意清除 |
+| createRun | startKey、可选startIntent、checkpoint；返回created及当前checkpoint。相同意图重试与冲突意图区分 |
+| load | runId→checkpoint或null；保持完整执行信息，不把返回值直接发给Model |
+| compareAndSwap | runId、expectedRevision、nextCheckpoint、transitionId及可选journalEntry；返回committed与checkpoint |
+| listJournal | runId→经校验的审计链；空结果/损坏与成功读取区分 |
+| getReceipt | runId+requestId→原acceptedRevision/digest等或null；用于历史接纳索引，不是业务结果仓库 |
+| close | 释放连接；清理自己的临时文件另行处理 |
+
+SQLite提供原子提交与索引实现；自定义Store须满足等效契约，不能用“写JSON后补Journal”替代原子CAS。该同步接口与下面CheckpointStoreV1不是同一返回形状。
+
+### createInteractiveCoordinator {#createInteractiveCoordinator}
+
+`createInteractiveCoordinator({store, runtime, policy?, maxStagesPerCall?})`返回协调器。policy默认空对象；maxStagesPerCall默认128，整数1–128，是单次推进预算，不是整个Run的步骤上限。返回policyHash和异步start/complete/resume/load。
+
+Runtime按Agent需要提供skillResolver(descriptor)→字符串/Promise和同步validateResult(schema,result)→string[]。descriptor含runId、nodeId、name、agent/skill/integrity；Host负责按已批准来源读取和校验。本版Agent checkStep不支持，不能要求后静默跳过。
+
+Skill必须是非空字符串，`instruction.length`不超过131072；这是JavaScript UTF-16代码单元数量，不是128 KiB字节上限。校验器必须同步返回可规范化的稠密JSON字符串数组，最多32项；每项非空，`reason.length`不超过512。`[]`表示通过；合约内的非空reasons按Agent声明的retries重试或耗尽，不能把校验器自身违约当普通业务校验失败。
+
+| 绑定结果或错误 | 状态与处理 |
+| --- | --- |
+| Skill加载抛出code为FK_R014或FK_I_TEMPORARY_SKILL的错误 | paused，pauseReason为skill-temporary；Host处理临时来源问题后，用同Run的resume重试准备任务，未派发Agent |
+| Skill加载抛出FK_R010/FK_R011 | errored并保留该causeCode，不按临时故障续跑 |
+| 其他Skill异常、空文本或超长文本 | errored，causeCode为FK_I_SKILL_CONTRACT；修正Host绑定/来源后另行处理，不宣称原Run可恢复 |
+| validateResult抛错、返回Promise、稀疏/不可规范化数组或超限/不合约reasons | errored，causeCode为FK_I_VALIDATOR_CONTRACT；保留原业务state，不走Agent retries |
+
+Host应按实际临时故障分类映射允许暂停的code，不能把所有异常都伪装成可重试错误。版本化Runtime的implementation也受这些执行约束。
+
+| 方法 | 输入 | 输出/限制 |
+| --- | --- | --- |
+| start | programBytes、programIdentity、startKey；可选runId/state/startIntent | 内部InteractiveRunFrame；可waiting、paused或终态 |
+| complete | runId/requestId/nodeId/attempt，agent-result+result或agent-call-failed+failure.message | frame加acceptedRevision/duplicate；保留实际接纳语义 |
+| resume | `{runId}` | 推进现有Run，沿用原产物/策略/Pending |
+| load | `{runId}` | frame或null，不创建新Run |
+
+这是Host内部接口，原始frame可包含state和单个pending；不含完整来源认证/模型披露边界。Model不能直接得到Store或complete能力。
+
+## Trusted Host与签收
+
+### createTrustedInteractiveHost {#createTrustedInteractiveHost}
+
+`createTrustedInteractiveHost(options)`同步返回带Ed25519签收的Host外观；首发受控stdio使用此层。它校验Host固定的产物、策略、请求与签名，仍需独立OS权限和真实传输观察。
+
+| 字段 | 必需/默认与约束 |
+| --- | --- |
+| store / runtime | Host持有的同步Store、上述InteractiveRuntime |
+| trustedPublicKeys | 非空Ed25519公钥映射，最多32把；不传私钥 |
+| trustedArtifacts | 非空受信artifactHash数组，最多1000项；来自独立受信构建 |
+| allowedInputKeys | 默认空数组，最多256个不重复键；只允许Agent明确inputs中的白名单字段 |
+| disclosurePolicyId / authorizeDisclosure | 必需；Host策略标识和授权回调，只有严格true允许披露 |
+| policy | 默认空JSON对象；hostSecurity为外观保留字段 |
+| authorizeTerminalAccess | 可选；未配置不允许终态投影/完整结果读；分别收到run:read或result:read动作 |
+| authorizeReceiptAudit / authorizeKeyRevocation | 可选，缺失不授予管理权；撤销需支持持久信任的Store |
+| drainOnly | 默认false；true仅承接现有Run，不新建 |
+| maxProofAgeMs | 默认300000，1000–3600000整数毫秒，约束签名有效区间长度 |
+| clockSkewMs | 默认5000，0–30000整数毫秒 |
+| now | 默认Date.now；Host持有的时钟函数，不给Model控制 |
+| maxStagesPerCall | 默认128，1–128，含义同协调器 |
+
+提供start/resume/load、getPublicAgentTask、accept、getPublicTerminalFrame、readTrustedTerminalResult、readHistoricalAck、revokeKey、policyHash与securityMode。
+
+`getPublicAgentTask({runId})`只返回经过inputs白名单和授权检查的任务，非waiting时可为null；不要序列化内部frame作为替代。`accept({receipt,attestation})`验证后才委托协调器接纳。终态先通过`getPublicTerminalFrame({runId})`得到不含state的resultRef，再由独立授权方调用`readTrustedTerminalResult({resultRef})`。
+
+readHistoricalAck接收namespace/runId/requestId/nodeId/attempt/receiptHash，经receipt:read-history授权，只读原索引；revokeKey接收公钥SPKI SHA-256，经host:revoke-key授权在该Store撤销。撤销不能靠换keyId规避，也不会跨两个Store自动传播。完整历史Ack和新签名接纳是不同权限/行为。
+
+### normalizeHostAgentReceipt {#normalizeHostAgentReceipt}
+
+同步规范化JSON receipt，失败抛FK_I_PROVENANCE_REJECTED。共同字段是runId/requestId/nodeId/attempt及kind；agent-result带result，agent-call-failed带`failure:{message}`。只用Host已关联的当前请求/回调，不把Model声称的身份作为独立证据。
+
+### createAgentReceiptStatement {#createAgentReceiptStatement}
+
+同步接收`{run, receipt, keyId, proofId, issuedAt, expiresAt}`，返回只读HostAgentReceiptStatement。run来自Host的权威Store，含namespace/artifactHash/policyHash；时间为正安全整数毫秒且expiresAt大于issuedAt。用于签名的keyId限1–64个协议字符，proofId限1–128，不能把任意字符串当合法标识。
+
+语句绑定协议domain、key/proof、租户、Run、请求、节点/尝试、receipt种类、产物/策略/回执哈希与时间。该函数不持有私钥，也不证明真实模型调用。
+
+### encodeAgentReceiptStatement {#encodeAgentReceiptStatement}
+
+同步返回规范Uint8Array签名字节。Host用自己的Ed25519私钥签它；attestation为`{statement, signature}`，signature是规范base64url的64字节签名。不得自行JSON.stringify代替规范编码，也不得把私钥放进DSL、state或Model任务。新签收需满足时钟/有效期；已接纳的同字节重传按持久索引返回原接纳，仍验证签名和现行信任条件。
+
+## 版本化Host接口
+
+### createSqliteInteractivePersistence {#createSqliteInteractivePersistence}
+
+`createSqliteInteractivePersistence(file,{namespace})`返回`{store,programRegistry,adminController,close}`。store的方法均为Promise，见CheckpointStoreV1：createIfAbsent、load、compareAndSwap、loadTransition、loadReceipt。注册表方法为putImmutable、resolveByHash、describe、retain、release；不能把同步Store直接传入版本化options。
+
+putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有namespace、artifactHash和programId；保留/释放与Run持久引用一致，不能在Run仍引用时自行删产物。自定义实现必须保留R5封套全部字段以及原子创建/CAS、转换与回执对账契约；不要把公开frame当checkpoint存储。
+
+### createInteractiveHostContext {#createInteractiveHostContext}
+
+`createInteractiveHostContext({namespace,subjectId,authorize,authorizeTask})`返回不透明授权对象。四项必需；authorize判断run:create/run:complete/run:resume/result:read，authorizeTask逐次决定任务披露，两者只有严格true允许。工厂保存回调绑定，不能用展开/反序列化对象替代。它不自动从OS取得subjectId或证明生产身份。
+
+### start {#start}
+
+`await start(sourceOrRef, runtime, initialState, {...options,startKey})`。source字符串是Host已授权的**文件路径**，不是DSL文本；也可给受信注册表的Program引用。options含同namespace的store/programRegistry、policy和auth；startKey必需。同key/意图重试与意图冲突分开，已有Run恢复也需要授权。
+
+RuntimeV1的skillResolver/validateResult为`{id,version,mode,implementation}`描述符，须与policy.bindingManifest一致。mode分别是trusted-read/pure-local；skillResolver收到reference和可选descriptor，校验器同步返回string[]；文本/reasons上限及paused/errored分流同上文绑定约束。policy还含id/version、disclosePolicyId、capabilityStage:P0-A、canonicalizationVersion:jcs-rfc8785-v1和可选requiredSkillManifestHash。不能把同步Runtime裸函数直接传进来。
+
+maxStagesPerCall默认128，signal可选并需宿主协作。JSON状态和策略须能规范化，不能放函数、undefined、非有限数字或登录凭据。
+
+### complete {#complete}
+
+`await complete(submission,runtime,options)`是Host特权调用。成功submission仅有kind:'agent'、runId、requestId、outcome:'succeeded'及result对象；失败用outcome:'failed'及error对象，其code/message必需，retryable/origin可选。origin仅为runtime/executor/validator/store/policy之一。
+
+Host先校验真实执行器来源并关联当前请求，再调用本接口；它不接受Trusted Host的attestation包，也不自动等价于Ed25519来源认证。结果的acknowledgement含requestId、acceptedRevision、repeated；同字节重试与不同内容冲突分别处理。
+
+### resume {#resume}
+
+`await resume(runId,runtime,options)`重用原Run/策略/绑定推进，不能改成另一个工作流“恢复”。返回公开InteractiveFrameV1：protocolVersion/runId/revision/status、pending数组、checkpointRef及按状态出现的terminal/resultRef/acknowledgement/diagnostics；不直接返回state。
+
+完整结果用`auth.readTerminalResult(resultRef,options)`另经result:read授权取得。审计上下文可以只允许这个动作，不应把Model任务与完整状态读取合并。
+
+**1.0.0版本化读取的已知限制：** succeeded/failed的结果读取可按上述方式使用；持久R5封套为errored、带顶层causeCode且terminal为null时，当前版本的readTerminalResult会抛TypeError，不能承诺所有终态都可经此方法读回。Host应先按frame.status分流，保留Run/resultRef和原错误投影，在已有授权的Host审计渠道查证；不要因读取失败重提业务回执、重建Run或向Model开放原始Store。本例只验证succeeded读取；此处记录现有版本限制，不改动底层签收和存储行为。
+
+### createInteractiveAdminContext {#createInteractiveAdminContext}
+
+`createInteractiveAdminContext({namespace,subjectId,authorize})`建立独立管理上下文，供`adminController.adminTerminate(runId,reasonCode,auth)`授权终止。管理员主体/动作与运行、审计主体分别配置，取消后的旧Pending不能复活。它不是模型可提交的JSON对象，也不是自动创建OS管理员。
+
+## 错误、版本与结构参考
+
+普通参数违约可为TypeError/RangeError/I/O错误；编译error在diagnostics；权限或披露失败为FK_I_HOST_DENIED，签收来源失败为FK_I_PROVENANCE_REJECTED。未支持图/绑定、产物/策略失配、过期请求或回执冲突、CAS冲突、容量和存储异常须按实际code处理，不承诺全部包装成一个错误形状。
+
+常用分类：FK_I_UNSUPPORTED_GRAPH/FK_I_BINDING_MISSING；FK_I_PROGRAM_MISMATCH/FK_I_POLICY_MISMATCH；FK_I_INVALID_RECEIPT/FK_I_STALE_RECEIPT/FK_I_RECEIPT_CONFLICT；FK_I_START_CONFLICT/FK_I_RUN_CONFLICT/FK_I_CAS_CONFLICT；FK_I_SKILL_CONTRACT/FK_I_VALIDATOR_CONTRACT及可暂停的FK_I_TEMPORARY_SKILL；FK_I_CHECKPOINT_CAPACITY；FK_I_STORE_UNCERTAIN/FK_I_STORE_CORRUPT/FK_I_STORE_SCHEMA/FK_I_STORE_UNSAFE。先保留当前Run及证据，确认持久结果后再重试；不能凭错误消息把未接纳请求写成已Ack。
+
+下列声明给出全部导出类型、嵌套字段、条件返回和接口签名。品牌标记/辅助类型用于表达约束，不作为额外可构造能力；policy/namespace/产物/ABI/语义/封套版本不匹配不能靠改字段绕过。运行及维护限制仍以本页和[Host与Store](/guide/interactive-host-store)为准。
+
+```ts file="../../../types/interactive.d.ts" title="Interactive公开声明与完整结构"
+```

@@ -67,3 +67,6 @@ deploy.mjs在构建目录先compile，再复制六类文件到deployment；该�
 ## 完成标准
 
 你应能运行成功路径、观察上述反例并恢复成功，解释状态字段及对应控制流。PowerShell用$LASTEXITCODE、Bash用echo $?查看上一条命令退出码。源码修改后重新compile/check，不继续使用不匹配的旧产物。继续阅读[相关契约](/guide/aot)，或回到[选择示例](/examples/index)。
+
+
+需要执行侧不依赖FlowKit的当前版本参考例时，参见[直接Host路径](/guide/direct-host)及[完整文件](/examples/direct-host)。它自行供给上下文/Skill/校验，不自动获得SDK AOT加载检查。
