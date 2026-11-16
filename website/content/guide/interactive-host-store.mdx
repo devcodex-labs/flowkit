@@ -30,6 +30,22 @@ SQLite父目录和DB/WAL/SHM由Host保护，数据库不是模型可编辑文件
 
 大业务内容由Host选定存储，校验快照后在现有结果中返回小引用；FlowKit不替你选择文件位置、下载权限、TTL或业务删除规则。参考Store的最近回执摘要有界，历史接纳由持久索引支持；不能随手清索引/Journal/仍被Run引用的Program。
 
+## 超大回执与传输失败 {#oversized-receipts}
+
+Trusted Host的签名v1协议限制**整个receipt的规范JSON为2 MiB**，含请求元数据、结果及封套；这不同于上文完整Checkpoint预算，也不同于Skill的UTF-16文本长度限制。接入方应在组装和签名前区分：
+
+| 情形 | 处理与持久结果 |
+| --- | --- |
+| 未认证或原始receipt已超出2 MiB | normalizeHostAgentReceipt在签名/来源验证前拒绝，code为FK_I_PROVENANCE_REJECTED；Checkpoint、Journal及接纳索引不变，Run可以继续waiting |
+| Host拥有的可信传输独立观察到当前供应商输出超限 | 关联权威Pending的Run/request/node/attempt，仅构造小型agent-call-failed及固定长度failure.message，规范化后用Host Ed25519签收。它是被接纳的失败回执，按原Agent retries重试或最终errored(FK_R004)，有正常acceptedRevision；在现行信任验证通过时，同字节重复回执返回原Ack |
+| 已认证且v1有界的结果，在接纳CAS前使整个活动Checkpoint超预算 | 可走容量预留出口，持久化errored(FK_I_CHECKPOINT_CAPACITY)，不把该结果记为已接纳，也不返回该结果的acceptedRevision |
+
+可信超限观察必须来自Host认证的供应商/会话传输或流式限额器，独立绑定本次请求和真实结果；模型文本自报超限不构成证据。failure.message使用Host固定的小消息，不拼接完整模型输出。签署前用[回执规范化](/reference/interactive#normalizeHostAgentReceipt)核对大小/形状，再按现有statement/签名协议接纳，不能直接发送未签名的“失败”来改变Run。
+
+FK_I_PROVENANCE_REJECTED也用于伪造、失配、畸形或不支持的回执，**不能把任意该错误捕获后改写成已认证的超限失败**。无法独立认证输出超限时保留Pending，按Host已有交付/幂等策略对账。传输应预先限制流量与缓冲，避免先无限收集响应再检查大小；Host选择的小文件/存储引用仍须满足Agent Schema、披露和完整性规则。
+
+现有host-oversize回归使用受控的可信传输观察，验证编译器、Program、SQLite、签名、重试/终态和历史Ack；它不证明真实供应商来源或故障已验证。生产和原生模型门禁继续分别判断。
+
 ## 签名、撤销、恢复
 
 Host将真实观察关联到当前Pending后，规范化receipt并用encodeAgentReceiptStatement的字节签署。新请求检查签名、租户、策略/产物、时间与尝试；已接纳的同字节重传可对账原Ack，仍须满足现行信任验证。时钟、密钥轮换和持久签收均由Host管理，私钥不进入Model或证据导出。

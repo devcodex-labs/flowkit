@@ -20,6 +20,8 @@
 
 未知/Symbol字段、accessor及不合法类型不静默忽略。成功返回code、diagnostics、programIdentity；失败可返回空code且无identity。programIdentity包含artifact/source/workflow/compiler/ABI/semantics/checkpoint/canonicalization/stage身份，含义见本页完整类型。此接口不返回Mermaid；Standard编译图与Interactive执行产物不可互换。
 
+静态诊断复用Standard分析器，编译器不下载远程Skill。skillCheck:false只跳过本地存在性检查，不放宽HTTPS白名单或integrity要求。flowkit.config.mjs由CLI读取，SDK不会隐式执行它。
+
 ### loadInteractiveProgram {#loadInteractiveProgram}
 
 `loadInteractiveProgram(bytes, expectedArtifactHash)`验证Uint8Array产物及预期SHA-256并返回Promise，成功得到artifactHash、interactiveProgram、programTable、advance。Host应先从独立受信构建获得并固定哈希。此加载器和哈希检查不构成进程/OS沙箱，不接受Model指定的任意模块。
@@ -68,6 +70,10 @@ Host应按实际临时故障分类映射允许暂停的code，不能把所有异
 
 这是Host内部接口，原始frame可包含state和单个pending；不含完整来源认证/模型披露边界。Model不能直接得到Store或complete能力。
 
+同步Coordinator/Trusted Host会固定整个Host policy的指纹；Host可把经批准的Skill、校验器及其依赖版本声明放入policy.bindingVersions，并在Run生命周期保留对应实现。这是同步接口的Host约定，不是对任意JS闭包/可变资源的自动身份检测，也不是legacy Run的强制新字段。版本化接口另须满足下文policy.bindingManifest的描述符约束，不能用推荐的bindingVersions替代它。
+
+协调器实例有4项LRU，仅缓存已验证的不可变Program对象，不缓存Store记录或进度。每阶段仍读取Host Store、验证当前产物字节/身份、策略与执行位置；缓存命中不能使已变更/缺失的产物合法。该缓存不跨实例共享，不提供延迟SLA。诊断脚本为仓库scripts/bench-interactive-load.mjs，性能样本不等于生产承诺。
+
 ## Trusted Host与签收
 
 ### createTrustedInteractiveHost {#createTrustedInteractiveHost}
@@ -99,6 +105,8 @@ readHistoricalAck接收namespace/runId/requestId/nodeId/attempt/receiptHash，�
 ### normalizeHostAgentReceipt {#normalizeHostAgentReceipt}
 
 同步规范化JSON receipt，失败抛FK_I_PROVENANCE_REJECTED。共同字段是runId/requestId/nodeId/attempt及kind；agent-result带result，agent-call-failed带`failure:{message}`。只用Host已关联的当前请求/回调，不把Model声称的身份作为独立证据。
+
+整个原始receipt的规范JSON上限为2 MiB，含元数据和结果封套；超限在Host accept的签名/来源验证前拒绝且不改变Run。runId/requestId/nodeId均为非空、最多256个JS代码单元的标识，不能含控制字符；attempt为1–11整数。failure.message必须非空且length不超过4096。超大原始回执、可信传输独立观测的输出超限和Checkpoint容量出口分别处理，见[三类分流与安全恢复](/guide/interactive-host-store#oversized-receipts)；不能把泛化来源拒绝当作可签署失败的证据。
 
 ### createAgentReceiptStatement {#createAgentReceiptStatement}
 
@@ -142,7 +150,9 @@ Host先校验真实执行器来源并关联当前请求，再调用本接口；�
 
 完整结果用`auth.readTerminalResult(resultRef,options)`另经result:read授权取得。审计上下文可以只允许这个动作，不应把Model任务与完整状态读取合并。
 
-**1.0.0版本化读取的已知限制：** succeeded/failed的结果读取可按上述方式使用；持久R5封套为errored、带顶层causeCode且terminal为null时，当前版本的readTerminalResult会抛TypeError，不能承诺所有终态都可经此方法读回。Host应先按frame.status分流，保留Run/resultRef和原错误投影，在已有授权的Host审计渠道查证；不要因读取失败重提业务回执、重建Run或向Model开放原始Store。本例只验证succeeded读取；此处记录现有版本限制，不改动底层签收和存储行为。
+读取支持succeeded、failed、errored和cancelled终态。succeeded/failed返回terminal；errored在持久封套含错误码时返回顶层causeCode，例如FK_I_VALIDATOR_CONTRACT或FK_R004，不能从可能为null的terminal读取它。不是每个终态都有causeCode，调用方应按status与实际字段处理。本例演示succeeded读取，错误终态、重开Store及授权拒绝由SDK回归覆盖。
+
+结果读取仍逐次验证主体授权、namespace、policy与resultRef的Run/revision，只读当前终态，不推进Run或改写Checkpoint、Journal与接纳索引。读取失败时保留Run/resultRef并查证原因，不通过重提业务回执、重建Run或向Model开放原始Store处理。
 
 ### createInteractiveAdminContext {#createInteractiveAdminContext}
 

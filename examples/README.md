@@ -1,6 +1,6 @@
 # FlowKit 示例
 
-初次使用请从[中文快速开始](https://devcodex-labs.github.io/flowkit/guide/quick-start.html)进入。用户教程主源位于 [docs/](docs/)，使用公开的 `@devcodex-labs/flowkit@1.0.0` 入口；下面保留原有三个仓库回归示例的命令与说明。
+初次使用请从[中文快速开始](https://devcodex-labs.github.io/flowkit/guide/quick-start.html)进入。完整使用说明维护在[网站](../website/content/)；教程的可执行源文件位于本目录下的[examples/docs](docs/)，使用公开的 `@devcodex-labs/flowkit@1.0.0` 入口，包安装需授权。下面保留原有三个仓库回归示例的命令与说明。
 
 ## 用户教程
 
@@ -20,10 +20,13 @@
 | [cancellation](docs/cancellation/) | 取消传播和资源清理 |
 | [run-cache](docs/run-cache/) | 进程内编译缓存和每次运行的状态 |
 | [sdk-options](docs/sdk-options/) | SDK、配置、CLI 和公共类型 |
+| [capability-graph](docs/capability-graph/) | Provider发现与显式Host动作绑定 |
+| [direct-host](docs/direct-host/) | 编译侧交付与无FlowKit依赖的所选执行侧 |
+| [interactive](docs/interactive/) | P0-A签收、同Pending续跑与授权结果读取 |
 
 示例中的 Agent 输出、人工决策与远程响应用于演示编排行为，不调用真实模型或审批 UI。固定远程响应不代表已验证互联网服务。替换真实服务前阅读[宿主接入](https://devcodex-labs.github.io/flowkit/guide/host-integration.html)。
 
-仓库构建后执行 `npm run docs:examples`，验证脚本会在临时项目真实安装候选 tarball 并运行这些教程。公开 npm 包消费与文档站发布步骤见[发布维护](https://devcodex-labs.github.io/flowkit/maintainers/releasing.html)。
+仓库构建后执行 `npm run docs:examples`，验证脚本会在临时项目真实安装候选 tarball 并运行这些教程。候选包、授权私有包消费与文档站发布步骤见[发布维护](https://devcodex-labs.github.io/flowkit/maintainers/releasing.html)。
 
 ## Contents
 
@@ -98,7 +101,7 @@ Copy [host.mjs](host.mjs) into your application and inject real services. The
 schemas and rejects other schema keywords. It is not a general JSON Schema
 validator. Production hosts must bind a complete validator for their schema
 dialect, actual model execution, business actions and an approval service. See
-[host integration](../docs/host-integration.md) and [troubleshooting](../docs/troubleshooting.md).
+[host integration](https://devcodex-labs.github.io/flowkit/guide/host-integration.html) and [troubleshooting](https://devcodex-labs.github.io/flowkit/troubleshooting/index.html).
 
 示例目录不随 npm 包分发。v1.0.0 包包含 `dist`、`README.md`、`LICENSE` 和包元数据；用户可从仓库或文档站获取完整教程文件。
 

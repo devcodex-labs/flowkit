@@ -153,6 +153,63 @@ test('R5 CAS recovers from a lost response only with durable transition evidence
   assert.deepEqual(await f.options.store.load(second.runId),stale);
 });
 
+test('R5 errored result reads return the persisted cause without changing execution data',async t=>{
+  for(const [name,bindings,result,causeCode] of [
+    ['validator-contract',{...runtime,validateResult:{...runtime.validateResult,
+      implementation(){throw new Error('fixed local validator error');}}},{answer:'yes'},'FK_I_VALIDATOR_CONTRACT'],
+    ['retry-exhaustion',runtime,{answer:37},'FK_R004'],
+  ]) await t.test(name,async t=>{
+    const f=await fixture(t);
+    const waiting=await start(f.program,bindings,{message:'hello',secret:'private'},f.options);
+    const final=await complete(submission(waiting,result),bindings,f.options);
+    assert.equal(final.status,'errored');
+    const checkpoint=await f.options.store.load(final.runId);
+    assert.equal(checkpoint.terminal,null);
+    assert.equal(checkpoint.causeCode,causeCode);
+    const journal=f.raw.listJournal(final.runId);
+    const receipt=await f.options.store.loadReceipt(final.runId,waiting.pending[0].requestId);
+    const denied=context({authorize:({action})=>action!=='result:read'});
+    await assert.rejects(denied.readTerminalResult(final.resultRef,f.options),{code:'FK_I_HOST_DENIED'});
+    await assert.rejects(f.options.auth.readTerminalResult({...final.resultRef,revision:final.revision+1},f.options),
+      {code:'FK_I_HOST_DENIED'});
+    const expected={projectionVersion:1,namespace:ns,runId:final.runId,status:'errored',
+      state:{message:'hello',secret:'private'},contextError:null,causeCode};
+    assert.deepEqual(await f.options.auth.readTerminalResult(final.resultRef,f.options),expected);
+    const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
+    try {
+      const auth=context();
+      assert.deepEqual(await auth.readTerminalResult(final.resultRef,{...f.options,...reopened,auth}),expected);
+    } finally {reopened.close();}
+    assert.deepEqual(await f.options.store.load(final.runId),checkpoint);
+    assert.deepEqual(f.raw.listJournal(final.runId),journal);
+    assert.deepEqual(await f.options.store.loadReceipt(final.runId,waiting.pending[0].requestId),receipt);
+  });
+});
+
+test('R5 result reads preserve business-failed and cancelled shapes without a cause',async t=>{
+  for(const status of ['failed','cancelled']) await t.test(status,async t=>{
+    const f=await fixture(t);
+    let final;
+    if(status==='failed') {
+      const file=path.join(f.dir,'failed.workflow.js');
+      await writeFile(file,bare.replace("status:'succeeded'","status:'failed'"));
+      final=await start(file,{}, {secret:'private'},{...f.options,policy:{...policy,bindingManifest:{}}});
+    } else {
+      const waiting=await start(f.program,runtime,{secret:'private'},f.options);
+      const admin=createInteractiveAdminContext({namespace:ns,subjectId:'ops',authorize:()=>true});
+      final=await f.persistence.adminController.adminTerminate(waiting.runId,'OPERATOR',admin);
+    }
+    assert.equal(final.status,status);
+    const opts=status==='failed'?{...f.options,policy:{...policy,bindingManifest:{}}}:f.options;
+    const result=await opts.auth.readTerminalResult(final.resultRef,opts);
+    assert.equal(result.status,status);
+    assert.deepEqual(result.state,{secret:'private'});
+    assert.equal(Object.hasOwn(result,'causeCode'),false);
+    if(status==='failed') assert.deepEqual(result.terminal,{nodeId:'done',status:'failed'});
+    else assert.equal(Object.hasOwn(result,'terminal'),false);
+  });
+});
+
 test('R5 file source works without Agent bindings and honors pre-aborted operations',async t=>{
   const f=await fixture(t);
   const file=path.join(f.dir,'terminal.workflow.js');

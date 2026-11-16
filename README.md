@@ -6,6 +6,8 @@
 
 [公开文档](https://devcodex-labs.github.io/flowkit/) · [工作流示例](https://devcodex-labs.github.io/flowkit/examples/index.html) · [内部示例源码](https://github.com/devcodex-labs/flowkit/tree/main/examples)
 
+完整使用说明维护在网站。站点尚未部署或暂时不可访问时，可读取同版本的[站点源码](https://github.com/devcodex-labs/flowkit/tree/main/website/content)与[完整教程文件](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)，或按[站点维护说明](https://github.com/devcodex-labs/flowkit/blob/main/website/content/community/contributing.mdx)本地预览；包安装仍需相应权限。
+
 ## 适用场景
 
 适合需要条件分支、并行处理、校验重试、循环修复或人工决策的多步骤任务。模型调用、业务接口、Schema 校验器及人工交互由宿主提供。下方 Standard 示例在同一进程执行，并行分支共享状态，`any` 汇合后其他分支仍可继续。需要持久化暂停和跨进程续跑的内部维护者可查看 [Interactive P0-A 接入](https://devcodex-labs.github.io/flowkit/guide/interactive)。

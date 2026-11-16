@@ -298,7 +298,7 @@ async function readTerminalResult(resultRef,options) {
     projectionVersion:1,namespace:cp.namespace,runId:cp.runId,status:cp.status,
     state:cp.state,contextError:null,
     ...(cp.status==='succeeded'||cp.status==='failed' ? {terminal:{nodeId:cp.terminal.nodeId,status:cp.status}} : {}),
-    ...(typeof cp.causeCode==='string' ? {causeCode:cp.terminal.causeCode} : {}),
+    ...(typeof cp.causeCode==='string' ? {causeCode:cp.causeCode} : {}),
   });
 }
 

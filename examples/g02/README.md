@@ -10,7 +10,7 @@
 - 操作脚本：[`run-standard.mjs`](run-standard.mjs)、[`run-interactive.mjs`](run-interactive.mjs)
 - 可重复测试：[`../../tests/interactive/g02-product-closed-loop.test.mjs`](../../tests/interactive/g02-product-closed-loop.test.mjs)
 - 模型回执夹具：[`../../tests/fixtures/g02/`](../../tests/fixtures/g02/)
-- 证据目录：[`../../docs/evidence/g02-intent-js-closed-loop-20261112/`](../../docs/evidence/g02-intent-js-closed-loop-20261112/)
+- 冻结证据：[83a0530中的G02历史目录](https://github.com/devcodex-labs/flowkit/tree/83a05306d82f374d054a5afef0137bd4e4cb8074/docs/evidence/g02-intent-js-closed-loop-20261112/)。根docs清理后仍按该不可变提交追溯；这些是当时的记录，不代表当前发行/生产验收通过。
 
 ## 分层说明
 
