@@ -2,7 +2,15 @@
 
 <a id="flowkit-doc-host"></a>
 
-## 普通模型 API
+## Host 独立执行主体
+
+`/host` 的 `createIndependentAgentAdapter` 接收 Host 的 `select` 和 `authorize`，按 Artifact、Run 与 Node 绑定执行主体、会话、工作区和权限引用。Host 返回的 `IndependentAgentBinding` 执行 PreparedAgentTask。配置由 `IndependentAgentOptions` 描述。
+
+需要独立复审的任务可用 `independentFrom` 提供实现者身份。重复主体、会话或工作区被拒绝。会话绑定按 Run 和 Artifact 保留，显式 `releaseRun` 只能释放已无实际执行的 Run。默认并发上限 4、会话绑定上限 64、单任务时限 30 秒，均可由 Host 配置。
+
+超时与取消后，已启动且尚未结束的 Host 执行仍占容量。迟到结果不会变成已返回任务的成功。真正的会话创建、模型调用、独立凭据与工作区隔离由 Host 实现。普通单 Agent 工作流沿用原 Runtime 入口。
+
+## 模型 API 工具循环
 
 `@devcodex-labs/flowkit/host` 的 `createApiAgentAdapter` 接收 PreparedAgentTask，调用 Host 提供的 Responses 传输，再把输出交回统一 AgentExecutionResult。Host 为工具提供 schema、参数验证、授权、执行与副作用分类。写工具还提供稳定的业务 operation key，以回执识别重放和参数冲突。
 
