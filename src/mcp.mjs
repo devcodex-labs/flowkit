@@ -36,7 +36,8 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   function catalog(collectionId) {
-    const snapshot = typeof store.readCollectionMetadata === 'function' ? store.readCollectionMetadata(collectionId) : store.readCollection(collectionId);
+    const snapshot = typeof store.readCollectionMetadata === 'function' ? store.readCollectionMetadata(collectionId,
+      {limit:Math.min(Number.MAX_SAFE_INTEGER,maxMetadataEntries+1)}) : store.readCollection(collectionId);
     if (!snapshot) throw new Error('Collection is unavailable');
     return snapshot;
   }

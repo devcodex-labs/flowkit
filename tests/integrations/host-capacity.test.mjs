@@ -28,6 +28,8 @@ test('1026 approved Skills use bounded metadata pages and keep identical logical
         await publishProfessionalSkill(candidate,{reviewRef:'review',approvalRef:'fixture-approved',previousHash:null},fixture.options.store);
       }
       let bodyReads=0;const store=fixture.options.store;
+      assert.equal(store.readCollectionMetadata('test-collection',{limit:3}).skills.length,3);
+      assert.throws(()=>store.readCollectionMetadata('test-collection',{limit:-1}));
       fixture.options.store={...store,readCollection(){assert.fail('MCP must use metadata-only queries');},
         readVersion(...args){bodyReads++;return store.readVersion(...args);}};
       fixture.bodyReads=()=>bodyReads;

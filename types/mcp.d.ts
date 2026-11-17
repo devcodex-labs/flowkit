@@ -1,6 +1,6 @@
 /** A Host-owned approved artifact store. */
 interface Store {
-  readCollectionMetadata?(collectionId:string):{collection:{name:string};skills:Array<Omit<Candidate,'files'>>}|null;
+  readCollectionMetadata?(collectionId:string,options?:{limit:number}):{collection:{name:string};skills:Array<Omit<Candidate,'files'>>}|null;
   readCollection(collectionId: string): { collection: { name: string }; skills: Candidate[] } | null;
   readVersion(collectionId: string, skillId: string, hash: string): Candidate | null;
   applyCollectionPlan(plan: { destination: { id: string } }, approvalRef: string): unknown;
