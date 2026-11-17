@@ -55,9 +55,11 @@ export async function stageCollectionForDiscovery(store, collectionId, hostOwned
 
 /** Remove only an unchanged generation this adapter created, after the Host withdraws its discovery mapping. */
 export async function removeCollectionGeneration({hostOwnedRoot,discoveryRoot,collectionId,authorizeRemoval}) {
-  const root=await realpath(hostOwnedRoot),target=path.resolve(discoveryRoot);
-  if(path.dirname(target)!==root || !/^flowkit-collection-[0-9a-f-]+$/.test(path.basename(target)) ||
-    (await lstat(target)).isSymbolicLink() || await realpath(target)!==target || typeof authorizeRemoval!=='function') {
+  const root=await realpath(hostOwnedRoot),requested=path.resolve(discoveryRoot);
+  const requestedStat=await lstat(requested);
+  const target=await realpath(requested);
+  if(path.relative(root,path.dirname(target))!=='' || !/^flowkit-collection-[0-9a-f-]+$/.test(path.basename(target)) ||
+    requestedStat.isSymbolicLink() || typeof authorizeRemoval!=='function') {
     throw new Error('Only an exact adapter-owned collection generation may be removed');
   }
   const markerFile=path.join(target,'.flowkit-generation.json');

@@ -121,7 +121,9 @@ test('generation uninstall removes only an unchanged approved adapter scope and 
   const foreign=path.join(generation.directory,'user-added.md');await writeFile(foreign,'keep user addition');
   await assert.rejects(removeCollectionGeneration(input),/user-owned/);
   assert.equal(await readFile(foreign,'utf8'),'keep user addition');await unlink(foreign);
-  await removeCollectionGeneration(input);assert.equal(await readFile(userFile,'utf8'),'keep original');
+  await removeCollectionGeneration(process.platform==='win32'?{...input,hostOwnedRoot:root.toUpperCase(),
+    discoveryRoot:generation.discoveryRoot.toUpperCase()}:input);
+  assert.equal(await readFile(userFile,'utf8'),'keep original');
   assert.equal(store.readVersion(options.collectionId,options.skillId,candidate.hash).hash,candidate.hash);
 });
 
