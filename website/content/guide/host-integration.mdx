@@ -1,5 +1,11 @@
 # 接入自己的宿主
 
+<a id="flowkit-doc-host"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/runtime/run.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/index.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/runtime/execution.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
+
+适用 FlowKit 1.0.0。先确定 Standard 或 Interactive 的能力范围，再提供相应类型的回调和授权。通过 Graph 发现能力后，仍由宿主提供动作绑定。
+
 Runtime 是 FlowKit 与模型、审批界面、业务函数之间的接缝。本页把 Agent、Skill、输出 Schema、业务检查和人工审批放在一个完整例子里。示例使用固定响应，便于先确认编排正确，再替换真实服务。
 
 ## 选择运行模式

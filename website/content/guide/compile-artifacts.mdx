@@ -1,5 +1,11 @@
 # 编译与检查
 
+<a id="flowkit-doc-compile"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/compiler/api.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/compiler/api.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/aot)
+
+适用 FlowKit 1.0.0。输入为静态 JS/TS DSL，编译能写出 JS 与可选 Mermaid。只读验证请用 `check`。用已保存的 JS 运行前，仍需按 [AOT 条件](/guide/aot)准备源文件和宿主。
+
 显式编译用于查看生成代码、保存 Mermaid 源码和准备预编译部署。run 也能直接处理 DSL，但它不等同于调用 compile 并写出同名产物。
 
 ## 三个接口的文件副作用

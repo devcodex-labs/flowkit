@@ -1,5 +1,11 @@
 # Runtime 契约
 
+<a id="flowkit-doc-runtime"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/runtime/run.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/index.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/runtime/run.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
+
+本页适用于 FlowKit 1.0.0 Standard Runtime。宿主提供模型、动作、授权与校验；需要持久化暂停和恢复时，请使用 [Interactive API](/reference/interactive)。
+
 Runtime是宿主提供的对象。isControlSignal始终必需，其余业务方法在工作流实际调用对应节点时需要；缺少方法不会自动得到一个默认模型或审批服务。Skill的两个读取方法有内建回退。
 
 ## 十个方法

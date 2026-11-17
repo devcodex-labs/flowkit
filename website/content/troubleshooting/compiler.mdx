@@ -1,5 +1,11 @@
 # 编译诊断
 
+<a id="flowkit-doc-compiler-errors"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/shared/contracts.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/contracts.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/tests/fixtures/errors)
+
+适用 FlowKit 1.0.0。定位诊断时保留源码、选项和错误码，再用 [SDK 的 check](/reference/sdk#check)复验。每条错误下面保留可执行反例和修复入口。
+
 这里列出v1.0.0全部52个编译诊断。C053和C059为warning，其余为error；编号不连续，不应把空缺编号当作功能。先看code，再结合file/line/column/nodeId定位。
 
 ## 如何复现与复验

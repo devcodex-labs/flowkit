@@ -1,5 +1,11 @@
 # 直接执行编译模块
 
+<a id="flowkit-doc-direct-host"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/runtime/run.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/index.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/runtime/execution.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
+
+适用 FlowKit 1.0.0。直接执行由宿主提供上下文与辅助方法。若需由 SDK 校验 AOT 产物及对应源码，参见 [AOT 指南](/guide/aot)。
+
 FlowKit 1.0.0 的Standard编译产物导出`async workflow(ctx)`。已有JavaScript宿主可提供上下文并调用它；本页的参考环境是Node.js ESM。FlowKit不要求另装一个独立二进制执行引擎。执行环境必须能够运行JavaScript和Host业务回调，把代码文本交给模型本身不等于执行。
 
 这是绑定**当前编译器版本与所选节点**的参考接入，不建立跨版本通用ABI，也不承诺所有模型宿主都能直接运行。首次使用请先完成[SDK宿主接入](/guide/host-integration)，再比较下列责任。

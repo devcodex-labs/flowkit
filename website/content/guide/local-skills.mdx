@@ -1,5 +1,11 @@
 # 本地 Skill
 
+<a id="flowkit-doc-local-skills"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/runtime/skills.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/runtime/skills.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/remote-skills)
+
+适用 FlowKit 1.0.0 的本地 Skill 加载。宿主负责决定可用目录和执行权限，拒绝出根或缺失内容时，按[运行时错误](/troubleshooting/runtime)核对诊断。
+
 Skill 是提供给 Agent 的 UTF-8 Markdown 说明文本。它由宿主或默认 loader 读取后成为 step.instruction。FlowKit 不把 Markdown 中的命令自动执行为工具，也不为内容注入权限。
 
 ## 两种定位方式

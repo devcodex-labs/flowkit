@@ -1,5 +1,11 @@
 # capability-graph 宿主消费示例
 
+<a id="flowkit-doc-provider-example"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/integrations/capability-graph.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/capability-graph.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/integrations/capability-graph.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/blob/main/examples/docs/capability-graph/verify.mjs)
+
+适用 FlowKit 1.0.0 与 Capability Graph 2.1.1。示例在宿主已配置可见能力和动作绑定时执行。查文档引用与执行业务操作各自验证，参见[文档读取](/guide/capability-provider#document-reading)。
+
 本示例使用 **独立的** `@devcodex/capability-graph@2.1.1`。FlowKit 不内置 Graph 服务或模型客户端，不改变 `agent`（Skill 路径映射）语义。只有宿主显式绑定的 `action` 会执行。
 
 ## 完整文件

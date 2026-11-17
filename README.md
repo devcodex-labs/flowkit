@@ -95,7 +95,11 @@ node host.mjs
 
 ## 公开接口
 
-能力图谱可选适配由 `@devcodex-labs/flowkit/capability-graph` 导出 `flowkitProvider` 和 `createCapabilityGraphActionAdapter`，它不内置模型或执行引擎；参见[能力声明](https://devcodex-labs.github.io/flowkit/guide/capability-provider.html)与[宿主消费示例](https://devcodex-labs.github.io/flowkit/examples/capability-graph.html)。
+<a id="flowkit-doc-readme"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/index.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/contracts.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/blob/main/examples/docs/quick-start/sample.workflow.js)
+
+可选集成 `@devcodex-labs/flowkit/capability-graph` 提供 `flowkitProvider` 和 `createCapabilityGraphActionAdapter`。先用[能力与文档指南](https://devcodex-labs.github.io/flowkit/guide/capability-provider.html)定位对应版本的文档，再按[宿主消费示例](https://devcodex-labs.github.io/flowkit/examples/capability-graph.html)提供实际动作和权限。
 
 SDK 根入口提供 `run`、`compile`、`compileSource`、`check`、`evalWhen`、`isControlSignal`。DSL 从 `@devcodex-labs/flowkit/dsl` 导入。CLI 提供 `compile` / `check`；运行流程使用 SDK。避免导入包内私有路径。
 

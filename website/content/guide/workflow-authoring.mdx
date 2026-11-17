@@ -1,5 +1,11 @@
 # 编写工作流与能力选型
 
+<a id="flowkit-doc-authoring"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/dsl.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/dsl.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/dsl.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
+
+适用 FlowKit 1.0.0。先用[能力目录](/guide/capability-provider)找到与当前版本匹配的说明，再对照[工作流模型](/guide/workflow-model)与[编译诊断](/troubleshooting/compiler)。本页说明当前的编写与验证路径。B3 的自然语言 Author 属于后续批次。
+
 本页为人类作者及开发宿主模型提供同一份编写依据：从业务目的选择现有能力，形成合法DSL和必要Host绑定，再检查业务结果。自然语言编写工作流Skill、MCP/插件封装和“流程图→DSL”接口属于后续迭代；当前可调用的是已列出的DSL、编译/检查和Host执行入口。
 
 ## 从业务目的到可执行交付

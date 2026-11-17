@@ -1,5 +1,11 @@
 # Interactive P0-A 接入
 
+<a id="flowkit-doc-interactive"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/interactive/index.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/interactive.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/interactive/versioned.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/interactive)
+
+适用 FlowKit 1.0.0 中已实现的 Interactive P0-A 子集。按 [Interactive API](/reference/interactive)提供受信 Host 与 Store，对不支持的节点按编译诊断处理。
+
 Interactive是Host持有状态和执行权限的独立接口，适合Agent暂停等待、同Run续跑、持久化接纳及授权读取。当前P0-A支持**Agent、Condition、Terminal**；Human、Action、Verification、Loop、Parallel以及Agent verify未开放。Agent绑定也不接受Standard的checkStep能力；不能通过忽略它来假装已校验。
 
 从`@devcodex-labs/flowkit/interactive`导入。它不自动提供模型、Codex登录、OS身份源、受信启动器或业务Schema校验器。先取得授权包与Node环境，再读[完整示例](/examples/interactive)、[分层API](/reference/interactive)和[Host/Store责任](/guide/interactive-host-store)。

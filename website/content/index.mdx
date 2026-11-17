@@ -22,6 +22,10 @@ features:
 
 import { Mermaid } from '../components/Mermaid';
 
+<a id="flowkit-doc-home"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/index.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/contracts.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/blob/main/examples/docs/quick-start/sample.workflow.js)
+
 ## 从定义到执行
 
 <Mermaid source={'flowchart LR\n A[JS / TS 工作流] --> B[静态编译与诊断]\n B --> C[JavaScript 与 Mermaid]\n C --> D[宿主 Runtime 执行]'} title="FlowKit 如何工作" description="先描述节点及连接关系，再检查并生成控制流，最后由你提供的宿主执行具体任务。也可以用 run 直接编译执行工作流源码。" />
@@ -40,6 +44,8 @@ import { Mermaid } from '../components/Mermaid';
 当任务包含多个业务步骤，并需要明确的分支、校验、重试或人工决策时，可以用 FlowKit 组织控制流。你仍需提供实际模型或业务服务，以及适合业务的结果校验器。
 
 本站快速开始使用 Standard，它在进程内执行完整流程。并行分支共享状态，`any` 汇合后其他分支仍可继续执行。需要持久化暂停和跨进程续跑时，内部维护者可评估 Interactive P0-A 及其可信 Host 和 SQLite Store。模型服务和审批界面由宿主提供。[宿主接入与模式范围](/guide/host-integration)
+
+需要在宿主中发现已声明的 FlowKit 能力时，先查看[能力和文档读取](/guide/capability-provider)，再按[宿主消费示例](/examples/capability-graph)提供明确绑定。
 
 [项目介绍](/guide/introduction) · [安装与环境](/guide/installation) · [授权与使用](/community/license)
 

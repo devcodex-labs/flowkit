@@ -1,5 +1,11 @@
 # 运行时错误
 
+<a id="flowkit-doc-runtime-errors"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/shared/contracts.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/contracts.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/tests/fixtures/errors)
+
+适用 FlowKit 1.0.0。排查时先保留调用模式、版本、错误码和宿主运行证据，再核对 [Runtime 契约](/reference/runtime)和[取消与错误传播](/guide/cancellation)。
+
 v1.0.0登记9个运行时代码，其中FK_R003预留、不抛。代码可以出现在run拒绝中，FK_R001也会出现在check诊断数组里。普通宿主/I/O异常不保证拥有这些代码。
 
 ## 如何读取错误

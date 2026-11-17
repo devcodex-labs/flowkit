@@ -1,5 +1,11 @@
 # 向 capability-graph 声明 FlowKit 能力
 
+<a id="flowkit-doc-provider"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/integrations/capability-graph.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/capability-graph.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/integrations/capability-graph.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/blob/main/examples/docs/capability-graph/verify.mjs)
+
+适用 FlowKit 1.0.0，示例验证使用 Capability Graph 2.1.1。使用能力 ID 查找结构化文档引用，按适用的 FlowKit 版本核对正文，然后决定宿主动作绑定。
+
 FlowKit 通过 `@devcodex-labs/flowkit/capability-graph` 导出 `flowkitProvider`。它是一份满足 `capability-graph` Provider Schema v1 的**静态能力声明**，不是额外的执行器。
 
 ## 已声明的能力
@@ -33,9 +39,20 @@ Graph 的 `requires` 表示能力前置关系（例如 `render-mermaid` 需要 `
 
 ## 版本、权限与限制
 
-此 Provider 声明版本随 FlowKit 包版本维护，不等于 Graph SDK 版本，也不等于 Graph 的结果 `revision`。`allowedProviders` 限定可见来源；`getCapabilities`、`resolve` 只读声明，不执行业务动作。FlowKit 的 `agent` 参数仍表示 Skill 映射，而非 Graph 能力 ID。
+Provider 声明版本、FlowKit 包版本、Graph SDK 版本和查询 `revision` 分别记录。本批映射的 Provider 声明版本为 1.0.1，适用 FlowKit 1.0.0。`allowedProviders` 限定可见来源。`getCapabilities` 和 `resolve` 返回声明和关系；执行仍由提供绑定的宿主负责。FlowKit 的 `agent` 参数仍表示 Skill 映射。
 
 如需将已解析能力绑定到业务操作，参见[宿主消费示例](/examples/capability-graph)。所有模型、动作权限和外部 IO 均由宿主提供。
+
+## 读取能力文档 {#document-reading}
+
+使用 `getCapabilities({ ids: ['flowkit::compile-workflow'] })` 取得 `capability.documents`。每条引用用稳定 `id` 标识。同一个页面可以关联到多项能力，例如编译和检查共用编译指南。先依据要执行的 FlowKit 版本选择文档；`usage.instructions` 提供简短的操作提示。
+
+| 文档来源 | 谁读取 | 结果与失败条件 |
+|---|---|---|
+| `source.type: 'file'` | 注册时指定可信 `documentRoot`，再调用 Graph 的 `readDocument({ capabilityId, documentId })` | 返回 UTF-8 正文、`byteLength`、`contentHash`。路径出根、文件缺失或无法解码时拒绝 |
+| `source.type: 'url'` | Graph 提供引用，`readDocument` 返回 `CG_DOCUMENT_REFERENCE_ONLY` | Host 对受信的固定 HTTPS 地址执行只读请求，验证状态、版本、字节和摘要 |
+
+包内 Provider 提供指向固定文档提交的 HTTPS 引用。仓库内验证可用同一文档 ID 和仓库文档根登记 file 来源。Host 读取时留存 URL、文档提交、FlowKit 和 Provider 版本、Graph revision、字节摘要及读取时间。遇到重定向、不可达、版本或摘要不匹配，保留错误并停止使用这一文档。能力发现、文档读取和业务执行分别授权。
 
 ## 根据任务取得完整使用说明
 
@@ -43,4 +60,4 @@ Graph 的 `requires` 表示能力前置关系（例如 `render-mermaid` 需要 `
 
 特别注意：八类节点属于Standard；Interactive P0-A只接受其已实现子集，使用[独立Host契约](/guide/interactive)。运行依赖由Host提供，getContext等桥接默认值与类型见[API参考](/reference/sdk#createCapabilityGraphActionAdapter)。
 
-Provider内的id是局部名，查询使用表中的`flowkit::…`完整ID。version是声明随包的版本，阅读对应版本文档；网站可访问性、私有包取得和运行权限分别核实。未能读取、版本不符或缺少绑定/前提时先补信息，不虚构参数或默认模型服务。未来自然语言编写Skill可引用这些同源资料；本页不宣称该Skill或自动模型编写服务已经提供。
+Provider 内的能力 ID 是局部名，查询使用表中的 `flowkit::…` 完整 ID。网站可访问性、私有包取得和运行权限分别核实。遇到文档缺失、版本不符或缺少绑定，请先查明所缺条件。后续自然语言 Author 将按目标版本消费这些文档。

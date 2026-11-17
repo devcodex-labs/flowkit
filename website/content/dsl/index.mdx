@@ -1,5 +1,11 @@
 # DSL 总览
 
+<a id="flowkit-doc-dsl"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/dsl.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/dsl.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/dsl.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
+
+适用 FlowKit 1.0.0。Standard 声明八类节点，Interactive P0-A 只接受其已实现子集。静态声明、字段形状和运行语义分别见[类型](/reference/types)、[编译与检查](/guide/compile-artifacts)和 [Interactive API](/reference/interactive)。
+
 从 `@devcodex-labs/flowkit/dsl` 导入构造器。v1.0.0 公开9个构造器：defineWorkflow 组织工作流，另外8个创建节点。DSL 描述控制流和数据契约，业务执行位于 Runtime。
 
 | 构造器 | 节点 type | 用途 | 参考 |

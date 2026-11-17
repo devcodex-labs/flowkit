@@ -1,5 +1,11 @@
 # 配置参考
 
+<a id="flowkit-doc-options"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/compiler/api.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/compiler/api.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/aot)
+
+本页说明 FlowKit 1.0.0 选项在哪个 API 生效。例如 `outDir` 不能为源码的兄弟目录，诊断见[编译与检查](/guide/compile-artifacts)。
+
 所有SDK options都经过类型和未知字段检查。支持以下11项；某阶段接受但不消费的选项仍要具有正确类型。undefined按未提供处理，null不是通用的“使用默认值”。
 
 ## 调用适用性矩阵

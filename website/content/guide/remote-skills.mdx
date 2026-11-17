@@ -1,5 +1,11 @@
 # 远程 Skill
 
+<a id="flowkit-doc-remote-skills"></a>
+
+实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/runtime/skills.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/compiler-api.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/runtime/skills.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/remote-skills)
+
+适用 FlowKit 1.0.0 的远程 Skill。按本文的宿主名单和内容完整性要求配置。Capability Graph 的文档 URL 引用由独立的宿主文档读取流程处理，见[能力声明](/guide/capability-provider)。
+
 远程 Skill 允许在 Agent 上引用受控 HTTPS Markdown 文件。v1.0.0 默认拒绝未放行主机；建议同时声明 integrity，将工作流绑定到经过审阅的确切内容。
 
 ## URL、主机和端口
