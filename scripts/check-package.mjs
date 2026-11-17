@@ -48,15 +48,16 @@ export async function validatePackage(root, packedPaths) {
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
   assert.equal(pkg.name, '@devcodex-labs/flowkit'); assert.equal(typeof pkg.private, 'boolean'); assert.equal(pkg.type, 'module');
-  assert.equal(pkg.engines.node, '>=22.13.0'); assert.deepEqual(pkg.dependencies, { acorn: '8.19.0' });
+  assert.equal(pkg.engines.node, '>=22.13.0');
+  assert.deepEqual(pkg.dependencies, { '@modelcontextprotocol/node': '2.1.2', '@modelcontextprotocol/server': '2.4.0', acorn: '8.19.0', zod: '4.6.7' });
   assert.deepEqual(pkg.bin, { flowkit: './dist/cli.mjs' });
   assert.deepEqual(Object.keys(lock.packages[''].bin), ['flowkit']);
   assert.ok(['./dist/cli.mjs', 'dist/cli.mjs'].includes(lock.packages[''].bin.flowkit), 'Lockfile bin must identify the same CLI');
   assert.deepEqual(lock.packages[''].dependencies, pkg.dependencies); assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].name, pkg.name); assert.equal(lock.packages[''].version, pkg.version);
   assert.deepEqual(pkg.files, ['dist', 'README.md', 'LICENSE']);
-  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './interactive', './package.json']);
-  for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs'], ['./capability-graph', './dist/capability-graph.d.ts', './dist/integrations/capability-graph.mjs'], ['./interactive', './dist/interactive.d.ts', './dist/interactive/index.mjs']]) {
+  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './interactive', './mcp', './package.json']);
+  for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs'], ['./capability-graph', './dist/capability-graph.d.ts', './dist/integrations/capability-graph.mjs'], ['./interactive', './dist/interactive.d.ts', './dist/interactive/index.mjs'], ['./mcp', './dist/mcp.d.ts', './dist/mcp.mjs']]) {
     assert.deepEqual(Object.keys(pkg.exports[key]), ['types', 'import', 'default']);
     assert.deepEqual(pkg.exports[key], { types, import: module, default: module });
   }
@@ -73,7 +74,12 @@ export async function validatePackage(root, packedPaths) {
     if (output.endsWith('/SKILL.md')) continue;
     for (const specifier of imports(bytes.toString(), output.endsWith('.d.ts'))) {
       if (specifier.startsWith('node:')) continue;
-      if (!specifier.startsWith('.')) { assert.ok(Object.hasOwn(pkg.dependencies, specifier), `Unlisted dependency: ${specifier}`); continue; }
+      if (!specifier.startsWith('.')) {
+        const parts = specifier.split('/');
+        const dependency = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+        assert.ok(Object.hasOwn(pkg.dependencies, dependency), `Unlisted dependency: ${specifier}`);
+        continue;
+      }
       const target = path.posix.normalize(path.posix.join(path.posix.dirname(output), specifier));
       const resolved = output.endsWith('.d.ts') ? target.replace(/\.js$/, '.d.ts') : target;
       assert.ok(members.has(resolved), `Missing packaged import: ${output} -> ${specifier}`);

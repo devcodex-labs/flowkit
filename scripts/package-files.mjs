@@ -2,6 +2,8 @@
 export const packageFiles = [
   ['src/index.mjs', 'dist/index.mjs'],
   ['src/cli.mjs', 'dist/cli.mjs'],
+  ['src/mcp.mjs', 'dist/mcp.mjs'],
+  ['types/mcp.d.ts', 'dist/mcp.d.ts'],
   ...['arguments', 'config', 'main'].map(name => [`src/cli/${name}.mjs`, `dist/cli/${name}.mjs`]),
   ['src/dsl.mjs', 'dist/dsl.mjs'],
   ['src/integrations/capability-graph.mjs', 'dist/integrations/capability-graph.mjs'],

@@ -2,6 +2,18 @@
 
 <a id="flowkit-doc-host"></a>
 
+## MCP 宿主入口
+
+`@devcodex-labs/flowkit/mcp` 提供 `createFlowkitMcpServer`、`connectFlowkitStdio` 和 `createFlowkitHttpHandler`。Host 为每个连接或请求绑定项目 namespace、可访问集合、同一 Author 服务和批准版本存储。每次工具或资源操作均调用 Host 授权函数。
+
+本地通过 stdio 连接。HTTP handler 由 Host 放进自己的服务，传入逐请求认证函数，返回对应身份的绑定。HTTP 调用之间需要继续审查或发布候选时，Host 持有该身份的 `pendingCandidates` Map，并按作用域分别管理。工具中的 `inputRef` 和 `planRef` 由 Host 解析为获准输入。
+
+工具覆盖起草、编译候选、查看差异、批准发布、丢弃候选、集合操作和运行。运行回调使用当前授权以及已批准 Artifact。Resources 使用包含 namespace、集合、Skill 和版本摘要的 URI。正文按需读取并受单次字节预算限制。
+
+支持当前 MCP Skills 扩展的客户端可以分页查询 Skill metadata，并校验资源内容。普通客户端使用 Tools/Resources。工作流和专业 Skill 共用原来的两层集合及批准身份。
+
+完整 Host 参数由 `FlowkitMcpOptions` 描述，`FlowkitMcpServer` 暴露连接和关闭生命周期。与模型运行、凭据和业务动作相关的实现由 Host 提供。
+
 实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/runtime/run.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/index.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/runtime/execution.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
 
 适用 FlowKit 1.0.0。先确定 Standard 或 Interactive 的能力范围，再提供相应类型的回调和授权。通过 Graph 发现能力后，仍由宿主提供动作绑定。

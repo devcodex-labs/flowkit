@@ -1,0 +1,199 @@
+import { McpServer } from '@modelcontextprotocol/server';
+import { SkillsExtension, skillEntry } from '@modelcontextprotocol/server/ext/skills';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import * as z from 'zod/v4';
+
+const id = z.string().min(1).max(256);
+const hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const response = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
+
+/** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
+export function createFlowkitMcpServer({ namespace, collectionIds, store, author, authorize,
+  resolveCompileInput, resolveCollectionPlan, runWorkflow, pendingCandidates = new Map(), limits = {} }) {
+  if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
+    !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
+    typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
+  const pageSize = limits.pageSize ?? 50;
+  const maxBytes = limits.maxResourceBytes ?? 262144;
+  const maxCandidates = limits.maxCandidates ?? 16;
+  if (![pageSize, maxBytes, maxCandidates].every(value => Number.isSafeInteger(value) && value > 0)) {
+    throw new TypeError('MCP limits must be positive integers');
+  }
+  const allowed = new Set(collectionIds);
+  const candidates = pendingCandidates;
+  const server = new McpServer({ name: 'flowkit', version: '1.0.0' });
+  const baseUri = `skill://${namespace}/`;
+  const candidateKey = candidateHash => `${namespace}\0${candidateHash}`;
+
+  async function access(operation, collectionId, ctx) {
+    ctx?.signal?.throwIfAborted();
+    if (!allowed.has(collectionId) || await authorize({ namespace, collectionId, operation, signal: ctx?.signal }) !== true) {
+      throw new Error('FlowKit access denied for this collection');
+    }
+    ctx?.signal?.throwIfAborted();
+  }
+
+  function catalog(collectionId) {
+    const snapshot = store.readCollection(collectionId);
+    if (!snapshot) throw new Error('Collection is unavailable');
+    return snapshot;
+  }
+
+  const metadata = candidate => ({ skillId: candidate.manifest.skillId, name: candidate.manifest.name,
+    version: candidate.manifest.version, candidateHash: candidate.hash, kind: candidate.manifest.kind ?? 'workflow' });
+  const candidateFor = (collectionId, candidateHash) => {
+    const candidate = candidates.get(candidateKey(candidateHash));
+    if (!candidate || candidate.manifest.collectionId !== collectionId) throw new Error('Candidate is unavailable in this collection');
+    return candidate;
+  };
+
+  function tool(name, description, schema, invoke, readOnlyHint = false) {
+    server.registerTool(name, { description, inputSchema: z.object(schema).strict(), annotations: { readOnlyHint } },
+      async (input, ctx) => {
+        await access(name, input.collectionId, ctx);
+        const result = await invoke(input, ctx);
+        await access(name, input.collectionId, ctx);
+        return response(result);
+      });
+  }
+
+  tool('flowkit_collection', 'Read approved metadata for one authorized FlowKit collection.', { collectionId: id },
+    ({ collectionId }) => { const { collection, skills } = catalog(collectionId); return { collection,
+      skills: skills.map(metadata) }; }, true);
+  tool('flowkit_start_workflow', 'Start a workflow draft using known collection choices.', {
+    collectionId: id, goal: z.string().min(1).max(maxBytes), executionMode: z.enum(['standard', 'interactive-p0-a']).optional(),
+    includeSource: z.boolean().optional()
+  }, ({ collectionId, goal, executionMode, includeSource }) => author.start(goal, {
+    collectionName: catalog(collectionId).collection.name, executionMode, includeSource
+  }));
+  tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
+    { collectionId: id, inputRef: id }, async ({ collectionId, inputRef }, ctx) => {
+      if (typeof resolveCompileInput !== 'function') throw new Error('Host compile binding is unavailable');
+      if (candidates.size >= maxCandidates) throw new Error('Discard or publish an existing candidate before preparing another');
+      const { plan, options } = await resolveCompileInput({ namespace, collectionId, inputRef, signal: ctx.signal });
+      if (options.collectionId !== collectionId) throw new Error('Host input belongs to a different collection');
+      const result = await author.prepare(plan, options);
+      if (result.candidate) {
+        const key = candidateKey(result.candidate.hash);
+        if (!candidates.has(key) && candidates.size >= maxCandidates) throw new Error('Candidate capacity changed during compilation');
+        candidates.set(key, result.candidate);
+      }
+      return result;
+    });
+  tool('flowkit_review_candidate', 'Read the exact candidate file difference before approval.',
+    { collectionId: id, candidateHash: hash, previousHash: hash.nullable() }, ({ collectionId, candidateHash, previousHash }) => {
+      const candidate = candidateFor(collectionId, candidateHash);
+      const previous = previousHash === null ? null : store.readVersion(collectionId, candidate.manifest.skillId, previousHash);
+      if (previousHash !== null && !previous) throw new Error('The expected previous version is unavailable');
+      return author.review(candidate, previous);
+    }, true);
+  tool('flowkit_publish_candidate', 'Publish an exact candidate after Host review and approval verification.',
+    { collectionId: id, candidateHash: hash, previousHash: hash.nullable(), reviewRef: id, approvalRef: id },
+    async ({ collectionId, candidateHash, ...receipts }) => {
+      const result = await author.publish(candidateFor(collectionId, candidateHash), receipts);
+      candidates.delete(candidateKey(candidateHash));
+      return { candidateHash: result };
+    });
+  tool('flowkit_discard_candidate', 'Discard a session candidate without changing approved Skill versions.',
+    { collectionId: id, candidateHash: hash }, ({ collectionId, candidateHash }) => {
+      candidateFor(collectionId, candidateHash);
+      candidates.delete(candidateKey(candidateHash));
+      return { discarded: candidateHash };
+    });
+  tool('flowkit_apply_collection_plan', 'Apply a Host-selected reviewed collection creation or migration plan.',
+    { collectionId: id, planRef: id, approvalRef: id }, async ({ collectionId, planRef, approvalRef }, ctx) => {
+      if (typeof resolveCollectionPlan !== 'function') throw new Error('Host collection binding is unavailable');
+      const plan = await resolveCollectionPlan({ namespace, collectionId, planRef, signal: ctx.signal });
+      if (plan.destination.id !== collectionId) throw new Error('Host collection plan belongs to a different collection');
+      return store.applyCollectionPlan(plan, approvalRef);
+    });
+  tool('flowkit_run_workflow', 'Run a fixed approved Artifact using the Host execution binding.',
+    { collectionId: id, skillId: id, candidateHash: hash, executionRef: id }, async (input, ctx) => {
+      if (typeof runWorkflow !== 'function') throw new Error('Host execution binding is unavailable');
+      return runWorkflow({ namespace, ...input, signal: ctx.signal });
+    });
+
+  function skillPath(candidate) {
+    const { collectionId, skillId, name } = candidate.manifest;
+    return [collectionId, skillId, candidate.hash.slice(7), name].map(encodeURIComponent).join('/');
+  }
+
+  async function findFile(uri, ctx) {
+    if (typeof uri !== 'string' || !uri.startsWith(baseUri)) return undefined;
+    const parts = uri.slice(baseUri.length).split('/');
+    let collectionId;
+    try { collectionId = decodeURIComponent(parts[0]); } catch { return undefined; }
+    await access('resources/read', collectionId, ctx);
+    if (parts.length < 5 || !/^[a-f0-9]{64}$/.test(parts[2])) return undefined;
+    let skillId;
+    try { skillId = decodeURIComponent(parts[1]); } catch { return undefined; }
+    const candidate = store.readVersion(collectionId, skillId, `sha256:${parts[2]}`);
+    if (!candidate) return undefined;
+    const prefix = baseUri + skillPath(candidate) + '/';
+    if (!uri.startsWith(prefix)) return undefined;
+    const relative = uri.slice(prefix.length);
+    if (!Object.hasOwn(candidate.files, relative)) return undefined;
+    const text = candidate.files[relative];
+    if (Buffer.byteLength(text) > maxBytes) throw new Error('Resource exceeds this Host read budget');
+    return { candidate, text };
+  }
+
+  const source = {
+    async list({ cursor }, ctx) {
+      const offset = cursor === undefined ? 0 : Number(cursor);
+      if (!Number.isSafeInteger(offset) || offset < 0 || cursor !== undefined && String(offset) !== cursor) throw new Error('Invalid Skill cursor');
+      const skills = [];
+      for (const collectionId of allowed) {
+        await access('skills/list', collectionId, ctx);
+        skills.push(...catalog(collectionId).skills);
+      }
+      skills.sort((a, b) => skillPath(a).localeCompare(skillPath(b)));
+      const selected = skills.slice(offset, offset + pageSize);
+      return { skills: await Promise.all(selected.map(candidate => skillEntry(skillPath(candidate), candidate.files, { baseUri }))),
+        ...(offset + pageSize < skills.length ? { nextCursor: String(offset + pageSize) } : {}) };
+    },
+    async get(uri, ctx) {
+      const file = await findFile(uri, ctx);
+      return file && uri.endsWith('/SKILL.md') ? skillEntry(skillPath(file.candidate), file.candidate.files, { baseUri }) : undefined;
+    },
+    async read(uri, ctx) {
+      const file = await findFile(uri, ctx);
+      return file ? { text: file.text, mimeType: uri.endsWith('.md') ? 'text/markdown' : 'text/plain' } : undefined;
+    },
+    async listResources(ctx) {
+      const resources = [];
+      let cursor;
+      do {
+        const page = await source.list({ cursor }, ctx);
+        resources.push(...page.skills.map(skill => ({ uri: skill.uri, name: skill.frontmatter.name, mimeType: 'text/markdown' })));
+        if (Buffer.byteLength(JSON.stringify(resources)) > maxBytes) throw new Error('Use scoped Skill discovery within the metadata budget');
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+      return resources;
+    }
+  };
+  new SkillsExtension({ source, baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' } }).attach(server);
+  return server;
+}
+
+export async function connectFlowkitStdio(options) {
+  const server = createFlowkitMcpServer(options);
+  await server.connect(new StdioServerTransport());
+  return server;
+}
+
+/** HTTP integration authenticates every request before binding its services. */
+export function createFlowkitHttpHandler(resolveHost) {
+  if (typeof resolveHost !== 'function') throw new TypeError('HTTP requires a Host authentication resolver');
+  return async (request, response) => {
+    const options = await resolveHost(request);
+    if (!options) { response.writeHead(401); response.end(); return; }
+    const server = createFlowkitMcpServer(options);
+    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(request, response);
+    } finally { await server.close(); }
+  };
+}

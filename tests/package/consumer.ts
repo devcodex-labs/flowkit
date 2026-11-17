@@ -1,4 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import { createFlowkitMcpServer } from '@devcodex-labs/flowkit/mcp';
+import type { FlowkitMcpOptions, FlowkitMcpServer } from '@devcodex-labs/flowkit/mcp';
+declare const mcpOptions: FlowkitMcpOptions;
+const mcpServer: FlowkitMcpServer = createFlowkitMcpServer(mcpOptions);
+void mcpServer;
 import { compile, run, isControlSignal } from '@devcodex-labs/flowkit';
 import type { Runtime, RunResult, FlowkitOptions } from '@devcodex-labs/flowkit';
 import { defineWorkflow, action, terminal } from '@devcodex-labs/flowkit/dsl';

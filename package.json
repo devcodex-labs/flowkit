@@ -40,6 +40,11 @@
       "import": "./dist/interactive/index.mjs",
       "default": "./dist/interactive/index.mjs"
     },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.mjs",
+      "default": "./dist/mcp.mjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -66,10 +71,14 @@
     "docs:private-package": "node scripts/docs/check-public-package.mjs"
   },
   "dependencies": {
-    "acorn": "8.19.0"
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "acorn": "8.19.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "typescript": "5.0.4",
-    "tar": "7.5.22"
+    "@modelcontextprotocol/client": "2.4.0",
+    "tar": "7.5.22",
+    "typescript": "5.0.4"
   }
 }

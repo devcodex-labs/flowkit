@@ -1,4 +1,8 @@
 import { compile, run, isControlSignal } from '@devcodex-labs/flowkit';
+import type { FlowkitMcpOptions, FlowkitMcpServer } from '@devcodex-labs/flowkit/mcp';
+declare const mcpOptions: FlowkitMcpOptions;
+declare const mcpServer: FlowkitMcpServer;
+void [mcpOptions, mcpServer];
 import type { FlowkitOptions, RunResult } from '@devcodex-labs/flowkit';
 import { compileInteractive, createTrustedInteractiveHost } from '@devcodex-labs/flowkit/interactive';
 import type {
