@@ -57,7 +57,7 @@ function createBudget(policy, signal) {
     } });
 }
 
-function during(signal, action) {
+export function during(signal, action) {
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);

@@ -7,6 +7,7 @@ import * as api from '@devcodex-labs/flowkit';
 import * as interactive from '@devcodex-labs/flowkit/interactive';
 import * as dsl from '@devcodex-labs/flowkit/dsl';
 import { createFlowkitMcpServer, createFlowkitHttpHandler } from '@devcodex-labs/flowkit/mcp';
+import { createApiAgentAdapter } from '@devcodex-labs/flowkit/host';
 import pkg from '@devcodex-labs/flowkit/package.json' with { type: 'json' };
 assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileArtifact', 'compileSource', 'evalWhen', 'isControlSignal', 'run', 'runArtifact']);
 assert.equal(Object.keys(dsl).length, 9); assert.equal(pkg.name, '@devcodex-labs/flowkit');
@@ -14,6 +15,10 @@ const mcp = createFlowkitMcpServer({ namespace: 'installed-project', collectionI
 assert.equal(typeof mcp.connect, 'function');
 assert.equal(typeof createFlowkitHttpHandler(() => null), 'function');
 await mcp.close();
+const apiAgent = createApiAgentAdapter({ scope: 'installed', model: 'local-fixture', request: async () =>
+  Response.json({ id: 'installed-result', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{"ok":true}' }] }] }) });
+assert.equal((await apiAgent.runAgentTask({ task: { execution: { requestId: 'fixture' }, run: { runId: 'run' }, node: { id: 'node' } },
+  descriptionResources: [], skills: [] })).result.ok, true);
 const resolved = fileURLToPath(import.meta.resolve('@devcodex-labs/flowkit'));
 assert.ok(resolved.startsWith(path.resolve('node_modules/@devcodex-labs/flowkit') + path.sep));
 for (const name of ['@devcodex-labs/flowkit/dist/index.mjs', '@devcodex-labs/flowkit/cli', '@devcodex-labs/flowkit/runtime/run', '@devcodex-labs/flowkit/testing']) await assert.rejects(import(name), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });

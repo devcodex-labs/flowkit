@@ -45,6 +45,11 @@
       "import": "./dist/mcp.mjs",
       "default": "./dist/mcp.mjs"
     },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.mjs",
+      "default": "./dist/host.mjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [

@@ -1,6 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { createFlowkitMcpServer } from '@devcodex-labs/flowkit/mcp';
 import type { FlowkitMcpOptions, FlowkitMcpServer } from '@devcodex-labs/flowkit/mcp';
+import { createApiAgentAdapter } from '@devcodex-labs/flowkit/host';
+import type { ApiHostOptions } from '@devcodex-labs/flowkit/host';
+declare const apiHostOptions: ApiHostOptions;
+void createApiAgentAdapter(apiHostOptions);
 declare const mcpOptions: FlowkitMcpOptions;
 const mcpServer: FlowkitMcpServer = createFlowkitMcpServer(mcpOptions);
 void mcpServer;

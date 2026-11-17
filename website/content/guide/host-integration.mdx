@@ -2,7 +2,15 @@
 
 <a id="flowkit-doc-host"></a>
 
-## MCP 宿主入口
+## 普通模型 API
+
+`@devcodex-labs/flowkit/host` 的 `createApiAgentAdapter` 接收 PreparedAgentTask，调用 Host 提供的 Responses 传输，再把输出交回统一 AgentExecutionResult。Host 为工具提供 schema、参数验证、授权、执行与副作用分类。写工具还提供稳定的业务 operation key，以回执识别重放和参数冲突。
+
+工具循环默认最多 4 次 HTTP 请求、8 个 Tool Call、30 秒总时限。请求输入与 Provider 输出分别最多 256 KiB，参数和单个工具结果最多 64 KiB。单次输出上限 1024 tokens，累计观测 Token 上限 16000。429 和暂时性 5xx 最多按两次延迟策略重试，计入同一请求上限和 deadline。`ApiHostOptions.limits` 可由 Host 配置。金额预算仍由实际 Provider 和 Host 计费策略负责。
+
+`supportsTools: false` 允许适用的预装配 JSON 任务。Host 用 `requiresTools` 标出必须动态工具执行的任务。未知写结果需要 Host 对账后处理，adapter 返回不自动重试的分类失败。`ApiHostTool` 的工具表与 `ledger` 由 Host 按项目和 Run 范围持有。
+
+## MCP 宿主绑定
 
 `@devcodex-labs/flowkit/mcp` 提供 `createFlowkitMcpServer`、`connectFlowkitStdio` 和 `createFlowkitHttpHandler`。Host 为每个连接或请求绑定项目 namespace、可访问集合、同一 Author 服务和批准版本存储。每次工具或资源操作均调用 Host 授权函数。
 

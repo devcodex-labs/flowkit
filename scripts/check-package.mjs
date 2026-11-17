@@ -56,12 +56,13 @@ export async function validatePackage(root, packedPaths) {
   assert.deepEqual(lock.packages[''].dependencies, pkg.dependencies); assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].name, pkg.name); assert.equal(lock.packages[''].version, pkg.version);
   assert.deepEqual(pkg.files, ['dist', 'README.md', 'LICENSE']);
-  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './interactive', './mcp', './package.json']);
+  assert.deepEqual(Object.keys(pkg.exports), ['.', './dsl', './capability-graph', './interactive', './mcp', './host', './package.json']);
   for (const [key, types, module] of [['.', './dist/compiler-api.d.ts', './dist/index.mjs'], ['./dsl', './dist/dsl.d.ts', './dist/dsl.mjs'], ['./capability-graph', './dist/capability-graph.d.ts', './dist/integrations/capability-graph.mjs'], ['./interactive', './dist/interactive.d.ts', './dist/interactive/index.mjs'], ['./mcp', './dist/mcp.d.ts', './dist/mcp.mjs']]) {
     assert.deepEqual(Object.keys(pkg.exports[key]), ['types', 'import', 'default']);
     assert.deepEqual(pkg.exports[key], { types, import: module, default: module });
   }
   assert.equal(pkg.exports['./package.json'], './package.json');
+  assert.deepEqual(pkg.exports['./host'], { types: './dist/host.d.ts', import: './dist/host.mjs', default: './dist/host.mjs' });
   const expected = packageFiles.map(([, output]) => output).sort();
   assert.deepEqual(await tree(root, 'dist'), expected, 'Unexpected or missing build output');
   const sourceFiles = [...(await tree(root, 'src')).filter(file => file.endsWith('.mjs') || file.endsWith('/SKILL.md')),
