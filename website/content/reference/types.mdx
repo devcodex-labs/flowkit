@@ -4,6 +4,8 @@
 
 ## SDK 类型索引
 
+Host 接入的 `ApiHostOptions`、`IndependentAgentOptions` 和 `CompilationCacheLimits` 分别描述模型传输、独立执行绑定和进程容量。`CompilationCacheStatus` 提供可观察计数；清理工具回执按 scope/Run 定位。MCP 的 `maxMetadataEntries` 和单页预算属于当前 Host 配置。Interactive 的 `PreparedAgentTask`、授权回调及持久 dispatch 预留见 [API](/reference/interactive)，不增加新的节点类型。
+
 | 导出类型 | 字段/用途 |
 |---|---|
 | FlowkitOptions | 11项可选配置，类型/默认/适用矩阵见[配置参考](/reference/options) |

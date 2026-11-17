@@ -39,7 +39,7 @@ Graph 的 `requires` 表示能力前置关系（例如 `render-mermaid` 需要 `
 
 ## 版本、权限与限制
 
-Provider 声明版本、FlowKit 包版本、Graph SDK 版本和查询 `revision` 分别记录。本批映射的 Provider 声明版本为 1.0.2，适用开发中的 FlowKit 1.0.0。`allowedProviders` 限定可见来源。`getCapabilities` 和 `resolve` 返回声明和关系，执行由提供绑定的宿主负责。描述型 Standard 节点的任务交付见[Runtime 契约](/reference/runtime#standard-task)。
+Provider 声明版本、FlowKit 包版本、Graph SDK 版本和查询 `revision` 分别记录。当前映射的 Provider 声明版本为 1.0.3，适用开发中的 FlowKit 1.0.0。保留现有5项能力，不把 Agent 执行交给 Graph。`allowedProviders` 限定可见来源。`getCapabilities` 和 `resolve` 返回声明和关系，执行由提供绑定的宿主负责。描述型任务见[Runtime 契约](/reference/runtime#standard-task)，持久恢复见[Interactive 接入](/guide/interactive)，工具循环/独立主体/容量管理见[Host 接入](/guide/host-integration)。
 
 如需将已解析能力绑定到业务操作，参见[宿主消费示例](/examples/capability-graph)。所有模型、动作权限和外部 IO 均由宿主提供。
 
