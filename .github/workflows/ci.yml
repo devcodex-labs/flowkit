@@ -40,6 +40,9 @@ jobs:
           # Type rejection fixtures retain diagnostics in JSON evidence.
           echo "::remove-matcher owner=tsc::"
           npm run verify
+      - name: Scan locked dependency vulnerabilities
+        if: ${{ matrix.os == 'ubuntu-24.04' && matrix.node == '24.22.1' }}
+        run: npm audit --audit-level=high
       - name: Measure repeated Interactive Program loads (diagnostic, Ubuntu Node 24)
         if: ${{ matrix.os == 'ubuntu-24.04' && matrix.node == '24.22.1' }}
         run: node scripts/bench-interactive-load.mjs
@@ -127,6 +130,7 @@ jobs:
             website/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm --prefix website ci --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix website audit --audit-level=high
       - run: npm run build
       - run: npm run docs:check
       - run: npm run docs:build

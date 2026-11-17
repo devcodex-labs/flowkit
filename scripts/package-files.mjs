@@ -6,6 +6,8 @@ export const packageFiles = [
   ['src/host.mjs', 'dist/host.mjs'],
   ['src/host/api-agent.mjs', 'dist/host/api-agent.mjs'],
   ['src/host/independent-agents.mjs', 'dist/host/independent-agents.mjs'],
+  ['src/host/tool-receipts.mjs', 'dist/host/tool-receipts.mjs'],
+  ['src/runtime/compilation-cache.mjs', 'dist/runtime/compilation-cache.mjs'],
   ['types/host.d.ts', 'dist/host.d.ts'],
   ['types/mcp.d.ts', 'dist/mcp.d.ts'],
   ...['arguments', 'config', 'main'].map(name => [`src/cli/${name}.mjs`, `dist/cli/${name}.mjs`]),

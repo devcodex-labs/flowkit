@@ -17,7 +17,8 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const pageSize = limits.pageSize ?? 50;
   const maxBytes = limits.maxResourceBytes ?? 262144;
   const maxCandidates = limits.maxCandidates ?? 16;
-  if (![pageSize, maxBytes, maxCandidates].every(value => Number.isSafeInteger(value) && value > 0)) {
+  const maxMetadataEntries = limits.maxMetadataEntries ?? 10000;
+  if (![pageSize, maxBytes, maxCandidates,maxMetadataEntries].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new TypeError('MCP limits must be positive integers');
   }
   const allowed = new Set(collectionIds);
@@ -35,7 +36,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   function catalog(collectionId) {
-    const snapshot = store.readCollection(collectionId);
+    const snapshot = typeof store.readCollectionMetadata === 'function' ? store.readCollectionMetadata(collectionId) : store.readCollection(collectionId);
     if (!snapshot) throw new Error('Collection is unavailable');
     return snapshot;
   }
@@ -58,9 +59,15 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       });
   }
 
-  tool('flowkit_collection', 'Read approved metadata for one authorized FlowKit collection.', { collectionId: id },
-    ({ collectionId }) => { const { collection, skills } = catalog(collectionId); return { collection,
-      skills: skills.map(metadata) }; }, true);
+  tool('flowkit_collection', 'Read one bounded page of approved collection metadata.', { collectionId: id,cursor:z.string().optional() },
+    ({ collectionId,cursor }) => { const { collection, skills } = catalog(collectionId);
+      const offset=cursor===undefined?0:Number(cursor);
+      if(!Number.isSafeInteger(offset)||offset<0||cursor!==undefined&&String(offset)!==cursor)throw new Error('Invalid Skill cursor');
+      if(skills.length>maxMetadataEntries)throw new Error('Scope collection discovery within the metadata entry budget');
+      const page={collection,skills:skills.slice(offset,offset+pageSize).map(metadata),
+        ...(offset+pageSize<skills.length?{nextCursor:String(offset+pageSize)}:{})};
+      if(Buffer.byteLength(JSON.stringify(page))>maxBytes)throw new Error('Collection page exceeds the metadata byte budget');
+      return page; }, true);
   tool('flowkit_start_workflow', 'Start a workflow draft using known collection choices.', {
     collectionId: id, goal: z.string().min(1).max(maxBytes), executionMode: z.enum(['standard', 'interactive-p0-a']).optional(),
     includeSource: z.boolean().optional()
@@ -146,12 +153,19 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       const skills = [];
       for (const collectionId of allowed) {
         await access('skills/list', collectionId, ctx);
-        skills.push(...catalog(collectionId).skills);
+        const listed=catalog(collectionId).skills;
+        if(skills.length+listed.length>maxMetadataEntries)throw new Error('Scope Skill discovery within the metadata entry budget');
+        skills.push(...listed);
       }
       skills.sort((a, b) => skillPath(a).localeCompare(skillPath(b)));
       const selected = skills.slice(offset, offset + pageSize);
-      return { skills: await Promise.all(selected.map(candidate => skillEntry(skillPath(candidate), candidate.files, { baseUri }))),
-        ...(offset + pageSize < skills.length ? { nextCursor: String(offset + pageSize) } : {}) };
+      const result={skills:await Promise.all(selected.map(async item=>{
+        const candidate=item.files?item:store.readVersion(item.manifest.collectionId,item.manifest.skillId,item.hash);
+        if(!candidate)throw new Error('Listed approved Skill is unavailable');
+        return skillEntry(skillPath(candidate),candidate.files,{baseUri});
+      })),...(offset+pageSize<skills.length?{nextCursor:String(offset+pageSize)}:{})};
+      if(Buffer.byteLength(JSON.stringify(result))>maxBytes)throw new Error('Skill page exceeds the metadata byte budget');
+      return result;
     },
     async get(uri, ctx) {
       const file = await findFile(uri, ctx);

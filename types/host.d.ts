@@ -1,4 +1,12 @@
 import type { AgentTaskV2, PreparedAgentTask, AgentExecutionResult, HostPreparationContext, TaskJsonObject } from './index.js';
+export interface CompilationCacheLimits {maxEntries:number;maxBytes:number;ttlMs:number;maxModuleIdentities:number;maxModuleBytes:number}
+export interface CompilationCacheStatus extends CompilationCacheLimits {
+  entries:number;bytes:number;residentModuleIdentities:number;residentModuleBytes:number;hits:number;misses:number;evictions:number;
+}
+export function configureCompilationCache(options:Partial<CompilationCacheLimits>):CompilationCacheStatus;
+export function clearCompilationCache():CompilationCacheStatus;
+export function compilationCacheStatus():CompilationCacheStatus;
+export function releaseToolReceipts(ledger:NonNullable<ApiHostOptions['ledger']>,identity:{scope:string;runId:string}):{removed:number;remaining:number};
 
 export interface ApiHostTool {
   name: string;

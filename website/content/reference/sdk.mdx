@@ -26,7 +26,9 @@ run每次重新读取指定源码或AOT。仅成功编译并首次加载的DSL�
 
 编译错误与首次加载失败不会进入缓存；成功加载后业务运行失败不会删除已有编译项。因此重试业务仍使用已编译控制流，但创建新state/Ctx/默认Skill loader。Skill内容不包含在编译键中，下一次run仍读取新内容；同进程删掉Skill后，已有编译缓存可能让错误发生在运行加载阶段，独立check仍重新做编译检查。
 
-这个缓存不是持久化结果缓存，不恢复上次审批/进度，也没有公开淘汰API或容量承诺。长时间进程持续载入大量不同源码/选项时，要评估内存增长，通过宿主进程生命周期管理，而不要依赖内部Map操作。
+这个缓存不保存业务结果或审批进度。默认最多 64 项、8 MiB 代码与键字节、5 分钟空闲 TTL，按 LRU 淘汰。Host 可从 `/host` 使用 `configureCompilationCache` 配置容量、`compilationCacheStatus` 观测命中/字节/淘汰、`clearCompilationCache` 清理编译项。
+
+Node 的 ESM registry 不随 LRU 清理而卸载。Standard、Interactive 与 dump 共同限制进程级加载身份，默认 256 个及 64 MiB 程序 UTF-8 字节；失败加载和 dump 重试 URL 也占用身份。到限后新身份在加载前以 FK_R001 拒绝，原已加载身份仍可用。Host 应在达到预算前轮换自己的进程；`maxModuleIdentities`、`maxModuleBytes` 不能降低到已驻留数量/代码字节以下，清理不能重置该计数。字节容量只计可测代码与键，不冒充完整 V8 heap 限制。
 
 下面完整例子在同进程运行两次，初始count都是0，两次结果都为1；编译复用不会累计业务状态。
 

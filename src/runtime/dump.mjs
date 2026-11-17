@@ -5,6 +5,7 @@ import path from 'node:path';
 import { serializeOutput, replaceArtifacts } from '../compiler/output.mjs';
 import { verifyWorkflowFunction, workflowFunctionText } from './load.mjs';
 import { dumpChannel } from './dump-channel.mjs';
+import {reserveModuleIdentity} from './compilation-cache.mjs';
 
 const attempts = new Map();
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -32,6 +33,7 @@ export async function loadDumpWorkflow(code, filename, directory) {
   const attempt = attempts.get(base.href) ?? 0;
   const url = new URL(base);
   if (attempt) url.searchParams.set('attempt', String(attempt));
+  reserveModuleIdentity(url.href,code);
   const channel = dumpChannel(), token = randomUUID();
   let pinned = false, workflow, failure;
   try {

@@ -7,7 +7,8 @@ import * as api from '@devcodex-labs/flowkit';
 import * as interactive from '@devcodex-labs/flowkit/interactive';
 import * as dsl from '@devcodex-labs/flowkit/dsl';
 import { createFlowkitMcpServer, createFlowkitHttpHandler } from '@devcodex-labs/flowkit/mcp';
-import { createApiAgentAdapter, createIndependentAgentAdapter } from '@devcodex-labs/flowkit/host';
+import { createApiAgentAdapter, createIndependentAgentAdapter, configureCompilationCache,
+  clearCompilationCache,compilationCacheStatus,releaseToolReceipts } from '@devcodex-labs/flowkit/host';
 import pkg from '@devcodex-labs/flowkit/package.json' with { type: 'json' };
 assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileArtifact', 'compileSource', 'evalWhen', 'isControlSignal', 'run', 'runArtifact']);
 assert.equal(Object.keys(dsl).length, 9); assert.equal(pkg.name, '@devcodex-labs/flowkit');
@@ -20,6 +21,10 @@ const apiAgent = createApiAgentAdapter({ scope: 'installed', model: 'local-fixtu
 assert.equal((await apiAgent.runAgentTask({ task: { execution: { requestId: 'fixture' }, run: { runId: 'run' }, node: { id: 'node' } },
   descriptionResources: [], skills: [] })).result.ok, true);
 const routed = createIndependentAgentAdapter({ scope: 'installed', select: async () => null, authorize: () => false });
+assert.ok(configureCompilationCache({maxEntries:16}).maxModuleBytes>0);
+assert.equal(clearCompilationCache().entries,0);
+assert.equal(compilationCacheStatus().entries,0);
+assert.deepEqual(releaseToolReceipts(new Map(),{scope:'installed',runId:'finished'}),{removed:0,remaining:0});
 assert.equal((await routed.runAgentTask({ task: { workflow: { artifactHash: 'fixture' }, execution: {}, run: { runId: 'run' }, node: { id: 'node' } } })).status, 'failed');
 const resolved = fileURLToPath(import.meta.resolve('@devcodex-labs/flowkit'));
 assert.ok(resolved.startsWith(path.resolve('node_modules/@devcodex-labs/flowkit') + path.sep));

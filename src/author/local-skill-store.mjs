@@ -72,6 +72,17 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
     }
 
     return Object.freeze({
+      readCollectionMetadata(collectionId) {
+        const collection=db.prepare('SELECT payload FROM fk_author_collections WHERE collection_id=?').get(collectionId);
+        if(!collection)return null;
+        const skills=db.prepare(`SELECT active.collection_id,active.skill_id,active.name,active.candidate_hash,
+          versions.version,json_extract(versions.payload,'$.manifest.kind') AS kind
+          FROM fk_author_active AS active JOIN fk_author_versions AS versions USING(collection_id,skill_id,candidate_hash)
+          WHERE active.collection_id=? ORDER BY active.name`).all(collectionId).map(row=>({hash:row.candidate_hash,
+            manifest:{collectionId:row.collection_id,skillId:row.skill_id,name:row.name,version:row.version,
+              ...(row.kind?{kind:row.kind}:{})}}));
+        return {collection:JSON.parse(collection.payload),skills};
+      },
       readActive(collectionId, skillId) { return readCandidate(active.get(collectionId, skillId)); },
       readVersion(collectionId, skillId, hash) { return readCandidate(read.get(collectionId, skillId, hash)); },
       readCollection(collectionId) {

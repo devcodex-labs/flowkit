@@ -1,4 +1,5 @@
 import {parse} from 'acorn';
+import {loadBoundedModule} from '../runtime/compilation-cache.mjs';
 import {sha256Bytes,assertSha256} from './identity.mjs';
 import {validateInteractiveIR,agentFrameRule} from '../compiler/interactive/validate-ir.mjs';
 
@@ -63,7 +64,7 @@ export async function loadInteractiveProgram(bytes, expectedArtifactHash) {
   const advances = ast.body.filter(n => n.type === 'ExportNamedDeclaration' && n.declaration?.type === 'FunctionDeclaration' && n.declaration.id.name === 'advance');
   if (advances.length !== 1) throw new TypeError('Exactly one exported advance function required');
   const originalBody = code.slice(advances[0].declaration.start,advances[0].declaration.end);
-  const module = await import('data:text/javascript;base64,' + immutable.toString('base64'));
+  const module = await loadBoundedModule(code);
   if (typeof module.advance !== 'function' || module.advance.constructor.name === 'AsyncFunction'
     || Function.prototype.toString.call(module.advance) !== originalBody) {
     throw new TypeError('Loaded advance function differs from verified bytes');

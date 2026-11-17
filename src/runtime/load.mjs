@@ -1,3 +1,5 @@
+import {loadBoundedModule} from './compilation-cache.mjs';
+
 export function workflowFunctionText(code) {
   if (typeof code !== 'string') throw new TypeError('code must be a string');
   const body = code.split('\n').slice(10).join('\n');
@@ -16,6 +18,6 @@ export function verifyWorkflowFunction(module, code) {
 /** Load the saved text and reject loader transformations before invoking business code. */
 export async function loadWorkflowText(code) {
   workflowFunctionText(code);
-  const module = await import('data:text/javascript;base64,' + Buffer.from(code, 'utf8').toString('base64'));
+  const module = await loadBoundedModule(code);
   return verifyWorkflowFunction(module, code);
 }

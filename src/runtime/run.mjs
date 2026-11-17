@@ -9,7 +9,7 @@ import { loadDumpWorkflow } from './dump.mjs';
 import { executeWorkflow } from './execute.mjs';
 import { STANDARD_ARTIFACT_HEADER, artifactDigest, standardIdentity } from '../shared/artifact-identity.mjs';
 
-const compiled = new Map();
+import {getCompilation,setCompilation} from './compilation-cache.mjs';
 
 /** Public run always rereads the supplied source/artifact; only successful DSL loading is cached. */
 export async function run(file, runtime, state, suppliedOptions) {
@@ -32,11 +32,11 @@ export async function run(file, runtime, state, suppliedOptions) {
     const snapshot = createSourceSnapshot(await readFile(filename), filename);
     const key = JSON.stringify([snapshot.sourceHash, filename, projectRoot, options.skillsRoot ?? 'skills', options.skillCheck ?? true,
       options.remoteSkillHosts ?? [], options.trace ?? false, dump ?? null]);
-    let entry = compiled.get(key);
+    let entry = getCompilation(key);
     if (!entry) {
       const code = await compileSourceText(snapshot, { ...resolved, outDir: path.dirname(filename), mermaid: false });
       workflow = await load(code);
-      entry = { code, workflow }; compiled.set(key, entry);
+      entry = { code, workflow }; setCompilation(key, entry);
     } else workflow = dump === undefined ? entry.workflow : await load(entry.code);
     code = entry.code;
   }

@@ -4,6 +4,10 @@
 
 ## Host 独立执行主体
 
+长期 Host 可通过 `/host` 的 `configureCompilationCache`、`compilationCacheStatus` 和 `clearCompilationCache` 管理本进程的编译容量。它们影响该进程内的执行入口，不清理业务状态或卸载已加载 ESM。到驻留程序身份上限时轮换 Host 进程，详见 [SDK 缓存边界](/reference/sdk)。
+
+完成 Run 且已保留持久回执后，Host 可调用 `releaseToolReceipts(ledger,{scope,runId})` 回收对应完成项。遇到 pending 或未知结果会整批拒绝清理，先对账；不会删除其他项目或 Run 的回执。
+
 `/host` 的 `createIndependentAgentAdapter` 接收 Host 的 `select` 和 `authorize`，按 Artifact、Run 与 Node 绑定执行主体、会话、工作区和权限引用。Host 返回的 `IndependentAgentBinding` 执行 PreparedAgentTask。配置由 `IndependentAgentOptions` 描述。
 
 需要独立复审的任务可用 `independentFrom` 提供实现者身份。重复主体、会话或工作区被拒绝。会话绑定按 Run 和 Artifact 保留，显式 `releaseRun` 只能释放已无实际执行的 Run。默认并发上限 4、会话绑定上限 64、单任务时限 30 秒，均可由 Host 配置。
@@ -19,6 +23,8 @@
 `supportsTools: false` 允许适用的预装配 JSON 任务。Host 用 `requiresTools` 标出必须动态工具执行的任务。未知写结果需要 Host 对账后处理，adapter 返回不自动重试的分类失败。`ApiHostTool` 的工具表与 `ledger` 由 Host 按项目和 Run 范围持有。
 
 ## MCP 宿主绑定
+
+`flowkit_collection` 和协商的 Skills 发现按 `pageSize` 分页；使用 `nextCursor` 获取下一页。默认最多枚举 10000 条 metadata，可用 `maxMetadataEntries` 调整，每页还受 `maxResourceBytes` 限制。内置 Store 从 metadata 查询取得目录，只为选中页读取批准版本正文；自定义 Store 应提供 `readCollectionMetadata` 以避免全量正文装配。缩小集合范围可降低上下文与存储读取压力。
 
 `@devcodex-labs/flowkit/mcp` 提供 `createFlowkitMcpServer`、`connectFlowkitStdio` 和 `createFlowkitHttpHandler`。Host 为每个连接或请求绑定项目 namespace、可访问集合、同一 Author 服务和批准版本存储。每次工具或资源操作均调用 Host 授权函数。
 

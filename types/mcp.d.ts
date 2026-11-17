@@ -1,5 +1,6 @@
 /** A Host-owned approved artifact store. */
 interface Store {
+  readCollectionMetadata?(collectionId:string):{collection:{name:string};skills:Array<Omit<Candidate,'files'>>}|null;
   readCollection(collectionId: string): { collection: { name: string }; skills: Candidate[] } | null;
   readVersion(collectionId: string, skillId: string, hash: string): Candidate | null;
   applyCollectionPlan(plan: { destination: { id: string } }, approvalRef: string): unknown;
@@ -27,7 +28,7 @@ export interface FlowkitMcpOptions {
     Promise<{ destination: { id: string } }>;
   runWorkflow?(scope: { namespace: string; collectionId: string; skillId: string; candidateHash: string; executionRef: string; signal: AbortSignal }): Promise<unknown>;
   pendingCandidates?: Map<string, Candidate>;
-  limits?: { pageSize?: number; maxResourceBytes?: number; maxCandidates?: number };
+  limits?: { pageSize?: number; maxResourceBytes?: number; maxCandidates?: number;maxMetadataEntries?:number };
 }
 export interface FlowkitMcpServer {
   connect(transport: object): Promise<void>;
