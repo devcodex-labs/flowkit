@@ -1,16 +1,84 @@
+// Keep references on the reviewed documentation snapshot rather than the moving main branch.
+const documentationCommit = 'f58a9ed8d109e5d82604a6ff9cce5ed68e3a9377';
+
+function document(id, page) {
+  return {
+    id,
+    source: {
+      type: 'url',
+      url: `https://raw.githubusercontent.com/devcodex-labs/flowkit/${documentationCommit}/website/content/${page}.mdx`,
+    },
+  };
+}
+
 /**
  * Optional host-side capability-graph bridge. No model, MCP server or second
  * workflow runtime is created by FlowKit.
  */
 export const flowkitProvider = Object.freeze({
-  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.0',
+  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.1',
   description: 'Compile declarative JavaScript/TypeScript workflows and run them with an explicit host Runtime.',
   capabilities: [
-    { id: 'define-workflow', name: 'Define workflow', description: 'Declare eight supported node kinds using the FlowKit DSL.', whenToUse: 'A host needs a statically analyzable workflow definition.', usage: { instructions: 'Import defineWorkflow and DSL constructors from @devcodex-labs/flowkit/dsl. The input must be literal JS/TS DSL. Standard supports eight node kinds; Interactive P0-A has its own subset and Host contract. For FlowKit 1.0.0 read https://devcodex-labs.github.io/flowkit/guide/workflow-authoring and https://devcodex-labs.github.io/flowkit/dsl/index before generating a definition.' } },
-    { id: 'compile-workflow', name: 'Compile workflow', description: 'Statically validate a workflow and emit executable JavaScript and optional Mermaid.', whenToUse: 'An application needs a verified compiled workflow.', usage: { instructions: 'Call compile or compileSource from @devcodex-labs/flowkit; inspect diagnostics before using artifacts. For FlowKit 1.0.0 parameters, paths, side effects and examples read https://devcodex-labs.github.io/flowkit/reference/sdk#compile and https://devcodex-labs.github.io/flowkit/guide/compile-artifacts .' }, relations: { requires: ['define-workflow'] } },
-    { id: 'check-workflow', name: 'Check workflow', description: 'Check source and compare an existing compiled JavaScript artifact without writing.', whenToUse: 'An application needs a read-only definition and artifact check.', usage: { instructions: 'Call check from @devcodex-labs/flowkit; absence of compiled output is not an error and Mermaid is not compared. Read the FlowKit 1.0.0 contract at https://devcodex-labs.github.io/flowkit/reference/sdk#check and diagnostic guidance at https://devcodex-labs.github.io/flowkit/troubleshooting/compiler .' }, relations: { requires: ['define-workflow'] } },
-    { id: 'run-workflow', name: 'Run workflow', description: 'Execute a verified workflow using a caller-provided host Runtime.', whenToUse: 'A host has authorized the workflow and supplied its business methods.', usage: { instructions: 'Call run from @devcodex-labs/flowkit with an explicit Runtime. FlowKit does not supply a model or persistent approvals. For FlowKit 1.0.0 Runtime and execution-path responsibilities read https://devcodex-labs.github.io/flowkit/reference/runtime and https://devcodex-labs.github.io/flowkit/guide/direct-host . Interactive uses its separate API: https://devcodex-labs.github.io/flowkit/guide/interactive .' }, relations: { requires: ['define-workflow'] } },
-    { id: 'render-mermaid', name: 'Render Mermaid', description: 'Produce a Mermaid diagram from the validated control-flow definition.', whenToUse: 'A caller needs a view of the workflow graph.', usage: { instructions: 'Use compile/compileSource with mermaid enabled; the diagram is visualization, not execution. For FlowKit 1.0.0 options and model/diagram boundaries read https://devcodex-labs.github.io/flowkit/guide/compile-artifacts and https://devcodex-labs.github.io/flowkit/guide/workflow-model .' }, relations: { requires: ['compile-workflow'] } },
+    {
+      id: 'define-workflow', name: 'Define workflow',
+      description: 'Declare a workflow using the static FlowKit DSL.',
+      whenToUse: 'A host needs a statically analyzable workflow definition.',
+      usage: { instructions: 'Use literal JS/TS DSL. Check the eight Standard node kinds or the supported Interactive P0-A subset before choosing a mode.' },
+      documents: [
+        document('flowkit-doc-dsl', 'dsl/index'),
+        document('flowkit-doc-authoring', 'guide/workflow-authoring'),
+        document('flowkit-doc-model', 'guide/workflow-model'),
+      ],
+    },
+    {
+      id: 'compile-workflow', name: 'Compile workflow',
+      description: 'Statically validate a workflow and emit executable JavaScript and optional Mermaid.',
+      whenToUse: 'An application needs a verified compiled workflow.',
+      usage: { instructions: 'Call compile or compileSource and inspect diagnostics before using either artifact.' },
+      relations: { requires: ['define-workflow'] },
+      documents: [
+        document('flowkit-doc-compile', 'guide/compile-artifacts'),
+        document('flowkit-doc-sdk', 'reference/sdk'),
+        document('flowkit-doc-options', 'reference/options'),
+      ],
+    },
+    {
+      id: 'check-workflow', name: 'Check workflow',
+      description: 'Check source and compare an existing compiled JavaScript artifact without writing.',
+      whenToUse: 'An application needs a read-only definition and artifact check.',
+      usage: { instructions: 'Call check and inspect diagnostics. A missing compiled file is allowed; check does not compare Mermaid.' },
+      relations: { requires: ['define-workflow'] },
+      documents: [
+        document('flowkit-doc-compile', 'guide/compile-artifacts'),
+        document('flowkit-doc-sdk', 'reference/sdk'),
+        document('flowkit-doc-compiler-errors', 'troubleshooting/compiler'),
+      ],
+    },
+    {
+      id: 'run-workflow', name: 'Run workflow',
+      description: 'Execute a verified workflow using a caller-provided host Runtime.',
+      whenToUse: 'A host has authorized the workflow and supplied its business methods.',
+      usage: { instructions: 'Use run with a host Runtime for Standard. Preserve AOT source identity. Interactive uses its own API and supported subset.' },
+      relations: { requires: ['define-workflow'] },
+      documents: [
+        document('flowkit-doc-runtime', 'reference/runtime'),
+        document('flowkit-doc-host', 'guide/host-integration'),
+        document('flowkit-doc-aot', 'guide/aot'),
+        document('flowkit-doc-direct-host', 'guide/direct-host'),
+        document('flowkit-doc-interactive', 'guide/interactive'),
+      ],
+    },
+    {
+      id: 'render-mermaid', name: 'Render Mermaid',
+      description: 'Produce a Mermaid diagram from the validated control-flow definition.',
+      whenToUse: 'A caller needs a view of the workflow graph.',
+      usage: { instructions: 'Use compile or compileSource with Mermaid enabled. Display the diagram and execute the JavaScript separately.' },
+      relations: { requires: ['compile-workflow'] },
+      documents: [
+        document('flowkit-doc-compile', 'guide/compile-artifacts'),
+        document('flowkit-doc-model', 'guide/workflow-model'),
+      ],
+    },
   ],
 });
 

@@ -3,6 +3,7 @@ import { readFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expectedReadme } from '../../scripts/docs/sync-readme.mjs';
+import { checkCapabilityDocuments } from '../../scripts/docs/check-capability-documents.mjs';
 const website = fileURLToPath(new URL('../', import.meta.url));
 const root = path.dirname(website);
 export function checkCoverage(pages) {
@@ -53,6 +54,7 @@ export async function checkContent(args = []) {
     for (const match of text.matchAll(/```\w+\s+file="([^"]+)"/g)) await access(path.resolve(path.dirname(filename), match[1]));
   }
   if (limit === Number.POSITIVE_INFINITY) {
+    await checkCapabilityDocuments(root);
     const changelog = (await readFile(path.join(root, 'CHANGELOG.md'), 'utf8'))
       .replace(/^# 更新记录\r?\n/, '# v1.0.0 发布记录\n')
       .replace('(LICENSE)', '(https://github.com/devcodex-labs/flowkit/blob/main/LICENSE)');

@@ -1,10 +1,64 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { pageFile, publicUrl } from './routes.mjs';
 import { checkLink, inspectHTML, assertSitemap } from './check-rendered.mjs';
 import { checkCoverage, assertNoPrivateContent, assertAnchors, assertVersion, exportedNames } from './check-content.mjs';
 import { onSearch } from '../search-hooks.mjs';
 import { alignSearchHeadingBoundaries } from '../search-index.mjs';
+import { flowkitProvider } from '../../src/integrations/capability-graph.mjs';
+import { readPinnedDocument, validateCapabilityDocuments, validateDocumentCatalog, validateDocumentReferences } from '../../scripts/docs/check-capability-documents.mjs';
+
+test('document inventory rejects duplicate identity, missing pages and version drift', async () => {
+  const catalog = JSON.parse(await readFile(new URL('../docs-catalog.json', import.meta.url), 'utf8'));
+  const pages = JSON.parse(await readFile(new URL('../coverage.json', import.meta.url), 'utf8'));
+  const files = catalog.documents.map(entry => entry.path);
+  assert.equal(validateDocumentCatalog(catalog, pages, files, '1.0.0').size, files.length);
+  assert.throws(() => validateDocumentCatalog(catalog, pages, files, '2.0.0'), /target does not match/);
+  const duplicate = structuredClone(catalog);
+  duplicate.documents[1].id = duplicate.documents[0].id;
+  assert.throws(() => validateDocumentCatalog(duplicate, pages, files, '1.0.0'), /Duplicate document ID/);
+  const incomplete = structuredClone(catalog);
+  incomplete.documents.pop();
+  assert.throws(() => validateDocumentCatalog(incomplete, pages, files, '1.0.0'), /inventory does not match/);
+});
+
+test('Provider document mappings reject missing, duplicate and unpinned references', async () => {
+  const catalog = JSON.parse(await readFile(new URL('../docs-catalog.json', import.meta.url), 'utf8'));
+  const byId = new Map(catalog.documents.map(entry => [entry.id, entry]));
+  assert(validateCapabilityDocuments(flowkitProvider, byId).size > 0);
+  const wrong = structuredClone(flowkitProvider);
+  const first = wrong.capabilities[0].documents[0];
+  first.id = 'unknown';
+  assert.throws(() => validateCapabilityDocuments(wrong, byId), /Unknown or unanchored/);
+  first.id = flowkitProvider.capabilities[0].documents[0].id;
+  wrong.capabilities[0].documents.push(first);
+  assert.throws(() => validateCapabilityDocuments(wrong, byId), /Duplicate document reference/);
+  wrong.capabilities[0].documents.pop();
+  first.source.url = first.source.url.replace(/[a-f0-9]{40}/, 'main');
+  assert.throws(() => validateCapabilityDocuments(wrong, byId), /Unpinned or mismatched/);
+});
+
+test('core pages must expose their implementation, type, test and example links', async () => {
+  const catalog = JSON.parse(await readFile(new URL('../docs-catalog.json', import.meta.url), 'utf8'));
+  const doc = catalog.documents.find(entry => entry.id === 'flowkit-doc-provider');
+  const refs = catalog.topics[doc.topic];
+  const text = await readFile(new URL(`../../${doc.path}`, import.meta.url), 'utf8');
+  validateDocumentReferences(doc, text, refs);
+  assert.throws(() => validateDocumentReferences(doc, text.replace(refs.tests[0], 'tests/nonexistent.mjs'), refs),
+    /Missing tests link/);
+});
+
+test('Host HTTPS validation rejects a floating URL and mismatched body', async (t) => {
+  const url = flowkitProvider.capabilities[0].documents[0].source.url;
+  await assert.rejects(readPinnedDocument(url.replace(/[a-f0-9]{40}/, 'main'), Buffer.from('expected')), /Only fixed/);
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.redirect, 'error');
+    return new Response('unexpected');
+  });
+  await assert.rejects(readPinnedDocument(url, Buffer.from('expected')), /HTTPS bytes differ/);
+  assert.equal(fetch.mock.callCount(), 1);
+});
 test('routes preserve homepage, normalized index and 404 semantics', () => {
   assert.equal(publicUrl('/'), 'https://devcodex-labs.github.io/flowkit/');
   assert.equal(publicUrl('/index'), publicUrl('/'));

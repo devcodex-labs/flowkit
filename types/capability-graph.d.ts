@@ -16,6 +16,11 @@ export interface GraphActionBinding {
   capabilityId: string;
   execute(args: { action: string; name: string; ctx: unknown; resolution: GraphResolution; capability: GraphResolvedNode['capability'] }): void | Promise<void>;
 }
+export interface FlowkitDocumentRef {
+  id: string;
+  title?: string;
+  source: { type: 'file'; path: string } | { type: 'url'; url: string };
+}
 export interface FlowkitCapabilityDeclaration {
   id: string;
   name: string;
@@ -23,6 +28,7 @@ export interface FlowkitCapabilityDeclaration {
   whenToUse?: string;
   usage?: { instructions?: string };
   relations?: { requires?: string[] };
+  documents?: FlowkitDocumentRef[];
 }
 export declare const flowkitProvider: {
   schemaVersion: 1;

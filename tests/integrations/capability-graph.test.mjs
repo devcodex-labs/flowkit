@@ -13,8 +13,23 @@ const resolved = status => ({
 test('Provider declares real public capabilities with stable graph IDs', () => {
   assert.equal(flowkitProvider.providerId, 'flowkit');
   assert.equal(flowkitProvider.schemaVersion, 1);
-  assert.equal(new Set(flowkitProvider.capabilities.map(item => item.id)).size, flowkitProvider.capabilities.length);
-  assert(flowkitProvider.capabilities.some(item => item.id === 'run-workflow'));
+  assert.deepEqual(flowkitProvider.capabilities.map(item => item.id),
+    ['define-workflow', 'compile-workflow', 'check-workflow', 'run-workflow', 'render-mermaid']);
+  for (const capability of flowkitProvider.capabilities) {
+    assert(capability.documents.length);
+    assert.equal(new Set(capability.documents.map(document => document.id)).size, capability.documents.length);
+    for (const document of capability.documents) {
+      assert.equal(document.source.type, 'url');
+      assert.match(document.source.url, /^https:\/\/raw\.githubusercontent\.com\/devcodex-labs\/flowkit\/[a-f0-9]{40}\//);
+    }
+    assert.doesNotMatch(capability.usage.instructions, /https:\/\//);
+  }
+  const [define, compile, check, run, render] = flowkitProvider.capabilities;
+  assert.equal(define.relations, undefined);
+  for (const capability of [compile, check, run]) assert.deepEqual(capability.relations.requires, ['define-workflow']);
+  assert.deepEqual(render.relations.requires, ['compile-workflow']);
+  assert.deepEqual(compile.documents[0], check.documents[0]);
+  assert.deepEqual(compile.documents[0], render.documents[0]);
 });
 test('host binding resolves capability and dependencies before executing', async () => {
   const calls = [], ctx = { state: {} };
