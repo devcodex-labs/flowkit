@@ -4,7 +4,7 @@ import { compileToText } from './compile.mjs';
 import { createSourceSnapshot, normalizeOptions, diagnostic, resolveProjectRoot } from './source.mjs';
 import { compilationPaths } from './paths.mjs';
 import { writeArtifacts } from './output.mjs';
-import { ARTIFACT_HEADER, STANDARD_ABI, STANDARD_SEMANTICS, artifactDigest } from '../shared/artifact-identity.mjs';
+import { STANDARD_ARTIFACT_HEADER, artifactDigest } from '../shared/artifact-identity.mjs';
 
 function sourceFilename(file, cwd) {
   if (typeof file !== 'string' || !/\.workflow\.(?:ts|js)$/.test(file)) throw new TypeError('file must end in .workflow.ts or .workflow.js');
@@ -55,17 +55,23 @@ export async function compileSource(text, suppliedOptions) {
 
 /** Produce the Standard workflow.js bytes for a caller-owned candidate publication. */
 export async function compileArtifact(file, suppliedOptions) {
+  const { artifact } = await compileArtifactDraft(file, suppliedOptions);
+  return artifact;
+}
+
+/** Keep Author metadata and both artifacts tied to the same compiler analysis. */
+export async function compileArtifactDraft(file, suppliedOptions) {
   const { filename, options } = input(file, suppliedOptions);
   const snapshot = createSourceSnapshot(await readFile(filename), filename);
   const result = await compileToText(snapshot, options);
-  if (!result.code) return { code: '', mermaid: '', diagnostics: result.diagnostics, artifactHash: null };
+  if (!result.code) return { snapshot, artifact: { code: '', mermaid: '', diagnostics: result.diagnostics, artifactHash: null } };
   const lines = result.code.split('\n');
-  lines[0] = ARTIFACT_HEADER + JSON.stringify({ mode: 'standard', programAbiVersion: STANDARD_ABI,
-    semanticsVersion: STANDARD_SEMANTICS });
+  lines[0] = STANDARD_ARTIFACT_HEADER;
   lines[2] = '// source: not included in this artifact';
   lines[3] = '// Verify the approved artifact SHA-256 before executing.';
   const code = lines.join('\n');
-  return { code, mermaid: result.mermaid, artifactHash: artifactDigest(code), diagnostics: result.diagnostics };
+  return { snapshot, definition: result.analysis.literal.definition, graph: result.analysis.graph,
+    artifact: { code, mermaid: result.mermaid, artifactHash: artifactDigest(code), diagnostics: result.diagnostics } };
 }
 
 /** Recompile on every call and compare only an existing compiled JS artifact, without writing. */

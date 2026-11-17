@@ -116,7 +116,7 @@ function writeResult(target, result) {
 }
 
 /** Host calls handle actual preparation and dispatch; compiled code retains control and business writes. */
-export function createPreparedAgentRunner(ctx, options, artifact) {
+export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedSkills) {
   const { runtime, signal, state, runId } = ctx;
   const policy = runtime.taskPolicy ?? {};
   let sharedBudget, taskSignal;
@@ -176,6 +176,7 @@ export function createPreparedAgentRunner(ctx, options, artifact) {
             return !bound || bound.logicalId !== skill.id || !isSemVer(bound.resolvedVersion) ||
               skill.version && bound.resolvedVersion !== skill.version || !/^sha256:[0-9a-f]{64}$/.test(bound.digest);
           })) throw failure('invalid-preparation', 'Prepared task or required Skill identity differs');
+      checkPreparedSkills?.(task.node.id, prepared.skills);
       const resources = [
         ...descriptionResources.map(({ uri, role, digest, byteLength }) => ({ logicalId: uri, role, digest, byteLength })),
         ...prepared.skills.map(({ logicalId, resolvedVersion, digest }) => ({ logicalId, resolvedVersion, digest }))

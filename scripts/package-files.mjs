@@ -6,6 +6,10 @@ export const packageFiles = [
   ['src/dsl.mjs', 'dist/dsl.mjs'],
   ['src/integrations/capability-graph.mjs', 'dist/integrations/capability-graph.mjs'],
   ['types/capability-graph.d.ts', 'dist/capability-graph.d.ts'],
+  ...['author', 'skill-document', 'standard-artifact', 'local-skill-store', 'collections', 'collection-layout', 'draft', 'workflow-plan',
+    'professional-skills', 'approved-run', 'documentation', 'openai-native-skills']
+    .map(name => [`src/author/${name}.mjs`, `dist/author/${name}.mjs`]),
+  ['src/author/flowkit-workflow-author/SKILL.md', 'dist/author/flowkit-workflow-author/SKILL.md'],
   ...['contracts', 'control', 'skill-ref', 'task-spec', 'artifact-identity'].map(name => [`src/shared/${name}.mjs`, `dist/shared/${name}.mjs`]),
   ...['source', 'extract', 'validate', 'skill-check', 'analyze', 'graph-algorithms', 'graph', 'dataflow', 'values', 'paths', 'mermaid', 'emit-plan', 'helpers', 'emit', 'compile', 'api', 'output'].map(name => [`src/compiler/${name}.mjs`, `dist/compiler/${name}.mjs`]),
   ...['feature-gate', 'lower', 'validate-ir'].map(name => [`src/compiler/interactive/${name}.mjs`, `dist/compiler/interactive/${name}.mjs`]),

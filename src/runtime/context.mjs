@@ -24,10 +24,10 @@ export function cloneOwnData(source) {
   return target;
 }
 
-export function createRunContext(runtime, state, options, artifact) {
+export function createRunContext(runtime, state, options, artifact, checkPreparedSkills) {
   const ctx = { runtime, state: cloneOwnData(state === undefined ? {} : state), signal: options.signal,
     runId: options.runId === undefined ? randomUUID() : options.runId };
   Object.defineProperty(ctx, 'skillLoader', { value: createSkillLoader(options) });
-  Object.defineProperty(ctx, 'runPreparedAgent', { value: createPreparedAgentRunner(ctx, options, artifact) });
+  Object.defineProperty(ctx, 'runPreparedAgent', { value: createPreparedAgentRunner(ctx, options, artifact, checkPreparedSkills) });
   return ctx;
 }

@@ -63,12 +63,14 @@ export async function validatePackage(root, packedPaths) {
   assert.equal(pkg.exports['./package.json'], './package.json');
   const expected = packageFiles.map(([, output]) => output).sort();
   assert.deepEqual(await tree(root, 'dist'), expected, 'Unexpected or missing build output');
-  const sourceFiles = [...(await tree(root, 'src')).filter(file => file.endsWith('.mjs')), ...(await tree(root, 'types')).filter(file => file.endsWith('.d.ts'))].sort();
+  const sourceFiles = [...(await tree(root, 'src')).filter(file => file.endsWith('.mjs') || file.endsWith('/SKILL.md')),
+    ...(await tree(root, 'types')).filter(file => file.endsWith('.d.ts'))].sort();
   assert.deepEqual(sourceFiles, packageFiles.map(([source]) => source).sort(), 'Build manifest does not cover the sources');
   const members = new Set(expected);
   for (const [source, output] of packageFiles) {
     const bytes = await readFile(path.join(root, output));
     assert.deepEqual(bytes, await readFile(path.join(root, source)), `Stale output: ${output}`);
+    if (output.endsWith('/SKILL.md')) continue;
     for (const specifier of imports(bytes.toString(), output.endsWith('.d.ts'))) {
       if (specifier.startsWith('node:')) continue;
       if (!specifier.startsWith('.')) { assert.ok(Object.hasOwn(pkg.dependencies, specifier), `Unlisted dependency: ${specifier}`); continue; }

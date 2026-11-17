@@ -8,6 +8,7 @@ import { hasTaskSpec } from '../../shared/task-spec.mjs';
 export const IMPLEMENTED_INTERACTIVE_STAGE = 'P0-A';
 const STAGES = Object.freeze(['P0-A', 'P0-B', 'P1']);
 const ENABLED = new Set(['condition', 'terminal', 'agent']);
+export const supportsP0ANodeKind = kind => ENABLED.has(kind);
 
 function interactiveDiagnostic(analysis, code, message, index, node) {
   const location = index === undefined ? { line: 1, column: 1 }
@@ -42,7 +43,7 @@ export function gateInteractiveFeatures(analysis, options = {}) {
     && !analysis.diagnostics.some(item => item.severity === 'error');
   if (standardValid) {
     analysis.literal.definition.nodes.forEach((node, index) => {
-      if (!ENABLED.has(node.type)) {
+      if (!supportsP0ANodeKind(node.type)) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A does not support node type ' + String(node.type), index, node));
       } else if (node.type === 'agent' && node.verify != null) {

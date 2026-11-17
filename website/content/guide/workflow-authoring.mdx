@@ -4,9 +4,17 @@
 
 实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/dsl.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/dsl.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/dsl.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs)
 
-适用 FlowKit 1.0.0。先用[能力目录](/guide/capability-provider)找到与当前版本匹配的说明，再对照[工作流模型](/guide/workflow-model)与[编译诊断](/troubleshooting/compiler)。本页说明当前的编写与验证路径。B3 的自然语言 Author 属于后续批次。
+适用 FlowKit 1.0.0 的编写与验证路径。先用[能力目录](/guide/capability-provider)找到与当前版本匹配的说明，再对照[工作流模型](/guide/workflow-model)与[编译诊断](/troubleshooting/compiler)。
 
-本页为人类作者及开发宿主模型提供同一份编写依据：从业务目的选择现有能力，形成合法DSL和必要Host绑定，再检查业务结果。自然语言编写工作流Skill、MCP/插件封装和“流程图→DSL”接口属于后续迭代；当前可调用的是已列出的DSL、编译/检查和Host执行入口。
+本页为人类作者及开发宿主模型提供同一份编写依据。从业务目的选择现有能力，形成合法 DSL 和必要 Host 绑定，再检查业务结果。启用 Author 的宿主可以调用以下工作流编写路径。编译／检查和 Host 执行入口也可直接使用。
+
+## 用 Author 准备 Workflow Skill
+
+宿主可安装随包交付的 `dist/author/flowkit-workflow-author/SKILL.md`。启用前由宿主配置 Author、Intent Runtime、已授权的 Capability Graph、候选审查与执行授权。用户可以从一句项目目标开始，Author 沿用明确选择，针对会影响控制流或交付的未知项提供方案和推荐。
+
+用户先核对候选目标、控制流和文件差异。Standard workflow 使用同一次编译的 `workflow.js` 与 `workflow.mmd`，与 `SKILL.md` 同目录。需要保留 DSL 时显式启用 `source/workflow.dsl.js`。Workflow Skill 与 Professional Skill 都出现在主集合的 `skills/` 目录下。集合逻辑 ID 在重命名时保持，旧版本继续保持原 Artifact 身份。
+
+宿主验证候选摘要与审批，发布完整版本并将获准的目录映射到发现位置。执行已有 Workflow Skill 时，宿主核对下载或本地文件与已批准 Artifact、固定资源版本和当前权限，再经 [runArtifact](/reference/sdk#runArtifact) 执行。Standard 运行无需安装 Author。
 
 ## 从业务目的到可执行交付
 
@@ -61,7 +69,7 @@
 
 读取不到对应版本文档、缺权限/Skill/绑定或业务约束不明确时，指出具体缺项并补信息；不从其它版本猜接口、虚构能力ID或把不可访问的页面当已读。当前站点内容与授权版本、支持矩阵共同核对，公开部署/Registry/技术门禁分别验收。
 
-未来Skill宜引用这套同源契约和适用版本，保留任务说明、文档出处、生成物与验证结果的追溯；不在Skill内再复制一套会与网站漂移的API说明。
+Author 引用选定能力的相应版本文档，保留 Provider 记录、内容摘要和验证结果，供后续核对。
 
 当前站点针对1.0.0，没有按包版本切换的多版本路由。旧包不能只凭同一个URL把将来的最新内容当作自己的契约。后续发布应保留可取得的对应版本说明；Skill评估先记录实际文档版本/提交并与包核对，不能确认一致时停止依赖该说明生成，补齐受信版本材料后再继续。
 
