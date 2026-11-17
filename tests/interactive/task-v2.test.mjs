@@ -11,6 +11,7 @@ import {compileInteractive,createInteractiveCoordinator,createSqliteCheckpointSt
 import {prepareStandardSkill,publishStandardSkill} from '../../src/author/standard-artifact.mjs';
 import {artifactDigest} from '../../src/shared/artifact-identity.mjs';
 import {createIndependentAgentAdapter,createApiAgentAdapter} from '../../src/host.mjs';
+import {openLocalSkillStore} from '../../src/author/local-skill-store.mjs';
 
 const source=`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'recover-task',name:'Recover task',version:'1.0.0',nodes:[
@@ -183,4 +184,49 @@ test('API continuation reservations persist across restart and reject calls beyo
   assert.equal((await f.api().reserveDispatch({...id,operationId:`${id.requestId}:provider:1`})).dispatches,2);
   await assert.rejects(f.api().reserveDispatch({...id,operationId:'new-provider-call'}),error=>error.kind==='dispatch-limit');
   assert.equal((await f.api().complete(receipt(waiting,result.result))).status,'succeeded');
+});
+
+test('P0-A declared inputs distinguish JSON null from missing and never retain caller or public-frame mutations',async t=>{
+  const f=await fixture(t);const initial={message:{explicit:null,nested:{value:'before'}}};
+  const opening=f.api().start({...f.opening,state:initial});initial.message.nested.value='after';
+  const waiting=await opening;
+  assert.deepEqual(waiting.pending.input,{message:{explicit:null,nested:{value:'before'}}});
+  assert.deepEqual(waiting.pending.missing,['missing']);
+  waiting.pending.preparedTask.task.input.message.nested.value='public mutation';
+  assert.equal((await f.api().load({runId:waiting.runId})).pending.preparedTask.task.input.message.nested.value,'before');
+  await assert.rejects(f.api().start({...f.opening,startKey:'invalid',runId:'invalid',state:{message:()=>{}}}));
+  assert.equal(f.store.load('invalid'),null);
+});
+
+test('P0-A condition diagrams match both terminals and a diagram failure preserves the old approved Program',async t=>{
+  const f=await fixture(t);
+  const text=source.replace('defineWorkflow,node,terminal','defineWorkflow,node,condition,terminal')
+    .replace('nodes:[',"nodes:[condition('gate',{name:'Gate',branches:[{when:'ready',next:'worker'},{when:'true',next:'failed'}]}),")
+    .replace("terminal('done',{name:'Done',status:'succeeded'})","terminal('done',{name:'Done',status:'succeeded'}),terminal('failed',{name:'Failed',status:'failed'})");
+  await writeFile(f.file,text);
+  const options={file:f.file,collectionId:'team',skillId:'workflow',name:'condition-flow',description:'Condition fixture',
+    version:'1.0.0',hostProfile:{id:'local',digest:artifactDigest('host')},buildId:'final',executionMode:'interactive-p0-a',
+    professionalSkills:[{nodeId:'worker',id:'inspect',version:'1.0.0',digest:skillDigest}]};
+  const candidate=(await prepareStandardSkill(options)).candidate;
+  assert.match(candidate.files['workflow.mmd'],/Gate[\s\S]*Worker[\s\S]*Done[\s\S]*Failed/);
+  const compiled=await compileInteractive(f.file,{output:'memory',featureStage:'P0-A'});
+  for(const ready of [true,false]) {
+    const frame=await f.api().start({...f.opening,programBytes:Buffer.from(compiled.code),programIdentity:compiled.programIdentity,
+      startKey:String(ready),runId:String(ready),state:{ready,message:'private input'}});
+    assert.equal(frame.status,ready?'waiting':'failed');
+    if(ready)assert.equal((await f.api().complete(receipt(frame,{answer:'yes'}))).status,'succeeded');
+  }
+  const store=openLocalSkillStore(path.join(f.dir,'publish.sqlite'),()=>true);
+  try {
+    await publishStandardSkill(candidate,{reviewRef:'review',approvalRef:'approval',previousHash:null},store);
+    await writeFile(f.file,text.replace("node('worker'","node('a-1'").replace("next:'worker'","next:'a-1'")
+      .replaceAll("'done'","'a1'"));
+    const failed=await prepareStandardSkill({...options,version:'2.0.0',professionalSkills:[{nodeId:'a-1',id:'inspect',version:'1.0.0',digest:skillDigest}]});
+    assert.equal(failed.candidate,null);assert.ok(failed.diagnostics.some(item=>item.code==='FK_C090'));
+    assert.equal(store.readActive('team','workflow').hash,candidate.hash);
+  } finally {store.close();}
+  await unlink(f.file);f.restart();
+  assert.equal((await f.api().resume({runId:'true'})).status,'succeeded');
+  assert.equal((await f.api().resume({runId:'false'})).status,'failed');
+  assert.ok(!candidate.files['workflow.mmd'].includes('private input'));
 });

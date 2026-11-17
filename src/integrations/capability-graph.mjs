@@ -1,5 +1,5 @@
 // Keep references on the reviewed documentation snapshot rather than the moving main branch.
-const documentationCommit = 'a58c419bcc0ea4ec86bf2f52f57c1370dbd3cd18';
+const documentationCommit = '88e936fb0f6f3c9e85ce4cc2369047f1b0c2dcec';
 
 function document(id, page) {
   return {
@@ -16,7 +16,7 @@ function document(id, page) {
  * workflow runtime is created by FlowKit.
  */
 export const flowkitProvider = Object.freeze({
-  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.2',
+  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.3',
   description: 'Compile declarative JavaScript/TypeScript workflows and run them with an explicit host Runtime.',
   capabilities: [
     {
@@ -34,12 +34,13 @@ export const flowkitProvider = Object.freeze({
       id: 'compile-workflow', name: 'Compile workflow',
       description: 'Statically validate a workflow and emit executable JavaScript and optional Mermaid.',
       whenToUse: 'An application needs a verified compiled workflow.',
-      usage: { instructions: 'Call compile or compileSource and inspect diagnostics before using either artifact.' },
+      usage: { instructions: 'Inspect diagnostics before using artifacts. Use compileArtifact for an approved Standard workflow.js; compileInteractive emits a P0-A Program, matching Mermaid and exact Program identity. Keep the mode and ABI explicit.' },
       relations: { requires: ['define-workflow'] },
       documents: [
         document('flowkit-doc-compile', 'guide/compile-artifacts'),
         document('flowkit-doc-sdk', 'reference/sdk'),
         document('flowkit-doc-options', 'reference/options'),
+        document('flowkit-doc-interactive-api', 'reference/interactive'),
       ],
     },
     {
@@ -58,7 +59,7 @@ export const flowkitProvider = Object.freeze({
       id: 'run-workflow', name: 'Run workflow',
       description: 'Execute a verified workflow using a caller-provided host Runtime.',
       whenToUse: 'A host has authorized the workflow and supplied its business methods.',
-      usage: { instructions: 'Use run with a host Runtime for Standard. Preserve AOT source identity. Interactive uses its own API and supported subset.' },
+      usage: { instructions: 'The Host authorizes and executes. Use runArtifact for approved Standard workflow.js bytes, or run for DSL/AOT. Interactive start/resume preserves the original Run, prepared resources and budget. Host API tools and independent execution subjects remain Host-owned; Graph never dispatches them.' },
       relations: { requires: ['define-workflow'] },
       documents: [
         document('flowkit-doc-runtime', 'reference/runtime'),
@@ -66,13 +67,14 @@ export const flowkitProvider = Object.freeze({
         document('flowkit-doc-aot', 'guide/aot'),
         document('flowkit-doc-direct-host', 'guide/direct-host'),
         document('flowkit-doc-interactive', 'guide/interactive'),
+        document('flowkit-doc-interactive-api', 'reference/interactive'),
       ],
     },
     {
       id: 'render-mermaid', name: 'Render Mermaid',
       description: 'Produce a Mermaid diagram from the validated control-flow definition.',
       whenToUse: 'A caller needs a view of the workflow graph.',
-      usage: { instructions: 'Use compile or compileSource with Mermaid enabled. Display the diagram and execute the JavaScript separately.' },
+      usage: { instructions: 'Standard compile/compileSource or Interactive compileInteractive produce a static Mermaid view from the same validated analysis as the program. It contains no Run state or replay. Display the diagram and execute the approved JavaScript through its mode-specific Host entry.' },
       relations: { requires: ['compile-workflow'] },
       documents: [
         document('flowkit-doc-compile', 'guide/compile-artifacts'),
