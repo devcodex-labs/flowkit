@@ -304,7 +304,8 @@ async function readTerminalResult(resultRef,options) {
 
 function bindingRuntime(runtime,policy) {
   const bound={};
-  for (const [key,mode] of [['validateResult','pure-local'],['skillResolver','trusted-read']]) {
+  for (const [key,mode] of [['validateResult','pure-local'],['skillResolver','trusted-read'],
+    ['prepareAgentTask','trusted-read'],['authorizeAgentTask','trusted-read']]) {
     const value=runtime[key];
     if (!value) continue;
     const approved=policy.bindingManifest?.[key];
@@ -320,6 +321,7 @@ function bindingRuntime(runtime,policy) {
     } : implementation;
   }
   if (runtime.checkStep) bound.checkStep=runtime.checkStep;
+  if (runtime.taskResourcePolicy) bound.taskResourcePolicy=runtime.taskResourcePolicy;
   return bound;
 }
 
@@ -353,8 +355,9 @@ async function publicFrame(frame,options,callbacks) {
     const checkpoint=await options.store.load(runId);
     if (checkpoint?.namespace!==options.auth.namespace || checkpoint.revision!==revision
       || checkpoint.status!=='waiting' || checkpoint.pending[0]?.requestId!==frame.pending?.requestId) throw uncertain();
-    const {requestId,nodeId,attempt,name,instruction,input,missing,resultSchema,reasons,overview}=frame.pending;
-    const task=safeJSONSnapshot({name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{})});
+    const {requestId,nodeId,attempt,name,instruction,input,missing,resultSchema,reasons,overview,preparedTask}=frame.pending;
+    const task=safeJSONSnapshot({name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{}),
+      ...(preparedTask?{preparedTask}:{})});
     let approved;
     try {
       approved=await callbacks.authorizeTask(Object.freeze({namespace:options.auth.namespace,
@@ -409,7 +412,8 @@ export async function complete(submission,runtime,options) {
     || (input.outcome==='failed' && (typeof input.error?.message!=='string' || !input.error.message
       || typeof input.error.code!=='string' || !input.error.code
       || (input.error.retryable!==undefined && typeof input.error.retryable!=='boolean')
-      || Object.keys(input.error).some(key=>!['message','code','retryable','origin'].includes(key))
+      || Object.keys(input.error).some(key=>!['message','code','retryable','origin','sideEffectStatus'].includes(key))
+      || (input.error.sideEffectStatus!==undefined && !['none','known','unknown'].includes(input.error.sideEffectStatus))
       || (input.error.origin!==undefined && !['runtime','executor','validator','store','policy'].includes(input.error.origin))))
     || (input.outcome==='succeeded' && (!input.result || typeof input.result!=='object' || Array.isArray(input.result)))) {
     throw fail('FK_I_INVALID_RECEIPT','a bounded Agent submission is required');
@@ -439,7 +443,9 @@ export async function complete(submission,runtime,options) {
   const result=await coordinator.complete({runId,requestId,nodeId:task.nodeId,attempt:task.attempt,
     submissionDigest:hash(input),receivedPayload:input,
     ...(outcome==='succeeded' ? {result:input.result}
-      : {kind:'agent-call-failed',failure:{message:input.error.message}})});
+      : {kind:'agent-call-failed',failure:{message:input.error.message,
+        ...(input.error.retryable!==undefined?{retryable:input.error.retryable}:{}),
+        ...(input.error.sideEffectStatus!==undefined?{sideEffectStatus:input.error.sideEffectStatus}:{}),code:input.error.code}})});
   const frame=await publicFrame(result,options,callbacks);
   frame.acknowledgement.requestId=requestId;
   return frame;
@@ -450,4 +456,12 @@ export async function resume(runId,runtime,options) {
   const coordinator=bind(runtime,options);
   const callbacks=await checkAccess(options,'run:resume',{runId});
   return publicFrame(await coordinator.resume({runId}),options,callbacks);
+}
+
+/** Host execution budget operation; never expose this entry to a model. */
+export async function reserveInteractiveDispatch(input,runtime,options) {
+  options=operationOptions(options);
+  const request=safeJSONSnapshot(input);
+  await checkAccess(options,'run:resume',{runId:request.runId});
+  return bind(runtime,options).reserveDispatch(request);
 }

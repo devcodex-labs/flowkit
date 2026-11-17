@@ -127,9 +127,12 @@ export function emitInteractive(ir, options = {}) {
     },
   };
   const agents = Object.values(ir.nodes).some(node => node.kind === 'agent');
+  const legacyAgents = Object.values(ir.nodes).some(node => node.kind === 'agent' && !node.metadata.task);
+  const taskAgents = Object.values(ir.nodes).some(node => node.kind === 'agent' && node.metadata.task);
   const bindings = agents ? [
     {id:'runtime.validateResult',version:'1',mode:'pure-local',kind:'agent-validation'},
-    {id:'runtime.skillResolver',version:'1',mode:'trusted-read',kind:'skill'},
+    ...(legacyAgents ? [{id:'runtime.skillResolver',version:'1',mode:'trusted-read',kind:'skill'}] : []),
+    ...(taskAgents ? [{id:'runtime.authorizeAgentTask',version:'1',mode:'trusted-read',kind:'task-authorization'}] : []),
   ] : [];
   const table = {
     schemaVersion:1, entryBlockId:ir.entryBlockId, blocks:ir.blocks,

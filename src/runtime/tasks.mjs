@@ -35,8 +35,8 @@ function positive(value, fallback, label) {
   return limit;
 }
 
-function createBudget(policy, signal) {
-  const deadlineMs = positive(policy.deadlineMs, Date.now() + 600000, 'deadlineMs');
+export function createBudget(policy, signal, persisted) {
+  const deadlineMs = positive(persisted?.deadlineMs ?? policy.deadlineMs, Date.now() + 600000, 'deadlineMs');
   const maxDispatches = positive(policy.maxDispatches, 1024, 'maxDispatches');
   const limits = policy.hostProfile?.resourceLimits;
   const maxResourceBytes = Math.min(positive(policy.maxResourceBytes, DESCRIPTION_MAX_BYTES, 'maxResourceBytes'),
@@ -44,12 +44,13 @@ function createBudget(policy, signal) {
   const maxTotalResourceBytes = positive(policy.maxTotalResourceBytes, 1048576, 'maxTotalResourceBytes');
   const maxTaskBytes = Math.min(positive(policy.maxTaskBytes, 1048576, 'maxTaskBytes'),
     positive(limits?.maxTaskBytes, Number.MAX_SAFE_INTEGER, 'Host maxTaskBytes'));
-  let used = 0;
+  let used = persisted?.dispatches ?? 0;
   function check() {
     if (signal?.aborted) throw failure('cancelled', 'Task was cancelled', signal.reason);
     if (Date.now() >= deadlineMs) throw failure('node-deadline-exceeded', 'Task deadline exceeded');
   }
   return Object.freeze({ deadlineMs, maxResourceBytes, maxTotalResourceBytes, maxTaskBytes, check,
+    snapshot() { return {deadlineMs, dispatches: used}; },
     dispatch() {
       check();
       if (used >= maxDispatches) throw failure('dispatch-limit', 'Run dispatch limit reached');
@@ -115,6 +116,36 @@ function writeResult(target, result) {
   }
 }
 
+/** Shared Standard/P0-A resource preparation; Host supplies discovery and actual permissions. */
+export async function prepareTaskV2(task, runtime, policy, context, mode = 'standard') {
+  const {signal, descriptionResources, budget} = context;
+  const requiredSkills = task.task.requiredSkills ?? [];
+  if (requiredSkills.length && typeof runtime.prepareAgentTask !== 'function') {
+    throw failure('required-skill-missing', 'Required Skills need host preparation');
+  }
+  const profile = policy.hostProfile;
+  if (requiredSkills.length && (profile?.schemaVersion !== 1 || !Array.isArray(profile.executionModes) || !profile.executionModes.includes(mode) ||
+    !['nativeSkillDiscovery','skillResourceLoading'].some(key => profile.capabilities?.[key] === 'supported'))) {
+    throw failure('capability-unavailable', 'Required Skill capability is unknown or unsupported for the current Host');
+  }
+  const prepared = snapshot(typeof runtime.prepareAgentTask === 'function' ?
+    await during(signal, () => runtime.prepareAgentTask(task, context)) :
+    {protocolVersion: 2, task, descriptionResources, skills: []});
+  if (prepared?.protocolVersion !== 2 || !isDeepStrictEqual(prepared.task, task) ||
+    !isDeepStrictEqual(prepared.descriptionResources, descriptionResources) || !Array.isArray(prepared.skills) ||
+    prepared.skills.length !== requiredSkills.length || requiredSkills.some((skill,index) => {
+      const bound = prepared.skills[index];
+      return !bound || bound.logicalId !== skill.id || !isSemVer(bound.resolvedVersion) ||
+        skill.version && bound.resolvedVersion !== skill.version || !/^sha256:[0-9a-f]{64}$/.test(bound.digest);
+    })) throw failure('invalid-preparation', 'Prepared task or required Skill identity differs');
+  const resources = [...descriptionResources.map(({uri,role,digest,byteLength}) => ({logicalId:uri,role,digest,byteLength})),
+    ...prepared.skills.map(({logicalId,resolvedVersion,digest}) => ({logicalId,resolvedVersion,digest}))];
+  const manifestHash = artifactDigest(JSON.stringify(resources));
+  const dispatched = snapshot({...prepared,resourceManifest:{manifestId:manifestHash,manifestHash,resources}});
+  validateSize(dispatched, budget.maxTaskBytes, 'Prepared task');
+  return dispatched;
+}
+
 /** Host calls handle actual preparation and dispatch; compiled code retains control and business writes. */
 export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedSkills) {
   const { runtime, signal, state, runId } = ctx;
@@ -152,44 +183,18 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
           attempt, reasons, ...(spec.overview ? { overviewStep: step } : {}) }
       });
       validateSize(task, budget.maxTaskBytes, 'Task');
-      const requiredSkills = spec.task.requiredSkills ?? [];
       const context = Object.freeze({ signal: taskSignal, deadlineMs: budget.deadlineMs, budget, projectRoot: policy.projectRoot,
         hostProfile: policy.hostProfile, authorizationContextRef: policy.authorizationContextRef,
         descriptionResources });
-      if (requiredSkills.length && typeof runtime.prepareAgentTask !== 'function') {
-        throw failure('required-skill-missing', 'Required Skills need host preparation');
-      }
-      const profile = policy.hostProfile;
-      if (requiredSkills.length && (profile?.schemaVersion !== 1 ||
-          !Array.isArray(profile.executionModes) || !profile.executionModes.includes('standard') ||
-          !['nativeSkillDiscovery', 'skillResourceLoading'].some(capability => profile.capabilities?.[capability] === 'supported'))) {
-        throw failure('capability-unavailable', 'Required Skill capability is unknown or unsupported for the current Host');
-      }
-      const prepared = snapshot(typeof runtime.prepareAgentTask === 'function' ?
-        await during(taskSignal, () => runtime.prepareAgentTask(task, context)) :
-        { protocolVersion: 2, task, descriptionResources, skills: [] });
-      if (!prepared || prepared.protocolVersion !== 2 || !isDeepStrictEqual(prepared.task, task) ||
-          !isDeepStrictEqual(prepared.descriptionResources, descriptionResources) || !Array.isArray(prepared.skills) ||
-          prepared.skills.length !== requiredSkills.length ||
-          requiredSkills.some((skill, index) => {
-            const bound = prepared.skills[index];
-            return !bound || bound.logicalId !== skill.id || !isSemVer(bound.resolvedVersion) ||
-              skill.version && bound.resolvedVersion !== skill.version || !/^sha256:[0-9a-f]{64}$/.test(bound.digest);
-          })) throw failure('invalid-preparation', 'Prepared task or required Skill identity differs');
+      const prepared = await prepareTaskV2(task, runtime, policy, context);
       checkPreparedSkills?.(task.node.id, prepared.skills);
-      const resources = [
-        ...descriptionResources.map(({ uri, role, digest, byteLength }) => ({ logicalId: uri, role, digest, byteLength })),
-        ...prepared.skills.map(({ logicalId, resolvedVersion, digest }) => ({ logicalId, resolvedVersion, digest }))
-      ];
-      const manifestHash = artifactDigest(JSON.stringify(resources));
+      const manifestHash = prepared.resourceManifest.manifestHash;
       if (frozenManifest !== undefined && manifestHash !== frozenManifest) {
         throw failure('invalid-preparation', 'Required resource identity changed within one activation');
       }
       frozenManifest = manifestHash;
-      const dispatched = snapshot({ ...prepared, resourceManifest: { manifestId: manifestHash, manifestHash, resources } });
-      validateSize(dispatched, budget.maxTaskBytes, 'Prepared task');
       budget.dispatch();
-      const envelope = validateResultEnvelope(await during(taskSignal, () => runtime.runAgentTask(dispatched, context)));
+      const envelope = validateResultEnvelope(await during(taskSignal, () => runtime.runAgentTask(prepared, context)));
       runtime.recordAgentResult?.(task, envelope);
       budget.check();
       if (envelope.status === 'cancelled') throw failure('cancelled', envelope.reason);

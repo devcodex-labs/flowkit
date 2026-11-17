@@ -56,9 +56,12 @@ export function normalizeHostAgentReceipt(supplied) {
     if (Object.hasOwn(data,'result') || !Object.hasOwn(data,'failure')) {
       throw rejected('invalid Agent failure fields');
     }
-    strictRecord(data.failure,['message']);
+    strictRecord(data.failure,['message','retryable','sideEffectStatus','code'],['message']);
     if (typeof data.failure.message !== 'string' || !data.failure.message.length
-      || data.failure.message.length>4096) {
+      || data.failure.message.length>4096
+      || data.failure.retryable !== undefined && typeof data.failure.retryable !== 'boolean'
+      || data.failure.sideEffectStatus !== undefined && !['none','known','unknown'].includes(data.failure.sideEffectStatus)
+      || data.failure.code !== undefined && typeof data.failure.code !== 'string') {
       throw rejected('invalid Agent failure message');
     }
   } else {

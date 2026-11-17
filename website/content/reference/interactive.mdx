@@ -154,6 +154,10 @@ Host先校验真实执行器来源并关联当前请求，再调用本接口；�
 
 `await resume(runId,runtime,options)`重用原Run/策略/绑定推进，不能改成另一个工作流“恢复”。返回公开InteractiveFrameV1：protocolVersion/runId/revision/status、pending数组、checkpointRef及按状态出现的terminal/resultRef/acknowledgement/diagnostics；不直接返回state。
 
+### reserveInteractiveDispatch {#reserveInteractiveDispatch}
+
+`await reserveInteractiveDispatch({runId,requestId,operationId},runtime,options)` 是 Host 内部的持久预算操作，需要当前 Run 的恢复权限及仍有效的 Task V2 授权。额外 API 请求发出前，按当前 Pending 的 requestId 和稳定 operationId 预留一次调度。重复操作幂等，原 deadline、总次数上限和资源绑定沿用检查点；不同 Pending、超预算和过期请求拒绝。同步协调器及 Trusted Host 的对应方法为 `reserveDispatch`，均不开放给模型。
+
 完整结果用`auth.readTerminalResult(resultRef,options)`另经result:read授权取得。审计上下文可以只允许这个动作，不应把Model任务与完整状态读取合并。
 
 读取支持succeeded、failed、errored和cancelled终态。succeeded/failed返回terminal；errored在持久封套含错误码时返回顶层causeCode，例如FK_I_VALIDATOR_CONTRACT或FK_R004，不能从可能为null的terminal读取它。不是每个终态都有causeCode，调用方应按status与实际字段处理。本例演示succeeded读取，错误终态、重开Store及授权拒绝由SDK回归覆盖。

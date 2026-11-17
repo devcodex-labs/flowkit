@@ -4,9 +4,9 @@ import { supportsP0ANodeKind } from '../compiler/interactive/feature-gate.mjs';
 const NODE_KINDS = new Set(['agent', 'action', 'verification', 'condition', 'parallel', 'loop', 'human', 'terminal']);
 const EDGE_KINDS = new Set(['control', 'data', 'capability', 'resource']);
 
-export function assertReadyStandardPlan(plan) {
+export function assertReadyStandardPlan(plan, mode = 'standard') {
   const { planHash, status, revision, ...view } = plan;
-  if (status !== 'ready-for-dsl' || view.target.executionMode !== 'standard' ||
+  if (status !== 'ready-for-dsl' || view.target.executionMode !== mode ||
     view.unresolvedIssues.some(issue => issue.blocking) || !Number.isSafeInteger(revision) || revision < 1 ||
     !/^sha256:[0-9a-f]{64}$/.test(view.intentRef?.effectiveIntentHash) ||
     planHash !== artifactDigest(JSON.stringify(view))) throw new Error('A current Standard WorkflowPlan is required');

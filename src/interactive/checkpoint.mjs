@@ -21,8 +21,9 @@ export function checkpointPolicy(policy,policyHash) {
 function pendingFromExecution(cp) {
   const task=cp.pending??cp.prepared;
   if (!task) return [];
-  const {requestId,nodeId,kind,attempt,name,instruction,input,missing,resultSchema,reasons,overview}=task;
-  const publicTask={name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{})};
+  const {requestId,nodeId,kind,attempt,name,instruction,input,missing,resultSchema,reasons,overview,preparedTask}=task;
+  const publicTask={name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{}),
+    ...(preparedTask?{preparedTask}:{})};
   return [{requestId,nodeId,kind,attempt,name,activation:cp.controlStack.at(-1).activation,
     issuedRevision:task.issuedRevision??cp.revision,intent:'execute',internalPayload:{},publicTask}];
 }
@@ -41,7 +42,8 @@ export function encodeCheckpoint(cp) {
     programRef:{namespace,artifactHash:program.artifactHash,programId:program.workflowId},
     policyIdentity,
     execution:{blockId:cp.blockId,phase,activationSeq:cp.activationSeq,agentStepCounter:cp.activationSeq,
-      controlStack:phase==='finished'?[]:cp.controlStack,contextError:cp.contextError??null},
+      controlStack:phase==='finished'?[]:cp.controlStack,contextError:cp.contextError??null,
+      ...(cp.taskContext?{taskContext:cp.taskContext}:{})},
     state,candidate,receivedSubmission,pending:pendingFromExecution(cp),inFlightOperations:[],
     terminal:status==='succeeded'||status==='failed'?cp.terminal:null,
     lastTransitionId:cp.lastTransitionId??null,
@@ -66,7 +68,7 @@ export function decodeCheckpoint(cp) {
     || cp.programRef.artifactHash!==cp.program.artifactHash || cp.programRef.programId!==cp.program.workflowId
     || !keys(cp.policyIdentity,['id','version','policyHash','bindingManifestHash'],['skillManifestHash'])
     || ![cp.policyIdentity.id,cp.policyIdentity.version].every(text)
-    || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'])
+    || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'],['taskContext'])
     || !text(cp.execution.blockId) || !phases.has(cp.execution.phase)
     || !count(cp.execution.activationSeq) || cp.execution.agentStepCounter!==cp.execution.activationSeq
     || !Array.isArray(cp.execution.controlStack)
@@ -80,6 +82,14 @@ export function decodeCheckpoint(cp) {
   const {namespace,runId,startKey,startIntentHash,revision,status,program,policyIdentity,execution,state,
     receivedSubmission,lastTransitionId}=cp;
   const {phase,blockId,controlStack,activationSeq,contextError}=execution;
+  if (execution.taskContext && (!object(execution.taskContext) || !count(execution.taskContext.dispatches) ||
+    !Number.isSafeInteger(execution.taskContext.deadlineMs) || execution.taskContext.deadlineMs < 1 ||
+    execution.taskContext.reservations && (!Array.isArray(execution.taskContext.reservations) ||
+      execution.taskContext.reservations.length>execution.taskContext.dispatches ||
+      new Set(execution.taskContext.reservations).size!==execution.taskContext.reservations.length ||
+      execution.taskContext.reservations.some(value=>!/^sha256:[0-9a-f]{64}$/.test(value))) ||
+    execution.taskContext.active && (!text(execution.taskContext.active.activationId) ||
+      execution.taskContext.active.prepared?.protocolVersion !== 2))) throw invalid();
   const hasPending=status==='waiting'||phase==='dispatch-ready';
   if ((!finished.has(status) && !['waiting','paused','running'].includes(status))
     || (phase==='finished')!==finished.has(status) || (phase==='awaiting')!==(status==='waiting')
@@ -128,7 +138,8 @@ export function decodeCheckpoint(cp) {
         || hash(cp.candidate.result)!==hash(payload.result)))) throw invalid();
     candidate={kind:'agent',requestId:accepted.requestId,nodeId:frame.nodeId,attempt:accepted.attempt,
       submissionKind:succeeded?'agent-result':'agent-call-failed',validated:false,
-      ...(succeeded?{result:payload.result}:{failure:{message:(payload.failure??payload.error).message}})};
+      ...(succeeded?{result:payload.result}:{failure:Object.fromEntries(['message','retryable','sideEffectStatus','code']
+        .filter(key=>Object.hasOwn(payload.failure??payload.error,key)).map(key=>[key,(payload.failure??payload.error)[key]]))})};
   } else if (phase==='commit') {
     if (!keys(cp.candidate,['kind','requestId','result']) || cp.candidate.kind!=='agent'
       || !text(cp.candidate.requestId) || !object(cp.candidate.result)) throw invalid();
@@ -140,6 +151,7 @@ export function decodeCheckpoint(cp) {
     artifactHash:program.artifactHash,policyHash:policyIdentity.policyHash,blockId,
     phase:phase==='finished'?blockId.slice(blockId.lastIndexOf('::')+2):phase,controlStack,activationSeq,contextError,
     candidate,receivedSubmission,lastTransitionId,stageCount:cp.limits.stageCount,receiptCount:cp.limits.receiptCount,
+    ...(execution.taskContext?{taskContext:execution.taskContext}:{}),
     pending:phase==='awaiting'?pending:null,prepared:phase==='dispatch-ready'?pending:null,
     terminal:status==='errored'?{status,nodeId:blockId.slice(0,blockId.lastIndexOf('::')),causeCode:cp.causeCode}:cp.terminal,
     ...(status==='paused'?{pauseReason:cp.causeCode==='FK_I_TEMPORARY_SKILL'?'skill-temporary':'stage-budget'}:{})};

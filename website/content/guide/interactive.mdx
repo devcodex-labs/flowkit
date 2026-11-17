@@ -12,6 +12,14 @@ Interactive是Host持有状态和执行权限的独立接口，适合Agent暂停
 
 ## 选择接口层
 
+Task V2 的 `description`、`descriptionRefs` 和 `requiredSkills` 可用于 P0-A Agent。`compileInteractive` 的 `code`、`mermaid` 与 `programIdentity` 来自同一次静态分析；Author 可据此交付 `SKILL.md`、`workflow.js` 和 `workflow.mmd`。默认不附源码，执行不依赖 Author。
+
+Host 提供 `prepareAgentTask` 和 `authorizeAgentTask`。前者返回完整准备结果，后者检查当前权限及固定资源是否仍可用；恢复、任务披露和新回执接纳前均复核。检查点保存原输入、资源内容和摘要、绝对 deadline、累计 dispatch，恢复不重置这些值，也不改用最新资源。版本化 API 的两个回调使用 `trusted-read` 描述符并列入 `bindingManifest`。
+
+普通 API 工具循环的额外请求应绑定到 Host 的持久预算：同步协调器/Trusted Host 调用 `reserveDispatch({runId,requestId,operationId})`，版本化入口使用 `reserveInteractiveDispatch`。将该操作接入执行器的 `context.budget.dispatch`；相同 operationId 幂等，超预算或过期请求拒绝。Host 保管工具业务回执和待对账记录，未知副作用不能通过重试消除。
+
+Task V2 失败回执应提供 `retryable` 和 `sideEffectStatus`；只有明确可重试且副作用为 `none` 才允许有限重试。授权后仍不可跳过独立的结果 Schema 校验。静态图不含业务输入、运行日志或恢复事件。
+
 | 层 | 入口 | 状态与用途 |
 | --- | --- | --- |
 | Host内部核心 | compileInteractive、loadInteractiveProgram、createSqliteCheckpointStore、createInteractiveCoordinator | 编译/加载、同步Store及协调器。原始frame/状态只留Host，不暴露给Model |

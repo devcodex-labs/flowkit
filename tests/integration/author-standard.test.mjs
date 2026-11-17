@@ -403,7 +403,7 @@ test('candidate retains the effective intent and Plan identity and rejects a cha
   const proposal = { entryNodeId: 'work', nodes: [{ id: 'work', kind: 'action' }, { id: 'done', kind: 'terminal' }],
     edges: [{ from: 'work', to: 'done', kind: 'control' }], coverage: [{ intentId: 'inspect', status: 'covered', coveredBy: ['work'] }] };
   const author = createWorkflowAuthor({});
-  await assert.rejects(author.prepare(undefined, options), /current Standard WorkflowPlan is required/);
+  await assert.rejects(author.prepare(undefined, options), /current WorkflowPlan is required/);
   const blocked = await author.plan(draft, intent, { ...proposal, capabilityRequirements: ['flowkit::compile-workflow'] });
   assert.equal(blocked.status, 'needs-clarification');
   await assert.rejects(author.prepare(blocked, options), /current Standard WorkflowPlan is required/);

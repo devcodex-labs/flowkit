@@ -6,9 +6,16 @@ import {analyzeSource} from '../compiler/analyze.mjs';
 import {normalizeOptions,resolveProjectRoot} from '../compiler/source.mjs';
 import {lowerInteractive} from '../compiler/interactive/lower.mjs';
 import {emitInteractive} from '../compiler/interactive/emit.mjs';
+import {checkMermaidIds, renderMermaid} from '../compiler/mermaid.mjs';
 
 /** Internal M2 compile API; the exported SDK subpath is introduced in M4. */
 export async function compileInteractive(file, options) {
+  const {snapshot, definition, graph, ...result} = await compileInteractiveDraft(file, options);
+  return result;
+}
+
+/** One source analysis supplies both Program bytes and the Author's static diagram/metadata. */
+export async function compileInteractiveDraft(file, options) {
   if (typeof file !== 'string' || !/\.workflow\.(js|ts)$/.test(file)) {
     throw new TypeError('Expected .workflow.js or .workflow.ts file');
   }
@@ -43,11 +50,14 @@ export async function compileInteractive(file, options) {
   });
   const lowered = lowerInteractive(analysis,{featureStage:snapshotOptions.featureStage});
   if (!lowered.ir) return {code:'',diagnostics:[...lowered.diagnostics]};
+  const mermaidDiagnostics = checkMermaidIds(analysis);
+  if (mermaidDiagnostics.some(d=>d.severity==='error')) return {code:'',diagnostics:[...lowered.diagnostics,...mermaidDiagnostics]};
   const emitted = emitInteractive(lowered.ir);
   if (emitted.diagnostics.some(d => d.severity === 'error')) {
     return {code:'',diagnostics:[...lowered.diagnostics,...emitted.diagnostics]};
   }
-  const result = {code:emitted.code,diagnostics:[...lowered.diagnostics],programIdentity:emitted.programIdentity};
+  const result = {code:emitted.code,mermaid:renderMermaid(analysis),diagnostics:[...lowered.diagnostics,...mermaidDiagnostics],
+    programIdentity:emitted.programIdentity,snapshot:analysis.snapshot,definition:analysis.literal.definition,graph:analysis.graph};
   if (snapshotOptions.output === 'file') {
     const stem = path.basename(filename).replace(/\.workflow\.(js|ts)$/,'');
     const artifactPath = path.join(outDir,stem + '.interactive.mjs');

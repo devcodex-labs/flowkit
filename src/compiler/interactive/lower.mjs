@@ -1,4 +1,5 @@
 import { gateInteractiveFeatures } from './feature-gate.mjs';
+import { hasTaskSpec } from '../../shared/task-spec.mjs';
 import { P0A_PHASES, interactiveBlockId, phaseContract, expectedBlockTargets, agentFrameRule, validateInteractiveIR } from './validate-ir.mjs';
 
 function copyData(value) {
@@ -47,6 +48,8 @@ export function lowerInteractive(analysis, options = {}) {
         ...(node.integrity === undefined ? {} : { integrity: node.integrity }),
         inputs: node.inputs ?? [], output: node.output,
         retries: node.retries ?? 2, overview: node.overview === true,
+        ...(hasTaskSpec(node) ? {task: Object.fromEntries(['description','descriptionRefs','requiredSkills']
+          .filter(key => node[key] !== undefined).map(key => [key, node[key]]))} : {}),
       };
     } else {
       metadata = { name: node.name, status: node.status };

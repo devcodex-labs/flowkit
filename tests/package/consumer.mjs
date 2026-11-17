@@ -64,7 +64,7 @@ assert.deepEqual(Object.keys(interactive),[
   'compileInteractive','complete','createAgentReceiptStatement','createInteractiveAdminContext','createInteractiveCoordinator',
   'createInteractiveHostContext','createSqliteCheckpointStore','createSqliteInteractivePersistence',
   'createTrustedInteractiveHost','encodeAgentReceiptStatement',
-  'loadInteractiveProgram','normalizeHostAgentReceipt','resume','start',
+  'loadInteractiveProgram','normalizeHostAgentReceipt','reserveInteractiveDispatch','resume','start',
 ]);
 await writeFile('simple.workflow.js',
   "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
@@ -88,6 +88,24 @@ try {
   assert.equal((await versioned.store.load(frame.runId)).protocolVersion,1);
 } finally {versioned.close();}
 assert.ok(compiledInteractive.programIdentity?.artifactHash);
+await writeFile('task-interactive.workflow.js',
+  "import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';"+
+  "export default defineWorkflow({id:'installed-task',version:'1.0.0',name:'Task',nodes:["+
+  "node('work',{name:'Work',description:'Check package',output:{type:'object'},next:'done'}),"+
+  "terminal('done',{name:'Done',status:'succeeded'})]});");
+const taskProgram=await interactive.compileInteractive('task-interactive.workflow.js',{output:'memory',featureStage:'P0-A'});
+assert.deepEqual(taskProgram.diagnostics,[]);
+assert.ok(taskProgram.mermaid.startsWith('flowchart TD'));
+await unlink('task-interactive.workflow.js');
+const taskStore=interactive.createSqliteCheckpointStore('task-interactive.db',{namespace:'installed-task'});
+try {
+  const machine=interactive.createInteractiveCoordinator({store:taskStore,runtime:{validateResult:()=>[],authorizeAgentTask:()=>true}});
+  const pending=await machine.start({programBytes:Buffer.from(taskProgram.code),programIdentity:taskProgram.programIdentity,startKey:'task'});
+  assert.equal(pending.pending.preparedTask.task.protocolVersion,2);
+  await machine.reserveDispatch({runId:pending.runId,requestId:pending.pending.requestId,operationId:'installed-extra'});
+  const result=await machine.complete({runId:pending.runId,requestId:pending.pending.requestId,nodeId:'work',attempt:1,result:{ok:true}});
+  assert.equal(result.status,'succeeded');
+} finally {taskStore.close();}
 const store=interactive.createSqliteCheckpointStore('interactive-demo.db',{namespace:'consumer'});
 try {
   const machine=interactive.createInteractiveCoordinator({store,runtime:{}});

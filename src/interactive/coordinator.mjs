@@ -3,6 +3,8 @@ import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256B
 import {loadInteractiveProgram} from './load.mjs';
 import {checkpointPolicy} from './checkpoint.mjs';
 import {agentFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
+import {createDescriptionResources} from '../runtime/task-resources.mjs';
 
 const FINISHED = new Set(['succeeded','failed','errored','cancelled']);
 const MAX_REASONS = 32;
@@ -82,6 +84,12 @@ function confirmCurrentBlock(cp, program) {
   if (cp.status === 'waiting') {
     if (cp.phase !== 'awaiting' || cp.pending?.requestId == null || cp.candidate != null) {
       throw failure('FK_I_INVALID_CHECKPOINT','waiting without certified pending request');
+    }
+    if (cp.pending.preparedTask && (!cp.taskContext?.active ||
+      fingerprint(cp.pending.preparedTask) !== fingerprint(cp.taskContext.active.prepared) ||
+      cp.pending.preparedTask.task.execution.requestId !== cp.pending.requestId ||
+      cp.pending.preparedTask.task.run.runId !== cp.runId || cp.pending.preparedTask.task.workflow.artifactHash !== cp.artifactHash)) {
+      throw failure('FK_I_INVALID_CHECKPOINT','Pending Task V2 differs from its persisted preparation');
     }
   } else if (cp.phase === 'awaiting' && !FINISHED.has(cp.status)) {
     throw failure('FK_I_INVALID_CHECKPOINT','awaiting must be a published waiting state');
@@ -236,7 +244,8 @@ function assertRuntime(program,runtime) {
   }
   for (const binding of program.programTable.requiredBindings) {
     if (binding.id === 'runtime.validateResult' && typeof runtime.validateResult !== 'function'
-      || binding.id === 'runtime.skillResolver' && typeof runtime.skillResolver !== 'function') {
+      || binding.id === 'runtime.skillResolver' && typeof runtime.skillResolver !== 'function'
+      || binding.id === 'runtime.authorizeAgentTask' && typeof runtime.authorizeAgentTask !== 'function') {
       throw failure('FK_I_BINDING_MISSING','Required P0-A binding ' + binding.id);
     }
   }
@@ -290,6 +299,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     validateResult:runtime.validateResult,
     skillResolver:runtime.skillResolver,
     checkStep:runtime.checkStep,
+    prepareAgentTask:runtime.prepareAgentTask,
+    authorizeAgentTask:runtime.authorizeAgentTask,
+    taskResourcePolicy:runtime.taskResourcePolicy,
   });
   const policySnapshot = copy(policy);
   const policyHash = fingerprint(policySnapshot);
@@ -336,6 +348,17 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
     }
     assertRuntime(program,execution);
+    if (!FINISHED.has(cp.status) && cp.taskContext) {
+      const budget = createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext);
+      budget.check();
+      const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647,budget.deadlineMs-Date.now())));
+      const currentSignal = signal ? AbortSignal.any([signal,expires]) : expires;
+      if (cp.taskContext.active && await during(currentSignal,()=>execution.authorizeAgentTask(freezeDeep(copy(cp.taskContext.active.prepared)),
+        {runId:cp.runId, signal:currentSignal, deadlineMs:budget.deadlineMs})) !== true) {
+        throw failure('FK_I_HOST_DENIED','Current Host authorization or pinned task resources are unavailable');
+      }
+      budget.check();
+    }
     if (!FINISHED.has(cp.status)) confirmCurrentBlock(cp,program);
     return program;
   }
@@ -446,7 +469,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
     if (proposal.kind === 'prepare-pending') {
       if (!extras.prepared) throw failure('FK_I_INVALID_CHECKPOINT','prepared data missing');
-      next.prepared=copy(extras.prepared);
+      const {taskContext, ...pending} = extras.prepared;
+      next.prepared=copy(pending);
+      if (taskContext) next.taskContext=copy(taskContext);
     }
     if (proposal.kind === 'move' && cp.phase === 'enter' && cp.blockId !== next.blockId
       && proposal.stackEffect.kind === 'push') {
@@ -470,6 +495,42 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     const frame=cp.controlStack.at(-1);
     if (node.kind!=='agent' || cp.phase!=='prepare' || !frame) {
       throw failure('FK_I_INVALID_CHECKPOINT','not at Agent prepare phase');
+    }
+    if (node.metadata.task) {
+      const policy = {...policySnapshot.taskPolicy, fetch:execution.taskResourcePolicy?.fetch,
+        authorizeRemote:execution.taskResourcePolicy?.authorizeRemote,isImmutableResource:execution.taskResourcePolicy?.isImmutableResource};
+      const budget = createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext);
+      const timeout = AbortSignal.timeout(Math.max(1,Math.min(2147483647,budget.deadlineMs-Date.now())));
+      const taskSignal = signal ? AbortSignal.any([signal,timeout]) : timeout;
+      const activationId = 'activation:' + fingerprint([cp.runId,cp.artifactHash,frame.activation]).slice(7);
+      const saved = cp.taskContext?.active?.activationId === activationId ? cp.taskContext.active : null;
+      const {input,missing} = saved ?? inputForAgent(cp.state,node.metadata.inputs);
+      const descriptionResources = saved?.prepared.descriptionResources ?? await during(taskSignal, () =>
+        createDescriptionResources(node.metadata.task.descriptionRefs ?? [],policy,
+          {remoteSkillHosts:policy.remoteSkillHosts},budget,taskSignal));
+      const requestId = 'req:' + fingerprint([cp.namespace,cp.runId,cp.artifactHash,frame.nodeId,frame.activation,frame.attempt]).slice(7);
+      const task = freezeDeep(copy({protocolVersion:2,
+        workflow:{id:program.interactiveProgram.identity.workflowId,version:program.interactiveProgram.identity.workflowVersion,
+          ...program.interactiveProgram.identity,artifactHash:cp.artifactHash,mode:'interactive-p0-a'},
+        run:{runId:cp.runId},node:{id:block.nodeId,name:node.metadata.name},task:node.metadata.task,
+        input,missing,outputSchema:node.metadata.output,
+        execution:{activationId,requestId,deadlineMs:budget.deadlineMs,attempt:frame.attempt,reasons:frame.reasons}}));
+      const context = Object.freeze({signal:taskSignal,budget,deadlineMs:budget.deadlineMs,
+        descriptionResources,projectRoot:policy.projectRoot,hostProfile:policy.hostProfile,
+        authorizationContextRef:policy.authorizationContextRef});
+      const prepared = await prepareTaskV2(task,execution,policy,context,'interactive-p0-a');
+      if (saved && prepared.resourceManifest.manifestHash !== saved.prepared.resourceManifest.manifestHash) {
+        throw failure('FK_I_PROGRAM_MISMATCH','Prepared task resources changed within the activation');
+      }
+      if (await during(taskSignal,()=>execution.authorizeAgentTask(prepared,context)) !== true) {
+        throw failure('FK_I_HOST_DENIED','Host denied Task V2 preparation');
+      }
+      budget.dispatch();
+      return copy({kind:'agent',runId:cp.runId,nodeId:block.nodeId,id:block.nodeId,name:node.metadata.name,
+        requestId,attempt:frame.attempt,instruction:Array.isArray(node.metadata.task.description) ?
+          node.metadata.task.description.join('\n') : node.metadata.task.description ?? '',input,missing,
+        resultSchema:node.metadata.output,reasons:frame.reasons,preparedTask:prepared,
+        taskContext:{...cp.taskContext,...budget.snapshot(),active:{activationId,input,missing,prepared}}});
     }
     const instruction = await execution.skillResolver(Object.freeze(copy({
       runId:cp.runId,nodeId:block.nodeId,name:node.metadata.name,
@@ -500,6 +561,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     const block=program.programTable.blocks.find(b=>b.id===cp.blockId);
     const schema=copy(program.programTable.nodes[block.nodeId].metadata.output);
     if (cp.candidate.submissionKind === 'agent-call-failed') {
+      if (program.programTable.nodes[block.nodeId].metadata.task &&
+        (cp.candidate.failure.retryable !== true || cp.candidate.failure.sideEffectStatus !== 'none')) {
+        return {kind:'deterministic-failure',causeCode:'FK_I_AGENT_EXECUTION_FAILED'};
+      }
       return {kind:'agent-call-failed',reasons: ['runAgent threw: ' +
         cp.candidate.failure.message.slice(0,MAX_REASON_LENGTH-16)]};
     }
@@ -638,6 +703,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
     const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
+    if (Object.values(program.programTable.nodes).some(node=>node.metadata.task)) {
+      initial.taskContext=createBudget(policySnapshot.taskPolicy ?? {},signal).snapshot();
+    }
     checkSignal();
     const registered=store.putArtifact({programIdentity:declared,bytes:byteSnapshot});
     if (versioned) await registered;
@@ -661,7 +729,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       safeFailure=copy(callFailure);
       if (!safeFailure || typeof safeFailure !== 'object' || Array.isArray(safeFailure)
         || typeof safeFailure.message !== 'string' || !safeFailure.message.length
-        || safeFailure.message.length > 4096 || Object.keys(safeFailure).length !== 1) {
+        || safeFailure.message.length > 4096 || Object.keys(safeFailure).some(key=>!['message','retryable','sideEffectStatus','code'].includes(key))
+        || safeFailure.retryable !== undefined && typeof safeFailure.retryable !== 'boolean'
+        || safeFailure.sideEffectStatus !== undefined && !['none','known','unknown'].includes(safeFailure.sideEffectStatus)
+        || safeFailure.code !== undefined && typeof safeFailure.code !== 'string') {
         throw failure('FK_I_INVALID_RECEIPT','Agent failure requires bounded {message:string}');
       }
     }
@@ -747,6 +818,31 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
   }
 
+  /** Host-only durable reservations for extra Provider calls; retrying one reservation is idempotent. */
+  async function reserveDispatch({runId,requestId,operationId}={}) {
+    nonempty(runId,'runId');nonempty(requestId,'requestId');nonempty(operationId,'operationId');
+    for (;;) {
+      checkSignal();
+      const cp=versioned ? await store.load(runId) : store.load(runId);
+      if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
+      await loadPinned(cp);
+      if (cp.status!=='waiting' || cp.pending?.requestId!==requestId || !cp.taskContext) {
+        throw failure('FK_I_STALE_RECEIPT','Dispatch reservation requires the current Task V2 Pending');
+      }
+      const key=fingerprint([requestId,operationId]);
+      const reservations=cp.taskContext.reservations ?? [];
+      if (reservations.includes(key)) return {deadlineMs:cp.taskContext.deadlineMs,dispatches:cp.taskContext.dispatches};
+      const budget=createBudget(policySnapshot.taskPolicy ?? {},signal,cp.taskContext);budget.dispatch();
+      const next={...cp,revision:cp.revision+1,taskContext:{...cp.taskContext,...budget.snapshot(),reservations:[...reservations,key]}};
+      const saved=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,nextCheckpoint:next,
+        journalEntry:{kind:'dispatch-reserved',requestId,reservation:key}},
+        {kind:'dispatch-reserved',requestId,reservation:key},{kind:'dispatch-reserved'});
+      if (!saved.committed) continue;
+      if (saved.capacityExit) throw failure('FK_I_CHECKPOINT_CAPACITY','Dispatch reservation could not be persisted');
+      return budget.snapshot();
+    }
+  }
+
   async function resume({runId}={}) { nonempty(runId,'runId');return drive(runId); }
   async function load({runId}={}) {
     nonempty(runId,'runId');
@@ -757,5 +853,5 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     return asPublicFrame(cp);
   }
 
-  return Object.freeze({start,complete,resume,load,policyHash});
+  return Object.freeze({start,complete,resume,load,reserveDispatch,policyHash});
 }

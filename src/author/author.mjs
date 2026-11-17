@@ -19,7 +19,7 @@ export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicati
       return createWorkflowPlan(draft, intent, { ...proposal, unresolvedIssues }, previous);
     },
     async prepare(plan, options) {
-      if (!plan) throw new TypeError('A current Standard WorkflowPlan is required');
+      if (!plan) throw new TypeError('A current WorkflowPlan is required');
       return prepareStandardSkill({ ...options, plan });
     },
     review: reviewStandardCandidate,

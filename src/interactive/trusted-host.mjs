@@ -270,6 +270,7 @@ export function createTrustedInteractiveHost({
       input:pending.input,missing:pending.missing,
       resultSchema:pending.resultSchema,reasons:pending.reasons,
       ...(pending.overview?{overview:pending.overview}:{}),
+      ...(pending.preparedTask?{preparedTask:pending.preparedTask}:{}),
     },MAX_CHECKPOINT_BYTES);
     let decision;
     try {
@@ -387,6 +388,7 @@ export function createTrustedInteractiveHost({
 
   return Object.freeze({
     start,resume,load,getPublicAgentTask,getPublicTerminalFrame,readTrustedTerminalResult,accept,
+    async reserveDispatch(input) { assertPinned(input?.runId);return coordinator.reserveDispatch(input); },
     readHistoricalAck,revokeKey,
     policyHash:coordinator.policyHash,
     securityMode:'ed25519-agent-receipt-v1',

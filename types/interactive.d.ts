@@ -1,3 +1,5 @@
+import type {Runtime, PreparedAgentTask, TaskPolicy} from './index.js';
+
 /**
  * P0-A / Interactive-state-machine-v1.
  * Host-owned execution only; a model may never independently call complete().
@@ -37,6 +39,7 @@ export interface InteractiveDiagnostic {
 }
 export interface InteractiveCompileResult {
   code: string;
+  mermaid?: string;
   diagnostics: InteractiveDiagnostic[];
   programIdentity?: InteractiveProgramIdentity;
   artifactPath?: string;
@@ -77,6 +80,7 @@ export interface InteractiveAgentPending {
   resultSchema: Record<string,unknown>;
   reasons: string[];
   overview?: {step: number};
+  preparedTask?: PreparedAgentTask;
 }
 export type InteractiveRunStatus =
   'running' | 'waiting' | 'paused' | 'succeeded' | 'failed' | 'errored' | 'cancelled';
@@ -150,6 +154,10 @@ export interface InteractiveSkillDescriptor {
   integrity: string|null;
 }
 export interface InteractiveRuntime {
+  prepareAgentTask?: Runtime['prepareAgentTask'];
+  /** Recheck current authorization and exact pinned resource availability on every resume/disclosure/receipt. */
+  authorizeAgentTask?: (task: PreparedAgentTask, context: {runId?:string;signal?:AbortSignal;deadlineMs:number}) => boolean|Promise<boolean>;
+  taskResourcePolicy?: Pick<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'>;
   skillResolver?: (descriptor: InteractiveSkillDescriptor) => string|Promise<string>;
   validateResult?: (schema: Record<string,unknown>, result: unknown) => string[];
   /**
@@ -160,6 +168,7 @@ export interface InteractiveRuntime {
   checkStep?: unknown;
 }
 export interface InteractiveCoordinator {
+  reserveDispatch(input:{runId:string;requestId:string;operationId:string}):Promise<{deadlineMs:number;dispatches:number}>;
   readonly policyHash: string;
   start(input: {
     programBytes: Uint8Array;
@@ -176,7 +185,7 @@ export interface InteractiveCoordinator {
     attempt: number;
     kind?: 'agent-result' | 'agent-call-failed';
     result?: unknown;
-    failure?: {message:string};
+    failure?: {message:string;retryable?:boolean;sideEffectStatus?:'none'|'known'|'unknown';code?:string};
   }): Promise<InteractiveRunFrame & {acceptedRevision:number;duplicate:boolean}>;
   resume(input: {runId:string}): Promise<InteractiveRunFrame>;
   load(input: {runId:string}): Promise<InteractiveRunFrame|null>;
@@ -192,7 +201,7 @@ export declare function createInteractiveCoordinator(input: {
 /** M5 signed Host-only Agent receipt: no Human/Action/Verification spoofing. */
 export type HostAgentReceipt =
   | {runId:string;requestId:string;nodeId:string;attempt:number;kind:'agent-result';result:unknown}
-  | {runId:string;requestId:string;nodeId:string;attempt:number;kind:'agent-call-failed';failure:{message:string}};
+  | {runId:string;requestId:string;nodeId:string;attempt:number;kind:'agent-call-failed';failure:{message:string;retryable?:boolean;sideEffectStatus?:'none'|'known'|'unknown';code?:string}};
 
 export interface HostAgentReceiptStatement {
   domain: 'flowkit.host-agent-receipt.v1';
@@ -230,6 +239,7 @@ export declare function encodeAgentReceiptStatement(
 ):Uint8Array;
 
 export interface PublicInteractiveAgentTask {
+  preparedTask?:PreparedAgentTask;
   schemaVersion:1;
   kind:'agent';
   id:string;
@@ -296,6 +306,7 @@ export interface HistoricalAckRequest {
   receiptHash:string;
 }
 export interface TrustedInteractiveHost {
+  reserveDispatch:InteractiveCoordinator['reserveDispatch'];
   readonly policyHash:string;
   readonly securityMode:'ed25519-agent-receipt-v1';
   /** Trusted Host only, not a model-facing method. */
@@ -388,7 +399,9 @@ export type RunCheckpointV1 = {
   policyIdentity:{id:string;version:string;policyHash:string;bindingManifestHash:string;skillManifestHash?:string};
   execution:{blockId:string;phase:'enter'|'prepare'|'dispatch-ready'|'awaiting'|'validate'|'commit'|'route'|'finished';
     activationSeq:number;agentStepCounter:number;controlStack:readonly Record<string,unknown>[];
-    contextError:{code:string;message:string;retryable?:boolean;origin?:'runtime'|'executor'|'validator'|'store'|'policy'}|null};
+    contextError:{code:string;message:string;retryable?:boolean;origin?:'runtime'|'executor'|'validator'|'store'|'policy'}|null;
+    taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
+      active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
   candidate:{kind:'agent';requestId:string;result:Record<string,unknown>}|null;
   receivedSubmission:{kind:'agent';requestId:string;activation:number;attempt:number;canonicalDigest:string;
@@ -470,7 +483,7 @@ export interface PublicPendingV1 {
   attempt:number;
   activation:number;
   intent:'execute';
-  task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'>;
+  task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'|'preparedTask'>;
 }
 
 export interface InteractiveFrameV1 {
@@ -497,11 +510,15 @@ export declare function createInteractiveHostContext(options:{
 
 type BindingV1<Mode extends string,F> = {id:string;version:string;mode:Mode;implementation:F};
 export interface InteractiveRuntimeV1 {
+  prepareAgentTask?:BindingV1<'trusted-read',NonNullable<InteractiveRuntime['prepareAgentTask']>>;
+  authorizeAgentTask?:BindingV1<'trusted-read',NonNullable<InteractiveRuntime['authorizeAgentTask']>>;
+  taskResourcePolicy?:InteractiveRuntime['taskResourcePolicy'];
   validateResult?:BindingV1<'pure-local',NonNullable<InteractiveRuntime['validateResult']>>;
   skillResolver?:BindingV1<'trusted-read',(reference:string,meta?:InteractiveSkillDescriptor)=>string|Promise<string>>;
 }
 
 export interface InteractivePolicyV1 {
+  taskPolicy?: Omit<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'> & {remoteSkillHosts?:string[]};
   id:string;
   version:string;
   bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
@@ -523,10 +540,12 @@ export interface InteractiveOptionsV1 {
 export type HostSubmissionV1 =
   | {kind:'agent';runId:string;requestId:string;outcome:'succeeded';result:Record<string,unknown>}
   | {kind:'agent';runId:string;requestId:string;outcome:'failed';error:{code:string;message:string;retryable?:boolean;
-      origin?:'runtime'|'executor'|'validator'|'store'|'policy'}};
+      sideEffectStatus?:'none'|'known'|'unknown';origin?:'runtime'|'executor'|'validator'|'store'|'policy'}};
 
 export declare function start(source:string|TrustedProgramRefV1,runtime:InteractiveRuntimeV1,
   initialState:Record<string,unknown>,options:InteractiveOptionsV1&{startKey:string}):Promise<InteractiveFrameV1>;
 export declare function complete(submission:HostSubmissionV1,runtime:InteractiveRuntimeV1,
   options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
 export declare function resume(runId:string,runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
+export declare function reserveInteractiveDispatch(input:{runId:string;requestId:string;operationId:string},
+  runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs:number;dispatches:number}>;

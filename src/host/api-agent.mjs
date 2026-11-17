@@ -57,7 +57,7 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
   return Object.freeze({
     async runAgentTask(prepared, context = {}) {
       const started = Date.now();
-      const deadline = Math.min(started + budget.timeoutMs, context.deadlineMs ?? Infinity);
+      const deadline = Math.min(started + budget.timeoutMs, context.deadlineMs ?? Infinity, prepared.task.execution.deadlineMs ?? Infinity);
       const timer = AbortSignal.timeout(Math.max(1, Math.min(2147483647, deadline - started)));
       const signal = context.signal ? AbortSignal.any([timer, context.signal]) : timer;
       const usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, toolCalls: 0, durationMs: 0 };
@@ -89,7 +89,8 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
           for (let retry = 0; ; retry++) {
             check();
             if (httpRequests >= budget.maxRequests) fail('request-limit', 'API request budget exhausted', sideEffects);
-            if (httpRequests > 0) context.budget?.dispatch();
+            if (httpRequests > 0) await during(signal, () => context.budget?.dispatch({
+              operationId:`${task.execution.requestId}:provider:${httpRequests}`}));
             httpRequests++;
             response = await during(signal, () => request(body, { signal, idempotencyKey: `${scope}:${task.execution.requestId}:${round}` }));
             events.push({ type: 'provider-response', request: httpRequests, status: response.status });

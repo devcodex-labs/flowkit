@@ -103,7 +103,8 @@ export interface HostPreparationContext {
   readonly authorizationContextRef?: string;
   readonly descriptionResources: readonly DescriptionResource[];
   readonly budget: { readonly deadlineMs: number; readonly maxResourceBytes: number;
-    readonly maxTotalResourceBytes: number; readonly maxTaskBytes: number; check(): void; dispatch(): void };
+    readonly maxTotalResourceBytes: number; readonly maxTaskBytes: number; check(): void;
+    dispatch(reservation?:{operationId:string}): void | Promise<unknown> };
 }
 export type SideEffectStatus = 'none' | 'known' | 'unknown';
 interface ExecutionObservations { readonly events: readonly TaskJsonObject[]; readonly usage?: TaskJsonObject }

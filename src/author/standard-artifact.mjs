@@ -3,12 +3,23 @@ import { STANDARD_ARTIFACT_HEADER, artifactDigest, standardIdentity } from '../s
 import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName } from './skill-document.mjs';
 import { assertReadyStandardPlan } from './workflow-plan.mjs';
+import { compileInteractiveDraft } from '../interactive/compile.mjs';
 
 const SOURCE_PATH = 'source/workflow.dsl.js';
 const FORMAL_PATHS = ['SKILL.md', 'workflow.js', 'workflow.mmd'];
 const digest = value => typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value) && value.length === 71;
 const identifier = value => typeof value === 'string' && value.length > 0 && !/\s/.test(value);
 const bindingKey = (nodeId, id) => JSON.stringify([nodeId, id]);
+
+function interactiveIdentity(code) {
+  const line = code.split('\n').find(line=>line.startsWith('export const interactiveProgram = freezeData('));
+  const metadata = JSON.parse(line?.slice('export const interactiveProgram = freezeData('.length,-2));
+  if (metadata.artifactFormat !== 'FlowkitInteractiveProgramV1' || metadata.identity.programAbiVersion !== 1 ||
+    metadata.identity.semanticsVersion !== 'interactive-state-machine-v1' || metadata.identity.implementedStage !== 'P0-A') {
+    throw new TypeError('Invalid Interactive artifact identity');
+  }
+  return {...metadata.identity,artifactHash:artifactDigest(code)};
+}
 
 function resolveSkillPins(definition, pins) {
   if (!Array.isArray(pins)) throw new TypeError('Professional Skill pins must be an array');
@@ -35,7 +46,9 @@ function resolveSkillPins(definition, pins) {
 
 /** Produce a candidate only. The Host owns review, approval, discovery and execution. */
 export async function prepareStandardSkill({ file, collectionId, skillId, name, description, version,
-  hostProfile, buildId, includeSource = false, professionalSkills = [], compilerOptions, plan: suppliedPlan }) {
+  hostProfile, buildId, includeSource = false, professionalSkills = [], compilerOptions, plan: suppliedPlan,
+  executionMode = suppliedPlan?.target.executionMode ?? 'standard' }) {
+  if (!['standard','interactive-p0-a'].includes(executionMode)) throw new TypeError('Unsupported Workflow Skill mode');
   if (!identifier(collectionId) || !identifier(skillId) || !isSemVer(version) ||
     !identifier(hostProfile?.id) || !digest(hostProfile.digest) || !identifier(buildId)) {
     throw new TypeError('A collection, a versioned Skill, a pinned Host profile and a build ID are required');
@@ -45,12 +58,16 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   }
   const entry = skillDocument(name, description,
     '# Run this workflow\n\nAsk the Host to verify this Skill’s approved Artifact and required capabilities. ' +
-    'Use the Host’s FlowKit `runArtifact` entry point with `workflow.js` and its approved SHA-256. ' +
+    (executionMode === 'standard' ? 'Use the Host’s FlowKit `runArtifact` entry point with `workflow.js` and its approved SHA-256. ' :
+      'Use the Host’s Interactive start/resume entry points with `workflow.js`, its approved Program identity and the original Run. ') +
     'Use `workflow.mmd` to view the static workflow.');
   const profile = Object.freeze({ id: hostProfile.id, digest: hostProfile.digest });
   const plan = suppliedPlan === undefined ? undefined : structuredClone(suppliedPlan);
-  if (plan !== undefined) assertReadyStandardPlan(plan);
-  const { snapshot, definition, graph, artifact } = await compileArtifactDraft(file, { ...compilerOptions, mermaid: true });
+  if (plan !== undefined) assertReadyStandardPlan(plan,executionMode);
+  const compiled = executionMode === 'standard' ? await compileArtifactDraft(file, { ...compilerOptions, mermaid: true }) :
+    await compileInteractiveDraft(file, {...compilerOptions,output:'memory',featureStage:'P0-A'});
+  const {snapshot,definition,graph} = compiled;
+  const artifact = executionMode === 'standard' ? compiled.artifact : {...compiled,artifactHash:compiled.programIdentity?.artifactHash};
   if (!artifact.artifactHash) return { candidate: null, diagnostics: artifact.diagnostics };
   if (plan && (definition.nodes[0].id !== plan.entryNodeId || definition.nodes.length !== plan.nodes.length ||
     plan.nodes.some(node => graph.byId.get(node.id)?.type !== node.kind))) {
@@ -65,9 +82,9 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   }
   const files = Object.freeze({ 'SKILL.md': entry, 'workflow.js': artifact.code, 'workflow.mmd': artifact.mermaid,
     ...(includeSource ? { [SOURCE_PATH]: snapshot.sourceText } : {}) });
-  const manifest = Object.freeze({ mode: 'standard', collectionId, skillId, name, version,
+  const manifest = Object.freeze({ mode: executionMode, collectionId, skillId, name, version,
     workflowId: definition.id, workflowVersion: definition.version,
-    sourceHash: `sha256:${snapshot.sourceHash}`, ...standardIdentity(artifact.code), hostProfile: profile,
+    sourceHash: `sha256:${snapshot.sourceHash}`, ...(executionMode === 'standard' ? standardIdentity(artifact.code) : artifact.programIdentity), hostProfile: profile,
     professionalSkills: resolveSkillPins(definition, professionalSkills), buildId, builtAt: new Date().toISOString(),
     ...(plan ? { planRef: Object.freeze({ planId: plan.planId, revision: plan.revision, planHash: plan.planHash,
       effectiveIntentHash: plan.intentRef.effectiveIntentHash }) } : {}),
@@ -80,7 +97,8 @@ export function checkCandidate({ files, manifest, hash }) {
   validateSkillName(manifest.name);
   const names = Object.keys(files);
   const expected = Object.hasOwn(files, SOURCE_PATH) ? [...FORMAL_PATHS, SOURCE_PATH] : FORMAL_PATHS;
-  if (manifest.mode !== 'standard' || !identifier(manifest.collectionId) || !identifier(manifest.skillId) ||
+  const interactive = manifest.mode === 'interactive-p0-a';
+  if (!['standard','interactive-p0-a'].includes(manifest.mode) || !identifier(manifest.collectionId) || !identifier(manifest.skillId) ||
     !isSemVer(manifest.version) || !digest(manifest.sourceHash) || !identifier(manifest.hostProfile?.id) ||
     !digest(manifest.hostProfile.digest) || !Array.isArray(manifest.professionalSkills) ||
     manifest.professionalSkills.some(pin => !identifier(pin?.nodeId) || !identifier(pin?.id) || !isSemVer(pin.version) || !digest(pin.digest)) ||
@@ -89,8 +107,9 @@ export function checkCandidate({ files, manifest, hash }) {
     expected.some(name => !Object.hasOwn(files, name) || typeof files[name] !== 'string' ||
       artifactDigest(files[name]) !== manifest.files[name]) ||
     hash !== artifactDigest(JSON.stringify(manifest)) || !files['SKILL.md'].startsWith(`---\nname: ${manifest.name}\n`) ||
-    !files['workflow.mmd'].startsWith('flowchart TD\n') || !files['workflow.js'].startsWith(`${STANDARD_ARTIFACT_HEADER}\n`) ||
-    Object.entries(standardIdentity(files['workflow.js'])).some(([key, value]) => manifest[key] !== value) ||
+    !files['workflow.mmd'].startsWith('flowchart TD\n') || !files['workflow.js'].startsWith(interactive ?
+      '// @generated by FlowKit Interactive — P0-A / Program ABI V1\n' : `${STANDARD_ARTIFACT_HEADER}\n`) ||
+    Object.entries(interactive ? interactiveIdentity(files['workflow.js']) : standardIdentity(files['workflow.js'])).some(([key, value]) => manifest[key] !== value) ||
     Object.hasOwn(files, SOURCE_PATH) && manifest.sourceHash !== manifest.files[SOURCE_PATH]) {
     throw new TypeError('Workflow Skill candidate bytes or manifest differ');
   }
