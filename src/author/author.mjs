@@ -5,10 +5,18 @@ import { createWorkflowPlan } from './workflow-plan.mjs';
 
 /** Shared Author operations for a Host Skill or a later MCP adapter. The Host supplies trusted bindings. */
 export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicationHost, readDocumentUrl }) {
+  const readDocuments=new Map();
+  const documentKey=({capabilityId,documentId})=>JSON.stringify([capabilityId,documentId]);
   return Object.freeze({
     start: startAuthorDraft,
     analyze(draft, turnOptions) { return analyzeAuthorDraft(draft, intentRuntime, turnOptions); },
-    readDocument(pin) { return readAuthorDocument(capabilityGraph, pin, readDocumentUrl); },
+    async readDocument(pin) {
+      const result=await readAuthorDocument(capabilityGraph,pin,readDocumentUrl);
+      const key=documentKey(result.evidence);readDocuments.delete(key);
+      readDocuments.set(key,{pin:structuredClone(pin),evidence:structuredClone(result.evidence)});
+      if(readDocuments.size>64)readDocuments.delete(readDocuments.keys().next().value);
+      return result;
+    },
     async plan(draft, intent, proposal, { previous, graphContext } = {}) {
       const requested = proposal.capabilityRequirements ?? [];
       const result = capabilityGraph ? await checkPlanCapabilities(capabilityGraph, requested, graphContext) : null;
@@ -20,7 +28,15 @@ export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicati
     },
     async prepare(plan, options) {
       if (!plan) throw new TypeError('A current WorkflowPlan is required');
-      return prepareStandardSkill({ ...options, plan });
+      const documents=[];
+      for(const evidence of options.documents ?? [...readDocuments.values()].map(entry=>entry.evidence)) {
+        const entry=readDocuments.get(documentKey(evidence));
+        if(!entry)throw new Error('The selected document was not read through this Author Host');
+        const current=await readAuthorDocument(capabilityGraph,entry.pin,readDocumentUrl);
+        if(JSON.stringify(current.evidence)!==JSON.stringify(evidence))throw new Error('Document provenance differs from the actual read');
+        documents.push(current.evidence);
+      }
+      return prepareStandardSkill({ ...options, plan,documents });
     },
     review: reviewStandardCandidate,
     prepareImport(candidate, target) { return prepareImportedStandardSkill(candidate, target, publicationHost); },

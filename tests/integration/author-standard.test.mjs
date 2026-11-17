@@ -10,13 +10,13 @@ import { compileArtifact, evalWhen, isControlSignal, runArtifact } from '../../s
 import { createWorkflowAuthor } from '../../src/author/author.mjs';
 import { runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs';
 import { createOpenAINativeSkillPort } from '../../src/author/openai-native-skills.mjs';
-import { stageCollectionForDiscovery } from '../../src/author/collection-layout.mjs';
+import { stageCollectionForDiscovery,removeCollectionGeneration } from '../../src/author/collection-layout.mjs';
 import { collectionSkill, planCollectionRename, planNewCollection, verifiedCollectionPlan } from '../../src/author/collections.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
 import { planProfessionalSkills, prepareProfessionalSkill, publishProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { startAuthorDraft } from '../../src/author/draft.mjs';
 import { createWorkflowPlan } from '../../src/author/workflow-plan.mjs';
-import { prepareStandardSkill, publishStandardSkill } from '../../src/author/standard-artifact.mjs';
+import { prepareStandardSkill, publishStandardSkill,reviewStandardCandidate } from '../../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 
 const source = `import { defineWorkflow, action, terminal } from '@devcodex-labs/flowkit/dsl';
@@ -76,6 +76,53 @@ test('source retention preserves original UTF-8 bytes and compile errors leave n
   assert.equal(rejected.candidate, null);
   assert.ok(rejected.diagnostics.some(diagnostic => diagnostic.severity === 'error'));
   assert.deepEqual(await readdir(dir), ['example.workflow.js']);
+});
+
+test('workflow-specific references and actual read document provenance remain bound to reviewed candidate bytes',async t=>{
+  const {options}=await fixture(t);
+  const bytes=Buffer.from('Reviewed compiler contract');const url='https://example.invalid/pinned/compile.md';
+  const pin={capabilityId:'flowkit::compile-workflow',documentId:'compiler',revision:'revision-1',contentHash:artifactDigest(bytes),url};
+  let revision='revision-1',content=bytes;
+  const author=createWorkflowAuthor({capabilityGraph:{async getCapabilities(){return {meta:{revision,completeness:'complete'},items:[
+    {capability:{id:pin.capabilityId,documents:[{id:pin.documentId,source:{type:'url',url}}]}}]};}},
+    readDocumentUrl:async()=>({url,bytes:content})});
+  const evidence=(await author.readDocument(pin)).evidence;
+  const draft=author.start('Inspect',{executionMode:'standard'});
+  const plan=await author.plan(draft,{intentRef:{effectiveIntentHash:artifactDigest('intent')},coverage:'complete',issues:[],unresolved:[],
+    goals:[{id:'goal'}],constraints:[]},{entryNodeId:'work',nodes:[{id:'work',kind:'action'},{id:'done',kind:'terminal'}],
+    edges:[{from:'work',to:'done',kind:'control'}],coverage:[{intentId:'goal',status:'covered',coveredBy:['work']}]});
+  const refs={'references/decision.md':'Workflow-specific decision'};
+  const candidate=(await author.prepare(plan,{...options,references:refs})).candidate;
+  assert.deepEqual(candidate.manifest.documents,[evidence]);assert.match(candidate.files['SKILL.md'],/Reviewed documentation/);
+  assert.equal(candidate.files['references/decision.md'],refs['references/decision.md']);
+  assert.equal(candidate.manifest.files['references/decision.md'],artifactDigest(refs['references/decision.md']));
+  content=Buffer.from('changed');await assert.rejects(author.prepare(plan,options),/content differs/);content=bytes;
+  revision='revision-2';await assert.rejects(author.prepare(plan,options),/revision differs/);
+  await assert.rejects(prepareStandardSkill({...options,references:{'references/skills/other/SKILL.md':'nested'}}),/workflow-specific/);
+  assert.deepEqual(Object.keys((await prepareStandardSkill(options)).candidate.files),['SKILL.md','workflow.js','workflow.mmd']);
+  const changed=(await prepareStandardSkill({...options,version:'2.0.0'})).candidate;
+  assert.ok(reviewStandardCandidate(changed,candidate).files.some(file=>file.path==='references/decision.md'));
+  assert.deepEqual(changed.manifest.workflowDefinition.nodes.map(node=>node.id),['work','done']);
+});
+
+test('generation uninstall removes only an unchanged approved adapter scope and preserves user Skills',async t=>{
+  let store;const {dir,options}=await fixture(t,source,()=>store?.close());
+  store=openLocalSkillStore(path.join(dir,'cleanup.sqlite'),()=>true,()=>true);
+  const plan=planNewCollection({name:'cleanup-flows',source:{id:options.collectionId},preserveId:true},[],()=>null);
+  store.applyCollectionPlan(plan,'approved');
+  const candidate=(await prepareStandardSkill(options)).candidate;
+  await publishStandardSkill(candidate,{reviewRef:'review',approvalRef:'approval',previousHash:null},store);
+  const root=path.join(dir,'managed');const generation=await stageCollectionForDiscovery(store,options.collectionId,root);
+  const userFile=path.join(dir,'user-skill.md');await writeFile(userFile,'keep original');
+  const input={hostOwnedRoot:root,discoveryRoot:generation.discoveryRoot,collectionId:options.collectionId,
+    authorizeRemoval:({manifestHash})=>manifestHash===generation.manifestHash};
+  await assert.rejects(removeCollectionGeneration({...input,discoveryRoot:dir}));
+  await assert.rejects(removeCollectionGeneration({...input,authorizeRemoval:()=>false}),/denied/);
+  const foreign=path.join(generation.directory,'user-added.md');await writeFile(foreign,'keep user addition');
+  await assert.rejects(removeCollectionGeneration(input),/user-owned/);
+  assert.equal(await readFile(foreign,'utf8'),'keep user addition');await unlink(foreign);
+  await removeCollectionGeneration(input);assert.equal(await readFile(userFile,'utf8'),'keep original');
+  assert.equal(store.readVersion(options.collectionId,options.skillId,candidate.hash).hash,candidate.hash);
 });
 
 test('required Professional Skills must bind exact choices from the compiled definition', async t => {

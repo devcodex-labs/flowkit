@@ -1,5 +1,13 @@
 const reservedName = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/;
 
+/** Workflow-specific supporting material is data, never another nested Skill. */
+export function workflowReference(file) {
+  const [root,...segments]=file.split('/');
+  return root==='references' && segments.length>0 && segments.every(segment=>
+    /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(segment) && !['skills','skill.md'].includes(segment.toLowerCase()) &&
+    !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment));
+}
+
 export function validateSkillName(name) {
   if (typeof name !== 'string' || name.length > 64 || name !== name.trim() ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || reservedName.test(name)) {

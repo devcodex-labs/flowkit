@@ -10,6 +10,10 @@
 
 ## 用 Author 准备 Workflow Skill
 
+Author 读取的文档 revision、来源 URI 和内容 Hash 随候选保存，编译前重新检查当前来源；过期或错版不继续编写。复审同时显示实际编译节点的语义差异和文件差异。可选 `references` 只接收工作流专属资料，禁止嵌套 Skill；默认三文件保持不变，不复制整套 DSL 文档。
+
+集合发现目录按完整批准版本分代生成。Host 撤回映射后，可校验创建回执并移除对应的适配器目录；发现用户新增/改动、链接或所有权不符即保留并对账。历史 Artifact 仍保留在版本存储，其他 Skill 目录不受影响。
+
 宿主可安装随包交付的 `dist/author/flowkit-workflow-author/SKILL.md`。启用前由宿主配置 Author、Intent Runtime、已授权的 Capability Graph、候选审查与执行授权。用户可以从一句项目目标开始，Author 沿用明确选择，针对会影响控制流或交付的未知项提供方案和推荐。
 
 用户先核对候选目标、控制流和文件差异。Standard workflow 使用同一次编译的 `workflow.js` 与 `workflow.mmd`，与 `SKILL.md` 同目录。需要保留 DSL 时显式启用 `source/workflow.dsl.js`。Workflow Skill 与 Professional Skill 都出现在主集合的 `skills/` 目录下。集合逻辑 ID 在重命名时保持，旧版本继续保持原 Artifact 身份。
