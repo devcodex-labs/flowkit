@@ -14,7 +14,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile, mkdtemp, rm} from 'node:fs/promises';
+import {copyFile, readFile, mkdtemp, rm} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -100,8 +100,12 @@ async function loadSkills() {
   return skills;
 }
 
-test('G02 Standard compile/check matches checked-in JS artifact and Program is real JavaScript', async () => {
-  const compiled = await compile(workflowFile, compileOptions);
+test('G02 Standard compile/check matches checked-in JS artifact and Program is real JavaScript', async (t) => {
+  const outDir = await mkdtemp(path.join(tmpdir(), 'flowkit-g02-standard-'));
+  t.after(() => rm(outDir, {recursive: true, force: true}));
+  const temporaryWorkflow = path.join(outDir, path.basename(workflowFile));
+  await copyFile(workflowFile, temporaryWorkflow);
+  const compiled = await compile(temporaryWorkflow, {...compileOptions, outDir});
   assert.equal(compiled.diagnostics.some(d => d.severity === 'error'), false,
     JSON.stringify(compiled.diagnostics));
   assert.match(compiled.code, /export async function workflow\(ctx\)/);
@@ -110,7 +114,8 @@ test('G02 Standard compile/check matches checked-in JS artifact and Program is r
   assert.match(compiled.code, /runStep\(/);
   assert.equal(compiled.code.includes('Mermaid'), false);
   const existing = await readFile(compiledFile);
-  assert.equal(sha256(existing), sha256(Buffer.from(compiled.code, 'utf8')));
+  assert.equal(sha256(existing), sha256(Buffer.from(compiled.code, 'utf8')),
+    'checked-in G02 Standard JS must match fresh compilation');
   const mermaid = await readFile(mermaidFile, 'utf8');
   assert.ok(mermaid.includes('flowchart'));
   const diagnostics = await check(workflowFile, compileOptions);

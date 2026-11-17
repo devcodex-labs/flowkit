@@ -20,18 +20,27 @@
 | Interactive P0-A | `compileInteractive`、真实 JS Program、Pending、受信 Host 回执、SQLite 关闭后重开恢复 | 不得把 Node/Shell 执行或本地测试签名标为 N-PASS 或原生安全 Host 来源认证 |
 | 现有 Standard golden | 与 [`../editorial.workflow.js`](../editorial.workflow.js) 对照，说明八类节点差异 | 不得把 editorial 的 Loop/Action/Human/Parallel 记为本次 Interactive 已实现 |
 
-## 从仓库复现
+## 验证已提交的金标
 
 需要 Node >=22.13.0，在仓库根目录：
 
 ```sh
 npm ci
 npm run build
+node --test tests/interactive/g02-product-closed-loop.test.mjs
+```
+
+Standard 金标测试在临时目录编译同一份工作流，并将新生成的 JS 与提交中的 `feature-review.compiled.mjs` 比对。测试保持示例目录中的 JS 和 Mermaid 原样。请在重建产物前运行测试，以便检出已有的金标漂移。
+
+## 重建并运行示例
+
+需要重建产物时执行下列命令。第一条会写入示例目录中已跟踪的 Standard JS 和 Mermaid，重建后请审阅生成差异。
+
+```sh
 node dist/cli.mjs compile examples/g02/feature-review.workflow.js --skills-root examples/g02/skills
 node dist/cli.mjs check examples/g02/feature-review.workflow.js --skills-root examples/g02/skills
 node examples/g02/run-standard.mjs
 node examples/g02/run-interactive.mjs
-node --test tests/interactive/g02-product-closed-loop.test.mjs
 ```
 
 `run-*.mjs` 从源码树导入现有 SDK，不创建第二套编译器。Interactive 脚本会在临时 SQLite 中重放已绑定的夹具，并输出 `pendingAtEnd`（终态帧是否仍有 Pending）以及从本次 `route` 实测的 `publishedPendingCount`。夹具中 `source=scripted-invalid` 是故意非法的脚本负例；`source=grok-model` 共消费 6 次，对应 5 份独立撰写正文、1 次复用（重新绑定到新的 Pending 身份），不能计为 6 次独立模型推理。
