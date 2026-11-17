@@ -12,6 +12,21 @@ export type MaxIterations =
   81 | 82 | 83 | 84 | 85 | 86 | 87 | 88 | 89 | 90 | 91 | 92 | 93 | 94 | 95 | 96 | 97 | 98 | 99 | 100;
 
 interface Named { readonly name: string }
+export interface DescriptionRef {
+  readonly uri: string;
+  readonly integrity?: string;
+  readonly role?: 'instruction' | 'reference' | 'evidence';
+}
+export interface RequiredSkillRef { readonly id: string; readonly version?: string }
+type TaskInstructions = {
+  readonly requiredSkills?: readonly RequiredSkillRef[];
+  readonly agent?: never;
+  readonly skill?: never;
+  readonly integrity?: never;
+} & (
+  { readonly description: string | readonly string[]; readonly descriptionRefs?: readonly DescriptionRef[] } |
+  { readonly description?: never; readonly descriptionRefs: readonly DescriptionRef[] }
+);
 interface AgentFields extends Named {
   readonly output: ObjectSchema;
   readonly inputs?: readonly string[];
@@ -21,9 +36,14 @@ interface AgentFields extends Named {
   readonly integrity?: string;
   readonly next?: string;
 }
-export type AgentOptions = AgentFields & (
+type MappedInstructions = {
+  readonly description?: never;
+  readonly descriptionRefs?: never;
+  readonly requiredSkills?: never;
+} & (
   { readonly agent: string; readonly skill?: string } | { readonly agent?: string; readonly skill: string }
 );
+export type AgentOptions = AgentFields & (TaskInstructions | MappedInstructions);
 export interface ActionOptions extends Named { readonly action: string; readonly writes?: readonly string[]; readonly next?: string }
 export interface VerificationOptions extends Named { readonly verifier: string; readonly onSuccess?: string; readonly onFailure?: string }
 export interface ParallelOptions extends Named {
@@ -32,7 +52,7 @@ export interface ParallelOptions extends Named {
 }
 export interface ConditionOptions extends Named { readonly branches: readonly [{ readonly when: string; readonly next: string }, ...{ readonly when: string; readonly next: string }[]] }
 export interface LoopOptions extends Named { readonly maxIterations: MaxIterations; readonly body: string; readonly onSuccess: string; readonly onMaxExceeded: string }
-export interface HumanOptions extends Named { readonly onApprove: string; readonly onReject: string }
+export interface HumanOptions extends Named { readonly onApprove: string; readonly onReject: string; readonly maxRevisions?: 0 | MaxIterations }
 export interface TerminalOptions extends Named { readonly status: 'succeeded' | 'failed' }
 
 export type AgentNode = AgentOptions & { readonly id: string; readonly type: 'agent' };

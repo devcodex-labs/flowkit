@@ -1,3 +1,6 @@
-/** The package entry exposes the six implemented SDK functions. */
-export { run, compile, compileSource, check, evalWhen, isControlSignal } from './index.js';
+/** Public package SDK entry. */
+export { run, runArtifact, compile, compileArtifact, compileSource, check, evalWhen, isControlSignal } from './index.js';
 export type { FlowkitOptions, Diagnostic, CompileResult, Ctx, Runtime, AgentStep, WorkflowResult, RunResult } from './index.js';
+export type { AgentTaskV2, PreparedAgentTask, TaskPreparation, AgentExecutionResult, DescriptionResource,
+  HostPreparationContext, HostCapabilityProfile, CapabilitySupport, PreparedSkill, ResourceManifest,
+  TaskJsonValue, TaskJsonObject, TaskPolicy, SideEffectStatus } from './index.js';

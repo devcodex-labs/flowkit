@@ -14,18 +14,20 @@ const discard = body => {
   try { Promise.resolve(body?.cancel()).catch(() => {}); } catch { /* Preserve the primary failure. */ }
 };
 
-function redirectTarget(location, current) {
+function redirectTarget(location, current, parseRemote, validLocal) {
   let target;
   try { target = new URL(location, current); }
   catch (cause) { throw skillError('FK_R014', 'Invalid redirect location', cause); }
   if (target.protocol !== 'https:' || target.origin !== current.origin) throw skillError('FK_R012', 'Redirect must remain on the same HTTPS origin');
   const absolute = remoteReference(location) ? location : location.startsWith('//') ? `https:${location}` : null;
-  if (absolute ? !remoteSkillURL(absolute) : !localSkillPath(location.replace(/^\//, ''))) throw skillError('FK_R011', 'Invalid redirect Skill reference');
+  if (absolute ? !parseRemote(absolute) : !validLocal(location.replace(/^\//, ''))) throw skillError('FK_R011', 'Invalid redirect Skill reference');
   return target;
 }
 
 /** One deadline covers fetch, all redirects and the complete byte stream. */
-export async function readRemoteSkill(initialURL, integrity, options) {
+export async function readRemoteSkill(initialURL, integrity, options, policy = {}) {
+  const limit = policy.maxBytes ?? maxBytes;
+  const timeout = policy.timeoutMs ?? 10000;
   const external = options.signal;
   if (external?.aborted) throw cancelSignal();
   const controller = new AbortController();
@@ -35,13 +37,14 @@ export async function readRemoteSkill(initialURL, integrity, options) {
   const onAbort = () => { const error = cancelSignal(); interrupt(error); controller.abort(error); };
   external?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => {
-    const error = new DOMException('Skill read exceeded 10000ms', 'TimeoutError');
+    const error = new DOMException(`Skill read exceeded ${timeout}ms`, 'TimeoutError');
     interrupt(error); controller.abort(error);
-  }, 10000);
+  }, timeout);
   const wait = promise => Promise.race([promise, interrupted]);
   let url = initialURL;
   try {
     for (let redirects = 0; ; redirects++) {
+      if (policy.authorize) await wait(Promise.resolve(policy.authorize(url, controller.signal)));
       const pending = Promise.resolve().then(() => (options.fetch ?? globalThis.fetch)(url.href,
         { signal: controller.signal, credentials: 'omit', redirect: 'manual' }));
       // A custom fetch may ignore AbortSignal and deliver a body after the deadline.
@@ -53,15 +56,18 @@ export async function readRemoteSkill(initialURL, integrity, options) {
         const location = response.headers.get('location');
         if (!location || redirects >= 3) throw skillError('FK_R014', 'Redirect limit or missing Location',
           { status, url: url.href, location, redirects: redirects + 1 });
-        const next = redirectTarget(location, url);
+        const next = redirectTarget(location, url, policy.parseRemote ?? remoteSkillURL, policy.validLocal ?? localSkillPath);
         if (body) await wait(body.cancel());
         consumed = true; body = undefined; url = next;
         continue;
       }
       if (status < 200 || status >= 300) throw skillError('FK_R014', 'HTTP failure', { status, url: url.href });
+      if (policy.textOnly && !/^text\/(markdown|plain)(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
+        throw skillError('FK_R014', 'Description response is not contracted UTF-8 text');
+      }
       const length = response.headers.get('content-length');
-      if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) throw skillError('FK_R014', 'Skill exceeds byte limit',
-        { status, url: url.href, maxBytes, contentLength: Number(length) });
+      if (length !== null && /^\d+$/.test(length) && Number(length) > limit) throw skillError('FK_R014', 'Skill exceeds byte limit',
+        { status, url: url.href, maxBytes: limit, contentLength: Number(length) });
       const chunks = []; let received = 0;
       if (body) {
         reader = body.getReader();
@@ -70,8 +76,8 @@ export async function readRemoteSkill(initialURL, integrity, options) {
           if (part.done) break;
           if (!(part.value instanceof Uint8Array)) throw new TypeError('Skill body must contain bytes');
           received += part.value.byteLength;
-          if (received > maxBytes) throw skillError('FK_R014', 'Skill exceeds byte limit',
-            { status, url: url.href, maxBytes, received });
+          if (received > limit) throw skillError('FK_R014', 'Skill exceeds byte limit',
+            { status, url: url.href, maxBytes: limit, received });
           chunks.push(Buffer.from(part.value));
         }
       }
@@ -81,7 +87,7 @@ export async function readRemoteSkill(initialURL, integrity, options) {
         const [algorithm, digest] = integrity.split('-');
         if (!createHash(algorithm).update(bytes).digest().equals(Buffer.from(digest, 'base64'))) throw skillError('FK_R013', 'Skill integrity mismatch');
       }
-      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      return policy.rawBytes ? bytes : new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     }
   } catch (cause) {
     if (external?.aborted) throw cancelSignal();

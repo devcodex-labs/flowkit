@@ -1,5 +1,5 @@
 // Keep references on the reviewed documentation snapshot rather than the moving main branch.
-const documentationCommit = 'f58a9ed8d109e5d82604a6ff9cce5ed68e3a9377';
+const documentationCommit = 'a58c419bcc0ea4ec86bf2f52f57c1370dbd3cd18';
 
 function document(id, page) {
   return {
@@ -16,7 +16,7 @@ function document(id, page) {
  * workflow runtime is created by FlowKit.
  */
 export const flowkitProvider = Object.freeze({
-  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.1',
+  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.2',
   description: 'Compile declarative JavaScript/TypeScript workflows and run them with an explicit host Runtime.',
   capabilities: [
     {

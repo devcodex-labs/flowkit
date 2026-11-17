@@ -1,3 +1,5 @@
+import { hasTaskSpec } from '../../shared/task-spec.mjs';
+
 /**
  * M1-only Interactive feature gate. The Standard analyzer remains the single
  * authority for DSL syntax, graph, dataflow, and existing FK_C/FK_R codes.
@@ -46,6 +48,9 @@ export function gateInteractiveFeatures(analysis, options = {}) {
       } else if (node.type === 'agent' && node.verify != null) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A Agent verify requires P0-B; it must not be skipped', index, node));
+      } else if (node.type === 'agent' && hasTaskSpec(node)) {
+        extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
+          'The current Interactive builder cannot prepare Task V2; use the Standard artifact entry', index, node));
       }
     });
   }

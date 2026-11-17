@@ -13,8 +13,8 @@ const codeIs = code => error => error.code === code;
 const act = "action('a',{name:'A',action:'save',next:'done'})";
 const agent = "node('n',{name:'N',agent:'a',output:{type:'object'},next:'done'})";
 
-test('public run exposes the sixth real function and resolves actual context state without writing artifacts', async t => {
-  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
+test('public run resolves actual context state without writing artifacts', async t => {
+  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileArtifact', 'compileSource', 'evalWhen', 'isControlSignal', 'run', 'runArtifact']);
   const f = await fixture(t, [act, end()]);
   const before = await readdir(f.directory); let ctx;
   const runtime = host({ runAction: async function (_a, _n, context) { assert.equal(this, runtime); ctx = context; context.state.value = 2; } });

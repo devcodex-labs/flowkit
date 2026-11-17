@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {generateKeyPairSync, sign} from 'node:crypto';
@@ -7,13 +7,31 @@ import * as api from '@devcodex-labs/flowkit';
 import * as interactive from '@devcodex-labs/flowkit/interactive';
 import * as dsl from '@devcodex-labs/flowkit/dsl';
 import pkg from '@devcodex-labs/flowkit/package.json' with { type: 'json' };
-assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
+assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileArtifact', 'compileSource', 'evalWhen', 'isControlSignal', 'run', 'runArtifact']);
 assert.equal(Object.keys(dsl).length, 9); assert.equal(pkg.name, '@devcodex-labs/flowkit');
 const resolved = fileURLToPath(import.meta.resolve('@devcodex-labs/flowkit'));
 assert.ok(resolved.startsWith(path.resolve('node_modules/@devcodex-labs/flowkit') + path.sep));
 for (const name of ['@devcodex-labs/flowkit/dist/index.mjs', '@devcodex-labs/flowkit/cli', '@devcodex-labs/flowkit/runtime/run', '@devcodex-labs/flowkit/testing']) await assert.rejects(import(name), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 const definition = dsl.defineWorkflow({ id: 'installed', version: '1.0.0', name: 'Installed', nodes: [dsl.terminal('done', { name: 'Done', status: 'succeeded' })] });
 assert.ok(Object.isFrozen(definition.nodes[0]));
+await writeFile('prepared.workflow.js', `
+import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'prepared',version:'1.0.0',name:'Prepared',nodes:[
+  node('work',{name:'Work',description:'Check installed package',output:{type:'object'},next:'done'}),
+  terminal('done',{name:'Done',status:'succeeded'})
+]});`);
+const standard = await api.compileArtifact('prepared.workflow.js');
+assert.deepEqual(standard.diagnostics, []);
+await writeFile('workflow.js', standard.code);
+await unlink('prepared.workflow.js');
+const prepared = await api.runArtifact('workflow.js', standard.artifactHash, {
+  isControlSignal: api.isControlSignal, validateResult: () => [],
+  async runAgentTask(value) {
+    assert.equal(value.task.task.description, 'Check installed package');
+    return { status: 'succeeded', result: { standardInstalled: true }, events: [] };
+  }
+});
+assert.equal(prepared.state.standardInstalled, true);
 await mkdir('skills'); await writeFile('skills/a.md', 'Installed Skill.');
 const source = `import {defineWorkflow,node,action,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'installed',version:'1.0.0',name:'Installed',nodes:[node('n',{name:'N',skill:'skills/a.md',output:{type:'object'},next:'save'}),action('save',{name:'Save',action:'save',next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]} as const);\n`;

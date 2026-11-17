@@ -4,6 +4,7 @@ import { compileToText } from './compile.mjs';
 import { createSourceSnapshot, normalizeOptions, diagnostic, resolveProjectRoot } from './source.mjs';
 import { compilationPaths } from './paths.mjs';
 import { writeArtifacts } from './output.mjs';
+import { ARTIFACT_HEADER, STANDARD_ABI, STANDARD_SEMANTICS, artifactDigest } from '../shared/artifact-identity.mjs';
 
 function sourceFilename(file, cwd) {
   if (typeof file !== 'string' || !/\.workflow\.(?:ts|js)$/.test(file)) throw new TypeError('file must end in .workflow.ts or .workflow.js');
@@ -50,6 +51,21 @@ export async function compile(file, suppliedOptions) {
 export async function compileSource(text, suppliedOptions) {
   const { filename, options } = input(undefined, suppliedOptions, true, text);
   return compileSnapshot(createSourceSnapshot(text, filename), options);
+}
+
+/** Produce the Standard workflow.js bytes for a caller-owned candidate publication. */
+export async function compileArtifact(file, suppliedOptions) {
+  const { filename, options } = input(file, suppliedOptions);
+  const snapshot = createSourceSnapshot(await readFile(filename), filename);
+  const result = await compileToText(snapshot, options);
+  if (!result.code) return { code: '', mermaid: '', diagnostics: result.diagnostics, artifactHash: null };
+  const lines = result.code.split('\n');
+  lines[0] = ARTIFACT_HEADER + JSON.stringify({ mode: 'standard', programAbiVersion: STANDARD_ABI,
+    semanticsVersion: STANDARD_SEMANTICS });
+  lines[2] = '// source: not included in this artifact';
+  lines[3] = '// Verify the approved artifact SHA-256 before executing.';
+  const code = lines.join('\n');
+  return { code, mermaid: result.mermaid, artifactHash: artifactDigest(code), diagnostics: result.diagnostics };
 }
 
 /** Recompile on every call and compare only an existing compiled JS artifact, without writing. */

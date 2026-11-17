@@ -37,7 +37,7 @@ async function snapshot(directory) {
 }
 
 test('package root exposes implemented compiler functions and runtime helpers while blocking deep imports', async () => {
-  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileSource', 'evalWhen', 'isControlSignal', 'run']);
+  assert.deepEqual(Object.keys(api), ['check', 'compile', 'compileArtifact', 'compileSource', 'evalWhen', 'isControlSignal', 'run', 'runArtifact']);
   await assert.rejects(import('@devcodex-labs/flowkit/compiler/api'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 });
 

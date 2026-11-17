@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PUBLIC_FUNCTIONS, OPTION_KEYS, ERROR_CATALOG, DSL_FIELDS, NODE_TYPES } from '../src/shared/contracts.mjs';
 
-test('定稿六名称和11选项与公共声明一致', async () => {
-  assert.deepEqual(PUBLIC_FUNCTIONS, ['run', 'compile', 'compileSource', 'check', 'evalWhen', 'isControlSignal']);
+test('公开 SDK 与 Standard 产物入口及 11 个选项和声明一致', async () => {
+  assert.deepEqual(PUBLIC_FUNCTIONS, ['run', 'runArtifact', 'compile', 'compileSource', 'compileArtifact', 'check', 'evalWhen', 'isControlSignal']);
   assert.deepEqual(OPTION_KEYS, ['projectRoot', 'outDir', 'skillsRoot', 'skillCheck', 'remoteSkillHosts', 'trace', 'mermaid', 'fetch', 'signal', 'runId', 'dump']);
   const declaration = await readFile(new URL('../types/index.d.ts', import.meta.url), 'utf8');
   assert.deepEqual([...declaration.matchAll(/export declare function (\w+)/g)].map(x => x[1]), PUBLIC_FUNCTIONS);

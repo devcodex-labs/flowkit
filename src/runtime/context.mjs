@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeOptions } from '../compiler/source.mjs';
 import { createSkillLoader } from './skills.mjs';
+import { createPreparedAgentRunner } from './tasks.mjs';
 
 export function executionOptions(supplied) {
   const options = normalizeOptions(supplied);
@@ -23,9 +24,10 @@ export function cloneOwnData(source) {
   return target;
 }
 
-export function createRunContext(runtime, state, options) {
+export function createRunContext(runtime, state, options, artifact) {
   const ctx = { runtime, state: cloneOwnData(state === undefined ? {} : state), signal: options.signal,
     runId: options.runId === undefined ? randomUUID() : options.runId };
   Object.defineProperty(ctx, 'skillLoader', { value: createSkillLoader(options) });
+  Object.defineProperty(ctx, 'runPreparedAgent', { value: createPreparedAgentRunner(ctx, options, artifact) });
   return ctx;
 }

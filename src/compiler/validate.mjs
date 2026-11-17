@@ -1,4 +1,6 @@
 import { DSL_FIELDS } from '../shared/contracts.mjs';
+import { DESCRIPTION_MAX_BYTES, hasTaskSpec, isSemVer, localTextResource, remoteTextResource, taskIntegrity } from '../shared/task-spec.mjs';
+import { allowedSkillHost } from '../shared/skill-ref.mjs';
 import { diagnostic, pointerChild } from './source.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -6,12 +8,7 @@ const nonempty = value => typeof value === 'string' && value.length > 0;
 const idValid = value => typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.exec(value)?.[0] === value;
 const lineBreak = /[\r\n\u2028\u2029]/;
 
-/** SemVer 2.0 validation without coercing identifiers to bounded JS numbers. */
-export function isSemVer(value) {
-  if (typeof value !== 'string') return false;
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(value);
-  return !!match && match[0] === value && (!match[4] || match[4].split('.').every(part => !/^\d+$/.test(part) || part === '0' || part[0] !== '0'));
-}
+export { isSemVer };
 
 /** Validate local fields only; reference existence and regions belong to the graph pass. */
 export function validateFields(literal, context) {
@@ -87,9 +84,77 @@ export function validateFields(literal, context) {
       else successor('next');
     }
     if (kind === 'node') {
-      if (!nonempty(node.agent) && !nonempty(node.skill)) emit('FK_C050', 'agent', 'An agent or skill is required');
+      if (!hasTaskSpec(node) && !nonempty(node.agent) && !nonempty(node.skill)) {
+        emit('FK_C050', 'agent', 'An agent, skill or task description is required');
+      }
       for (const key of ['agent', 'skill']) if (present(key) && typeof node[key] !== 'string') {
         emit('FK_C007', key, `${key} must be a string`);
+      }
+      if (hasTaskSpec(node)) {
+        for (const key of ['agent', 'skill', 'integrity']) {
+          if (present(key)) emit('FK_C018', key, `${key} cannot be mixed with the task description contract`);
+        }
+        if (present('description')) {
+          const parts = Array.isArray(node.description) ? node.description : [node.description];
+          if (!parts.length || !parts.every(part => typeof part === 'string' && part.trim().length > 0)) {
+            emit('FK_C007', 'description', 'Expected a nonempty string or array of nonempty strings');
+          } else if (Buffer.byteLength(parts.join('\n\n')) > DESCRIPTION_MAX_BYTES) {
+            emit('FK_C007', 'description', `Description exceeds ${DESCRIPTION_MAX_BYTES} UTF-8 bytes`);
+          }
+        }
+        let hasInstruction = false;
+        if (present('descriptionRefs')) {
+          if (!Array.isArray(node.descriptionRefs) || node.descriptionRefs.length === 0) {
+            emit('FK_C019', 'descriptionRefs', 'Expected a nonempty array of description references');
+          } else {
+            node.descriptionRefs.forEach((ref, index) => {
+              const base = `${pointer}/descriptionRefs/${index}`;
+              if (!object(ref)) {
+                report('FK_C007', base, 'Expected a description reference', node.id);
+                return;
+              }
+              unknown(ref, ['uri', 'integrity', 'role'], base, 'FK_C018', node.id);
+              const url = remoteTextResource(ref.uri);
+              if (!url && !localTextResource(ref.uri)) {
+                report('FK_C052', `${base}/uri`, 'Expected a relative text path or HTTPS text URL', node.id);
+              } else if (url && !allowedSkillHost(url, context.remoteSkillHosts)) {
+                report('FK_C057', `${base}/uri`, 'Remote description host is not allowed', node.id);
+              }
+              if (Object.hasOwn(ref, 'integrity') && !taskIntegrity(ref.integrity)) {
+                report('FK_C058', `${base}/integrity`, 'Expected a sha256 integrity digest', node.id);
+              }
+              if (Object.hasOwn(ref, 'role') && !['instruction', 'reference', 'evidence'].includes(ref.role)) {
+                report('FK_C007', `${base}/role`, 'Invalid resource role', node.id);
+              }
+              hasInstruction ||= ref.role === 'instruction';
+            });
+          }
+        }
+        if (!present('description') && !hasInstruction) {
+          emit('FK_C050', 'description', 'A description or an instruction reference is required');
+        }
+        if (present('requiredSkills')) {
+          if (!Array.isArray(node.requiredSkills) || node.requiredSkills.length === 0) {
+            emit('FK_C019', 'requiredSkills', 'Expected a nonempty array of required Skills');
+          } else {
+            const seen = new Set();
+            node.requiredSkills.forEach((skill, index) => {
+              const base = `${pointer}/requiredSkills/${index}`;
+              if (!object(skill)) {
+                report('FK_C007', base, 'Expected a required Skill reference', node.id);
+                return;
+              }
+              unknown(skill, ['id', 'version'], base, 'FK_C018', node.id);
+              if (typeof skill.id !== 'string' || !/^\S+$/.test(skill.id) || seen.has(skill.id)) {
+                report('FK_C056', `${base}/id`, 'Expected a unique nonempty logical Skill id', node.id);
+              }
+              seen.add(skill.id);
+              if (Object.hasOwn(skill, 'version') && !isSemVer(skill.version)) {
+                report('FK_C002', `${base}/version`, 'Required Skill version must be exact SemVer', node.id);
+              }
+            });
+          }
+        }
       }
       if (!object(node.output) || node.output.type !== 'object' ||
         Object.hasOwn(node.output, 'properties') && !object(node.output.properties)) {
@@ -144,6 +209,9 @@ export function validateFields(literal, context) {
       for (const key of ['body', 'onSuccess', 'onMaxExceeded']) successor(key);
     } else if (kind === 'human') {
       successor('onApprove'); successor('onReject');
+      if (present('maxRevisions') && (!Number.isInteger(node.maxRevisions) || node.maxRevisions < 0 || node.maxRevisions > 100)) {
+        emit('FK_C007', 'maxRevisions', 'Max revisions must be an integer from 0 to 100');
+      }
     } else if (kind === 'terminal' && !['succeeded', 'failed'].includes(node.status)) {
       emit('FK_C070', 'status', 'Terminal status must be succeeded or failed');
     }

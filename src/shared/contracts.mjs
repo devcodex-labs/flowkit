@@ -1,15 +1,15 @@
 /** 已确认的公共契约基线；内部使用，不增加包导出。 */
-export const PUBLIC_FUNCTIONS = Object.freeze(['run', 'compile', 'compileSource', 'check', 'evalWhen', 'isControlSignal']);
+export const PUBLIC_FUNCTIONS = Object.freeze(['run', 'runArtifact', 'compile', 'compileSource', 'compileArtifact', 'check', 'evalWhen', 'isControlSignal']);
 export const OPTION_KEYS = Object.freeze(['projectRoot', 'outDir', 'skillsRoot', 'skillCheck', 'remoteSkillHosts', 'trace', 'mermaid', 'fetch', 'signal', 'runId', 'dump']);
 export const DSL_FIELDS = Object.freeze(Object.fromEntries(Object.entries({
   defineWorkflow: ['id', 'version', 'name', 'nodes'],
-  node: ['name', 'agent', 'skill', 'output', 'inputs', 'retries', 'verify', 'overview', 'integrity', 'next'],
+  node: ['name', 'agent', 'skill', 'description', 'descriptionRefs', 'requiredSkills', 'output', 'inputs', 'retries', 'verify', 'overview', 'integrity', 'next'],
   action: ['name', 'action', 'writes', 'next'],
   verification: ['name', 'verifier', 'onSuccess', 'onFailure'],
   parallel: ['name', 'branches', 'join'],
   condition: ['name', 'branches'],
   loop: ['name', 'maxIterations', 'body', 'onSuccess', 'onMaxExceeded'],
-  human: ['name', 'onApprove', 'onReject'],
+  human: ['name', 'onApprove', 'onReject', 'maxRevisions'],
   terminal: ['name', 'status'],
 }).map(([key, fields]) => [key, Object.freeze(fields)])));
 export const NODE_TYPES = Object.freeze({ node: 'agent', action: 'action', verification: 'verification', parallel: 'parallel', condition: 'condition', loop: 'loop', human: 'human', terminal: 'terminal' });

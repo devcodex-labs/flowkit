@@ -2,6 +2,7 @@ import { EXIT } from './graph-algorithms.mjs';
 import { branchTargets, nextTarget } from './emit-plan.mjs';
 import { quote, commentText, printValue, localName } from './values.mjs';
 import { emitHelpers } from './helpers.mjs';
+import { hasTaskSpec } from '../shared/task-spec.mjs';
 
 /** Share the exact static Skill reference between readable node and header metadata. */
 export function agentSkillMetadata(node, skillsRoot) {
@@ -40,10 +41,14 @@ export function emitWorkflow(analysis, plan) {
   function nodeComment(node, level) {
     let detail = node.type;
     if (node.type === 'agent') {
-      const skill = agentSkillMetadata(node, context.skillsRoot);
-      detail = skill.explicit ? `skill: ${skill.reference}${node.agent ? ` (explicit skill; agent ${node.agent} is not called)` : ''}`
-        : `agent: ${node.agent} -> ${skill.reference}`;
-      if (skill.remote) detail += `; remote; integrity: ${skill.integrity ?? 'not provided'}`;
+      if (hasTaskSpec(node)) {
+        detail = `agent task; description refs: ${node.descriptionRefs?.length ?? 0}; required Skills: ${node.requiredSkills?.length ?? 0}`;
+      } else {
+        const skill = agentSkillMetadata(node, context.skillsRoot);
+        detail = skill.explicit ? `skill: ${skill.reference}${node.agent ? ` (explicit skill; agent ${node.agent} is not called)` : ''}`
+          : `agent: ${node.agent} -> ${skill.reference}`;
+        if (skill.remote) detail += `; remote; integrity: ${skill.integrity ?? 'not provided'}`;
+      }
       detail += `; inputs: ${(node.inputs ?? []).join(', ') || 'none'}; results: ${Object.keys(node.output.properties ?? {}).join(', ') || 'object'}; attempts: ${(node.retries ?? 2) + 1}`;
     } else if (node.type === 'action') detail += `: ${node.action}${catches.has(node.id) ? `; error -> ${graph.byId.get(node.next).onFailure}` : ''}`;
     else if (node.type === 'verification') detail += `: ${node.verifier}`;
@@ -53,9 +58,17 @@ export function emitWorkflow(analysis, plan) {
     line(level, `await ${helper.tracing ? `traced(${quote(node.id)}, ${quote(node.name)}, () => ${expression})` : expression};`);
   }
   function agentCall(node) {
+    const common = `id: ${quote(node.id)}, name: ${quote(node.name)}`;
+    const options = `inputs: ${printValue(node.inputs ?? [])}, output: ${printValue(node.output, `/nodes/${indices.get(node.id)}/output`, literal.propertyOrder)}, retries: ${node.retries ?? 2}, verify: ${quote(node.verify ?? null)}, overview: ${node.overview ?? false}`;
+    if (hasTaskSpec(node)) {
+      const task = Object.fromEntries(['description', 'descriptionRefs', 'requiredSkills']
+        .filter(field => Object.hasOwn(node, field)).map(field => [field, node[field]]));
+      const { id, version } = literal.definition;
+      return `runPreparedStep({ ${common}, workflow: ${printValue({ id, version })}, task: ${printValue(task)}, ${options} })`;
+    }
     const skill = Object.hasOwn(node, 'skill') ? `loadSkill(${quote(node.skill)}${Object.hasOwn(node, 'integrity') ? `, { integrity: ${quote(node.integrity)} }` : ''})`
       : `loadSkillByAgent(${quote(node.agent)})`;
-    return `runStep({ id: ${quote(node.id)}, name: ${quote(node.name)}, skill: () => ${skill}, inputs: ${printValue(node.inputs ?? [])}, output: ${printValue(node.output, `/nodes/${indices.get(node.id)}/output`, literal.propertyOrder)}, retries: ${node.retries ?? 2}, verify: ${quote(node.verify ?? null)}, overview: ${node.overview ?? false} })`;
+    return `runStep({ ${common}, skill: () => ${skill}, ${options} })`;
   }
   function action(node, level) {
     const call = `runAction(${quote(node.action)}, ${quote(node.name)}, ctx)`;
@@ -99,8 +112,16 @@ export function emitWorkflow(analysis, plan) {
     nodeComment(node, level);
     const repairs = humanRepairs.get(node.id);
     const call = `await askHuman(${quote(node.id)}, ${quote(node.name)})`;
+    const revisions = `${name(node.id)}Revisions`;
+    if (node.maxRevisions !== undefined) line(level, `let ${revisions} = 0;`);
+    function checkRejection(inner) {
+      if (node.maxRevisions === undefined) return;
+      line(inner, `if (${revisions} >= ${node.maxRevisions}) throw Object.assign(new Error("FK_R004 Human revision limit reached"), { code: "FK_R004" });`);
+      line(inner, `${revisions}++;`);
+    }
     if (graph.regions.get(node.id).entryTargets.size === 1) {
       line(level, `while (!(${call})) {`);
+      checkRejection(level + 1);
       for (const id of repairs) leaf(graph.byId.get(id), level + 1);
       line(level, '}');
     } else {
@@ -114,6 +135,7 @@ export function emitWorkflow(analysis, plan) {
       }
       line(level + 1, `${first} = false;`);
       line(level + 1, `if (${call}) break;`);
+      checkRejection(level + 1);
       line(level, '}');
     }
   }

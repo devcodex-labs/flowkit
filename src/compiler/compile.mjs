@@ -7,6 +7,7 @@ import { createEmitPlan } from './emit-plan.mjs';
 import { emitWorkflow, agentSkillMetadata } from './emit.mjs';
 import { checkMermaidIds, renderMermaid } from './mermaid.mjs';
 import { commentText } from './values.mjs';
+import { hasTaskSpec } from '../shared/task-spec.mjs';
 
 const compilerVersion = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
@@ -16,7 +17,7 @@ function header(analysis, paths, bodyHash) {
   const conventions = [];
   if (has('condition')) conventions.push('evalWhen reads own ctx.state paths; strict booleans and short circuit; ! has lower precedence than comparison.');
   if (has('agent')) {
-    const remoteSkills = [...new Set(nodes.filter(node => node.type === 'agent').map(node => agentSkillMetadata(node, analysis.context.skillsRoot))
+    const remoteSkills = [...new Set(nodes.filter(node => node.type === 'agent' && !hasTaskSpec(node)).map(node => agentSkillMetadata(node, analysis.context.skillsRoot))
       .filter(skill => skill.remote).map(skill => `${skill.reference} (integrity: ${skill.integrity ?? 'not provided'})`))];
     conventions.push('runAgent receives one step; schema -> checkStep -> verify; own-key commit only after success; retries share reasons and control signals are rethrown.' +
       (remoteSkills.length ? ` Remote Skills: ${remoteSkills.join('; ')}.` : ''));

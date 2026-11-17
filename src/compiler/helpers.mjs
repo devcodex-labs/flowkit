@@ -1,3 +1,5 @@
+import { hasTaskSpec } from '../shared/task-spec.mjs';
+
 /** These bodies are compiler-owned templates, never called in the compiler process. */
 function booleanTemplate() {
   const asBool = (value, name) => {
@@ -98,6 +100,7 @@ function body(fn) {
 /** Select actual template dependencies; trace=off has no trace binding or instrumentation. */
 export function emitHelpers(nodes, trace, actionCatches) {
   const agent = nodes.some(node => node.type === 'agent');
+  const prepared = nodes.some(node => node.type === 'agent' && hasTaskSpec(node));
   const human = nodes.some(node => node.type === 'human');
   const verification = nodes.some(node => node.type === 'verification' || node.type === 'agent' && node.verify != null);
   const calls = nodes.some(node => ['agent', 'human', 'verification', 'action', 'parallel'].includes(node.type));
@@ -124,6 +127,9 @@ export function emitHelpers(nodes, trace, actionCatches) {
     // A literal null verify never calls this unused fallback; keeping it local avoids a second runtime.
     if (!verification) lines.push('const verifyStep = undefined;');
     lines.push(body(agentTemplate));
+    if (prepared) {
+      lines.push('const runPreparedStep = s => ctx.runPreparedAgent(s, ++stepNo, checkStep, verifyStep);');
+    }
   }
   if (human) {
     lines.push(body(humanTemplate));
