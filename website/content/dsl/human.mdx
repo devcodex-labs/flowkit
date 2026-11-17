@@ -29,6 +29,8 @@ return { approved: false, comment: '请补充说明' };
 
 ## 拒绝链和等待边界
 
+Standard 节点可设置 `maxRevisions` 为 0 到 100。计数针对实际启动的拒绝修订，达到上限时停止并抛出 `FK_R004`。
+
 拒绝链只能包含Agent/action，必须最终回到同一个human。不能跳到另一个human、terminal、condition或loop后永久离开；这种结构分别可能得到[FK_C060](/troubleshooting/compiler#FK_C060)、[FK_C061](/troubleshooting/compiler#FK_C061)。需要结束审批的业务，可在宿主用取消/错误机制明确处理，或者重新设计流程边界，不能偷偷把拒绝当批准。
 
 FlowKit没有为human内建持久化等待、审批权限、通知或跨进程恢复。runHuman的Promise等待多久由宿主决定；服务重启后的恢复也要由宿主设计。它不自动限制拒绝次数，宿主应定义业务时限、取消和响应关联。

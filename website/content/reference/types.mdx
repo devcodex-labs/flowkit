@@ -20,6 +20,17 @@
 ```ts file="../../../types/index.d.ts" title="公开SDK声明"
 ```
 
+## Standard Task 类型
+
+| 类型 | 用途 |
+|---|---|
+| `TaskJsonValue`、`TaskJsonObject` | 任务与结果可序列化的 JSON 值域 |
+| `AgentTaskV2`、`TaskPreparation`、`PreparedAgentTask` | 调用身份、Host 准备和实际派发 |
+| `DescriptionRef`、`RequiredSkillRef`、`DescriptionResource`、`PreparedSkill` | DSL 逻辑引用与 Host 解析后的资源身份 |
+| `ResourceManifest` | 已解析的资源顺序及内容摘要 |
+| `CapabilitySupport`、`HostCapabilityProfile`、`TaskPolicy`、`HostPreparationContext` | Host 能力、授权、限制及本地 Prepare 上下文 |
+| `SideEffectStatus`、`AgentExecutionResult` | 成功或失败结果、实际观察到的事件与 Usage |
+
 ## DSL 数据类型
 
 | 导出类型 | 含义 |

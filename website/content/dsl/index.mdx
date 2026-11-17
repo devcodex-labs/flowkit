@@ -32,6 +32,13 @@
 
 节点数组第一项为入口，所有引用必须存在，所有节点应可达。允许共享汇合，禁止任意回边；loop 与 human 提供受约束的回路。每个页面都给出完整工作流引用、字段说明和失败恢复。
 
+## Standard Agent 任务 {#agent-task}
+
+- `description` 接受非空 Markdown 字符串或有序字符串数组。数组包含同一次任务的说明片段。
+- `descriptionRefs` 使用 `uri`、可选的 SHA-256 `integrity` 和 `role`。角色为 `instruction`、`reference`（默认）或 `evidence`。仅引用的任务需至少一个非空必读指令引用。
+- `requiredSkills` 使用逻辑 `id` 及可选的精确 SemVer `version`。省略版本时由可信 Host 解析固定版本。浮动范围和 latest 会被拒绝。描述型节点与文件映射字段分别定义。
+- Standard Human 节点可用 `maxRevisions` 限制连续驳回后启动的修订次数。达到上限时停止并报告 `FK_R004`。
+
 ## 从完整文件开始
 
 ```js file="../../../examples/docs/quick-start/sample.workflow.js" title="sample.workflow.js"

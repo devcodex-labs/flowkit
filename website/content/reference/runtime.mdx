@@ -41,6 +41,18 @@ Runtime是宿主提供的对象。isControlSignal始终必需，其余业务方�
 
 输入在该Agent的重试循环前提取，Skill也在重试前加载。不要假定一次重试会重新读取所有外部内容。runAgent返回值通过validateResult、可选checkStep、可选verify后才提交。
 
+## Standard Task / Prepare {#standard-task}
+
+使用 `description`、`descriptionRefs` 或 `requiredSkills` 的节点，以 `runAgentTask(prepared, context)` 调用 Host。FlowKit 为每次激活取已声明输入的 JSON 快照，保留 null 并在 `missing` 标出缺失键。一次激活的重试保留 activation ID 并使用新的逻辑 request ID。
+
+纯描述任务可使用内建的轻量 Prepare。使用必需 Skill 时，Host 提供声明 Standard 的 `taskPolicy.hostProfile` 以及 `prepareAgentTask`，按逻辑 ID 固定具体版本与 SHA-256。资源引用按声明顺序提供给 Host。Host 按角色交付资源，必读 instruction 在模型执行前装配。
+
+本地描述读取要求 Host 指定获授权的 `taskPolicy.projectRoot`。远程需要显式 `remoteSkillHosts`、`taskPolicy.authorizeRemote` 及落实 DNS 和目的地址授权的可信 `taskPolicy.fetch`。完整性使用 SHA-256 或 Host 核实的不可变引用。未授予访问或身份不一致时任务在派发前失败。
+
+`taskPolicy` 可指定成功准备和派发共享的 `deadlineMs`、`maxDispatches`、`maxResourceBytes`、`maxTotalResourceBytes` 和 `maxTaskBytes`。分别默认当前时刻后 10 分钟、1024 次、256 KiB、1 MiB 和 1 MiB。远程单次读取还受十秒上限。达到适用阈值后停止新的受限派发。
+
+结果封套的状态为 succeeded、failed 或 cancelled。FlowKit 仅将已验证的 succeeded.result 合并业务 State。使用 `recordAgentResult` 观察实际 Host 提供的事件、Usage 和失败。明确无副作用且允许重试的失败可在剩余额度内执行新尝试。
+
 ## Ctx 的字段
 
 Ctx包含runtime、state、可选signal/runId/error。公开run实际提供默认生成的runId，类型保留可选以表达其他构造场景。state是本次顶层浅复制；嵌套引用共享。error仅在执行过程中写入时存在，不代表每个failed终点都有异常。

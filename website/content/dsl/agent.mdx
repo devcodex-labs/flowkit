@@ -1,5 +1,7 @@
 # node（Agent 节点）
 
+Standard 描述型任务使用 `description`、`descriptionRefs` 和 `requiredSkills`。这些字段按[任务语义](/dsl/#agent-task)交给[Standard Task / Prepare](/reference/runtime#standard-task)。
+
 `node(id, options)` 创建 type:agent 节点。它加载说明、提取输入、请求宿主生成结果，完成校验和可选重试后提交状态。它不绑定某个模型供应商。
 
 `id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。

@@ -101,7 +101,9 @@ node host.mjs
 
 可选集成 `@devcodex-labs/flowkit/capability-graph` 提供 `flowkitProvider` 和 `createCapabilityGraphActionAdapter`。先用[能力与文档指南](https://devcodex-labs.github.io/flowkit/guide/capability-provider.html)定位对应版本的文档，再按[宿主消费示例](https://devcodex-labs.github.io/flowkit/examples/capability-graph.html)提供实际动作和权限。
 
-SDK 根入口提供 `run`、`compile`、`compileSource`、`check`、`evalWhen`、`isControlSignal`。DSL 从 `@devcodex-labs/flowkit/dsl` 导入。CLI 提供 `compile` / `check`；运行流程使用 SDK。避免导入包内私有路径。
+SDK 根入口提供 `run`、`runArtifact`、`compile`、`compileSource`、`compileArtifact`、`check`、`evalWhen`、`isControlSignal`。DSL 从 `@devcodex-labs/flowkit/dsl` 导入。CLI 提供 `compile` / `check`，运行流程使用 SDK。避免导入包内私有路径。
+
+Standard 正式产物通过 `compileArtifact` 取得 `workflow.js` 文本及摘要。Host 从可信批准记录取预期摘要，使用 `runArtifact` 校验和执行。描述型 Agent 节点使用 `description`、`descriptionRefs` 或 `requiredSkills`，由 Host 提供 `runAgentTask` 并在需要时提供 `prepareAgentTask`。
 
 工作流源文件必须以 `.workflow.js` 或 `.workflow.ts` 结尾。AOT 部署保留原始源码、编译产物及所需 Skill；一致性校验不能替代对宿主代码和产物来源的信任。
 
