@@ -88,7 +88,7 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   if(!Array.isArray(safetyPolicies))throw new TypeError('Host safety policies must be an array');
   for(const node of definition.nodes) {
     if(node.type==='human' && !Number.isSafeInteger(node.maxRevisions)) {
-      throw new Error('Author requires a finite maxRevisions for automated Human revision');
+      throw Object.assign(new Error('Author requires a finite maxRevisions for automated Human revision'), { code: 'FKA_HUMAN_LIMIT_REQUIRED', nodeId: node.id });
     }
     if(node.type==='parallel' && node.join.strategy==='any' && node.branches.some(id=>
       ['agent','action'].includes(graph.byId.get(id)?.type))) {
@@ -96,7 +96,8 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
       if(!identifier(binding?.policyRef)||typeof verifySafetyPolicy!=='function'||await verifySafetyPolicy({
         node:structuredClone(node),branches:node.branches.map(id=>structuredClone(graph.byId.get(id))),
         artifactHash:artifact.artifactHash,hostProfile:profile,policyRef:binding.policyRef})!==true) {
-        throw new Error('parallel.any with possible writes requires a Host-approved policy for the exact artifact');
+        throw Object.assign(new Error('parallel.any with possible writes requires a Host-approved policy for the exact artifact'), {
+          code: 'FKA_SAFETY_POLICY_REQUIRED', nodeId: node.id, artifactHash: artifact.artifactHash });
       }
       approvedSafety.push({nodeId:node.id,policyRef:binding.policyRef});
     }

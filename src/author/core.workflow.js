@@ -1,10 +1,13 @@
-import { defineWorkflow, node, action, verification, loop, terminal } from '@devcodex-labs/flowkit/dsl';
+import { defineWorkflow, node, action, verification, loop, terminal, condition } from '@devcodex-labs/flowkit/dsl';
 
 // The compiler owns control flow. Host actions supply domain operations; this core never publishes.
 export default defineWorkflow({ id: 'flowkit-author-core', version: '1.2.0', name: 'Workflow Author', nodes: [
+  condition('turn-kind', { name: 'Review existing exact candidate', branches: [{ when: 'reviewOnly', next: 'load-review' }, { when: 'true', next: 'intent' }] }),
+  action('load-review', { name: 'Load committed review materials', action: 'loadReview', writes: ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'currentPlan', 'candidate', 'candidateDiff', 'resourceSnapshot'], next: 'semantic-review' }),
   action('intent', { name: 'Parse current intent', action: 'parseIntent', writes: ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence'], next: 'intent-ready' }),
   verification('intent-ready', { name: 'Intent is clear', verifier: 'intentReady', onSuccess: 'catalog', onFailure: 'needs-info' }),
-  action('catalog', { name: 'Read initial catalog', action: 'readCatalog', writes: ['catalogSnapshot'], next: 'proposal' }),
+  action('catalog', { name: 'Read initial catalog', action: 'readCatalog', writes: ['catalogSnapshot', 'confirmedPlan', 'rawText'], next: 'plan-choice' }),
+  condition('plan-choice', { name: 'Use exact confirmed Plan', branches: [{ when: 'confirmedPlan', next: 'plan-validate' }, { when: 'true', next: 'proposal' }] }),
   node('proposal', { name: 'Propose Plan', description: 'Return JSON Plan as rawText. Include typed nodes, entryNodeId, control edges, intent coverage, capabilityRequirements and resourceRequirements. Preserve every current request constraint; do not invent decisions.', inputs: ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'catalogSnapshot'], output: { type: 'object', properties: { rawText: { type: 'string' } }, required: ['rawText'], additionalProperties: false }, retries: 0, next: 'plan-validate' }),
   action('plan-validate', { name: 'Validate Plan', action: 'validatePlan', writes: ['currentPlan', 'planDiagnostics'], next: 'plan-quality' }),
   loop('plan-quality', { name: 'Bounded Plan checks', maxIterations: 3, body: 'plan-valid', onSuccess: 'plan-ready', onMaxExceeded: 'needs-revision' }),
@@ -12,8 +15,10 @@ export default defineWorkflow({ id: 'flowkit-author-core', version: '1.2.0', nam
   node('plan-repair', { name: 'Repair technical Plan errors', description: 'Return corrected Plan JSON as rawText. Change only technical errors in diagnostics, preserving the authorized intent and fixed resources. The Host shares two repair dispatches across Plan and DSL.', inputs: ['authorizedRequest', 'effectiveIntent', 'catalogSnapshot', 'planDiagnostics'], output: { type: 'object', properties: { rawText: { type: 'string' } }, required: ['rawText'], additionalProperties: false }, retries: 0, next: 'plan-revalidate' }),
   action('plan-revalidate', { name: 'Revalidate Plan', action: 'validatePlan', writes: ['currentPlan', 'planDiagnostics'], next: 'plan-valid' }),
   verification('plan-ready', { name: 'Plan has no unresolved decisions', verifier: 'planReady', onSuccess: 'bind-resources', onFailure: 'needs-info' }),
-  action('bind-resources', { name: 'Pin final Plan resources', action: 'bindResources', writes: ['resourceSnapshot'], next: 'resources-ready' }),
-  verification('resources-ready', { name: 'Required resources are available', verifier: 'resourcesReady', onSuccess: 'dsl-source', onFailure: 'needs-info' }),
+  action('bind-resources', { name: 'Pin final Plan resources', action: 'bindResources', writes: ['resourceSnapshot', 'candidate', 'candidateDiff', 'reuseCandidate', 'reuseReview'], next: 'resources-ready' }),
+  verification('resources-ready', { name: 'Required resources are available', verifier: 'resourcesReady', onSuccess: 'reuse-candidate', onFailure: 'needs-info' }),
+  condition('reuse-candidate', { name: 'Reuse unchanged candidate bytes', branches: [{ when: 'reuseCandidate', next: 'reuse-review' }, { when: 'true', next: 'dsl-source' }] }),
+  condition('reuse-review', { name: 'Reuse exact current review', branches: [{ when: 'reuseReview', next: 'candidate-ready' }, { when: 'true', next: 'semantic-review' }] }),
   node('dsl-source', { name: 'Generate DSL source', description: 'Return only complete FlowKit JavaScript DSL as rawText, importing @devcodex-labs/flowkit/dsl. Match the fixed Plan entry, node IDs/types and all control edges exactly. Use selected resource documentation and explicit finite Human limits. Do not publish or run the target business workflow.', inputs: ['authorizedRequest', 'effectiveIntent', 'currentPlan', 'resourceSnapshot'], output: { type: 'object', properties: { rawText: { type: 'string' } }, required: ['rawText'], additionalProperties: false }, retries: 0, next: 'compile' }),
   action('compile', { name: 'Compile exact candidate', action: 'prepareCandidate', writes: ['candidate', 'candidateDiff', 'compileDiagnostics'], next: 'dsl-quality' }),
   loop('dsl-quality', { name: 'Bounded DSL checks', maxIterations: 3, body: 'compiled', onSuccess: 'semantic-review', onMaxExceeded: 'needs-revision' }),

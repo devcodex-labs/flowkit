@@ -45,23 +45,28 @@ export interface AuthorHostOptions {
   authorization: {
     authorize(binding: { action: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal; [key: string]: unknown }): boolean | Promise<boolean>;
     observeReview(binding: { task: unknown; result: unknown; requestContext: AuthorRequestContext; [key: string]: unknown }):
-      Promise<{ passed: boolean; subjectId: string; executionId: string; authorSubjectId?: string }>;
+      Promise<{ passed: boolean; subjectId: string; executionId: string; requestId?: string; authorSubjectId?: string }>;
     verifyApproval(binding: { approvalRef: string; candidateHash?: string; requestContext: AuthorRequestContext; [key: string]: unknown }):
       Promise<{ approved: boolean; subjectId: string; approvalId: string }>;
     verifySettlement?(binding: object): Promise<{ verified: boolean; physicalDone: boolean; noEffect?: boolean }>;
     verifySafetyPolicy?(binding: object): boolean | Promise<boolean>;
+    verifyImport?(binding: object): boolean | Promise<boolean>;
     reviewPolicy?: 'separate-pass' | 'independent-subject';
   };
   capabilityGraph?: object; initialDocuments?: object[];
+  initialCapabilityIds?: string[];
+  resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string }>;
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
-  resolveProfessionalSkill?(pin: object, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ id: string; version: string; digest: string } | null>;
+  resolveProfessionalSkill?(pin: object, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ id: string; version: string; digest: string; approved: boolean } | null>;
   resolveAuthoringInput?(inputRef: string, context: AuthorRequestContext): Promise<AuthorTurnInput>;
 }
-export interface AuthorStartInput { collectionId: string; requestId: string; goal: string; choices?: AuthorChoices; target?: AuthorTarget; operation?: 'create' | 'update' | 'import' }
+export interface AuthorTargetRef { collectionId: string; skillId: string; baseArtifactHash: string; baseVersion: string }
+export interface AuthorStartInput { collectionId: string; requestId: string; goal: string; choices?: AuthorChoices; target?: AuthorTarget; operation?: 'create' | 'update' | 'import'; targetRef?: AuthorTargetRef; importSource?: { sourceRef: string; mode: 'new-collection' | 'migration' } }
 export interface AuthorTurnInput {
   draftId: string; expectedStateVersion: number; turnId: string; input: string; kind?: 'authoring' | 'review-only' | 'retry';
   choices?: AuthorChoices; contextSnapshot?: unknown; baseline?: unknown; baselineId?: string; confirmedConstraintIds?: string[];
   safetyPolicies?: Array<{ nodeId: string; policyRef: string }>; retryRef?: string;
+  confirmedPlanHash?: string;
 }
 export interface AuthorCandidateIdentity { draftId: string; candidateHash: string; previousHash: string | null }
 export interface AuthorApprovalInput extends AuthorCandidateIdentity { expectedStateVersion: number; reviewRef: string; approvalRef: string }

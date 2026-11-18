@@ -14,6 +14,7 @@ export async function authorCoreFiles(root) {
   }
   const identity = { schemaVersion: 1, workflowId: 'flowkit-author-core', version: '1.2.0',
     sourceHash: artifactDigest(await readFile(file)), ...standardIdentity(artifact.code),
+    guideHash: artifactDigest(await readFile(path.join(root, 'src/author/flowkit-workflow-author/SKILL.md'))),
     mermaidHash: artifactDigest(artifact.mermaid) };
   return new Map([[generatedAuthorFiles[0], artifact.code], [generatedAuthorFiles[1], artifact.mermaid],
     [generatedAuthorFiles[2], JSON.stringify(identity, null, 2) + '\n']]);
