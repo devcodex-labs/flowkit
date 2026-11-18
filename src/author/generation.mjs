@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
 import { mkdir, readFile, lstat, readdir, rename, open, realpath } from 'node:fs/promises';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { collectionSkill } from './collections.mjs';
@@ -34,7 +35,7 @@ const completeRecord = plan => ({ collectionId: plan.collectionId, files: plan.f
 /** Prepare every identity/path/hash before filesystem mutation. The caller durably stores this plan. */
 export function planCollectionGeneration(snapshot, hostOwnedRoot, { namespace, publicationId, operationId, generationId, snapshotHash }) {
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(generationId) || !namespace || !publicationId || !snapshotHash) throw new Error('Generation needs exact Host-owned scope and identity');
-  const root = path.resolve(hostOwnedRoot), files = Object.fromEntries(Object.entries(bodies(snapshot)).map(([name, body]) => [name, artifactDigest(body)]));
+  const root = realpathSync(hostOwnedRoot), files = Object.fromEntries(Object.entries(bodies(snapshot)).map(([name, body]) => [name, artifactDigest(body)]));
   const entries = Object.values(bodies(snapshot));
   if (entries.length > 10000 || entries.reduce((size, body) => size + Buffer.byteLength(body), 0) > 128 * 1024 * 1024) throw new Error('Generation exceeds its file/byte capacity');
   const plan = { namespace, publicationId, operationId, generationId, collectionId: snapshot.collection.id, snapshotHash, root,

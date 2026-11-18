@@ -313,8 +313,12 @@ export async function createWorkflowAuthorHost(supplied) {
       });
       if (replay) return replay;
       const controller = new AbortController();
-      const combined = signal ? AbortSignal.any([signal, controller.signal, AbortSignal.timeout(Math.max(1, turn.budget.deadlineMs - Date.now()))]) :
-        AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, turn.budget.deadlineMs - Date.now()))]);
+      // Keep an awaited SDK turn alive even when a Host returns only a pending Promise.
+      const deadlineController = new AbortController();
+      const deadlineTimer = setTimeout(() => deadlineController.abort(authorError('author-deadline', 'Turn deadline exhausted')),
+        Math.max(1, turn.budget.deadlineMs - Date.now()));
+      const combined = signal ? AbortSignal.any([signal, controller.signal, deadlineController.signal]) :
+        AbortSignal.any([controller.signal, deadlineController.signal]);
       const flight = { controller, pending: new Set(), done: false, draftId: input.draftId, turnId: input.turnId,
         attemptId: turn.attemptId, token: turn.executionToken };
       const key = JSON.stringify([input.draftId, input.turnId]); flights.set(key, flight);
@@ -402,7 +406,7 @@ export async function createWorkflowAuthorHost(supplied) {
         flight.done = true; finishPhysical();
         await authorize('read', initial.collectionId, currentRequestContext, signal, { draftId: initial.id });
         return view(read(input.draftId));
-      } finally { flight.done = true; finishPhysical(); }
+      } finally { clearTimeout(deadlineTimer); flight.done = true; finishPhysical(); }
     },
     async reviewCandidate(input, currentRequestContext, signal) {
       const draft = read(input.draftId);
