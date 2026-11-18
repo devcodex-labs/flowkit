@@ -509,12 +509,14 @@ test('candidate retains the effective intent and Plan identity and rejects a cha
   await assert.rejects(author.prepare(differentEdge, options), /control flow differs/);
 });
 
-test('R-04: the actual Author Skill parallel example compiles with its documented join strategies', async () => {
+test('R-04: the actual Author Skill parallel example compiles with its documented join strategies', async t => {
   const guide = await readFile(new URL('../../src/author/flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8');
   assert.match(guide, /join: \{strategy: 'all_succeeded' 或 'any', next\}/);
   const example = /<!-- standard-parallel-example -->\r?\n```js\r?\n([\s\S]+?)\r?\n```/.exec(guide);
   assert.ok(example, 'Expected a compilable example from the shipped guide');
-  const options = { filename: 'author-guide.workflow.js', skillCheck: false };
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'flowkit-author-guide-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = { filename: path.join(directory, 'author-guide.workflow.js'), projectRoot: directory, skillCheck: false };
   const compiled = await compileSource(example[1], options);
   assert.ok(compiled.code);
   assert.deepEqual(compiled.diagnostics, []);
