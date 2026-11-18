@@ -14,7 +14,7 @@ Author 读取的文档 revision、来源 URI 和内容 Hash 随候选保存，�
 
 能力和 `requires` 依赖必须全部适用，Graph 返回 complete 也不能把 unknown/partial/inapplicable 当作成功。编译出的控制边必须与当前 Plan 一致，不能因遗漏一条分支而绕过复审。自动 Human 修订必须有有限的 `maxRevisions`。`parallel.any` 包含 Action 或副作用未知的 Agent 时，需要 Host 为精确 Artifact 认可安全策略；缺失即拒绝候选，FlowKit 不新增协作取消或 winner-only 语义。
 
-集合发现目录按完整批准版本分代生成。Host 撤回映射后，可校验创建回执并移除对应的适配器目录；发现用户新增/改动、链接或所有权不符即保留并对账。历史 Artifact 仍保留在版本存储，其他 Skill 目录不受影响。
+集合发现目录按保存事务固定的完整批准快照生成，写文件前持久分配路径。映射须 CAS 和实际读回；失败如实 saved/discovery-pending，旧发布重试不反激活旧版。清理先撤映射、核 Run 无引用且新 Run 接入关闭，再核验全文件；用户增改、链接或所有权不符保留并对账。历史 Artifact 保留。配置与恢复见 [Author Host](/guide/host-integration#author-host)。
 
 宿主可安装随包交付的 `dist/author/flowkit-workflow-author/SKILL.md`。启用前由宿主配置 Author、Intent Runtime、已授权的 Capability Graph、候选审查与执行授权。用户可以从一句项目目标开始，Author 沿用明确选择，针对会影响控制流或交付的未知项提供方案和推荐。
 

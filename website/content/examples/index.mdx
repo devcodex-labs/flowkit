@@ -7,6 +7,7 @@
 | 你想完成的事 | 示例 | 前置知识 |
 |---|---|---|
 | 第一次安装并得到结果 | [第一个工作流](/guide/quick-start) | Node与ESM |
+| 从一句话创建可复审 Workflow Skill | [Author 首次接入](/guide/host-integration#author-host) | Host 的模型、认证和有限容量 |
 | 连接Agent、Schema、Skill和审批 | [接入自己的宿主](/guide/host-integration) | 已跑通最小例 |
 | 按输入分流后汇合 | [条件分流与汇合](/examples/conditional-routing) | state与boolean |
 | 同时处理独立工作 | [并行处理与汇合](/examples/parallel-review) | Promise完成与拒绝 |
@@ -29,7 +30,7 @@
 
 ## 文件从哪里来
 
-教程代码与源码仓库 `examples/docs` 中的主源保持一致。源码当前公开可见且受专有许可约束，运行仍需对应包与使用权限；公开读者可直接阅读本站嵌入代码。主源verify.mjs保存适用的成功、失败与恢复断言，manifest现列E01–E15共15组消费者用例。站点构建直接包含主源文件，README最小例从同一来源同步。
+教程代码与源码仓库 `examples/docs` 中的主源保持一致。源码当前公开可见且受专有许可约束，运行仍需对应包与使用权限；公开读者可直接阅读本站嵌入代码。主源verify.mjs保存适用的成功、失败与恢复断言，manifest现列E01–E16共16组消费者用例。E16 用固定响应验证 Author 装配、三文件和关闭 Author 后独立运行，不代表真实模型质量或生产发布。站点构建直接包含主源文件，README最小例从同一来源同步。
 
 ## 推荐运行方式
 

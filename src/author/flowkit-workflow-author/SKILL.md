@@ -17,6 +17,18 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
 6. 用户审阅精确候选后，Host 核验批准引用，通过 `recordApproval` 或在 `publish` 中原子登记批准并保存。绑定 contentHash、candidateHash、previousHash 和最新 stateVersion。模型声称“已批准”不能授予发布权。publicationId 重试读回原保存操作，不反激活旧版本；saved/discovery-pending 必须如实显示。
 7. stdio/HTTP 使用同一服务的 `createMcpOptions(currentRequestContext, bindings)`，每次请求传当前身份和 Host 解析的 inputRef。八个既有 MCP 工具不增加名称；连接关闭不关闭共享 AuthorHost。仅服务所有者调用 `close`。取消后未知结果先用 SDK `settleTurn` 对账；一次性 retryRef 不重置原回合预算，不能自动重发未知写。
 
+## 首次接入与恢复
+
+Host 必须显式配置有限的 `capacity`：`maxPhysicalExecutions`、`maxDrafts`、`maxDraftBytes`、`maxRetainedDraftBytes`、`maxReceiptBytes`、`maxTurnsPerDraft`。待批准候选默认上限 16，与保留草稿及物理在途分开。缺执行器或容量时列出接入缺项，不等待正在调用 MCP 的同一原生 Agent 来执行核心。
+
+每次传入的 RequestContext 包含 `namespace`、`principalId`、`sessionId`、`workspaceId`、`authorizedCollections`、`authorizationSnapshotRef`。它由 Host 认证生成，不能来自模型伪造参数。模型、工具及资源的所有实际请求都经过本回合 guarded ports；局部 adapter 重试也要计入持久总预算。可观察 usage 记录为观测值，其余保留 unknown，不报告精确费用。
+
+取消先撤销旧执行的写回权。实际请求未结束仍占槽位，新输入可保留但不自动并发接管。`settleTurn` 只接受 Host 对准确 attempt 的证据；`confirm-result` 只提交已持久完成结果，`confirm-no-effect` 才可能发一次 retryRef，`abandon` 仍保留未知写的去重记录。`close` 未关闭时须处理其 outstanding 报告，不关闭 Host 外部客户端。
+
+启用发现需 Host 提供自有 root、`readMapping` 和 `compareAndSetMapping`；只有实际 CAS/读回匹配才显示 active。先保存全集合快照与固定 generation 路径，重试旧发布不反激活旧版。集合重命名须绑定当前全部批准 Skill 的 `expectedSnapshotHash`。清理 generation 还须 Host 提供 `readReferences`，确认撤映射、无 Run 引用且新 Run 接入已关闭；用户改动、未知目录和正式历史版本保留。跨集合迁移按回执对账，不宣称跨库原子，也不自动删除源。
+
+完整固定响应接入示例见[Host 文档](https://devcodex-labs.github.io/flowkit/guide/host-integration)。示例只证明接线；真实模型质量、原生宿主发现、独立身份与费用分别验收。
+
 ## DSL 生成参考
 
 生成字面量 JavaScript，导入 `@devcodex-labs/flowkit/dsl`。用选定能力的准确文档补充下表，不执行用户 DSL 来探测其含义。

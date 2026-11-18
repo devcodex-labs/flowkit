@@ -367,6 +367,15 @@
         }
       ],
       "verify": "verify.mjs"
+    },
+    {
+      "id": "E16",
+      "directory": "author-host",
+      "files": ["package.json", "host.mjs", "verify.mjs", "consumer.ts"],
+      "workflows": [],
+      "scenarios": [{ "entry": "host.mjs", "expected": { "fixture": true, "status": "candidate-ready", "files": ["SKILL.md", "workflow.js", "workflow.mmd"], "standalone": "done", "published": false } }],
+      "verify": "verify.mjs",
+      "types": ["consumer.ts"]
     }
   ]
 }

@@ -2,6 +2,57 @@
 
 <a id="flowkit-doc-host"></a>
 
+## Author 首次接入 {#author-host}
+
+`@devcodex-labs/flowkit/host` 的 `createWorkflowAuthorHost(options)` 装配 namespace 自有的持久编写服务。随包 `dist/author/core/workflow.js` 由固定 Standard DSL 实际编译，配套 Mermaid 和 identity；Skill、SDK 和八个既有 MCP 工具共用同一流程。目标 Workflow 的业务运行另由 Host 授权。
+
+沿用[内部安装权限](/guide/installation)，安装当前包后复制下例并执行 `node host.mjs`。这是完整固定响应例：实际创建 SQLite、运行核心、检查三文件、拒绝伪批准、关闭 Author，再独立运行本地测试产物。它不发布正式集合，不证明真实模型或原生宿主接入。
+
+```js file="../../../examples/docs/author-host/host.mjs" title="host.mjs：受控接线示例"
+```
+
+预期 JSON：fixture=true、status=candidate-ready、三项 files、standalone=done、published=false。示例清理自身连接和临时目录。仓库维护者可运行 `npm run build` 和 `npm run docs:examples -- --case E16`，真实安装候选 tarball 验证；本地候选不等于 Registry 已发布版本。
+
+| 配置 | Host 责任 |
+|---|---|
+| namespace / storageFile / collectionIds | 真实文件唯一归属 namespace；明确项目及授权集合。服务拥有自己新开的 SQLite 连接 |
+| hostProfile | 当前能力及稳定 digest，变化后重新核验候选资格 |
+| execution.request / tool / io | 每次实际请求经过 guarded ports，写工具传可信 sideEffect、toolName、稳定 operationKey，端口内部不隐藏额外请求 |
+| execution.createSession | 用 ports 装配实际 Intent Runtime 和 Task V2 Runtime；createApiAgentAdapter.request 接 ports.request，工具执行接 ports.tool。执行端能在 MCP 等待期间独立响应，不能等待同一原生调用者 |
+| authorization | 逐动作授权；observeReview 关联实际 requestId，verifyApproval 核验准确用户批准；模型自称批准无效 |
+| capabilityGraph / readDocumentUrl / resolveProfessionalSkill | 当前权限下发现和读取；专业 Skill 固定 id/version/digest/approved；Graph 不执行 Agent |
+| budgetPolicy | 缺省 300000ms、24 模型请求、32 工具、96 I/O、16MiB 总字节、256KiB 单响应；Host 可配置有限正值，429/5xx 重试也计数 |
+| capacity | 必填有限正值：maxPhysicalExecutions、maxDrafts、maxDraftBytes、maxRetainedDraftBytes、maxReceiptBytes、maxTurnsPerDraft；maxPendingCandidates 默认 16 |
+| retention / discovery | 默认不自动删数据；发现需自有 root、readMapping、compareAndSetMapping。缺 CAS 可保存，但 discovery 保持 pending |
+
+每个业务调用独立传 `AuthorRequestContext={namespace,principalId,sessionId,workspaceId,authorizedCollections,authorizationSnapshotRef}`，由当前 Host 认证生成，不从模型参数补造或缓存上次 HTTP 身份。完整类型见[Host 类型](/reference/types#author-types)。
+
+### 编写与批准
+
+start 只用一句 goal、幂等 requestId 和已知选择起草；未知模式提供 Standard 推荐。update 要准确 `TargetRef={collectionId,skillId,baseArtifactHash,baseVersion}` 和未占用新版本，不按名字覆盖。advanceTurn 使用 draftId、expectedStateVersion、turnId、本轮 input/实际上下文和基线，执行 Intent→目录/文档→Plan→最终 requires/资源→DSL→编译→复审。纯解释走 readDraft，review-only 只重审已有候选。
+
+reviewCandidate 展示准确 Diff 和实际 ReviewReceipt。复审八项输入是当前授权原文、有效意图、变更、基线证据、Plan、候选、Diff、资源。默认 separate-pass；independent-subject 必须观察实现者与审查者各自不同的主体、会话和工作区，缺项不通过。
+
+Host 展示精确候选和旧 Hash，核验用户批准后 recordApproval，再用新 stateVersion、唯一 publicationId 和同一身份 publish。MCP publish 可原子登记相同可信批准并保存。版本、active CAS、savedReceipt 与全集合快照同一 SQLite 事务。A 后已有 B 时重试 A 仅返回旧回执和 currentActive=B，不反激活 A。保存批准不替代目标业务运行授权。
+
+### 取消与对账
+
+同 turnId 的指纹含实际材料和当前身份，不同内容冲突。新 turn 获得新期限；同 turn 重试沿用 deadline/已用量且 retryRef 仅一次。可靠 Responses usage 记 observed，其余 unknown，不当作零消耗或精确费用。Runtime 局部预算只是附加上限，不重复累计同一次实际请求。
+
+取消先持久撤销 executionToken，再发信号；实际未结束仍占物理槽。迟到结果只结算旧回执，不提交候选。新输入可有界保留，不自动接管。Standard 内部 Run 不从中途恢复：读已提交结果，或经 Host 对账后显式重试。
+
+settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提升已持久完成且 Hash 匹配的结果；confirm-no-effect 要证明物理结束及无副作用；abandon 仍保留未知写及去重记录。跨草稿复用未知 operationKey 也阻断。仅服务所有者 close；closed=false 附 outstanding，处理后再次收尾，不关闭外部客户端。HTTP 断开仅结束请求等待，不关闭共享服务。
+
+### 发现与清理
+
+写文件前持久固定全集合 snapshotHash、generationId 和路径，逐文件核验、flush、marker、rename 后，再 CAS Host 映射并读回 operationId/generation/root/manifestHash。失败如实 saved/discovery-pending；数据库、文件系统和 Host 映射不宣称跨系统原子。只续建已验证自有暂存；未知目录或用户改动保留。其他 Skill、目录或 active 变化时旧操作 superseded。
+
+集合 rename 的 reviewed plan 必须有 expectedSnapshotHash，绑定完整 readCollectionMetadata（含全部批准 Skill hashes）；按对象键排序后 JSON 编码、取 sha256: 摘要，同一事务复核。集合 ID 和旧 Artifact/Run pin 不变。
+
+默认 discard 保留正文；显式 purgeBody 要 Host retention.policyRef、准确候选及无引用/在途/未知副作用，之后保留拒绝旧 ID 重放的 tombstone。SDK discard 的 generationId 清理还要 discovery.readReferences 返回准确 generationId/evidenceRef、referenced=false、closedForNewRuns=true，并保证清理期间新 Run 接入持续关闭。先 CAS 撤映射并读回，再核引用、marker 和全文件；仍映射/引用、链接、所有权不符或用户增改均保留，正式版本不删除，旧 publication 重放不重建已移除目录。
+
+错误含类型 code、retryable、sideEffectStatus，例如 FKA_HOST_BINDING_MISSING、FKA_SCOPE_DENIED、FKA_CONFLICT、FKA_BUDGET_EXHAUSTED、FKA_DEADLINE、FKA_INFLIGHT、FKA_RECONCILIATION_REQUIRED、FKA_IDEMPOTENCY_EXPIRED。当前开发 schemaVersion=2，旧格式只读识别后拒绝，不迁移/清空。业务复制/迁移继续使用当前批准源和 CollectionPlan，逐回执对账，不盲删源。
+
 ## Host 独立执行主体
 
 长期 Host 可通过 `/host` 的 `configureCompilationCache`、`compilationCacheStatus` 和 `clearCompilationCache` 管理本进程的编译容量。它们影响该进程内的执行入口，不清理业务状态或卸载已加载 ESM。到驻留程序身份上限时轮换 Host 进程，详见 [SDK 缓存边界](/reference/sdk)。

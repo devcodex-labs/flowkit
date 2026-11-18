@@ -10,6 +10,8 @@
 
 ## 适用场景
 
+自然语言编写入口为随包交付的 `dist/author/flowkit-workflow-author/SKILL.md`，由 Host 通过 `/host.createWorkflowAuthorHost` 装配。用户一句话起草，关键未知项选择后生成可复审候选；保存需 Host 核验用户批准。完整接入、恢复和发现合同见[Workflow Author](https://devcodex-labs.github.io/flowkit/guide/workflow-authoring)与[Host 接入](https://devcodex-labs.github.io/flowkit/guide/host-integration)。已有 Workflow 的运行不依赖 Author。
+
 适合需要条件分支、并行处理、校验重试、循环修复或人工决策的多步骤任务。模型调用、业务接口、Schema 校验器及人工交互由宿主提供。下方 Standard 示例在同一进程执行，并行分支共享状态，`any` 汇合后其他分支仍可继续。需要持久化暂停和跨进程续跑的内部维护者可查看 [Interactive P0-A 接入](https://devcodex-labs.github.io/flowkit/guide/interactive)。
 
 ## 运营定位
