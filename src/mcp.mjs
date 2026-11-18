@@ -9,33 +9,32 @@ const hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const response = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
 
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
-export function createFlowkitMcpServer({ namespace, collectionIds, store, author, authorize,
-  resolveCompileInput, resolveCollectionPlan, runWorkflow, pendingCandidates = new Map(), limits = {} }) {
+export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
+  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, limits = {} }) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
   const pageSize = limits.pageSize ?? 50;
   const maxBytes = limits.maxResourceBytes ?? 262144;
-  const maxCandidates = limits.maxCandidates ?? 16;
+  const maxResponseBytes = limits.maxResponseBytes ?? 262144;
   const maxMetadataEntries = limits.maxMetadataEntries ?? 10000;
-  if (![pageSize, maxBytes, maxCandidates,maxMetadataEntries].every(value => Number.isSafeInteger(value) && value > 0)) {
+  if (![pageSize, maxBytes, maxResponseBytes,maxMetadataEntries].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new TypeError('MCP limits must be positive integers');
   }
   const allowed = new Set(collectionIds);
-  const candidates = pendingCandidates;
   const server = new McpServer({ name: 'flowkit', version: '1.0.0' });
   const baseUri = `skill://${namespace}/`;
-  const candidateKey = candidateHash => `${namespace}\0${candidateHash}`;
 
   async function access(operation, collectionId, ctx) {
     ctx?.signal?.throwIfAborted();
-    if (!allowed.has(collectionId) || await authorize({ namespace, collectionId, operation, signal: ctx?.signal }) !== true) {
+    if (!allowed.has(collectionId) || await authorize({ namespace, collectionId, operation, signal: ctx?.signal }, requestContext) !== true) {
       throw new Error('FlowKit access denied for this collection');
     }
     ctx?.signal?.throwIfAborted();
   }
 
   function catalog(collectionId) {
+    if (!store) throw new Error('Host approved Skill store is unavailable');
     const snapshot = typeof store.readCollectionMetadata === 'function' ? store.readCollectionMetadata(collectionId,
       {limit:Math.min(Number.MAX_SAFE_INTEGER,maxMetadataEntries+1)}) : store.readCollection(collectionId);
     if (!snapshot) throw new Error('Collection is unavailable');
@@ -44,19 +43,32 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
 
   const metadata = candidate => ({ skillId: candidate.manifest.skillId, name: candidate.manifest.name,
     version: candidate.manifest.version, candidateHash: candidate.hash, kind: candidate.manifest.kind ?? 'workflow' });
-  const candidateFor = (collectionId, candidateHash) => {
-    const candidate = candidates.get(candidateKey(candidateHash));
-    if (!candidate || candidate.manifest.collectionId !== collectionId) throw new Error('Candidate is unavailable in this collection');
-    return candidate;
+  const author = () => {
+    if (!authorHost || !requestContext || requestContext.namespace !== namespace) throw new Error('Authenticated AuthorHost request binding is unavailable');
+    return authorHost;
   };
+  const draftView = draft => Object.fromEntries(['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash',
+    'goal', 'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt']
+    .filter(key => Object.hasOwn(draft, key)).map(key => [key, draft[key]]));
+  async function exactDraft(collectionId, draftId, signal) {
+    const draft = await author().readDraft({ draftId }, requestContext, signal);
+    if (draft.collectionId !== collectionId) throw new Error('Draft belongs to a different collection');
+    return draft;
+  }
 
   function tool(name, description, schema, invoke, readOnlyHint = false) {
     server.registerTool(name, { description, inputSchema: z.object(schema).strict(), annotations: { readOnlyHint } },
       async (input, ctx) => {
+        try {
         await access(name, input.collectionId, ctx);
         const result = await invoke(input, ctx);
         await access(name, input.collectionId, ctx);
+        if (Buffer.byteLength(JSON.stringify(result)) > maxResponseBytes) throw new Error('Tool response exceeds the Host response byte budget; read the committed draft through the Host');
         return response(result);
+        } catch (error) {
+          return { ...response({ error: { code: error.code ?? 'FKA_HOST_OPERATION_FAILED', message: error.message,
+            ...(error.questions ? { questions: error.questions } : {}), ...(error.options ? { options: error.options, recommended: error.recommended } : {}) } }), isError: true };
+        }
       });
   }
 
@@ -70,56 +82,53 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       if(Buffer.byteLength(JSON.stringify(page))>maxBytes)throw new Error('Collection page exceeds the metadata byte budget');
       return page; }, true);
   tool('flowkit_start_workflow', 'Start a workflow draft using known collection choices.', {
-    collectionId: id, goal: z.string().min(1).max(maxBytes), executionMode: z.enum(['standard', 'interactive-p0-a']).optional(),
+    collectionId: id, requestId: id, operation: z.enum(['create', 'update', 'import']), goal: z.string().min(1).max(maxBytes),
+    targetRef: z.union([z.object({ collectionId: id, skillId: id, baseArtifactHash: hash, baseVersion: id }).strict(),
+      z.object({ sourceRef: id, mode: z.enum(['new-collection', 'migration']) }).strict()]).optional(),
+    executionMode: z.enum(['standard', 'interactive-p0-a']).optional(),
     includeSource: z.boolean().optional()
-  }, ({ collectionId, goal, executionMode, includeSource }) => author.start(goal, {
-    collectionName: catalog(collectionId).collection.name, executionMode, includeSource
-  }));
+  }, async ({ collectionId, goal, requestId, operation, targetRef, executionMode, includeSource }, ctx) => draftView(await author().start({ collectionId,
+    goal, requestId, operation, ...(operation === 'import' ? { importSource: targetRef } : { targetRef }), choices: { collectionName: catalog(collectionId).collection.name,
+      ...(executionMode ? { executionMode } : {}), ...(includeSource === undefined ? {} : { includeSource }) } }, requestContext, ctx.signal)));
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
     { collectionId: id, inputRef: id }, async ({ collectionId, inputRef }, ctx) => {
-      if (typeof resolveCompileInput !== 'function') throw new Error('Host compile binding is unavailable');
-      if (candidates.size >= maxCandidates) throw new Error('Discard or publish an existing candidate before preparing another');
-      const { plan, options } = await resolveCompileInput({ namespace, collectionId, inputRef, signal: ctx.signal });
-      if (options.collectionId !== collectionId) throw new Error('Host input belongs to a different collection');
-      const result = await author.prepare(plan, options);
-      if (result.candidate) {
-        const key = candidateKey(result.candidate.hash);
-        if (!candidates.has(key) && candidates.size >= maxCandidates) throw new Error('Candidate capacity changed during compilation');
-        candidates.set(key, result.candidate);
-      }
-      return result;
+      if (typeof resolveAuthoringInput !== 'function') throw new Error('Host AuthoringInput resolver is unavailable');
+      const input = await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal: ctx.signal });
+      await exactDraft(collectionId, input.draftId, ctx.signal);
+      // An HTTP disconnect stops waiting. Only explicit SDK cancellation fences this shared turn.
+      return draftView(await author().advanceTurn(input, requestContext));
     });
   tool('flowkit_review_candidate', 'Read the exact candidate file difference before approval.',
-    { collectionId: id, candidateHash: hash, previousHash: hash.nullable() }, ({ collectionId, candidateHash, previousHash }) => {
-      const candidate = candidateFor(collectionId, candidateHash);
-      const previous = previousHash === null ? null : store.readVersion(collectionId, candidate.manifest.skillId, previousHash);
-      if (previousHash !== null && !previous) throw new Error('The expected previous version is unavailable');
-      return author.review(candidate, previous);
+    { collectionId: id, draftId: id, candidateHash: hash, previousHash: hash.nullable() }, async ({ collectionId, ...input }, ctx) => {
+      await exactDraft(collectionId, input.draftId, ctx.signal);
+      return author().reviewCandidate(input, requestContext, ctx.signal);
     }, true);
   tool('flowkit_publish_candidate', 'Publish an exact candidate after Host review and approval verification.',
-    { collectionId: id, candidateHash: hash, previousHash: hash.nullable(), reviewRef: id, approvalRef: id },
-    async ({ collectionId, candidateHash, ...receipts }) => {
-      const result = await author.publish(candidateFor(collectionId, candidateHash), receipts);
-      candidates.delete(candidateKey(candidateHash));
-      return { candidateHash: result };
+    { collectionId: id, draftId: id, expectedStateVersion: z.number().int().positive(), publicationId: id,
+      candidateHash: hash, previousHash: hash.nullable(), reviewRef: id, approvalRef: id },
+    async ({ collectionId, ...input }, ctx) => {
+      await exactDraft(collectionId, input.draftId, ctx.signal);
+      const published = await author().publish(input, requestContext, ctx.signal);
+      return Object.fromEntries(['publicationId', 'candidateHash', 'previousHash', 'status', 'discovery', 'currentActive', 'isCurrent', 'stateVersion', 'generation']
+        .filter(key => Object.hasOwn(published, key)).map(key => [key, published[key]]));
     });
   tool('flowkit_discard_candidate', 'Discard a session candidate without changing approved Skill versions.',
-    { collectionId: id, candidateHash: hash }, ({ collectionId, candidateHash }) => {
-      candidateFor(collectionId, candidateHash);
-      candidates.delete(candidateKey(candidateHash));
-      return { discarded: candidateHash };
+    { collectionId: id, draftId: id, expectedStateVersion: z.number().int().positive(), candidateHash: hash.nullable() }, async ({ collectionId, ...input }, ctx) => {
+      await exactDraft(collectionId, input.draftId, ctx.signal);
+      return draftView(await author().discard(input, requestContext, ctx.signal));
     });
   tool('flowkit_apply_collection_plan', 'Apply a Host-selected reviewed collection creation or migration plan.',
     { collectionId: id, planRef: id, approvalRef: id }, async ({ collectionId, planRef, approvalRef }, ctx) => {
       if (typeof resolveCollectionPlan !== 'function') throw new Error('Host collection binding is unavailable');
-      const plan = await resolveCollectionPlan({ namespace, collectionId, planRef, signal: ctx.signal });
+      const plan = await resolveCollectionPlan({ namespace, collectionId, planRef, requestContext, signal: ctx.signal });
       if (plan.destination.id !== collectionId) throw new Error('Host collection plan belongs to a different collection');
-      return store.applyCollectionPlan(plan, approvalRef);
+      if (typeof applyCollectionPlan !== 'function') throw new Error('Host collection approval binding is unavailable');
+      return applyCollectionPlan(plan, approvalRef, requestContext, ctx.signal);
     });
   tool('flowkit_run_workflow', 'Run a fixed approved Artifact using the Host execution binding.',
     { collectionId: id, skillId: id, candidateHash: hash, executionRef: id }, async (input, ctx) => {
       if (typeof runWorkflow !== 'function') throw new Error('Host execution binding is unavailable');
-      return runWorkflow({ namespace, ...input, signal: ctx.signal });
+      return runWorkflow({ namespace, ...input, requestContext, signal: ctx.signal });
     });
 
   function skillPath(candidate) {

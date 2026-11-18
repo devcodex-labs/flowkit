@@ -1,4 +1,5 @@
 import type { AgentExecutionResult, PreparedAgentTask, HostPreparationContext, Runtime } from './index.js';
+import type { FlowkitMcpOptions } from './mcp.js';
 
 export interface AuthorRequestContext {
   namespace: string; principalId: string; sessionId: string; workspaceRef: string; collectionIds: string[];
@@ -53,12 +54,12 @@ export interface AuthorHostOptions {
     verifyImport?(binding: object): boolean | Promise<boolean>;
     reviewPolicy?: 'separate-pass' | 'independent-subject';
   };
-  capabilityGraph?: object; initialDocuments?: object[];
+  capabilityGraph?: object | ((context: { requestContext: AuthorRequestContext; signal: AbortSignal }) => object | Promise<object>); initialDocuments?: object[];
   initialCapabilityIds?: string[];
   resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string }>;
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
   resolveProfessionalSkill?(pin: object, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ id: string; version: string; digest: string; approved: boolean } | null>;
-  resolveAuthoringInput?(inputRef: string, context: AuthorRequestContext): Promise<AuthorTurnInput>;
+  resolveAuthoringInput?: FlowkitMcpOptions['resolveAuthoringInput'];
 }
 export interface AuthorTargetRef { collectionId: string; skillId: string; baseArtifactHash: string; baseVersion: string }
 export interface AuthorStartInput { collectionId: string; requestId: string; goal: string; choices?: AuthorChoices; target?: AuthorTarget; operation?: 'create' | 'update' | 'import'; targetRef?: AuthorTargetRef; importSource?: { sourceRef: string; mode: 'new-collection' | 'migration' } }
@@ -67,6 +68,7 @@ export interface AuthorTurnInput {
   choices?: AuthorChoices; contextSnapshot?: unknown; baseline?: unknown; baselineId?: string; confirmedConstraintIds?: string[];
   safetyPolicies?: Array<{ nodeId: string; policyRef: string }>; retryRef?: string;
   confirmedPlanHash?: string;
+  target?: Partial<AuthorTarget>;
 }
 export interface AuthorCandidateIdentity { draftId: string; candidateHash: string; previousHash: string | null }
 export interface AuthorApprovalInput extends AuthorCandidateIdentity { expectedStateVersion: number; reviewRef: string; approvalRef: string }
@@ -81,7 +83,7 @@ export interface WorkflowAuthorHost {
   settleTurn(input: { draftId: string; expectedStateVersion: number; turnId: string; decision: 'confirm-result' | 'confirm-no-effect' | 'abandon' }, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ retryRef: string | null; stateVersion: number; budget: unknown }>;
   discard(input: { draftId: string; expectedStateVersion: number; candidateHash: string | null }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   cancelTurn(input: { draftId: string; expectedStateVersion: number; turnId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
-  createMcpOptions(): { namespace: string; collectionIds: string[]; authorHost: WorkflowAuthorHost; store: object; [key: string]: unknown };
+  createMcpOptions(context?: AuthorRequestContext, bindings?: Pick<FlowkitMcpOptions, 'resolveAuthoringInput' | 'resolveCollectionPlan' | 'runWorkflow' | 'limits'>): FlowkitMcpOptions;
   close(options?: { mode?: 'drain' | 'cancel'; timeoutMs?: number }): Promise<{ closed: boolean; outstanding: number }>;
 }
 export function createWorkflowAuthorHost(options: AuthorHostOptions): Promise<WorkflowAuthorHost>;

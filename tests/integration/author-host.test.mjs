@@ -38,12 +38,13 @@ test('I1 installed core performs actual parse/Plan/compile/review and atomically
   const publication = { ...approval, expectedStateVersion: approved.stateVersion, publicationId: 'save-1' };
   await assert.rejects(f.host.publish({ ...publication, candidateHash: 'wrong' }, context), /exact review/);
   const saved = await f.host.publish(publication, context); assert.equal(saved.status, 'saved'); assert.equal(saved.discovery, 'pending');
-  assert.equal(saved.collectionSnapshot.skills[0].hash, ready.candidate.hash);
+  assert.equal(saved.collectionSnapshot, undefined);
   const replaySave = await f.host.publish(publication, context); assert.equal(replaySave.currentActive, ready.candidate.hash);
   const db = new DatabaseSync(path.join(f.directory, 'author.sqlite'), { readOnly: true });
   try {
     const durable = JSON.parse(db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(ready.id).payload);
     assert.equal(durable.savedReceipt.candidateHash, ready.candidate.hash);
+    assert.equal(durable.savedReceipt.collectionSnapshot.skills[0].hash, ready.candidate.hash);
     assert.equal(db.prepare('SELECT count(*) AS total FROM fk_author_versions').get().total, 1);
     const turn = JSON.parse(db.prepare('SELECT payload FROM fk_author_turns').get().payload);
     assert.equal(turn.budget.used.requests, 4); assert.equal(turn.budget.repairs.length, 0);
@@ -115,4 +116,35 @@ test('I1 a real SQLite fault after formal version writes rolls back active, vers
     db.exec('DROP TRIGGER cut_saved');
     assert.equal((await f.host.publish(input, context)).status, 'saved');
   } finally { db.close(); }
+});
+
+test('I3 precise Host approval registration and publication share a single rollback boundary', async t => {
+  const f = await setup(t); await f.register(); const ready = await candidate(f);
+  const input = { draftId: ready.id, expectedStateVersion: ready.stateVersion, publicationId: 'atomic-approval',
+    candidateHash: ready.candidate.hash, previousHash: null, reviewRef: ready.reviewReceipt.reviewRef, approvalRef: 'user' };
+  f.approvals.set('user', ready.candidate.hash);
+  const db = new DatabaseSync(path.join(f.directory, 'author.sqlite'));
+  try {
+    db.exec("CREATE TRIGGER cut_approval_save BEFORE UPDATE ON fk_author_drafts WHEN NEW.status='saved' BEGIN SELECT RAISE(ABORT, 'cut-approved-save'); END;");
+    await assert.rejects(f.host.publish(input, context), /cut-approved-save/);
+    assert.equal((await f.host.readDraft({ draftId: ready.id }, context)).approvalReceipt, null);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM fk_author_versions').get().n, 0);
+    db.exec('DROP TRIGGER cut_approval_save');
+    assert.equal((await f.host.publish(input, context)).status, 'saved');
+    assert.equal((await f.host.readDraft({ draftId: ready.id }, context)).approvalReceipt.approvalRef, 'user');
+  } finally { db.close(); }
+});
+
+test('I3 owner-specific authorization covers read, cancel, settle, discard and every model/Graph/document port', async t => {
+  const f = await setup(t); const draft = await f.start();
+  const other = { ...context, principalId: 'other' };
+  let allowed = true;
+  f.options.authorization.authorize = async ({ ownerScope, requestContext }) => allowed && (!ownerScope || ownerScope.principalId === requestContext.principalId);
+  for (const name of ['readDraft', 'cancelTurn', 'settleTurn', 'discard']) {
+    await assert.rejects(f.host[name]({ draftId: draft.id, expectedStateVersion: draft.stateVersion, turnId: 'none', candidateHash: null }, other), /denied/);
+  }
+  const raw = f.options.execution.request;
+  f.options.execution.request = async input => { const result = await raw(input); allowed = false; return result; };
+  await assert.rejects(f.host.advanceTurn({ draftId: draft.id, expectedStateVersion: draft.stateVersion, turnId: 'revoke', input: 'Inspect' }, context), /denied/);
+  assert.equal(f.calls.length, 1);
 });

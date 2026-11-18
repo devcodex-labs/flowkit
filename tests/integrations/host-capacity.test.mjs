@@ -17,8 +17,8 @@ test('1026 approved Skills use bounded metadata pages and keep identical logical
   const hosts=new Map(),clients=[];let server;
   try {
     for(const tenant of ['alpha','beta']) {
-      const fixture=await fixtureOptions(path.join(directory,tenant+'.sqlite'));
-      hosts.set(tenant,fixture);fixture.options.namespace=tenant;
+      const fixture=await fixtureOptions(path.join(directory,tenant+'.sqlite'),'test-collection',tenant);
+      hosts.set(tenant,fixture);
       fixture.options.limits={pageSize:16,maxResourceBytes:32768,maxMetadataEntries:2048};
       const collection=fixture.options.store.readCollectionMetadata('test-collection').collection;
       for(let i=0;i<512;i++) {
@@ -58,7 +58,7 @@ test('1026 approved Skills use bounded metadata pages and keep identical logical
   } finally {
     for(const client of clients)await client.close();
     if(server)await new Promise(resolve=>server.close(resolve));
-    for(const fixture of hosts.values())fixture.close();
+    for(const fixture of hosts.values())await fixture.close();
     await rm(directory,{recursive:true,force:true});
   }
 });

@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createWorkflowAuthor } from '../../src/author/author.mjs';
+import { createWorkflowAuthorHost } from '../../dist/host.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
 import { planNewCollection } from '../../src/author/collections.mjs';
 import { prepareProfessionalSkill, publishProfessionalSkill } from '../../src/author/professional-skills.mjs';
@@ -12,7 +12,30 @@ import { runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs
 import { stageCollectionForDiscovery } from '../../src/author/collection-layout.mjs';
 import { isControlSignal } from '../../src/index.mjs';
 
-export async function fixtureOptions(file, collectionId = 'test-collection') {
+export async function fixtureOptions(file, collectionId = 'test-collection', namespace = 'test-project') {
+  let authorized = true;
+  const approved = new Map(), calls = [], controls = { barrier: null };
+  const requestContext = { namespace, principalId: 'fixture-user', sessionId: 'fixture-session', workspaceRef: path.dirname(file), collectionIds: [collectionId] };
+  const hostProfile = { id:'fixture-host',digest:artifactDigest('fixture host profile') };
+  const sourceText = `import {defineWorkflow,action,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('work',{name:'Work',action:'inspect',next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});`;
+  const authorHost = await createWorkflowAuthorHost({ namespace, storageFile: file, collectionIds: [collectionId], hostProfile,
+    execution: { async request(input) {
+      calls.push(input);
+      if (input.prepared && controls.barrier) await controls.barrier;
+      if (input.intent) return { effective: { intents: [{ id: 'inspect', goal: 'Inspect', children: [], constraints: [] }], constraints: [], relations: [], coverage: 'complete', unresolved: [] }, turn: { changes: [], facts: {} }, issues: [], inferences: [] };
+      const id = input.prepared.task.node.id;
+      const proposal = { entryNodeId:'work', nodes:[{id:'work',kind:'action'},{id:'done',kind:'terminal'}],
+        edges:[{from:'work',to:'done',kind:'control'}], coverage:[{intentId:'inspect',status:'covered',coveredBy:['work']}] };
+      return { status: 'succeeded', events: [], result: id === 'proposal' ? { rawText: JSON.stringify(proposal) } :
+        id === 'semantic-review' ? { passed: true, findings: [] } : { rawText: sourceText } };
+    }, async createSession(ports) { return { intentRuntime: { parse: intent => ports.request({ intent }) },
+      runtime: { validateResult: () => [], runAgentTask: prepared => ports.request({ prepared }) } }; } },
+    authorization: { authorize: async ({ requestContext: context }) => authorized && context.principalId !== 'denied',
+      async observeReview({ task, result }) { return calls.some(call => call.prepared?.task.execution.requestId === task.execution.requestId) && result.result.passed ?
+        { passed: true, subjectId: 'fixture-executor', executionId: task.execution.requestId } : null; },
+      async verifyApproval({ approvalRef, candidateHash }) { return { approved: approved.get(approvalRef) === candidateHash, subjectId: 'fixture-user', approvalId: approvalRef }; }
+    } });
   const store = openLocalSkillStore(file, ({ approvalRef }) => approvalRef === 'fixture-approved', () => true);
   if (!store.readCollection(collectionId)) {
     const plan = planNewCollection({ name: 'fixture-flows', source: { id: collectionId }, preserveId: true }, [], () => null);
@@ -21,23 +44,12 @@ export async function fixtureOptions(file, collectionId = 'test-collection') {
       description: 'Review a synthetic workflow', body: '# Review test output', resources: { 'references/check.md': 'Inspect the terminal.' } });
     await publishProfessionalSkill(candidate, { reviewRef: 'fixture-review', approvalRef: 'fixture-approved', previousHash: null }, store);
   }
-  let authorized = true;
-  const author = createWorkflowAuthor({ publicationHost: store });
-  const sourceFile = path.join(path.dirname(file), 'sample.workflow.js');
-  await writeFile(sourceFile, `import { defineWorkflow, action, terminal } from '@devcodex-labs/flowkit/dsl';
-export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[
-action('work',{name:'Work',action:'inspect',next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});`);
-  const draft = author.start('Inspect the synthetic result', { executionMode: 'standard' });
-  const plan = createWorkflowPlan(draft, { intentRef: { effectiveIntentHash: artifactDigest('fixture intent') },
-    coverage: 'complete', issues: [], unresolved: [], goals: [{id:'inspect'}], constraints: [] }, {
-    entryNodeId:'work', nodes:[{id:'work',kind:'action'},{id:'done',kind:'terminal'}],
-    edges:[{from:'work',to:'done',kind:'control'}], coverage:[{intentId:'inspect',status:'covered',coveredBy:['work']}] });
-  const hostProfile = { id:'fixture-host',digest:artifactDigest('fixture host profile') };
-  const options = { namespace: 'test-project', collectionIds: [collectionId], store,
-    author, authorize: () => authorized,
-    async resolveCompileInput({ inputRef }) {
-      if(inputRef !== 'fixture-input') throw new Error('Unknown input reference');
-      return {plan, options:{file:sourceFile,collectionId,skillId:'workflow',name:'test-workflow',description:'Inspect a fixture',version:'1.0.0',hostProfile,buildId:'fixture-build'}};
+  const bindings = {
+    async resolveAuthoringInput({ inputRef, requestContext: context }) {
+      if(!inputRef.startsWith('fixture-input-')) throw new Error('Unknown input reference');
+      const draftId = inputRef.slice('fixture-input-'.length), draft = await authorHost.readDraft({ draftId }, context);
+      return { draftId, expectedStateVersion: draft.stateVersion, turnId: 'fixture-turn', input: 'Inspect the synthetic result',
+        choices: { executionMode: 'standard' }, target: { name: 'test-workflow' } };
     },
     async runWorkflow({ collectionId, skillId, candidateHash, executionRef }) {
       const snapshot = await stageCollectionForDiscovery(store,collectionId,path.join(path.dirname(file),'installed'));
@@ -45,8 +57,11 @@ action('work',{name:'Work',action:'inspect',next:'done'}),terminal('done',{name:
         skillDirectory:path.join(snapshot.directory,'skills','test-workflow')},
         {hostProfile,authorizeExecution:()=>executionRef === 'fixture-execution',runtime:{isControlSignal,runAction:async()=>{}}});
     },
-    pendingCandidates: new Map(), limits: { pageSize: 1, maxResourceBytes: 1024 } };
-  return { options, close: () => store.close(), revoke: () => { authorized = false; } };
+    limits: { pageSize: 1, maxResourceBytes: 4096 } };
+  const optionsFor = context => ({ ...authorHost.createMcpOptions(context, bindings), store });
+  const options = optionsFor(requestContext);
+  return { options, optionsFor, authorHost, requestContext, calls, controls, approve: (reference, candidateHash) => approved.set(reference, candidateHash),
+    close: async () => { await authorHost.close({ mode: 'cancel' }); store.close(); }, revoke: () => { authorized = false; } };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

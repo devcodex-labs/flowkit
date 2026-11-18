@@ -20,7 +20,7 @@ export function newTurnBudget(policy) {
 }
 
 /** Reserve before actual dispatch, not around a black-box completed turn. Unknown usage stays charged. */
-export function createTurnPorts({ changeTurn, signal, requestContext, execution, track }) {
+export function createTurnPorts({ changeTurn, signal, requestContext, execution, track, beforeDispatch }) {
   function check(turn) {
     signal.throwIfAborted();
     if (Date.now() >= turn.budget.deadlineMs) throw authorError('author-budget', 'Turn deadline exhausted');
@@ -42,8 +42,9 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       turn.budget.reservations[id] = { kind, inputBytes, outputReserved: maximum, status: 'reserved' };
     });
     // Track the real operation promise, even if the caller stops awaiting after logical cancellation.
-    const pending = Promise.resolve().then(() => {
+    const pending = Promise.resolve().then(async () => {
       signal.throwIfAborted();
+      await beforeDispatch(kind);
       return operation(input, { ...supplied, signal, requestContext });
     }).then(async value => {
       if (value instanceof Response) {

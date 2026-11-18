@@ -28,7 +28,9 @@
 
 `@devcodex-labs/flowkit/mcp` 提供 `createFlowkitMcpServer`、`connectFlowkitStdio` 和 `createFlowkitHttpHandler`。Host 为每个连接或请求绑定项目 namespace、可访问集合、同一 Author 服务和批准版本存储。每次工具或资源操作均调用 Host 授权函数。
 
-本地通过 stdio 连接。HTTP handler 由 Host 放进自己的服务，传入逐请求认证函数，返回对应身份的绑定。HTTP 调用之间需要继续审查或发布候选时，Host 持有该身份的 `pendingCandidates` Map，并按作用域分别管理。工具中的 `inputRef` 和 `planRef` 由 Host 解析为获准输入。
+本地通过 stdio 连接。HTTP handler 由 Host 放进自己的服务，传入逐请求认证函数，返回 `authorHost.createMcpOptions(currentRequestContext, bindings)`。同一长期 AuthorHost 使用 namespace 独占的文件数据库保存草稿、回合和批准，不使用连接内候选 Map。每次请求都传当前主体、会话、工作区与授权集合；连接关闭不会关闭共享 AuthorHost。
+
+`flowkit_start_workflow` 接收 `requestId`、明确的 create/update/import 操作和目标引用。`flowkit_prepare_workflow` 的 `inputRef` 由 Host 解析为准确 draftId、turnId、expectedStateVersion、当前输入及实际上下文，再调用同一 `advanceTurn`。查看差异需要 draftId/candidateHash/previousHash；发布还需最新状态版本、publicationId、真实 reviewRef 和用户 approvalRef。批准登记与保存可以在一个事务中完成。取消、对账和关闭由服务所有者使用 SDK；不增加 MCP 工具名。
 
 工具覆盖起草、编译候选、查看差异、批准发布、丢弃候选、集合操作和运行。运行回调使用当前授权以及已批准 Artifact。Resources 使用包含 namespace、集合、Skill 和版本摘要的 URI。正文按需读取并受单次字节预算限制。
 

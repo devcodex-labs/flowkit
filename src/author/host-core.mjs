@@ -19,7 +19,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   if (!session?.intentRuntime?.parse || !session.runtime?.runAgentTask || !session.runtime?.validateResult) {
     throw authorError('author-executor', 'Session requires Intent Runtime, TaskV2 execution and result validation');
   }
-  const graph = options.capabilityGraph && new Proxy(options.capabilityGraph, { get(target, key) {
+  const boundGraph = typeof options.capabilityGraph === 'function' ? await options.capabilityGraph({ requestContext, signal }) : options.capabilityGraph;
+  const graph = boundGraph && new Proxy(boundGraph, { get(target, key) {
     const method = target[key];
     return typeof method === 'function' ? (...args) => ports.read({ graphMethod: String(key), args }, () => method.apply(target, args)) : method;
   } });
@@ -179,7 +180,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
       if (!observation || observation.passed !== true || !observation.subjectId || !observation.executionId ||
         options.authorization.reviewPolicy === 'independent-subject' && (!observation.authorSubjectId || observation.subjectId === observation.authorSubjectId)) {
-        throw authorError('author-review', 'Host review observation is not qualified');
+        throw clarify('Host review observation is not qualified', [question('review-observation',
+          options.authorization.reviewPolicy === 'independent-subject' ? 'Configure an independently authorized reviewer and its actual execution evidence' :
+            'Configure the actual semantic review execution observer', ['configure-host-review', 'cancel'])]);
       }
       ctx.state.reviewReceipt = { observation, candidateHash: ctx.state.candidate.hash };
     }
@@ -202,7 +205,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     async runVerification(name, _label, { state: value }) {
       ports.check();
       return { intentReady: () => value.effectiveIntent.coverage === 'complete' && !value.effectiveIntent.issues.length &&
-          !value.effectiveIntent.unresolved.length && !!draft.choices.executionMode,
+          !value.effectiveIntent.unresolved.length && !!draft.choices.executionMode &&
+          !(draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version),
         planValid: () => !!value.currentPlan, planReady: () => value.currentPlan.status === 'ready-for-dsl',
         resourcesReady: () => value.resourceSnapshot.ready === true, compiled: () => !!value.candidate,
         reviewPassed: () => !!value.reviewReceipt }[name]();

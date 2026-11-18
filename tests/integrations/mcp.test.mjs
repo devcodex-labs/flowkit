@@ -24,9 +24,10 @@ async function directory(t) {
 
 async function assertClient(client, extended = false) {
   const tools = await client.listTools();
+  assert.equal(tools.tools.length, 8);
   assert.ok(tools.tools.some(tool => tool.name === 'flowkit_start_workflow'));
   const result = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
-    collectionId: 'test-collection', goal: 'Create a review workflow'
+    collectionId: 'test-collection', requestId: 'fixture-start', operation: 'create', goal: 'Create a review workflow'
   } });
   assert.equal(result.isError, undefined);
   const draft = JSON.parse(result.content[0].text);
@@ -53,6 +54,7 @@ async function assertClient(client, extended = false) {
     assert.equal(file.verified, true);
     assert.equal(file.text, 'Inspect the terminal.');
   }
+  return draft;
 }
 
 test('real MCP stdio client reaches the same Author and scoped approved Skill resources', async t => {
@@ -63,7 +65,10 @@ test('real MCP stdio client reaches the same Author and scoped approved Skill re
   const client = new Client({ name: 'flowkit-integration', version: '1.0.0' });
   close.push(() => client.close());
   await client.connect(transport);
-  await assertClient(client);
+  const draft = await assertClient(client);
+  const prepared = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } });
+  assert.equal(prepared.isError, undefined, JSON.stringify(prepared));
+  assert.equal(JSON.parse(prepared.content[0].text).status, 'candidate-ready');
 });
 
 test('real HTTP MCP client authenticates each request and verifies negotiated Skill content', async t => {
@@ -86,18 +91,22 @@ test('real HTTP MCP client authenticates each request and verifies negotiated Sk
   const client = new Client({ name: 'flowkit-http-test', version: '1.0.0' });
   close.push(() => client.close());
   await client.connect(transport);
-  await assertClient(client, true);
-  const prepared = await client.callTool({name:'flowkit_prepare_workflow',arguments:{collectionId:'test-collection',inputRef:'fixture-input'}});
+  const draft = await assertClient(client, true);
+  const prepared = await client.callTool({name:'flowkit_prepare_workflow',arguments:{collectionId:'test-collection',inputRef:'fixture-input-' + draft.id}});
   assert.equal(prepared.isError,undefined);
-  const {candidate}=JSON.parse(prepared.content[0].text);
-  const identity={collectionId:'test-collection',candidateHash:candidate.hash,previousHash:null};
+  const ready = JSON.parse(prepared.content[0].text), {candidate} = ready;
+  assert.equal(ready.status, 'candidate-ready');
+  const identity={collectionId:'test-collection',draftId: ready.id,candidateHash:candidate.hash,previousHash:null};
   const review=await client.callTool({name:'flowkit_review_candidate',arguments:identity});
-  assert.equal(JSON.parse(review.content[0].text).files.length,3);
-  const refused=await client.callTool({name:'flowkit_publish_candidate',arguments:{...identity,reviewRef:'fixture-review',approvalRef:'denied'}});
+  const reviewed = JSON.parse(review.content[0].text);
+  assert.equal(reviewed.diff.files.length,3);
+  const publication = { ...identity, expectedStateVersion: ready.stateVersion, publicationId: 'publication', reviewRef: reviewed.receipt.reviewRef };
+  const refused=await client.callTool({name:'flowkit_publish_candidate',arguments:{...publication,approvalRef:'denied'}});
   assert.equal(refused.isError,true);
-  const published=await client.callTool({name:'flowkit_publish_candidate',arguments:{...identity,reviewRef:'fixture-review',approvalRef:'fixture-approved'}});
+  fixture.approve('fixture-approved', candidate.hash);
+  const published=await client.callTool({name:'flowkit_publish_candidate',arguments:{...publication,approvalRef:'fixture-approved'}});
   assert.equal(published.isError,undefined);
-  const executed=await client.callTool({name:'flowkit_run_workflow',arguments:{collectionId:'test-collection',skillId:'workflow',candidateHash:candidate.hash,executionRef:'fixture-execution'}});
+  const executed=await client.callTool({name:'flowkit_run_workflow',arguments:{collectionId:'test-collection',skillId:ready.target.skillId,candidateHash:candidate.hash,executionRef:'fixture-execution'}});
   assert.equal(executed.isError,undefined);
   assert.equal(JSON.parse(executed.content[0].text).terminal,'done');
   const allResources = await client.listResources();
@@ -105,4 +114,56 @@ test('real HTTP MCP client authenticates each request and verifies negotiated Sk
   fixture.revoke();
   const denied = await client.callTool({ name: 'flowkit_collection', arguments: { collectionId: 'test-collection' } });
   assert.equal(denied.isError, true);
+});
+
+test('I3 S26/S27/S46/S68/S87/S108/S109: distinct HTTP subjects use one durable service and never inherit previous request authority', async t => {
+  const { dir, close } = await directory(t); const fixture = await fixtureOptions(path.join(dir, 'subjects.sqlite')); close.push(fixture.close);
+  const handler = createFlowkitHttpHandler(request => {
+    const principalId = request.headers.authorization === 'A' ? 'fixture-user' : 'denied';
+    return fixture.optionsFor({ ...fixture.requestContext, principalId });
+  });
+  const http = createServer(handler); http.listen(0, '127.0.0.1'); await once(http, 'listening');
+  close.push(() => new Promise(resolve => http.close(resolve)));
+  const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`), clients = [];
+  for (const identity of ['A', 'B']) {
+    const client = new Client({ name: identity, version: '1' }); clients.push(client); close.push(() => client.close());
+    await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: identity } } }));
+  }
+  const started = await clients[0].callTool({ name: 'flowkit_start_workflow', arguments: { collectionId: 'test-collection', requestId: 'subject', operation: 'create', goal: 'Inspect' } });
+  const draft = JSON.parse(started.content[0].text);
+  const prepared = await clients[0].callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } });
+  const ready = JSON.parse(prepared.content[0].text); assert.equal(ready.status, 'candidate-ready');
+  assert.equal(ready.baselineEvidence, undefined); assert.equal(ready.authorizedRequest, undefined); assert.equal(ready.publications, undefined);
+  const identity = { collectionId: 'test-collection', draftId: ready.id, candidateHash: ready.candidate.hash, previousHash: null };
+  assert.equal((await clients[1].callTool({ name: 'flowkit_review_candidate', arguments: identity })).isError, true);
+  assert.equal((await clients[0].callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id, requestContext: { principalId: 'forged' } } })).isError, true);
+  await clients[0].close();
+  assert.equal((await fixture.authorHost.readDraft({ draftId: ready.id }, fixture.requestContext)).candidate.hash, ready.candidate.hash);
+  fixture.approve('fixture-approved', ready.candidate.hash); fixture.revoke();
+  await assert.rejects(fixture.authorHost.publish({ ...identity, expectedStateVersion: ready.stateVersion, publicationId: 'revoked',
+    reviewRef: ready.reviewReceipt.reviewRef, approvalRef: 'fixture-approved' }, fixture.requestContext), /denied/);
+  assert.equal(fixture.options.store.readActive('test-collection', ready.target.skillId), null);
+});
+
+test('I3 S106: disconnecting HTTP stops the request waiter while the shared independently executing turn commits', async t => {
+  const { dir, close } = await directory(t); const fixture = await fixtureOptions(path.join(dir, 'disconnect.sqlite')); close.push(fixture.close);
+  let release; fixture.controls.barrier = new Promise(resolve => { release = resolve; });
+  close.push(() => release());
+  const handler = createFlowkitHttpHandler(() => fixture.options);
+  const http = createServer((req, res) => { handler(req, res).catch(() => { if (!res.writableEnded) res.end(); }); });
+  http.listen(0, '127.0.0.1'); await once(http, 'listening'); close.push(() => new Promise(resolve => http.close(resolve)));
+  const client = new Client({ name: 'disconnect', version: '1' }); close.push(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${http.address().port}/mcp`)));
+  const started = await client.callTool({ name: 'flowkit_start_workflow', arguments: { collectionId: 'test-collection', requestId: 'disconnect', operation: 'create', goal: 'Inspect' } });
+  const draft = JSON.parse(started.content[0].text);
+  const waiting = client.callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } }).catch(() => null);
+  for (let attempt = 0; attempt < 100 && !fixture.calls.some(call => call.prepared); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(fixture.calls.some(call => call.prepared)); await client.close(); release(); await waiting;
+  let result;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    result = await fixture.authorHost.readDraft({ draftId: draft.id }, fixture.requestContext);
+    if (result.status === 'candidate-ready') break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
 });

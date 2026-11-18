@@ -10,6 +10,10 @@ import { executeAuthorCore } from './host-core.mjs';
 import { authorError, budgetPolicy, newTurnBudget, positive, createTurnPorts, jsonBytes } from './host-budget.mjs';
 
 const clone = value => structuredClone(value);
+const select = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+const publicationView = (saved, currentActive, stateVersion) => clone({ ...select(saved,
+  ['publicationId', 'namespace', 'storeId', 'draftId', 'collectionId', 'candidateHash', 'previousHash', 'status', 'discovery', 'generation', 'savedAt']),
+  currentActive, isCurrent: currentActive === saved.candidateHash, ...(stateVersion === undefined ? {} : { stateVersion }) });
 const content = draft => ({ intent: draft.intent?.intentRef?.effectiveIntentHash ?? null, choices: draft.choices, target: draft.target,
   coreIdentity: draft.coreIdentity, plan: draft.plan ?? null, resources: draft.resources ?? null, candidateHash: draft.candidate?.hash ?? null });
 const requiredId = (value, label) => {
@@ -42,7 +46,15 @@ export async function createWorkflowAuthorHost(supplied) {
     { namespace: options.namespace });
   const meta = store.authorTransaction(state => state.meta());
   const flights = new Map();
-  function view(draft) { return clone({ ...draft, storeId: meta.store_id, namespace: options.namespace }); }
+  function view(draft) {
+    const result = select(draft, ['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash', 'goal', 'operation',
+      'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt', 'coreIdentity']);
+    if (draft.resources) result.resources = { ...select(draft.resources, ['ready', 'gap', 'options', 'hostProfile', 'safetyPolicies', 'catalogIdentity']),
+      documents: draft.resources.documents?.map(item => item.evidence ?? item) ?? [],
+      professionalSkills: draft.resources.professionalSkills?.map(item => select(item, ['nodeId', 'id', 'version', 'digest', 'approved'])) ?? [] };
+    if (draft.savedReceipt) result.savedReceipt = publicationView(draft.savedReceipt, store.readActive(draft.collectionId, draft.target.skillId)?.hash ?? null);
+    return clone({ ...result, storeId: meta.store_id, namespace: options.namespace });
+  }
   function read(id) {
     if (closed) throw authorError('author-closed', 'Author service is closed');
     const draft = store.authorTransaction(state => state.readDraft(id));
@@ -70,7 +82,9 @@ export async function createWorkflowAuthorHost(supplied) {
     if (!context || context.namespace !== options.namespace || !context.principalId || !context.sessionId ||
       !context.workspaceRef || !Array.isArray(context.collectionIds) || !context.collectionIds.includes(collectionId) ||
       !options.collectionIds.includes(collectionId)) throw authorError('author-unauthorized', 'Current Host request does not authorize this namespace/collection');
-    if (await options.authorization.authorize({ action, collectionId, requestContext: clone(context), signal, ...details }) !== true) {
+    const authorizedDraft = details.draftId ? read(details.draftId) : null;
+    const binding = authorizedDraft ? { ownerScope: authorizedDraft.ownerScope, target: authorizedDraft.target, contentIdentity: receiptBinding(authorizedDraft) } : {};
+    if (await options.authorization.authorize({ ...binding, ...details, action, collectionId, requestContext: clone(context), signal }) !== true) {
       throw authorError('author-unauthorized', 'Host denied the current action');
     }
     signal?.throwIfAborted();
@@ -78,13 +92,14 @@ export async function createWorkflowAuthorHost(supplied) {
   function receiptBinding(draft) {
     return { namespace: options.namespace, storeId: meta.store_id, draftId: draft.id, collectionId: draft.collectionId,
       contentRevision: draft.contentRevision, contentHash: draft.contentHash, candidateHash: draft.candidate?.hash,
-      planHash: hash(draft.plan ?? null), resourceHash: hash(draft.resources ?? null), coreHash: hash(draft.coreIdentity),
+      planHash: hash(draft.plan ?? null), resourceHash: hash(draft.resources ?? null), coreHash: hash(options.coreIdentity),
       hostProfileHash: hash(options.hostProfile),
+      reviewPolicy: options.authorization.reviewPolicy ?? 'separate-pass',
       previousHash: draft.previousHash };
   }
   const host = {
     async start(input, currentRequestContext, signal) {
-      await authorize('start', input.collectionId, currentRequestContext, signal);
+      await authorize('start', input.collectionId, currentRequestContext, signal, { operation: input.operation ?? 'create', targetRef: input.targetRef, target: input.target });
       requiredId(input.requestId, 'requestId');
       let fingerprint = hash({ ...input, currentRequestContext });
       let imported;
@@ -111,11 +126,21 @@ export async function createWorkflowAuthorHost(supplied) {
         const draft = { ...initial, namespace: options.namespace, collectionId: input.collectionId,
           startRequestId: input.requestId, startFingerprint: fingerprint, stateVersion: 1, contentRevision: 1,
           coreIdentity: options.coreIdentity,
+          ownerScope: { principalId: currentRequestContext.principalId, workspaceRef: currentRequestContext.workspaceRef },
           target: { skillId: previous?.manifest.skillId ?? randomUUID(), name: previous?.manifest.name ?? 'workflow',
             description: input.goal, version: '1.0.0', ...input.target, ...importedTarget },
           operation, previousHash: previous?.hash ?? null,
           previousCandidate: previous, activeExecution: null, publications: {} };
-        if (operation === 'update' && (!input.target?.version || input.target.version === previous.manifest.version)) throw authorError('author-target', 'Choose a new unused target version');
+        if (operation === 'update') {
+          if (input.target?.version === previous.manifest.version) throw authorError('author-target', 'Choose a new unused target version');
+          if (!input.target?.version) {
+            draft.target.version = previous.manifest.version; draft.status = 'needs-clarification';
+            const next = previous.manifest.version.replace(/(\d+)$/, number => String(Number(number) + 1));
+            draft.questions.push({ id: 'target-version', question: 'Choose an unused version for this update',
+              options: [{ value: next, label: next, reason: 'A separate version preserves existing approved Runs.' }, { value: 'custom', label: 'Choose another version' }],
+              recommended: next, customAllowed: true });
+          }
+        }
         if (imported) {
           draft.candidate = imported; draft.status = 'needs-review';
           draft.plan = { importedDefinition: imported.manifest.workflowDefinition, importSource: input.importSource };
@@ -130,12 +155,12 @@ export async function createWorkflowAuthorHost(supplied) {
     },
     async readDraft(input, currentRequestContext, signal) {
       const draft = read(input.draftId);
-      await authorize('read', draft.collectionId, currentRequestContext, signal);
+      await authorize('read', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       return view(draft);
     },
     async advanceTurn(input, currentRequestContext, signal) {
       const initial = read(input.draftId);
-      await authorize('advance', initial.collectionId, currentRequestContext, signal);
+      await authorize('advance', initial.collectionId, currentRequestContext, signal, { draftId: initial.id });
       requiredId(input.turnId, 'turnId');
       if ((input.baseline === undefined) !== (input.baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
       if (!['authoring', 'review-only', 'retry'].includes(input.kind ?? 'authoring')) throw new TypeError('Unknown Author turn kind');
@@ -146,7 +171,7 @@ export async function createWorkflowAuthorHost(supplied) {
         safetyPolicies: input.safetyPolicies ?? [] });
       const priorTurn = input.kind === 'retry' ? store.authorTransaction(state => state.readTurn(input.draftId, input.turnId)) : null;
       const fingerprint = hash({ request, choices: input.choices ?? {}, kind: priorTurn?.kind ?? input.kind ?? 'authoring', currentRequestContext,
-        operation: initial.operation, target: initial.target, previousHash: initial.previousHash, hostProfile: options.hostProfile, coreIdentity: options.coreIdentity });
+        operation: initial.operation, target: { ...initial.target, ...input.target }, previousHash: initial.previousHash, hostProfile: options.hostProfile, coreIdentity: options.coreIdentity });
       let turn, replay;
       store.authorTransaction(state => {
         const draft = state.readDraft(input.draftId);
@@ -179,6 +204,11 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         if (typeof input.input !== 'string' || !input.input.trim()) throw new TypeError('Current input is required');
         draft.choices = { ...draft.choices, ...input.choices };
+        if (input.target) {
+          if (input.target.skillId && input.target.skillId !== draft.target.skillId) throw authorError('author-target', 'Target Skill ID is fixed for this draft');
+          draft.target = { ...draft.target, ...input.target };
+          if (draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version) throw authorError('author-target', 'Choose a new unused target version');
+        }
         startAuthorDraft(draft.goal, draft.choices);
         turn = { draftId: draft.id, turnId: input.turnId, kind: input.kind ?? 'authoring', attemptId: randomUUID(), executionToken: randomUUID(),
           priorReview: draft.reviewReceipt ?? null, priorApproval: draft.approvalReceipt ?? null,
@@ -211,13 +241,8 @@ export async function createWorkflowAuthorHost(supplied) {
         flight.settled = true;
         flights.delete(key);
       }
-      const execution = Object.fromEntries(['request', 'tool', 'io'].filter(kind => typeof options.execution?.[kind] === 'function')
-        .map(kind => [kind, async (value, portContext) => {
-          await authorize(`execute-${kind}`, initial.collectionId, currentRequestContext, combined);
-          return options.execution[kind](value, portContext);
-        }]));
       const ports = createTurnPorts({ changeTurn, signal: combined, requestContext: currentRequestContext,
-        execution, track(promise) {
+        execution: options.execution, beforeDispatch: kind => authorize(`execute-${kind}`, initial.collectionId, currentRequestContext, combined, { draftId: initial.id }), track(promise) {
           flight.pending.add(promise);
           promise.then(() => { flight.pending.delete(promise); finishPhysical(); }, () => { flight.pending.delete(promise); finishPhysical(); });
         } });
@@ -225,6 +250,7 @@ export async function createWorkflowAuthorHost(supplied) {
         const result = await executeAuthorCore({ draft: read(input.draftId), turn, options, ports,
           signal: combined, requestContext: currentRequestContext, observeReview: options.authorization.observeReview ?? (() => null) });
         combined.throwIfAborted();
+        await authorize('advance-commit', initial.collectionId, currentRequestContext, combined, { draftId: initial.id });
         const response = mutate(input.draftId, undefined, (draft, state) => {
           const current = state.readTurn(draft.id, turn.turnId);
           if (draft.activeExecution !== turn.executionToken || current.executionToken !== turn.executionToken) throw authorError('author-fenced', 'Late result cannot change current content');
@@ -270,23 +296,29 @@ export async function createWorkflowAuthorHost(supplied) {
           state.writeTurn(current);
         });
         flight.done = true; finishPhysical();
+        await authorize('read', initial.collectionId, currentRequestContext, signal, { draftId: initial.id });
         return view(read(input.draftId));
       } finally { flight.done = true; finishPhysical(); }
     },
     async reviewCandidate(input, currentRequestContext, signal) {
       const draft = read(input.draftId);
-      await authorize('review', draft.collectionId, currentRequestContext, signal);
+      await authorize('review', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       if (!draft.candidate || input.candidateHash !== draft.candidate.hash || input.previousHash !== draft.previousHash) throw authorError('author-conflict', 'Exact candidate and previous identity are required');
-      return { diff: reviewStandardCandidate(draft.candidate, draft.previousCandidate), receipt: clone(draft.reviewReceipt ?? null) };
+      const receipt = clone(draft.reviewReceipt ?? null);
+      if (receipt && Object.entries(receiptBinding(draft)).some(([key, value]) => receipt[key] !== value)) {
+        receipt.qualified = false; receipt.reason = 'Current content/core/Host policy differs; run review-only or rebuild';
+      }
+      return { diff: reviewStandardCandidate(draft.candidate, draft.previousCandidate), receipt };
     },
     async recordApproval(input, currentRequestContext, signal) {
       const draft = read(input.draftId);
-      await authorize('approve', draft.collectionId, currentRequestContext, signal);
+      await authorize('approve', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef });
       if (draft.activeExecution || !draft.reviewReceipt?.qualified || input.candidateHash !== draft.candidate?.hash || input.reviewRef !== draft.reviewReceipt.reviewRef ||
-        input.previousHash !== draft.previousHash) throw authorError('author-approval', 'Approval must bind the qualified exact candidate and previous version');
+        input.previousHash !== draft.previousHash || Object.entries(receiptBinding(draft)).some(([key, value]) => draft.reviewReceipt[key] !== value)) throw authorError('author-approval', 'Approval must bind the qualified exact candidate and previous version');
       const observation = await options.authorization.verifyApproval?.({ ...receiptBinding(draft), reviewRef: input.reviewRef,
         approvalRef: input.approvalRef, requestContext: clone(currentRequestContext), signal });
       if (observation?.approved !== true || !observation.subjectId || !observation.approvalId) throw authorError('author-approval', 'Host did not observe explicit user approval');
+      await authorize('approve', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef });
       return mutate(draft.id, input.expectedStateVersion, current => {
         if (current.contentHash !== draft.contentHash) throw authorError('author-conflict', 'Content changed during approval');
         current.approvalReceipt = { ...receiptBinding(current), reviewRef: input.reviewRef, approvalRef: input.approvalRef, observation };
@@ -294,17 +326,27 @@ export async function createWorkflowAuthorHost(supplied) {
     },
     async publish(input, currentRequestContext, signal) {
       const draft = read(input.draftId);
-      await authorize('publish', draft.collectionId, currentRequestContext, signal);
+      await authorize('publish', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef, publicationId: input.publicationId });
       requiredId(input.publicationId, 'publicationId');
       const fingerprint = hash({ candidateHash: input.candidateHash, previousHash: input.previousHash,
         reviewRef: input.reviewRef, approvalRef: input.approvalRef });
       const replay = draft.publications[input.publicationId];
       if (replay) {
         if (replay.fingerprint !== fingerprint) throw authorError('author-conflict', 'Publication ID has different material');
-        return { ...clone(replay), currentActive: store.readActive(draft.collectionId, draft.target.skillId)?.hash ?? null };
+        return publicationView(replay, store.readActive(draft.collectionId, draft.target.skillId)?.hash ?? null, draft.stateVersion);
       }
+      if (draft.activeExecution || !draft.reviewReceipt?.qualified || input.candidateHash !== draft.candidate?.hash ||
+        input.reviewRef !== draft.reviewReceipt.reviewRef || input.previousHash !== draft.previousHash) {
+        throw authorError('author-approval', 'Current exact review and user approval are required');
+      }
+      const observation = await options.authorization.verifyApproval?.({ ...receiptBinding(draft), reviewRef: input.reviewRef,
+        approvalRef: input.approvalRef, requestContext: clone(currentRequestContext), signal });
+      if (observation?.approved !== true || !observation.subjectId || !observation.approvalId) throw authorError('author-approval', 'Current exact review and user approval are required');
+      await authorize('publish', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef, publicationId: input.publicationId });
       return mutate(draft.id, input.expectedStateVersion, (current, state) => {
         const binding = receiptBinding(current);
+        if (current.contentHash !== draft.contentHash || current.reviewReceipt?.reviewRef !== draft.reviewReceipt.reviewRef) throw authorError('author-conflict', 'Content changed during publication approval verification');
+        current.approvalReceipt = { ...binding, reviewRef: input.reviewRef, approvalRef: input.approvalRef, observation };
         if (current.activeExecution || !current.reviewReceipt?.qualified || !current.approvalReceipt || input.candidateHash !== current.candidate?.hash ||
           input.previousHash !== current.previousHash || input.reviewRef !== current.reviewReceipt.reviewRef ||
           input.approvalRef !== current.approvalReceipt.approvalRef ||
@@ -318,11 +360,11 @@ export async function createWorkflowAuthorHost(supplied) {
           collectionSnapshot: store.readCollection(current.collectionId), savedAt: new Date().toISOString() };
         current.publications[input.publicationId] = saved; current.savedReceipt = saved; current.status = 'saved';
         // write() after this callback commits alongside the formal version and active pointer.
-        return { ...clone(saved), currentActive: input.candidateHash, stateVersion: current.stateVersion + 1 };
+        return publicationView(saved, input.candidateHash, current.stateVersion + 1);
       });
     },
     async cancelTurn(input, currentRequestContext, signal) {
-      const draft = read(input.draftId); await authorize('cancel', draft.collectionId, currentRequestContext, signal);
+      const draft = read(input.draftId); await authorize('cancel', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       const result = mutate(draft.id, input.expectedStateVersion, (current, state) => {
         const turn = state.readTurn(draft.id, input.turnId);
         if (!turn) throw authorError('author-turn-missing', 'Turn is unknown');
@@ -333,7 +375,7 @@ export async function createWorkflowAuthorHost(supplied) {
       return result;
     },
     async settleTurn(input, currentRequestContext, signal) {
-      const draft = read(input.draftId); await authorize('settle', draft.collectionId, currentRequestContext, signal);
+      const draft = read(input.draftId); await authorize('settle', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       const observation = await options.authorization.verifySettlement?.({ ...input, requestContext: clone(currentRequestContext), signal });
       if (observation?.verified !== true) throw authorError('author-settlement', 'Trusted Host settlement evidence is required');
       return mutate(draft.id, input.expectedStateVersion, (current, state) => {
@@ -354,23 +396,25 @@ export async function createWorkflowAuthorHost(supplied) {
       });
     },
     async discard(input, currentRequestContext, signal) {
-      const draft = read(input.draftId); await authorize('discard', draft.collectionId, currentRequestContext, signal);
+      const draft = read(input.draftId); await authorize('discard', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       return mutate(draft.id, input.expectedStateVersion, (current, state) => {
         if (state.turns(current.id).some(turn => turn.physicalOutstanding)) throw authorError('author-busy', 'Cancel and settle outstanding execution first');
         if (input.candidateHash !== (current.candidate?.hash ?? null)) throw authorError('author-conflict', 'Candidate changed');
         current.status = 'discarded'; current.candidate = null; current.reviewReceipt = null; current.approvalReceipt = null;
       });
     },
-    createMcpOptions() {
+    createMcpOptions(currentRequestContext, bindings = {}) {
+      const requestContext = currentRequestContext && authorInput(currentRequestContext, policy.maxBytes);
       return { namespace: options.namespace, collectionIds: [...options.collectionIds], authorHost: publicHost,
-        store, resolveAuthoringInput: options.resolveAuthoringInput,
-        authorize: async (request, context) => {
-          await authorize(request.action, request.collectionId, context, request.signal); return true;
+        requestContext, store, resolveAuthoringInput: bindings.resolveAuthoringInput ?? options.resolveAuthoringInput,
+        resolveCollectionPlan: bindings.resolveCollectionPlan, runWorkflow: bindings.runWorkflow, limits: bindings.limits,
+        authorize: async (request, context = requestContext) => {
+          await authorize(request.action ?? request.operation, request.collectionId, context, request.signal); return true;
         },
         async applyCollectionPlan(plan, approvalRef, context, signal) {
-          await authorize('collection-plan', plan.destination.id, context, signal);
           const { verifiedCollectionPlan } = await import('./collections.mjs');
           const verified = verifiedCollectionPlan(plan);
+          await authorize('collection-plan', plan.destination.id, context ?? requestContext, signal, { plan: verified.plan, planHash: verified.planHash, approvalRef });
           collectionChange = { planHash: verified.planHash, approvalRef };
           try { return store.applyCollectionPlan(plan, approvalRef); } finally { collectionChange = null; }
         } };

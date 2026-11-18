@@ -1,3 +1,4 @@
+import type { AuthorRequestContext, AuthorTurnInput, WorkflowAuthorHost } from './author-host.js';
 /** A Host-owned approved artifact store. */
 interface Store {
   readCollectionMetadata?(collectionId:string,options?:{limit:number}):{collection:{name:string};skills:Array<Omit<Candidate,'files'>>}|null;
@@ -14,21 +15,16 @@ interface Candidate {
 export interface FlowkitMcpOptions {
   namespace: string;
   collectionIds: string[];
-  store: Store;
-  author: {
-    start(goal: string, choices: object): unknown;
-    prepare(plan: unknown, options: unknown): Promise<{ candidate: Candidate | null; diagnostics: unknown[] }>;
-    review(candidate: Candidate, previous: Candidate | null): unknown;
-    publish(candidate: Candidate, receipts: object): Promise<string>;
-  };
-  authorize(scope: { namespace: string; collectionId: string; operation: string; signal?: AbortSignal }): boolean | Promise<boolean>;
-  resolveCompileInput?(scope: { namespace: string; collectionId: string; inputRef: string; signal: AbortSignal }):
-    Promise<{ plan: unknown; options: { collectionId: string; [key: string]: unknown } }>;
-  resolveCollectionPlan?(scope: { namespace: string; collectionId: string; planRef: string; signal: AbortSignal }):
+  store?: Store;
+  authorHost?: WorkflowAuthorHost;
+  requestContext?: AuthorRequestContext;
+  authorize(scope: { namespace: string; collectionId: string; operation: string; signal?: AbortSignal }, context?: AuthorRequestContext): boolean | Promise<boolean>;
+  resolveAuthoringInput?(scope: { namespace: string; collectionId: string; inputRef: string; requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<AuthorTurnInput>;
+  resolveCollectionPlan?(scope: { namespace: string; collectionId: string; planRef: string; requestContext: AuthorRequestContext; signal: AbortSignal }):
     Promise<{ destination: { id: string } }>;
-  runWorkflow?(scope: { namespace: string; collectionId: string; skillId: string; candidateHash: string; executionRef: string; signal: AbortSignal }): Promise<unknown>;
-  pendingCandidates?: Map<string, Candidate>;
-  limits?: { pageSize?: number; maxResourceBytes?: number; maxCandidates?: number;maxMetadataEntries?:number };
+  applyCollectionPlan?(plan: { destination: { id: string } }, approvalRef: string, context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
+  runWorkflow?(scope: { namespace: string; collectionId: string; skillId: string; candidateHash: string; executionRef: string; requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<unknown>;
+  limits?: { pageSize?: number; maxResourceBytes?: number; maxResponseBytes?: number;maxMetadataEntries?:number };
 }
 export interface FlowkitMcpServer {
   connect(transport: object): Promise<void>;
