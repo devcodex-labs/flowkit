@@ -38,8 +38,9 @@ try {
   }
   const members = await files(installed); assert.deepEqual(members.sort(), packed.files.map(file => file.path).sort());
   for (const member of members) assert.deepEqual(await readFile(path.join(installed, member)), await readFile(path.join(root, member)), `Installed bytes differ: ${member}`);
-  for (const name of ['consumer.mjs', 'consumer.cjs', 'consumer.ts', 'consumer-dom.ts', 'consumer-invalid.ts']) await copyFile(path.join(root, 'tests/package', name), path.join(consumer, name));
+  for (const name of ['consumer.mjs', 'author-consumer.mjs', 'consumer.cjs', 'consumer.ts', 'consumer-dom.ts', 'consumer-invalid.ts']) await copyFile(path.join(root, 'tests/package', name), path.join(consumer, name));
   await execute('esm-sdk', ['consumer.mjs'], consumer);
+  await execute('installed-author-core', ['author-consumer.mjs'], consumer);
   await execute('cjs', ['consumer.cjs'], consumer);
   const runtime = path.join(temporary, 'runtime'); await mkdir(runtime);
   const runtimeName = process.platform === 'win32' ? 'node.exe' : 'node';

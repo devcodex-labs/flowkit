@@ -6,6 +6,7 @@ import { gunzipSync } from 'node:zlib';
 import { Parser } from 'tar';
 import { isSemVer } from '../src/compiler/validate.mjs';
 import { packageFiles } from './package-files.mjs';
+import { generatedAuthorFiles, authorCoreFiles } from './author-core.mjs';
 import { validatePackage } from './check-package.mjs';
 import { runProcess } from './validation-process.mjs';
 
@@ -53,7 +54,7 @@ async function outputDirectory(root, create = false) {
 }
 
 const filenameFor = version => `devcodex-labs-flowkit-${version}.tgz`;
-const members = () => ['package.json', 'README.md', 'LICENSE', ...packageFiles.map(([, output]) => output)].sort();
+const members = () => ['package.json', 'README.md', 'LICENSE', ...packageFiles.map(([, output]) => output), ...generatedAuthorFiles].sort();
 async function ready(root, tag) {
   const assessment = await assessRelease(root, tag);
   if (!assessment.ready) throw Object.assign(new Error('Release candidate is not ready'), { assessment });
@@ -104,10 +105,11 @@ export async function verifyRelease(root, tag) {
   if (digest(bytes) !== manifest.sha256) throw new Error('Release tarball digest mismatch');
   if (!Array.isArray(manifest.files) || JSON.stringify(manifest.files.map(file => file.path).sort()) !== JSON.stringify(members())) throw new Error('Release file manifest mismatch');
   const sourceFor = new Map(packageFiles.map(([source, output]) => [output, source]));
+  const generated = await authorCoreFiles(root);
   const expected = new Map();
   for (const item of manifest.files) {
     const source = sourceFor.get(item.path) ?? item.path;
-    const original = await readFile(path.join(root, source));
+    const original = generated.has(item.path) ? Buffer.from(generated.get(item.path)) : await readFile(path.join(root, source));
     if (digest(original) !== item.sha256) throw new Error(`Release source changed: ${source}`);
     expected.set(item.path, { sha256: item.sha256, size: original.length });
   }

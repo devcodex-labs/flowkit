@@ -6,14 +6,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from '../../scripts/build.mjs';
 import { packageFiles } from '../../scripts/package-files.mjs';
+import { generatedAuthorFiles } from '../../scripts/author-core.mjs';
 import { validatePackage } from '../../scripts/check-package.mjs';
 import { runProcess } from '../../scripts/validation-process.mjs';
 const repository = fileURLToPath(new URL('../../', import.meta.url));
-const packed = ['package.json', 'README.md', ...packageFiles.map(([, output]) => output)];
+const packed = ['package.json', 'README.md', ...packageFiles.map(([, output]) => output), ...generatedAuthorFiles];
 async function fixture(t) {
   const base = path.resolve(tmpdir()), directory = await mkdtemp(path.join(base, 'flowkit-package-'));
   t.after(async () => { assert.equal(path.dirname(directory), base); assert.ok(path.basename(directory).startsWith('flowkit-package-')); await rm(directory, { recursive: true, force: true }); });
-  for (const file of ['package.json', 'package-lock.json', 'README.md', ...packageFiles.map(([source]) => source)]) {
+  for (const file of ['package.json', 'package-lock.json', 'README.md', 'src/author/core.workflow.js', ...packageFiles.map(([source]) => source)]) {
     const target = path.join(directory, file); await mkdir(path.dirname(target), { recursive: true }); await copyFile(path.join(repository, file), target);
   }
   await build(directory); return directory;
@@ -27,7 +28,7 @@ test('a clean build removes stale derived files and ships exact source bytes wit
   assert.deepEqual(await readFile(path.join(directory, 'dist/cli.mjs')), source);
   await writeFile(path.join(directory, 'src/internal.d.ts'), 'export interface InternalOnly {}');
   if (process.platform !== 'win32') assert.ok((await stat(path.join(directory, 'dist/cli.mjs'))).mode & 0o111);
-  assert.deepEqual(await validatePackage(directory, packed), { files: packed.length, modules: packageFiles.length, licensePresent: false });
+  assert.deepEqual(await validatePackage(directory, packed), { files: packed.length, modules: packageFiles.length + generatedAuthorFiles.length, licensePresent: false });
 });
 test('build rejects a linked dist without touching the linked target', async t => {
   const directory = await fixture(t), outside = path.join(directory, 'outside'); await mkdir(outside);

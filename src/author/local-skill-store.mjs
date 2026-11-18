@@ -1,4 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
+import { closeSync, openSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { verifiedCollectionPlan } from './collections.mjs';
 import { checkProfessionalSkill } from './professional-skills.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
@@ -9,10 +11,51 @@ function checkPublishedSkill(candidate) {
 }
 
 /** A Host-owned local store. Consumers read a complete version through one database snapshot. */
-export function openLocalSkillStore(file, authorizePublication, authorizeCollectionChange) {
+export function openLocalSkillStore(file, authorizePublication, authorizeCollectionChange, { namespace } = {}) {
   if (typeof authorizePublication !== 'function') throw new TypeError('Host publication verifier is required');
+  // Inspect an existing namespace database read-only, before journal/DDL pragmas can change it.
+  if (namespace !== undefined) {
+    if (typeof namespace !== 'string' || !namespace.trim()) throw new TypeError('A namespace is required');
+    try {
+      if (statSync(file).size) {
+        const probe = new DatabaseSync(file, { readOnly: true });
+        try {
+          const meta = probe.prepare('SELECT namespace, schema_version FROM fk_author_meta WHERE singleton=1').get();
+          if (meta?.namespace !== namespace || meta.schema_version !== 1) throw new Error('Author namespace or schema differs');
+        } finally { probe.close(); }
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      try { closeSync(openSync(file, 'wx')); } catch (claim) { if (claim.code !== 'EEXIST') throw claim; }
+    }
+  }
   const db = new DatabaseSync(file);
   try {
+    if (namespace !== undefined) {
+      db.exec('PRAGMA busy_timeout = 15000; BEGIN IMMEDIATE');
+      try {
+        const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+        if (tables.length && !tables.some(row => row.name === 'fk_author_meta')) throw new Error('Unowned Author database');
+        db.exec(`CREATE TABLE IF NOT EXISTS fk_author_meta (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1), namespace TEXT NOT NULL,
+          schema_version INTEGER NOT NULL, store_id TEXT NOT NULL
+        ) STRICT`);
+        db.prepare('INSERT OR IGNORE INTO fk_author_meta VALUES (1, ?, 1, ?)').run(namespace, randomUUID());
+        const meta = db.prepare('SELECT * FROM fk_author_meta WHERE singleton=1').get();
+        if (meta.namespace !== namespace || meta.schema_version !== 1) throw new Error('Author namespace or schema differs');
+        db.exec(`CREATE TABLE IF NOT EXISTS fk_author_drafts (
+          draft_id TEXT PRIMARY KEY, state_version INTEGER NOT NULL, content_revision INTEGER NOT NULL,
+          status TEXT NOT NULL, payload TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS fk_author_turns (
+          draft_id TEXT NOT NULL, turn_id TEXT NOT NULL, fingerprint TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY(draft_id, turn_id), FOREIGN KEY(draft_id) REFERENCES fk_author_drafts(draft_id)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS fk_author_draft_status ON fk_author_drafts(status);
+        CREATE INDEX IF NOT EXISTS fk_author_turn_status ON fk_author_turns(status);
+        COMMIT`);
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    }
     db.exec(`
       PRAGMA busy_timeout = 15000;
       PRAGMA foreign_keys = ON;
@@ -59,7 +102,9 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
       return candidate;
     }
 
+    let authorTransaction = false;
     function writeTransaction(operation) {
+      if (authorTransaction) return operation();
       db.exec('BEGIN IMMEDIATE');
       try {
         const result = operation();
@@ -72,6 +117,34 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
     }
 
     return Object.freeze({
+      /** Internal Author unit of work. Publication and its durable receipt share this connection. */
+      authorTransaction(operation) {
+        if (namespace === undefined || authorTransaction) throw new Error('A namespace transaction is required');
+        return writeTransaction(() => {
+          authorTransaction = true;
+          try {
+            const state = {
+              meta: () => ({ ...db.prepare('SELECT * FROM fk_author_meta WHERE singleton=1').get() }),
+              readDraft: id => { const row = db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(id); return row ? JSON.parse(row.payload) : null; },
+              drafts: () => db.prepare('SELECT payload FROM fk_author_drafts').all().map(row => JSON.parse(row.payload)),
+              writeDraft(draft, expected) {
+                const payload = JSON.stringify(draft);
+                if (expected === null) db.prepare('INSERT INTO fk_author_drafts VALUES (?, ?, ?, ?, ?)').run(draft.id, draft.stateVersion, draft.contentRevision, draft.status, payload);
+                else if (db.prepare('UPDATE fk_author_drafts SET state_version=?, content_revision=?, status=?, payload=? WHERE draft_id=? AND state_version=?')
+                  .run(draft.stateVersion, draft.contentRevision, draft.status, payload, draft.id, expected).changes !== 1) throw new Error('Author state CAS conflict');
+              },
+              readTurn: (id, turnId) => { const row = db.prepare('SELECT payload FROM fk_author_turns WHERE draft_id=? AND turn_id=?').get(id, turnId); return row ? JSON.parse(row.payload) : null; },
+              turns: id => db.prepare('SELECT payload FROM fk_author_turns WHERE draft_id=?').all(id).map(row => JSON.parse(row.payload)),
+              writeTurn: turn => db.prepare(`INSERT INTO fk_author_turns VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(draft_id, turn_id) DO UPDATE SET fingerprint=excluded.fingerprint,status=excluded.status,payload=excluded.payload`)
+                .run(turn.draftId, turn.turnId, turn.fingerprint, turn.status, JSON.stringify(turn))
+            };
+            const result = operation(state);
+            if (result && typeof result.then === 'function') throw new TypeError('Author transactions must be synchronous');
+            return result;
+          } finally { authorTransaction = false; }
+        });
+      },
       readCollectionMetadata(collectionId,{limit=10001}={}) {
         if(!Number.isSafeInteger(limit)||limit<1)throw new TypeError('Metadata query requires a positive row limit');
         const collection=db.prepare('SELECT payload FROM fk_author_collections WHERE collection_id=?').get(collectionId);

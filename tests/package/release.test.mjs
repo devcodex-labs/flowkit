@@ -9,6 +9,7 @@ import { create as createTar, Header } from 'tar';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { assessRelease, packRelease, verifyRelease } from '../../scripts/release.mjs';
 import { packageFiles } from '../../scripts/package-files.mjs';
+import { generatedAuthorFiles } from '../../scripts/author-core.mjs';
 import { build } from '../../scripts/build.mjs';
 import { validatePackage } from '../../scripts/check-package.mjs';
 import { runProcess } from '../../scripts/validation-process.mjs';
@@ -19,7 +20,7 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'flowkit-release-tests-'));
   t.after(async () => { assert.equal(path.dirname(root), path.resolve(tmpdir())); assert.ok(path.basename(root).startsWith('flowkit-release-tests-')); await rm(root, {recursive:true,force:true}); });
-  for (const file of ['package.json', 'package-lock.json', 'README.md', ...packageFiles.map(([source]) => source)]) {
+  for (const file of ['package.json', 'package-lock.json', 'README.md', 'src/author/core.workflow.js', ...packageFiles.map(([source]) => source)]) {
     await mkdir(path.dirname(path.join(root, file)), {recursive:true}); await copyFile(path.join(repository, file), path.join(root, file));
   }
   const pkg = JSON.parse(await readFile(path.join(root,'package.json')));
@@ -35,7 +36,7 @@ async function syntheticArtifact(root) {
   await build(root);
   const directory=path.join(root,'.tmp/release');await mkdir(directory,{recursive:true});
   const filename=`devcodex-labs-flowkit-${tag.slice(1)}.tgz`;
-  const files=[];for(const member of ['package.json','README.md','LICENSE',...packageFiles.map(([,output])=>output)]){
+  const files=[];for(const member of ['package.json','README.md','LICENSE',...packageFiles.map(([,output])=>output),...generatedAuthorFiles]){
     const source=packageFiles.find(([,output])=>output===member)?.[0]??member;
     files.push({path:member,sha256:digest(await readFile(path.join(root,source)))});
   }
@@ -61,7 +62,7 @@ test('release assessment collects current gaps without writing and accepts adjac
 
 test('stable releases use latest; lock root identities and explicit private booleans stay validated',async t=>{
   const root=await fixture(t);await build(root);
-  const packed=['package.json','README.md','LICENSE',...packageFiles.map(([,output])=>output)];
+  const packed=['package.json','README.md','LICENSE',...packageFiles.map(([,output])=>output),...generatedAuthorFiles];
   assert.equal((await validatePackage(root,packed)).licensePresent,true);
   const filename=path.join(root,'package.json'),pkg=JSON.parse(await readFile(filename));
   for(const value of [null,'false',0]){await writeFile(filename,JSON.stringify({...pkg,private:value}));await assert.rejects(validatePackage(root,packed));}

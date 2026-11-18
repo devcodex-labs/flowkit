@@ -5,6 +5,7 @@ import path from 'node:path';
 import { parse } from 'acorn';
 import ts from 'typescript';
 import { packageFiles } from './package-files.mjs';
+import { generatedAuthorFiles, authorCoreFiles } from './author-core.mjs';
 import { runProcess } from './validation-process.mjs';
 
 async function tree(root, relative, found = [], depth = 0) {
@@ -63,12 +64,15 @@ export async function validatePackage(root, packedPaths) {
   }
   assert.equal(pkg.exports['./package.json'], './package.json');
   assert.deepEqual(pkg.exports['./host'], { types: './dist/host.d.ts', import: './dist/host.mjs', default: './dist/host.mjs' });
-  const expected = packageFiles.map(([, output]) => output).sort();
+  const expected = [...packageFiles.map(([, output]) => output), ...generatedAuthorFiles].sort();
   assert.deepEqual(await tree(root, 'dist'), expected, 'Unexpected or missing build output');
   const sourceFiles = [...(await tree(root, 'src')).filter(file => file.endsWith('.mjs') || file.endsWith('/SKILL.md')),
     ...(await tree(root, 'types')).filter(file => file.endsWith('.d.ts'))].sort();
   assert.deepEqual(sourceFiles, packageFiles.map(([source]) => source).sort(), 'Build manifest does not cover the sources');
   const members = new Set(expected);
+  for (const [output, body] of await authorCoreFiles(root)) {
+    assert.equal(await readFile(path.join(root, output), 'utf8'), body, `Stale generated Author core: ${output}`);
+  }
   for (const [source, output] of packageFiles) {
     const bytes = await readFile(path.join(root, output));
     assert.deepEqual(bytes, await readFile(path.join(root, source)), `Stale output: ${output}`);

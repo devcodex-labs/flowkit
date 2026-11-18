@@ -1,4 +1,8 @@
 import { compile, run, isControlSignal } from '@devcodex-labs/flowkit';
+import { createWorkflowAuthorHost } from '@devcodex-labs/flowkit/host';
+import type { AuthorHostOptions } from '@devcodex-labs/flowkit/host';
+declare const authorOptions: AuthorHostOptions;
+void createWorkflowAuthorHost(authorOptions);
 import type { FlowkitMcpOptions, FlowkitMcpServer } from '@devcodex-labs/flowkit/mcp';
 declare const mcpOptions: FlowkitMcpOptions;
 declare const mcpServer: FlowkitMcpServer;
