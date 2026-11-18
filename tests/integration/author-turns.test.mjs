@@ -237,6 +237,33 @@ test('I2 S13/S71: same document revision with changed bytes between selection an
   assert.equal(f.calls.filter(call => call.prepared?.task.node.id.endsWith('-repair')).length, 0);
 });
 
+test('I5 S141: a no-DSL update binds the old baseline, new explicit constraint and newly required document before review', async t => {
+  const bytes = Buffer.from('Preserve the existing public API.');
+  const pin = { kind: 'document', capabilityId: 'api-policy', documentId: 'guide', revision: '1', contentHash: artifactDigest(bytes), url: 'https://fixture.invalid/api-policy' };
+  const f = await setup(t, { capabilityGraph: {
+    async getCapabilities() { return { meta: { revision: '1', completeness: 'complete' }, items: [{ capability: { id: 'api-policy', documents: [{ id: 'guide', source: { type: 'url', url: pin.url } }] } }] }; },
+    async resolve() { return { meta: { completeness: 'complete' }, unresolved: [], nodes: [{ capability: { id: 'api-policy' }, applicability: { status: 'applicable' } }] }; }
+  }, readDocumentUrl: async () => ({ url: pin.url, bytes }) });
+  await f.register(); const original = await advance(f, await f.start()); await save(f, await approve(f, original));
+  const next = await f.start({ requestId: 'update', operation: 'update', targetRef: { collectionId: 'team', skillId: original.target.skillId,
+    baseArtifactHash: original.candidate.manifest.artifactHash, baseVersion: original.target.version },
+    target: { name: 'inspect', description: 'Preserve API', version: '1.0.1' } });
+  replacePlan(f, plan => ({ ...plan, capabilityRequirements: ['api-policy'], resourceRequirements: [pin],
+    coverage: [...plan.coverage, { intentId: 'keep-api', status: 'covered', coveredBy: ['work'] }] }));
+  const raw = f.options.execution.request;
+  f.options.execution.request = async input => {
+    if (input.stage !== 'intent') return raw(input);
+    f.calls.push(input); const changed = structuredClone(intent);
+    changed.effective.constraints.push({ id: 'keep-api', kind: 'prohibition', text: 'Do not remove the existing API', scope: {} }); return changed;
+  };
+  const ready = await advance(f, next, { input: 'Update inspection and do not remove the existing API' });
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics)); assert.equal(ready.approvalReceipt, null);
+  const review = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').at(-1).prepared.task.input;
+  assert.equal(review.baselineEvidence.workflow.manifest.artifactHash, original.candidate.manifest.artifactHash);
+  assert.equal(review.effectiveIntent.constraints[0].statement, 'Do not remove the existing API');
+  assert.match(review.authorizedRequest.input, /do not remove/); assert.ok(review.resourceSnapshot.documents.length);
+});
+
 test('I2 S15/S16/S83: one Plan repair plus one DSL repair share exactly two dispatches and yield a real compiled candidate', async t => {
   const f = await setup(t); const request = f.options.execution.request;
   f.options.execution.request = async input => {

@@ -70,6 +70,11 @@ export async function createWorkflowAuthorHost(supplied) {
     const result = select(draft, ['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash', 'goal', 'operation',
       'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt', 'coreIdentity',
       'reconciliationRequired', 'pendingTurnIds', 'bodyPurged']);
+    if (result.reviewReceipt && Object.entries(receiptBinding(draft)).some(([key, value]) => result.reviewReceipt[key] !== value)) {
+      result.reviewReceipt = { ...result.reviewReceipt, qualified: false, reason: 'Current content/core/Host policy differs; run review-only or rebuild' };
+      result.approvalReceipt = null;
+      if (['approved', 'candidate-ready'].includes(result.status)) result.status = 'needs-review';
+    }
     if (draft.recoveryRef) result.recoveryRef = draft.recoveryRef;
     const turns = state ? state.turns(draft.id, capacity.maxTurnsPerDraft + 1) :
       store.authorTransaction(state => state.turns(draft.id, capacity.maxTurnsPerDraft + 1));

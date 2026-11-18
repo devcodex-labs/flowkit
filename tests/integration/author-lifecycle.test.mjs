@@ -135,6 +135,22 @@ test('I4 S110/S112: a directory alias reads the same store identity while hard l
   assert.deepEqual(await readFile(f.file), before); await unlink(hard);
 });
 
+test('I5 S115: an actual process kill after the saved transaction and before publish returns recovers the original operation without duplicate writes', async t => {
+  const f = await setup(t); await f.host.close();
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./author-crash-worker.mjs', import.meta.url)), f.file, 'publication'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let exited = false; child.once('exit', () => { exited = true; }); child.stderr.resume();
+  t.after(() => { if (!exited) child.kill('SIGKILL'); });
+  const ready = await new Promise((resolve, reject) => {
+    let output = ''; child.stdout.on('data', chunk => { output += chunk; const line = output.split('\n')[0]; if (line.endsWith('}')) resolve(JSON.parse(line)); }); child.once('error', reject);
+  });
+  assert.equal(ready.pid, child.pid); const exit = once(child, 'exit'); child.kill('SIGKILL'); await exit;
+  const recovered = await fixture(f.file); f.hosts.push(recovered.host);
+  const result = await recovered.host.publish(ready.publication, context);
+  assert.equal(result.status, 'saved'); assert.equal(result.candidateHash, ready.publication.candidateHash); assert.equal(recovered.calls.length, 0);
+  assert.equal(database(f.file, db => db.prepare('SELECT count(*) AS count FROM fk_author_versions').get().count), 1);
+  assert.equal((await recovered.host.readDraft({ draftId: ready.publication.draftId }, context)).savedReceipt.publicationId, ready.publication.publicationId);
+});
+
 test('I4 S49/S125/S126/S127/S129: default discard retains bodies; explicit unreferenced cleanup leaves replay-denying tombstones', async t => {
   const f = await setup(t, { capacity: { maxDrafts: 2, maxPendingCandidates: 1 }, retention: { policyRef: 'owned-retention', idempotencyRetentionMs: 60000 } });
   const first = await f.start(), ready = await advance(f, first);
