@@ -1,5 +1,5 @@
 // Keep references on the reviewed documentation snapshot rather than the moving main branch.
-const documentationCommit = '25b6fd8943114deee86d53f527a9df7441a43ac3';
+const documentationCommit = '580f72d67661d8a273fd90c825edd65476ef102b';
 
 function document(id, page) {
   return {
@@ -16,17 +16,18 @@ function document(id, page) {
  * workflow runtime is created by FlowKit.
  */
 export const flowkitProvider = Object.freeze({
-  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.4',
+  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.5',
   description: 'Compile declarative JavaScript/TypeScript workflows and run them with an explicit host Runtime.',
   capabilities: [
     {
       id: 'define-workflow', name: 'Define workflow',
       description: 'Declare a workflow using the static FlowKit DSL.',
       whenToUse: 'A host needs a statically analyzable workflow definition.',
-      usage: { instructions: 'Use literal JS/TS DSL. Check the eight Standard node kinds or the supported Interactive P0-A subset before choosing a mode.' },
+      usage: { instructions: 'Use literal JS/TS DSL. Author Hosts use /host.createWorkflowAuthorHost with guarded execution, exact review and user approval. Check the eight Standard node kinds or supported Interactive P0-A subset before choosing a mode; Graph only discovers and documents capabilities.' },
       documents: [
         document('flowkit-doc-dsl', 'dsl/index'),
         document('flowkit-doc-authoring', 'guide/workflow-authoring'),
+        document('flowkit-doc-host', 'guide/host-integration'),
         document('flowkit-doc-model', 'guide/workflow-model'),
       ],
     },
