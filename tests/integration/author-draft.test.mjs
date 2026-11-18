@@ -59,6 +59,17 @@ test('incomplete capability discovery stays unresolved', async () => {
   assert.deepEqual(result.unresolved, [{ id: 'flowkit::compiler' }]);
 });
 
+test('complete Graph responses still reject unknown, inapplicable or missing roots and inspect requires dependencies',async()=>{
+  for(const status of ['unknown','partial','inapplicable',undefined]) {
+    const result=await checkPlanCapabilities({async resolve(request){assert.deepEqual(request.relations,['requires']);
+      return {meta:{completeness:'complete'},unresolved:[],nodes:[{capability:{id:'flowkit::compile'},applicability:{status}}]};}},['flowkit::compile'],{});
+    assert.equal(result.supported,false);
+  }
+  const graph=nodes=>({async resolve(){return {meta:{completeness:'complete'},unresolved:[],nodes};}});
+  assert.equal((await checkPlanCapabilities(graph([]),['flowkit::compile'],{})).supported,false);
+  assert.equal((await checkPlanCapabilities(graph([{capability:{id:'flowkit::compile'},applicability:{status:'applicable'}}]),['flowkit::compile'],{})).supported,true);
+});
+
 test('WorkflowPlan blocks unresolved mode and P0-A gaps, and preserves a no-change revision', () => {
   const draft = startAuthorDraft('Prepare and approve a login delivery');
   const intent = { coverage: 'complete', issues: [], unresolved: [], goals: [{ id: 'login' }], constraints: [] };

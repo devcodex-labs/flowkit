@@ -4,7 +4,7 @@ import { prepareImportedStandardSkill, prepareStandardSkill, publishStandardSkil
 import { createWorkflowPlan } from './workflow-plan.mjs';
 
 /** Shared Author operations for a Host Skill or a later MCP adapter. The Host supplies trusted bindings. */
-export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicationHost, readDocumentUrl }) {
+export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicationHost, readDocumentUrl,verifySafetyPolicy }) {
   const readDocuments=new Map();
   const documentKey=({capabilityId,documentId})=>JSON.stringify([capabilityId,documentId]);
   return Object.freeze({
@@ -36,7 +36,7 @@ export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicati
         if(JSON.stringify(current.evidence)!==JSON.stringify(evidence))throw new Error('Document provenance differs from the actual read');
         documents.push(current.evidence);
       }
-      return prepareStandardSkill({ ...options, plan,documents });
+      return prepareStandardSkill({ ...options, plan,documents,verifySafetyPolicy });
     },
     review: reviewStandardCandidate,
     prepareImport(candidate, target) { return prepareImportedStandardSkill(candidate, target, publicationHost); },

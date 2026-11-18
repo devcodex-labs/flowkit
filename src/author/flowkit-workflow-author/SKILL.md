@@ -10,6 +10,7 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
 1. 通过宿主配置的 FlowKit Author 入口调用 Intent Runtime，显式传入当前回合、可用上下文和已绑定的基线。保留尚未生效的变更和未决问题。
 2. 使用授权的 Capability Graph 查询能力及固定版本的官方文档。按实际依赖核对可执行条件。能力依赖由宿主检查，工作流顺序由 FlowKit DSL 表达。
 3. 梳理节点、分支、审批、有限重试、失败和终态。只在当前集合内查找确需复用的 Professional Skill。为每个强制依赖固定身份、版本和内容摘要。
+   Capability及requires依赖必须全部applicable；unknown/partial不进入可执行声明。Human自动修订必须设置有限maxRevisions。parallel.any存在写入或未知Agent副作用时，先取得Host对精确Artifact的安全策略认可；未认可则阻断，不改变引擎的迟到执行语义。
 4. 用已确认的计划生成 DSL 候选，通过 FlowKit Compiler 生成 `workflow.js` 和 `workflow.mmd`。候选还应包含 `SKILL.md`。按用户要求选择是否保留 `source/workflow.dsl.js`。
 5. 核对目标覆盖和控制流，向用户展示计划与产物差异。正式交付需绑定精确候选和预期旧版本的审查、用户批准与宿主授权。待确认的候选留在草稿区域。
 

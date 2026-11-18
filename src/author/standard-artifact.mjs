@@ -47,8 +47,10 @@ function resolveSkillPins(definition, pins) {
 /** Produce a candidate only. The Host owns review, approval, discovery and execution. */
 export async function prepareStandardSkill({ file, collectionId, skillId, name, description, version,
   hostProfile, buildId, includeSource = false, professionalSkills = [], compilerOptions, plan: suppliedPlan,
-  executionMode = suppliedPlan?.target.executionMode ?? 'standard',references={},documents=[] }) {
+  executionMode = suppliedPlan?.target.executionMode ?? 'standard',references={},documents=[],
+  safetyPolicies=[],verifySafetyPolicy }) {
   references=structuredClone(references);professionalSkills=structuredClone(professionalSkills);
+  safetyPolicies=structuredClone(safetyPolicies);
   if (!['standard','interactive-p0-a'].includes(executionMode)) throw new TypeError('Unsupported Workflow Skill mode');
   if(!references || Object.entries(references).some(([name,body])=>!workflowReference(name)||typeof body!=='string') ||
     Object.keys(references).length!==new Set(Object.keys(references).map(name=>name.toLowerCase())).size) {
@@ -82,6 +84,23 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   const {snapshot,definition,graph} = compiled;
   const artifact = executionMode === 'standard' ? compiled.artifact : {...compiled,artifactHash:compiled.programIdentity?.artifactHash};
   if (!artifact.artifactHash) return { candidate: null, diagnostics: artifact.diagnostics };
+  const approvedSafety=[];
+  if(!Array.isArray(safetyPolicies))throw new TypeError('Host safety policies must be an array');
+  for(const node of definition.nodes) {
+    if(node.type==='human' && !Number.isSafeInteger(node.maxRevisions)) {
+      throw new Error('Author requires a finite maxRevisions for automated Human revision');
+    }
+    if(node.type==='parallel' && node.join.strategy==='any' && node.branches.some(id=>
+      ['agent','action'].includes(graph.byId.get(id)?.type))) {
+      const binding=safetyPolicies.find(item=>item?.nodeId===node.id);
+      if(!identifier(binding?.policyRef)||typeof verifySafetyPolicy!=='function'||await verifySafetyPolicy({
+        node:structuredClone(node),branches:node.branches.map(id=>structuredClone(graph.byId.get(id))),
+        artifactHash:artifact.artifactHash,hostProfile:profile,policyRef:binding.policyRef})!==true) {
+        throw new Error('parallel.any with possible writes requires a Host-approved policy for the exact artifact');
+      }
+      approvedSafety.push({nodeId:node.id,policyRef:binding.policyRef});
+    }
+  }
   if (plan && (definition.nodes[0].id !== plan.entryNodeId || definition.nodes.length !== plan.nodes.length ||
     plan.nodes.some(node => graph.byId.get(node.id)?.type !== node.kind))) {
     throw new Error('Compiled entry or node identities differ from the WorkflowPlan. Review the changes before building a candidate.');
@@ -89,7 +108,8 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   if (plan) {
     const controlKey = ({ from, to }) => JSON.stringify([from, to]);
     const compiledEdges = new Set([...graph.referenceEdges, ...graph.executionEdges].map(controlKey));
-    if (plan.edges.some(edge => edge.kind === 'control' && !compiledEdges.has(controlKey(edge)))) {
+    const plannedEdges=new Set(plan.edges.filter(edge=>edge.kind==='control').map(controlKey));
+    if (plannedEdges.size!==compiledEdges.size || [...plannedEdges].some(edge=>!compiledEdges.has(edge))) {
       throw new Error('Compiled control flow differs from the WorkflowPlan. Review the changes before building a candidate.');
     }
   }
@@ -101,6 +121,7 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     sourceHash: `sha256:${snapshot.sourceHash}`, ...(executionMode === 'standard' ? standardIdentity(artifact.code) : artifact.programIdentity), hostProfile: profile,
     professionalSkills: resolveSkillPins(definition, professionalSkills), buildId, builtAt: new Date().toISOString(),
     ...(documentEvidence.length?{documents:documentEvidence}:{}),
+    ...(approvedSafety.length?{safetyPolicies:approvedSafety}:{}),
     ...(plan ? { planRef: Object.freeze({ planId: plan.planId, revision: plan.revision, planHash: plan.planHash,
       effectiveIntentHash: plan.intentRef.effectiveIntentHash }) } : {}),
     files: Object.freeze(Object.fromEntries(Object.entries(files).map(([filename, body]) => [filename, artifactDigest(body)]))) });

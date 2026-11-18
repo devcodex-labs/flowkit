@@ -68,7 +68,8 @@ export async function analyzeAuthorDraft(draft, intentRuntime, { input = draft.g
 /** Read-only dependency resolution. Graph relations stay capability information. */
 export async function checkPlanCapabilities(graph, ids, context) {
   if (ids.length === 0) return { supported: true, unresolved: [], nodes: [] };
-  const { meta, unresolved, nodes } = await graph.resolve({ ids: [...ids], context });
-  return { supported: meta.completeness === 'complete' && unresolved.length === 0,
+  const { meta, unresolved, nodes } = await graph.resolve({ ids: [...ids], context,relations:['requires'] });
+  return { supported: meta.completeness === 'complete' && unresolved.length === 0 && Array.isArray(nodes) &&
+      ids.every(id=>nodes.some(item=>item.capability?.id===id)) && nodes.every(item=>item.applicability?.status==='applicable'),
     unresolved, nodes };
 }

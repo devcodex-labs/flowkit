@@ -127,6 +127,33 @@ test('generation uninstall removes only an unchanged approved adapter scope and 
   assert.equal(store.readVersion(options.collectionId,options.skillId,candidate.hash).hash,candidate.hash);
 });
 
+test('Author rejects uncontrolled any writes, unlimited Human revisions and an omitted planned control edge',async t=>{
+  const any=`import {defineWorkflow,parallel,action,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'any-writes',name:'Any',version:'1.0.0',nodes:[
+parallel('race',{name:'Race',branches:['one','two'],join:{strategy:'any',next:'done'}}),
+action('one',{name:'One',action:'write-one'}),action('two',{name:'Two',action:'write-two'}),
+terminal('done',{name:'Done',status:'succeeded'})]});`;
+  const {options}=await fixture(t,any);
+  await assert.rejects(prepareStandardSkill(options),/Host-approved policy/);
+  await assert.rejects(prepareStandardSkill({...options,safetyPolicies:[{nodeId:'race',policyRef:'claimed'}],verifySafetyPolicy:()=>false}),/Host-approved/);
+  const allowed=await prepareStandardSkill({...options,safetyPolicies:[{nodeId:'race',policyRef:'checked'}],verifySafetyPolicy:request=>{
+    assert.ok(request.artifactHash.startsWith('sha256:'));assert.equal(request.branches.length,2);return true;}});
+  assert.deepEqual(allowed.candidate.manifest.safetyPolicies,[{nodeId:'race',policyRef:'checked'}]);
+  const human=`import {defineWorkflow,human,action,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'review',name:'Review',version:'1.0.0',nodes:[
+human('review',{name:'Review',onApprove:'done',onReject:'revise'}),
+action('revise',{name:'Revise',action:'revise',next:'review'}),terminal('done',{name:'Done',status:'succeeded'})]});`;
+  await writeFile(options.file,human);await assert.rejects(prepareStandardSkill(options),/finite maxRevisions/);
+  await writeFile(options.file,human.replace("name:'Review',onApprove","name:'Review',maxRevisions:2,onApprove"));
+  assert.ok((await prepareStandardSkill(options)).candidate);
+  await writeFile(options.file,source);
+  const author=createWorkflowAuthor({});const draft=author.start('Inspect',{executionMode:'standard'});
+  const plan=await author.plan(draft,{intentRef:{effectiveIntentHash:artifactDigest('intent')},coverage:'complete',issues:[],unresolved:[],
+    goals:[{id:'inspect'}],constraints:[]},{entryNodeId:'work',nodes:[{id:'work',kind:'action'},{id:'done',kind:'terminal'}],
+    edges:[],coverage:[{intentId:'inspect',status:'covered',coveredBy:['work']}]});
+  await assert.rejects(author.prepare(plan,options),/control flow differs/);
+});
+
 test('required Professional Skills must bind exact choices from the compiled definition', async t => {
   const { options } = await fixture(t, source.replace('defineWorkflow, action, terminal', 'defineWorkflow, node, terminal')
     .replace("action('work', { name: 'Work', action: 'inspect', next: 'done' })",
