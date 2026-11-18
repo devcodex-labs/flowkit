@@ -26,6 +26,15 @@ const requiredId = (value, label) => {
 // Multiple connections in this process share observed physical ownership, never a TTL takeover.
 const physicalExecutions = new Map();
 const NO_CHANGE = Symbol('no-change');
+const isTerminalDraft = draft => ['discarded', 'abandoned', 'saved', 'expired'].includes(draft.status);
+
+function assertUncommittedTurn(draft, turn, decision) {
+  // An abandoned attempt may still need to release an external hold after trusted reconciliation.
+  const reconcilingAbandonment = decision === 'confirm-no-effect' && draft.status === 'abandoned' && turn.status === 'abandoned';
+  if (turn.result || (isTerminalDraft(draft) && !reconcilingAbandonment)) {
+    throw authorError('author-settlement', 'Committed turns and terminal drafts cannot be settled or retried');
+  }
+}
 
 /** Create one namespace-owned Author service. Host clients, credentials and permissions stay Host-owned. */
 export async function createWorkflowAuthorHost(supplied) {
@@ -66,6 +75,10 @@ export async function createWorkflowAuthorHost(supplied) {
   const ownerId = randomUUID();
   const flights = new Map();
   const publications = new Map();
+  function physicalSlotUnavailable(state, draft, activeDrafts = state.activeDrafts(capacity.maxDrafts + 1)) {
+    const physical = activeDrafts.flatMap(item => state.turns(item.id)).filter(turn => turn.physicalOutstanding);
+    return Boolean(draft.activeExecution || physical.some(turn => turn.draftId === draft.id) || physical.length >= capacity.maxPhysicalExecutions);
+  }
   function view(draft, state) {
     const result = select(draft, ['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash', 'goal', 'operation',
       'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt', 'coreIdentity',
@@ -263,9 +276,12 @@ export async function createWorkflowAuthorHost(supplied) {
           if (turn.status === 'expired') throw authorError('author-expired', 'Turn ID is expired and cannot be replayed as a new execution');
           if (turn.fingerprint !== fingerprint) throw authorError('author-conflict', 'Turn ID has different bound material');
           if (input.kind !== 'retry' || turn.consumedRetryRefs && Object.hasOwn(turn.consumedRetryRefs, input.retryRef)) { replay = turn.result ?? view(draft, state); return; }
+          assertUncommittedTurn(draft, turn);
           if (!input.retryRef || turn.retryRef !== input.retryRef || turn.retryStateVersion !== draft.stateVersion ||
             input.expectedStateVersion !== draft.stateVersion || turn.physicalOutstanding || turn.status === 'running' ||
             Date.now() >= turn.budget.deadlineMs) throw authorError('author-settlement', 'Retry requires its unconsumed, current no-effect settlement and remaining budget');
+          // Check before consuming the reference, in the same SQLite transaction that starts the attempt.
+          if (physicalSlotUnavailable(state, draft)) throw authorError('author-busy', 'No physical Author execution slot is available');
           const attemptId = randomUUID();
           turn.attemptHistory ??= []; turn.attemptHistory.push({ attemptId: turn.attemptId, status: turn.status, failure: turn.failure ?? null });
           turn.consumedRetryRefs ??= {}; turn.consumedRetryRefs[input.retryRef] = attemptId;
@@ -278,12 +294,11 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         if (input.kind === 'retry') throw authorError('author-settlement', 'Unknown original turn cannot be retried');
         if (draft.stateVersion !== input.expectedStateVersion) throw authorError('author-conflict', 'Draft stateVersion changed');
-        if (['discarded', 'abandoned', 'saved', 'expired'].includes(draft.status)) throw authorError('author-terminal', 'Draft is terminal; start an explicit update draft for a saved version');
+        if (isTerminalDraft(draft)) throw authorError('author-terminal', 'Draft is terminal; start an explicit update draft for a saved version');
         const ownTurns = state.turns(draft.id, capacity.maxTurnsPerDraft + 1);
         if (ownTurns.length >= capacity.maxTurnsPerDraft) throw authorError('author-capacity', 'Retained turn receipt capacity reached');
         const all = state.activeDrafts(capacity.maxDrafts + 1);
-        const physical = all.flatMap(item => state.turns(item.id)).filter(item => item.physicalOutstanding);
-        if (draft.activeExecution || physical.some(item => item.draftId === draft.id) || physical.length >= capacity.maxPhysicalExecutions ||
+        if (physicalSlotUnavailable(state, draft, all) ||
           ownTurns.some(item => item.reconciliationRequired && !item.settlement)) {
           draft.pendingInputs ??= {};
           if (Object.keys(draft.pendingInputs).length >= 4 && !Object.hasOwn(draft.pendingInputs, input.turnId)) throw authorError('author-capacity', 'Pending input capacity reached');
@@ -509,6 +524,7 @@ export async function createWorkflowAuthorHost(supplied) {
       const draft = read(input.draftId); await authorize('settle', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       const observedTurn = store.authorTransaction(state => state.readTurn(draft.id, input.turnId));
       if (!observedTurn) throw authorError('author-turn-missing', 'Turn is unknown');
+      assertUncommittedTurn(draft, observedTurn, input.decision);
       requiredId(input.evidenceRef, 'Trusted settlement evidenceRef');
       const observation = await options.authorization.verifySettlement?.({ ...input, namespace: options.namespace, storeId: meta.store_id,
         attemptId: observedTurn.attemptId, resultHash: observedTurn.preparedResultHash ?? null,
@@ -519,6 +535,8 @@ export async function createWorkflowAuthorHost(supplied) {
       return mutate(draft.id, input.expectedStateVersion, (current, state) => {
         const turn = state.readTurn(draft.id, input.turnId);
         if (!turn || turn.attemptId !== observedTurn.attemptId) throw authorError('author-conflict', 'Settlement attempt changed');
+        assertUncommittedTurn(current, turn, input.decision);
+        if (current.activeExecution && current.activeExecution !== turn.executionToken) throw authorError('author-conflict', 'Another turn owns the draft execution');
         const physical = physicalExecutions.get(JSON.stringify([meta.store_id, draft.id, input.turnId]));
         if (input.decision !== 'abandon' && (physical?.pending.size || observation.physicalDone !== true)) throw authorError('author-busy', 'Actual execution is still outstanding or physical proof is missing');
         if (current.activeExecution === turn.executionToken) current.activeExecution = null;
@@ -532,10 +550,11 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         else if (input.decision === 'confirm-no-effect' && observation.noEffect === true) {
           const budget = turn.budget;
+          const abandoned = current.status === 'abandoned';
           const remaining = Date.now() < budget.deadlineMs && budget.used.requests < budget.limits.maxRequests &&
             budget.used.toolCalls < budget.limits.maxToolCalls && budget.used.ioCalls < budget.limits.maxIoCalls && budget.used.bytes < budget.limits.maxBytes;
-          turn.retryRef = remaining ? turn.retryRef ?? randomUUID() : null; turn.retryStateVersion = current.stateVersion + 1;
-          turn.status = 'failed'; turn.reconciliationRequired = false; current.reconciliationRequired = false;
+          turn.retryRef = remaining && !abandoned ? turn.retryRef ?? randomUUID() : null; turn.retryStateVersion = current.stateVersion + 1;
+          turn.status = abandoned ? 'abandoned' : 'failed'; turn.reconciliationRequired = false; current.reconciliationRequired = false;
           for (const receipt of Object.values(budget.reservations)) if (receipt.sideEffectStatus === 'unknown') { receipt.sideEffectStatus = 'none'; receipt.settlementRef = input.evidenceRef; }
           for (const operation of Object.values(budget.toolOperations ?? {})) if (operation.status === 'unknown' || operation.status === 'running') operation.status = 'no-effect';
         } else if (input.decision === 'confirm-result') {

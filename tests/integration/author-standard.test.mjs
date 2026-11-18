@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { compileArtifact, evalWhen, isControlSignal, runArtifact } from '../../src/index.mjs';
+import { compileArtifact, compileSource, evalWhen, isControlSignal, runArtifact } from '../../src/index.mjs';
 import { createWorkflowAuthor } from '../../src/author/author.mjs';
 import { runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs';
 import { createOpenAINativeSkillPort } from '../../src/author/openai-native-skills.mjs';
@@ -507,6 +507,20 @@ test('candidate retains the effective intent and Plan identity and rejects a cha
   await assert.rejects(prepareStandardSkill({ ...options, plan: differentEntry }), /entry or node identities differ/);
   const differentEdge = createWorkflowPlan(draft, intent, { ...proposal, edges: [{ from: 'done', to: 'work', kind: 'control' }] }, plan);
   await assert.rejects(author.prepare(differentEdge, options), /control flow differs/);
+});
+
+test('R-04: the actual Author Skill parallel example compiles with its documented join strategies', async () => {
+  const guide = await readFile(new URL('../../src/author/flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8');
+  assert.match(guide, /join: \{strategy: 'all_succeeded' 或 'any', next\}/);
+  const example = /<!-- standard-parallel-example -->\r?\n```js\r?\n([\s\S]+?)\r?\n```/.exec(guide);
+  assert.ok(example, 'Expected a compilable example from the shipped guide');
+  const options = { filename: 'author-guide.workflow.js', skillCheck: false };
+  const compiled = await compileSource(example[1], options);
+  assert.ok(compiled.code);
+  assert.deepEqual(compiled.diagnostics, []);
+  const rejected = await compileSource(example[1].replace("strategy: 'all_succeeded'", "strategy: 'all'"), options);
+  assert.equal(rejected.code, '');
+  assert.deepEqual(rejected.diagnostics.map(({ code }) => code), ['FK_C023']);
 });
 
 test('diagram control branches, joins, and bounded repair match executable Standard candidates', async t => {

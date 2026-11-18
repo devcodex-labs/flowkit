@@ -71,7 +71,7 @@ test('real MCP stdio client reaches the same Author and scoped approved Skill re
   assert.equal(JSON.parse(prepared.content[0].text).status, 'candidate-ready');
 });
 
-test('real HTTP MCP client authenticates each request and verifies negotiated Skill content', async t => {
+test('real HTTP MCP authenticates requests and returns R-03 S03 clarification before preparing or publishing', async t => {
   const { dir, close } = await directory(t);
   const fixture = await fixtureOptions(path.join(dir, 'http.sqlite'));
   close.push(fixture.close);
@@ -91,6 +91,23 @@ test('real HTTP MCP client authenticates each request and verifies negotiated Sk
   const client = new Client({ name: 'flowkit-http-test', version: '1.0.0' });
   close.push(() => client.close());
   await client.connect(transport);
+  const unclear = JSON.parse((await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+    collectionId: 'test-collection', requestId: 'unclear-delivery', operation: 'create', goal: 'Create a delivery workflow', executionMode: 'standard'
+  } })).content[0].text);
+  fixture.controls.intentGap = 'publication-destination';
+  const response = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: {
+    collectionId: 'test-collection', inputRef: 'fixture-input-' + unclear.id
+  } });
+  fixture.controls.intentGap = null;
+  assert.equal(response.isError, undefined);
+  const pending = JSON.parse(response.content[0].text);
+  assert.equal(pending.status, 'needs-clarification');
+  assert.equal(pending.candidate, null);
+  assert.equal(pending.choices.executionMode, 'standard');
+  assert.deepEqual(pending.questions.map(({ id }) => id), ['intent:publication-destination']);
+  assert.equal(pending.questions[0].recommended, 'keep-draft');
+  assert.equal(pending.questions[0].customAllowed, true);
+  assert.deepEqual(fixture.calls.map(call => Boolean(call.intent)), [true]);
   const draft = await assertClient(client, true);
   const prepared = await client.callTool({name:'flowkit_prepare_workflow',arguments:{collectionId:'test-collection',inputRef:'fixture-input-' + draft.id}});
   assert.equal(prepared.isError,undefined);

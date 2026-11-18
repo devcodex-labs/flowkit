@@ -9,7 +9,7 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
 
 1. 使用 Host 装配的 `/host.createWorkflowAuthorHost`。Host 必须提供可独立响应的执行器及实际受预算约束的模型、工具和 I/O 端口；不能让 MCP 等待正在等待工具返回的同一调用者 Agent 来执行核心。
 2. `start` 接受一句目标和 Host 已知的选择，持久化草稿，不调用模型或发布。已有版本须选准确 TargetRef，不能按相似名称覆盖。只解释时读取 `readDraft`，由 Host 有界解释；不重新生成、不使原批准失效。
-3. 用户补充关键选择后，由 Host 以当前认证身份、turnId、expectedStateVersion、实际上下文和基线调用 `advanceTurn`。共享固定 Standard DSL 核心实际调用 Intent Runtime、初始目录/文档、Plan、最终依赖、DSL 生成、真实编译及语义复审；不要在 Skill 或 MCP 中另写这套流程。保留未生效变更、原始要求及未决问题。
+3. Host 以当前认证身份、turnId、expectedStateVersion、实际上下文和基线调用 `advanceTurn`。收到 `needs-clarification` 时，展示 `questions` 给出的选项、推荐和自定义入口，沿用已知选择。例如交付或发布目标不明确时，可保留草稿，或请用户明确目标后再推进。共享固定 Standard DSL 核心实际调用 Intent Runtime、初始目录/文档、Plan、最终依赖、DSL 生成、真实编译及语义复审；不要在 Skill 或 MCP 中另写这套流程。保留未生效变更、原始要求及未决问题。
    只在当前集合内查找确需复用的 Professional Skill。为每个强制依赖固定身份、版本和内容摘要。
    Capability及requires依赖必须全部applicable；unknown/partial不进入可执行声明。Human自动修订必须设置有限maxRevisions。parallel.any存在写入或未知Agent副作用时，先取得Host对精确Artifact的安全策略认可；未认可则阻断，不改变引擎的迟到执行语义。
 4. 内核仅在冻结语义内共享最多两次 Plan/DSL 技术修复。业务歧义、能力缺失、安全政策或语义复审阻断返回明确问题与选项，不通过删除约束来编译。引擎 succeeded 不等于 candidate-ready。同 Plan/资源/候选复用原字节与 builtAt；`advanceTurn(kind=review-only)` 只重新复审既有候选。
@@ -23,7 +23,7 @@ Host 必须显式配置有限的 `capacity`：`maxPhysicalExecutions`、`maxDraf
 
 每次传入的 RequestContext 包含 `namespace`、`principalId`、`sessionId`、`workspaceId`、`authorizedCollections`、`authorizationSnapshotRef`。它由 Host 认证生成，不能来自模型伪造参数。模型、工具及资源的所有实际请求都经过本回合 guarded ports；局部 adapter 重试也要计入持久总预算。可观察 usage 记录为观测值，其余保留 unknown，不报告精确费用。
 
-取消先撤销旧执行的写回权。实际请求未结束仍占槽位，新输入可保留但不自动并发接管。`settleTurn` 只接受 Host 对准确 attempt 的证据；`confirm-result` 只提交已持久完成结果，`confirm-no-effect` 才可能发一次 retryRef，`abandon` 仍保留未知写的去重记录。`close` 未关闭时须处理其 outstanding 报告，不关闭 Host 外部客户端。
+取消先撤销旧执行的写回权。实际请求未结束仍占槽位，新输入可保留但不自动并发接管。已提交的回合直接读回原结果。`settleTurn` 只处理未提交的回合，且需要 Host 对准确 attempt 的证据。`confirm-result` 只提交已持久完成结果，`confirm-no-effect` 才可能发一次 retryRef，`abandon` 保留未知写的去重记录。重试与新回合共用物理槽位。遇到 `FKA_INFLIGHT` 时，等实际执行结束后使用原重试凭据。`close` 未关闭时须处理其 outstanding 报告，不关闭 Host 外部客户端。
 
 启用发现需 Host 提供自有 root、`readMapping` 和 `compareAndSetMapping`；只有实际 CAS/读回匹配才显示 active。先保存全集合快照与固定 generation 路径，重试旧发布不反激活旧版。集合重命名须绑定当前全部批准 Skill 的 `expectedSnapshotHash`。清理 generation 还须 Host 提供 `readReferences`，确认撤映射、无 Run 引用且新 Run 接入已关闭；用户改动、未知目录和正式历史版本保留。跨集合迁移按回执对账，不宣称跨库原子，也不自动删除源。
 
@@ -39,11 +39,25 @@ Host 必须显式配置有限的 `capacity`：`maxPhysicalExecutions`、`maxDraf
 | node | Agent：name、description、inputs、output JSON Schema、retries、next；requiredSkills 需准确版本 pin |
 | action | name、action、writes、next；实际操作由 Host 执行 |
 | condition | name、branches: [{when, next}]；兜底使用 when: 'true' |
-| parallel | name、branches: [节点 ID]、join: {strategy: 'all' 或 'any', next} |
+| parallel | name、branches: [节点 ID]、join: {strategy: 'all_succeeded' 或 'any', next} |
 | loop | name、maxIterations、body、onSuccess、onMaxExceeded；修复区域遵循实际编译器检查 |
 | verification | name、verifier、onSuccess、onFailure；返回布尔 |
 | human | name、onApprove、onReject、有限 maxRevisions；拒绝路径必须合法 |
 | terminal | name、status: 'succeeded' 或 'failed' |
+
+并行示例使用 `all_succeeded` 等待两个分支均正常完成，再进入 `done`。验证分支返回 `false` 仍属于正常完成。
+
+<!-- standard-parallel-example -->
+```js
+import { defineWorkflow, parallel, action, terminal } from '@devcodex-labs/flowkit/dsl';
+
+export default defineWorkflow({ id: 'parallel-inspection', name: 'Parallel inspection', version: '1.0.0', nodes: [
+  parallel('inspect', { name: 'Inspect both inputs', branches: ['left', 'right'], join: { strategy: 'all_succeeded', next: 'done' } }),
+  action('left', { name: 'Inspect left', action: 'inspect-left' }),
+  action('right', { name: 'Inspect right', action: 'inspect-right' }),
+  terminal('done', { name: 'Done', status: 'succeeded' })
+] });
+```
 
 目标 Workflow 默认交付 `SKILL.md`、`workflow.js`、`workflow.mmd`，DSL 默认不分发；仅按显式选择保留 `source/workflow.dsl.js`。导入复用 Host 已批准源和既有集合规则；无 DSL 更新读取已验证 manifest.workflowDefinition、文件及依赖，不宣称反编译。Workflow Skill 与 Professional Skill 在集合的第二层平级，不加第三层。
 

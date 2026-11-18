@@ -55,6 +55,83 @@ test('I4 S31/S67/S111: two SQLite connections admit one execution and same-turn 
   const replay = await second.host.advanceTurn(input, context); assert.deepEqual(replay, ready); assert.equal(second.calls.length, 0);
 });
 
+test('R-01 S28/S33/S104: committed turns stay immutable through review, approval and publication', async t => {
+  const f = await setup(t);
+  await f.register();
+  const draft = await f.start();
+  const input = { draftId: draft.id, expectedStateVersion: draft.stateVersion, turnId: 'turn', input: 'Inspect' };
+  const ready = await f.host.advanceTurn(input, context);
+  assert.equal(ready.status, 'candidate-ready');
+  const stored = turnRecord(f.file);
+  const assertCommitted = async status => {
+    const before = await latest(f, draft);
+    assert.equal(before.status, status);
+    for (const decision of ['confirm-no-effect', 'confirm-result', 'abandon']) {
+      await assert.rejects(f.host.settleTurn({ draftId: draft.id, expectedStateVersion: before.stateVersion,
+        turnId: input.turnId, decision, evidenceRef: 'controlled-observation' }, context), { code: 'FKA_SETTLEMENT_INVALID' });
+    }
+    assert.deepEqual(await latest(f, draft), before);
+    assert.deepEqual(turnRecord(f.file), stored);
+    assert.deepEqual(await f.host.advanceTurn(input, context), ready);
+    assert.equal(f.calls.length, 4);
+  };
+  await assertCommitted('candidate-ready');
+  const binding = { draftId: draft.id, expectedStateVersion: ready.stateVersion, candidateHash: ready.candidate.hash,
+    previousHash: ready.previousHash, reviewRef: ready.reviewReceipt.reviewRef, approvalRef: 'approved' };
+  f.approvals.set(binding.approvalRef, binding.candidateHash);
+  const approved = await f.host.recordApproval(binding, context);
+  await assertCommitted('approved');
+  await f.host.publish({ ...binding, expectedStateVersion: approved.stateVersion, publicationId: 'save' }, context);
+  await assertCommitted('saved');
+});
+
+test('R-02 S35/S128: retries share the physical slot across connections and retain the reference while the slot is occupied', async t => {
+  const overrides = { capacity: { maxPhysicalExecutions: 1 } };
+  const f = await setup(t, overrides);
+  const other = await fixture(f.file, overrides);
+  f.hosts.push(other.host);
+  const raw = f.options.execution.request;
+  f.options.execution.request = async () => { throw new Error('controlled no-effect transport failure'); };
+  const retryDraft = await f.start({ requestId: 'retry-draft' });
+  const failed = await advance(f, retryDraft, { turnId: 'retry-turn' });
+  assert.equal(failed.status, 'failed');
+  const settled = await f.host.settleTurn({ draftId: retryDraft.id, expectedStateVersion: failed.stateVersion,
+    turnId: 'retry-turn', decision: 'confirm-no-effect', evidenceRef: 'controlled-no-effect' }, context);
+  assert.ok(settled.retryRef);
+  f.options.execution.request = raw;
+
+  let release, entered;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  f.releases.push(release);
+  other.options.execution.request = async () => { entered(); await barrier; return structuredClone(intent); };
+  const occupyingDraft = await other.start({ requestId: 'occupying-draft' });
+  const occupying = advance(other, occupyingDraft, { turnId: 'occupying-turn' });
+  await started;
+  const retryInput = { draftId: retryDraft.id, expectedStateVersion: settled.stateVersion, turnId: 'retry-turn', input: 'Inspect',
+    kind: 'retry', retryRef: settled.retryRef };
+  const assertBlocked = async () => {
+    await assert.rejects(f.host.advanceTurn(retryInput, context), { code: 'FKA_INFLIGHT' });
+    assert.equal((await latest(f, retryDraft)).stateVersion, settled.stateVersion);
+    assert.equal(turnRecord(f.file, 'retry-turn').retryRef, settled.retryRef);
+    assert.equal(f.calls.length, 0);
+  };
+  try {
+    await assertBlocked();
+    await other.host.cancelTurn({ draftId: occupyingDraft.id, expectedStateVersion: (await latest(other, occupyingDraft)).stateVersion,
+      turnId: 'occupying-turn' }, context);
+    await occupying;
+    assert.equal((await latest(other, occupyingDraft)).physicalOutstanding.length, 1);
+    await assertBlocked();
+  } finally { release(); await occupying; }
+  await until(async () => !(await latest(other, occupyingDraft)).physicalOutstanding.length);
+  const ready = await f.host.advanceTurn(retryInput, context);
+  assert.equal(ready.status, 'candidate-ready');
+  assert.deepEqual(await f.host.advanceTurn(retryInput, context), ready);
+  assert.equal(f.calls.length, 4);
+  assert.equal(turnRecord(f.file, 'retry-turn').budget.deadlineMs, settled.budget.deadlineMs);
+});
+
 test('I4 S32/S99/S100/S101/S128: durable cancellation fences first, retains the physical slot, saves new input and rejects late candidate writes', async t => {
   const f = await setup(t, { capacity: { maxPhysicalExecutions: 1 } }); let release, entered;
   const barrier = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; }); f.releases.push(release);

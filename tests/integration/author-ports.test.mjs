@@ -55,6 +55,12 @@ test('I4 S96/S103: unknown writes survive abandon and block the same business op
   await f.host.settleTurn({ draftId: first.id, expectedStateVersion: first.stateVersion, turnId: 'turn', decision: 'abandon', evidenceRef: 'controlled-abandon-with-unknown-write' }, context);
   const second = await turn(f, 'two'); assert.notEqual(second.status, 'candidate-ready'); assert.equal(writes, 1);
   assert.match(JSON.stringify(second.diagnostics), /reconciled/);
+  const abandoned = await f.host.readDraft({ draftId: first.id }, context);
+  const reconciled = await f.host.settleTurn({ draftId: first.id, expectedStateVersion: abandoned.stateVersion,
+    turnId: 'turn', decision: 'confirm-no-effect', evidenceRef: 'controlled-proof-no-external-write' }, context);
+  assert.equal(reconciled.retryRef, null);
+  assert.equal((await f.host.readDraft({ draftId: first.id }, context)).status, 'abandoned');
+  assert.equal(writes, 1);
 });
 
 test('I4 S93/S99: exact reservation boundary dispatches once; one byte less and an already cancelled signal dispatch nothing', async () => {

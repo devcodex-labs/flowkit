@@ -4,7 +4,7 @@ import { defineWorkflow, node, action, verification, loop, terminal, condition }
 export default defineWorkflow({ id: 'flowkit-author-core', version: '1.2.0', name: 'Workflow Author', nodes: [
   condition('turn-kind', { name: 'Review existing exact candidate', branches: [{ when: 'reviewOnly', next: 'load-review' }, { when: 'true', next: 'intent' }] }),
   action('load-review', { name: 'Load committed review materials', action: 'loadReview', writes: ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'currentPlan', 'candidate', 'candidateDiff', 'resourceSnapshot'], next: 'semantic-review' }),
-  action('intent', { name: 'Parse current intent', action: 'parseIntent', writes: ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence'], next: 'intent-ready' }),
+  action('intent', { name: 'Parse current intent', action: 'parseIntent', writes: ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'questions'], next: 'intent-ready' }),
   verification('intent-ready', { name: 'Intent is clear', verifier: 'intentReady', onSuccess: 'catalog', onFailure: 'needs-info' }),
   action('catalog', { name: 'Read initial catalog', action: 'readCatalog', writes: ['catalogSnapshot', 'confirmedPlan', 'rawText'], next: 'plan-choice' }),
   condition('plan-choice', { name: 'Use exact confirmed Plan', branches: [{ when: 'confirmedPlan', next: 'plan-validate' }, { when: 'true', next: 'proposal' }] }),

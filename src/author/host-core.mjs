@@ -10,6 +10,26 @@ import { authorError } from './host-budget.mjs';
 import { authorIdentity } from './host-target.mjs';
 import { evalWhen } from '../when/evaluate.mjs';
 
+function clarificationQuestions(draft, intent) {
+  const questions = draft.questions.filter(({ id }) =>
+    id === 'execution-mode' && !draft.choices.executionMode ||
+    id === 'target-version' && draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version);
+  const unresolved = new Set([...intent.unresolved, ...intent.issues.map(issue => issue.id)]
+    .filter(id => typeof id === 'string' && id.trim()));
+  if (!unresolved.size && (intent.coverage !== 'complete' || intent.issues.length || intent.unresolved.length)) unresolved.add('workflow-goal');
+  for (const id of unresolved) {
+    const isDestination = ['publication-destination', 'publication-target', 'delivery-target'].includes(id);
+    questions.push({ id: `intent:${id}`,
+      question: isDestination ? 'Where should the workflow deliver or publish its result?' : `What should the workflow do about ${id}?`,
+      options: [
+        { value: 'keep-draft', label: 'Keep this as a draft', reason: 'Wait for this decision before generating the workflow.' },
+        { value: 'provide-details', label: isDestination ? 'Specify the destination' : 'Specify the expected behavior',
+          reason: 'Use the details you provide in the next turn.' }
+      ], recommended: 'keep-draft', customAllowed: true });
+  }
+  return questions;
+}
+
 /** Real domain operations for the compiled fixed core. Semantic failures never enter syntax repair. */
 export async function executeAuthorCore({ draft, turn, options, ports, signal, requestContext, observeReview, track }) {
   const execution = options.execution;
@@ -70,6 +90,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.effectiveIntent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, { input: turn.request.input,
         context: turn.request.contextSnapshot, baseline, baselineId: turn.request.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
         confirmedConstraintIds: turn.request.confirmedConstraintIds, signal }))));
+      ctx.state.questions = clarificationQuestions(draft, ctx.state.effectiveIntent);
       ctx.state.intentChanges = ctx.state.effectiveIntent.changes;
       ctx.state.baselineEvidence = { ...(draft.intent ? { intent: draft.intent } : {}),
         plan: draft.plan ?? null, candidateHash: draft.candidate?.hash ?? null,

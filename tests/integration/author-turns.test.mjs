@@ -31,6 +31,39 @@ async function save(f, approved, id = 'save') {
     approvalRef: approved.approvalReceipt.approvalRef }, context);
 }
 function agentResult(result) { return { status: 'succeeded', events: [], result }; }
+
+test('R-03 S03: unresolved publication offers a draft recommendation and custom input before planning', async t => {
+  const f = await setup(t, { defaults: {} });
+  await f.register();
+  const raw = f.options.execution.request;
+  f.options.execution.request = async input => {
+    const result = await raw(input);
+    if (input.stage === 'intent' && input.request.input.startsWith('Prepare')) {
+      result.effective.coverage = 'partial';
+      result.effective.unresolved = ['publication-destination'];
+      result.issues = [{ id: 'publication-destination' }];
+    }
+    return result;
+  };
+  const draft = await f.start({ goal: 'Prepare a delivery workflow' });
+  assert.equal(draft.questions[0].id, 'execution-mode');
+  const pending = await advance(f, draft, { input: draft.goal, choices: { executionMode: 'standard' } });
+  assert.equal(pending.status, 'needs-clarification');
+  assert.equal(pending.choices.executionMode, 'standard');
+  assert.equal(pending.candidate, null);
+  assert.deepEqual(f.calls.map(call => call.stage), ['intent']);
+  assert.deepEqual(pending.questions.map(question => question.id), ['intent:publication-destination']);
+  const [question] = pending.questions;
+  assert.deepEqual(question.options.map(({ value }) => value), ['keep-draft', 'provide-details']);
+  assert.equal(question.recommended, 'keep-draft');
+  assert.equal(question.customAllowed, true);
+  const ready = await advance(f, pending, { input: 'Deliver the result to our approved internal review queue' });
+  assert.equal(ready.status, 'candidate-ready');
+  assert.deepEqual(ready.questions, []);
+  assert.equal(ready.savedReceipt, undefined);
+  assert.equal(f.host.createMcpOptions().store.readActive('team', ready.target.skillId), null);
+});
+
 function replacePlan(f, change) {
   const request = f.options.execution.request;
   f.options.execution.request = async input => input.prepared?.task.node.id === 'proposal' ?

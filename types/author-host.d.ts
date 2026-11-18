@@ -22,7 +22,7 @@ export interface AuthorCandidate {
 }
 export interface AuthorDraftView {
   id: string; namespace: string; storeId: string; collectionId: string; stateVersion: number; contentRevision: number; contentHash: string;
-  status: string; goal: string; choices: AuthorChoices; questions: Array<{ id: string; question: string; options: unknown[]; recommended: string }>;
+  status: string; goal: string; choices: AuthorChoices; questions: Array<{ id: string; question: string; options: unknown[]; recommended: string; customAllowed?: boolean }>;
   candidate?: AuthorCandidate | null; previousHash: string | null;
   reviewReceipt?: { qualified: boolean; reviewRef: string; candidateHash: string; [key: string]: unknown } | null;
   approvalReceipt?: { approvalRef: string; [key: string]: unknown } | null;
