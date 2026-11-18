@@ -6,11 +6,13 @@ import { checkProfessionalSkill } from './professional-skills.mjs';
 import { validateSkillName } from './skill-document.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
 import {artifactDigest} from '../shared/artifact-identity.mjs';
+import { materializeCollectionGeneration } from './generation.mjs';
 
 /** Materialize one approved store snapshot. The Host chooses which completed generation to advertise. */
-export async function stageCollectionForDiscovery(store, collectionId, hostOwnedRoot) {
-  const snapshot = store.readCollection(collectionId);
+export async function stageCollectionForDiscovery(store, collectionId, hostOwnedRoot, planned) {
+  const snapshot = planned?.snapshot ?? store.readCollection(collectionId);
   if (!snapshot) throw new Error('The Host has no approved collection with this ID');
+  if (planned?.plan) return materializeCollectionGeneration(snapshot, hostOwnedRoot, planned.plan, planned.signal);
   const { collection, skills } = snapshot;
   validateSkillName(collection.name);
   if (collection.id !== collectionId || collection.name !== collection.directory) throw new Error('Collection identity differs');
@@ -71,6 +73,10 @@ export async function removeCollectionGeneration({hostOwnedRoot,discoveryRoot,co
   if(receipt.collectionId!==collectionId || !files || Object.keys(files).length>10000 ||
     manifestHash!==artifactDigest(JSON.stringify({collectionId,files})))throw new Error('Generation ownership record differs');
   if(await authorizeRemoval({collectionId,discoveryRoot:target,manifestHash})!==true)throw new Error('Host denied generation removal');
+  if(receipt.ownerHash) {
+    const ownerFile=path.join(target,'.flowkit-owner.json'),ownerStat=await lstat(ownerFile);
+    if(!ownerStat.isFile()||ownerStat.isSymbolicLink()||ownerStat.size>1024*1024||artifactDigest(await readFile(ownerFile))!==receipt.ownerHash)throw new Error('Generation ownership proof changed');
+  }
   const pending=[''];let visited=0,readBytes=0;
   const seen=new Set();
   while(pending.length) {
@@ -83,7 +89,7 @@ export async function removeCollectionGeneration({hostOwnedRoot,discoveryRoot,co
         if(!Object.keys(files).some(file=>file.startsWith(relative+'/')))throw new Error('Generation contains a user-owned directory');
         pending.push(relative);continue;
       }
-      if(relative==='.flowkit-generation.json')continue;
+      if(relative==='.flowkit-generation.json'||relative==='.flowkit-owner.json'&&receipt.ownerHash)continue;
       const fileStat=await lstat(path.join(target,relative));readBytes+=fileStat.size;
       if(!fileStat.isFile()||readBytes>128*1024*1024)throw new Error('Generation read budget exceeded; retain for Host reconciliation');
       if(!Object.hasOwn(files,relative)||artifactDigest(await readFile(path.join(target,relative)))!==files[relative]) {

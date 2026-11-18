@@ -37,6 +37,49 @@ function replacePlan(f, change) {
     (f.calls.push(input), agentResult({ rawText: JSON.stringify(change(structuredClone(proposal))) })) : request(input);
 }
 
+test('I4 S05/S25/S88/S90/S91/S92: mode changes invalidate approval, new turns get fresh deadlines and independent review needs observed distinct identities', async t => {
+  const f = await setup(t); const ready = await advance(f, await f.start()); const approved = await approve(f, ready);
+  const first = f.host.createMcpOptions().store.authorTransaction(state => state.turns(ready.id)[0]);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const changed = await advance(f, approved, { choices: { executionMode: 'interactive-p0-a' } });
+  assert.equal(changed.approvalReceipt, null); assert.equal(changed.reviewReceipt, null); assert.notEqual(changed.status, 'approved');
+  const records = f.host.createMcpOptions().store.authorTransaction(state => state.turns(ready.id));
+  assert.ok(records.find(item => item.turnId !== first.turnId).budget.deadlineMs > first.budget.deadlineMs);
+  await assert.rejects(f.host.recordApproval({ draftId: ready.id, expectedStateVersion: approved.stateVersion,
+    candidateHash: ready.candidate.hash, previousHash: null, reviewRef: ready.reviewReceipt.reviewRef, approvalRef: 'approved' }, context));
+  for (const identity of ['missing', 'same', 'same-session', 'same-workspace', 'distinct']) {
+    const g = await setup(t); g.options.authorization.reviewPolicy = 'independent-subject';
+    g.options.authorization.observeReview = async ({ task }) => ({ passed: true, executionId: task.execution.requestId,
+      subjectId: identity === 'same' ? 'author' : 'reviewer', ...(identity !== 'missing' ? { authorSubjectId: 'author' } : {}),
+      authorSessionId: 'author-session', sessionId: identity === 'same-session' ? 'author-session' : 'review-session',
+      authorWorkspaceId: 'author-workspace', workspaceId: identity === 'same-workspace' ? 'author-workspace' : 'review-workspace' });
+    const result = await advance(g, await g.start());
+    assert.equal(result.status === 'candidate-ready', identity === 'distinct');
+  }
+});
+
+test('I4 S142: bounded Human repair, a real DSL repair and any-write policy coexist with an exact compiled Artifact', async t => {
+  const f = await setup(t);
+  const text = `import {defineWorkflow,parallel,action,human,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'combined',version:'1.0.0',name:'Combined',nodes:[
+parallel('race',{name:'Race',branches:['one','two'],join:{strategy:'any',next:'approve'}}),
+action('one',{name:'One',action:'one'}),action('two',{name:'Two',action:'two'}),
+human('approve',{name:'Approve',onApprove:'done',onReject:'revise',maxRevisions:1}),
+action('revise',{name:'Revise',action:'revise',next:'approve'}),terminal('done',{name:'Done',status:'succeeded'})]});`;
+  const file = path.join(f.dir, 'combined.workflow.js'); await writeFile(file, text);
+  const compiled = await compileArtifactDraft(file, { skillCheck: false }); assert.ok(compiled.artifact);
+  replacePlan(f, plan => ({ ...plan, entryNodeId: 'race', nodes: compiled.definition.nodes.map(node => ({ id: node.id, kind: node.type })),
+    edges: [...compiled.graph.referenceEdges, ...compiled.graph.executionEdges].map(({ from, to }) => ({ from, to, kind: 'control' })) }));
+  const request = f.options.execution.request;
+  f.options.execution.request = async input => ['dsl-source', 'dsl-repair'].includes(input.prepared?.task.node.id) ?
+    (f.calls.push(input), agentResult({ rawText: input.prepared.task.node.id === 'dsl-source' ? 'broken' : text })) : request(input);
+  f.options.authorization.verifySafetyPolicy = async binding => binding.artifactHash === compiled.artifact.artifactHash && binding.policyRef === 'exact-combined';
+  const result = await advance(f, await f.start(), { safetyPolicies: [{ nodeId: 'race', policyRef: 'exact-combined' }] });
+  assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
+  assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'dsl-repair').length, 1);
+  assert.equal(result.candidate.manifest.workflowDefinition.nodes.find(node => node.id === 'approve').maxRevisions, 1);
+});
+
 test('I2 S01/S02/S54/S55: unknown mode offers recommendation; explicit known choices take precedence without repeated questions', async t => {
   const f = await setup(t, { defaults: {} });
   const draft = await f.start(); assert.equal(draft.questions[0].recommended, 'standard');
@@ -53,7 +96,7 @@ test('I2 S04/S09/S66: read-only explanation and unchanged Plan reuse preserve by
   const approved = await approve(f, ready); const before = await current(f, ready); const calls = f.calls.length;
   assert.deepEqual(await current(f, before), before); assert.equal(f.calls.length, calls);
   const reused = await advance(f, before);
-  assert.equal(reused.status, 'candidate-ready', JSON.stringify(reused.diagnostics));
+  assert.equal(reused.status, 'approved', JSON.stringify(reused.diagnostics));
   assert.equal(reused.candidate.hash, ready.candidate.hash); assert.equal(reused.candidate.manifest.builtAt, ready.candidate.manifest.builtAt);
   assert.equal(reused.contentRevision, ready.contentRevision); assert.equal(reused.contentHash, ready.contentHash);
   assert.equal(reused.approvalReceipt.approvalRef, approved.approvalReceipt.approvalRef);
@@ -163,7 +206,7 @@ test('I2 S50/S61: copy import uses trusted approved source, new IDs, exact files
   const target = await setup(t, { collectionIds: ['copy'], resolveImportSource: async () => ({ candidate: original.candidate, sourceRef: 'approved-source' }) });
   target.options.authorization.verifyImport = async binding =>
     sourceHost.host.createMcpOptions().store.readActive('team', original.target.skillId)?.hash === binding.sourceHash && binding.collectionId === 'copy';
-  const targetContext = { ...context, collectionIds: ['copy'] };
+  const targetContext = { ...context, authorizedCollections: ['copy'] };
   const imported = await target.host.start({ collectionId: 'copy', requestId: 'import', goal: 'Import approved inspection', operation: 'import',
     importSource: { mode: 'new-collection', sourceRef: 'approved-source' } }, targetContext);
   assert.equal(imported.status, 'needs-review'); assert.equal(target.calls.length, 0);
@@ -242,13 +285,13 @@ test('I2 S35/S45: trusted no-effect retry consumes one reference and inherits th
   const input = { draftId: draft.id, expectedStateVersion: draft.stateVersion, turnId: 'original', input: 'Inspect' };
   const failed = await f.host.advanceTurn(input, context); assert.equal(failed.status, 'failed');
   const settled = await f.host.settleTurn({ draftId: draft.id, expectedStateVersion: failed.stateVersion,
-    turnId: input.turnId, decision: 'confirm-no-effect' }, context);
+    turnId: input.turnId, decision: 'confirm-no-effect', evidenceRef: 'controlled-no-effect' }, context);
   assert.ok(settled.retryRef); assert.equal(settled.budget.used.requests, 3);
   const retryInput = { ...input, expectedStateVersion: settled.stateVersion, kind: 'retry', retryRef: settled.retryRef };
   const exhausted = await f.host.advanceTurn(retryInput, context);
   assert.equal(exhausted.status, 'needs-revision', JSON.stringify(exhausted.diagnostics)); assert.equal(f.calls.length, 5);
   const replay = await f.host.advanceTurn(retryInput, context); assert.equal(replay.status, exhausted.status); assert.equal(f.calls.length, 5);
   const after = await f.host.settleTurn({ draftId: draft.id, expectedStateVersion: (await current(f, draft)).stateVersion,
-    turnId: input.turnId, decision: 'confirm-no-effect' }, context);
+    turnId: input.turnId, decision: 'confirm-no-effect', evidenceRef: 'controlled-exhausted' }, context);
   assert.equal(after.budget.deadlineMs, settled.budget.deadlineMs); assert.equal(after.budget.used.requests, 5);
 });

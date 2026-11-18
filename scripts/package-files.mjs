@@ -15,7 +15,7 @@ export const packageFiles = [
   ['src/dsl.mjs', 'dist/dsl.mjs'],
   ['src/integrations/capability-graph.mjs', 'dist/integrations/capability-graph.mjs'],
   ['types/capability-graph.d.ts', 'dist/capability-graph.d.ts'],
-  ...['author', 'author-host', 'host-budget', 'host-core', 'host-target', 'skill-document', 'standard-artifact', 'local-skill-store', 'collections', 'collection-layout', 'draft', 'workflow-plan',
+  ...['author', 'author-host', 'host-budget', 'host-core', 'host-target', 'host-discovery', 'generation', 'skill-document', 'standard-artifact', 'local-skill-store', 'collections', 'collection-layout', 'draft', 'workflow-plan',
     'professional-skills', 'approved-run', 'documentation', 'openai-native-skills']
     .map(name => [`src/author/${name}.mjs`, `dist/author/${name}.mjs`]),
   ['src/author/flowkit-workflow-author/SKILL.md', 'dist/author/flowkit-workflow-author/SKILL.md'],

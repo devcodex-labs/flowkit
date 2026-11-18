@@ -36,6 +36,9 @@ export function verifiedCollectionPlan(proposedPlan) {
     !Array.isArray(plan.workflowReferences) || !Array.isArray(plan.mcpResources) || !Object.hasOwn(plan, 'hostMapping'))) {
     throw new TypeError('Collection rename needs the reviewed mapping and affected references');
   }
+  if (operation === 'rename' && !/^sha256:[0-9a-f]{64}$/.test(plan.expectedSnapshotHash ?? '')) {
+    throw new TypeError('Collection rename needs the reviewed collection snapshot hash');
+  }
   return { plan: Object.freeze({ ...plan, destination: expected }), planHash: artifactDigest(JSON.stringify(plan)) };
 }
 
@@ -73,13 +76,13 @@ export function planCollectionRename({ id, name }, discovered, host) {
   if (previous.name === name && previous.directory === name) throw new Error('Choose a different collection name');
   rejectConflicts(destination, discovered, directory => host.directoryOwner(directory), previous);
   const changes = host.previewMigration(previous, destination);
-  if (!changes || !Array.isArray(changes.workflowReferences) || !Array.isArray(changes.mcpResources) ||
+  if (!changes || !/^sha256:[0-9a-f]{64}$/.test(changes.expectedSnapshotHash ?? '') || !Array.isArray(changes.workflowReferences) || !Array.isArray(changes.mcpResources) ||
     !Object.hasOwn(changes, 'hostMapping')) {
     throw new Error(`Host cannot verify the migration and references for ${id}`);
   }
   return Object.freeze({ operation: 'rename', destination, sourceId: id,
     directory: [previous.directory, destination.directory], skillName: [previous.name, destination.name],
-    ...structuredClone({ hostMapping: changes.hostMapping, mcpResources: changes.mcpResources,
+    ...structuredClone({ expectedSnapshotHash: changes.expectedSnapshotHash, hostMapping: changes.hostMapping, mcpResources: changes.mcpResources,
       workflowReferences: changes.workflowReferences }) });
 }
 

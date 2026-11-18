@@ -14,6 +14,9 @@ export function authorInput(value, maxBytes) {
       !Array.isArray(item) && ![null, Object.prototype].includes(Object.getPrototypeOf(item))) throw authorError('author-input', 'Author input must be bounded JSON data');
     active.add(item);
     const descriptors = Object.getOwnPropertyDescriptors(item), result = Array.isArray(item) ? [] : {};
+    if (Object.getOwnPropertySymbols(item).length || Object.entries(descriptors).some(([key, descriptor]) =>
+      !(Array.isArray(item) && key === 'length') && (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value'))) ||
+      Array.isArray(item) && (Object.keys(item).length !== item.length || Object.keys(item).some((key, index) => key !== String(index)))) throw authorError('author-input', 'Author input cannot contain getters, symbols, hidden JSON members or sparse arrays');
     for (const key of Object.keys(item)) {
       if (++members > 10000 || !Object.hasOwn(descriptors[key], 'value')) throw authorError('author-input', 'Author input cannot contain getters or excessive members');
       const child = descriptors[key].value;

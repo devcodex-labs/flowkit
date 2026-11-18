@@ -15,11 +15,12 @@ import { isControlSignal } from '../../src/index.mjs';
 export async function fixtureOptions(file, collectionId = 'test-collection', namespace = 'test-project') {
   let authorized = true;
   const approved = new Map(), calls = [], controls = { barrier: null };
-  const requestContext = { namespace, principalId: 'fixture-user', sessionId: 'fixture-session', workspaceRef: path.dirname(file), collectionIds: [collectionId] };
+  const requestContext = { namespace, principalId: 'fixture-user', sessionId: 'fixture-session', workspaceId: path.dirname(file), authorizedCollections: [collectionId], authorizationSnapshotRef: 'fixture-permissions-v1' };
   const hostProfile = { id:'fixture-host',digest:artifactDigest('fixture host profile') };
   const sourceText = `import {defineWorkflow,action,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[action('work',{name:'Work',action:'inspect',next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});`;
   const authorHost = await createWorkflowAuthorHost({ namespace, storageFile: file, collectionIds: [collectionId], hostProfile,
+    capacity: { maxPhysicalExecutions: 4, maxDrafts: 256, maxDraftBytes: 8388608, maxRetainedDraftBytes: 67108864, maxReceiptBytes: 67108864, maxTurnsPerDraft: 256 },
     execution: { async request(input) {
       calls.push(input);
       if (input.prepared && controls.barrier) await controls.barrier;

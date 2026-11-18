@@ -11,7 +11,7 @@ import { authorIdentity } from './host-target.mjs';
 import { evalWhen } from '../when/evaluate.mjs';
 
 /** Real domain operations for the compiled fixed core. Semantic failures never enter syntax repair. */
-export async function executeAuthorCore({ draft, turn, options, ports, signal, requestContext, observeReview }) {
+export async function executeAuthorCore({ draft, turn, options, ports, signal, requestContext, observeReview, track }) {
   const execution = options.execution;
   if (typeof execution?.createSession !== 'function') throw authorError('author-executor', 'An independently responsive Host execution session is required');
   const session = await execution.createSession(Object.freeze({ request: ports.request, tool: ports.tool, io: ports.io }),
@@ -40,7 +40,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const clarify = (message, questions) => Object.assign(authorError('author-resource', message), { outcome: 'needs-clarification', questions });
   const observed = async operation => {
     const before = ports.observed();
-    const value = await operation();
+    const pending = Promise.resolve().then(operation);
+    track(pending);
+    const value = await pending;
     if (ports.observed() === before) throw authorError('author-unobserved', 'Execution bypassed the guarded model request port');
     return value;
   };
@@ -142,7 +144,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.reuseReview = false;
       if (ctx.state.reuseCandidate) {
         ctx.state.candidate = draft.candidate; ctx.state.candidateDiff = reviewStandardCandidate(draft.candidate, draft.previousCandidate);
-        ctx.state.reuseReview = !!turn.priorReview?.qualified && authorIdentity(draft.authorizedRequest) === authorIdentity(ctx.state.authorizedRequest);
+        ctx.state.reuseReview = !!turn.priorReview?.qualified && turn.priorReview.coreHash === authorIdentity(options.coreIdentity) &&
+          turn.priorReview.reviewPolicy === (options.authorization.reviewPolicy ?? 'separate-pass') &&
+          authorIdentity(draft.authorizedRequest) === authorIdentity(ctx.state.authorizedRequest);
       }
     },
     async prepareCandidate(ctx) {
@@ -179,7 +183,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         throw authorError('author-review', 'Host review observation does not correlate with the actual review request');
       }
       if (!observation || observation.passed !== true || !observation.subjectId || !observation.executionId ||
-        options.authorization.reviewPolicy === 'independent-subject' && (!observation.authorSubjectId || observation.subjectId === observation.authorSubjectId)) {
+        options.authorization.reviewPolicy === 'independent-subject' && (!observation.authorSubjectId || observation.subjectId === observation.authorSubjectId ||
+          !observation.sessionId || !observation.authorSessionId || observation.sessionId === observation.authorSessionId ||
+          !observation.workspaceId || !observation.authorWorkspaceId || observation.workspaceId === observation.authorWorkspaceId)) {
         throw clarify('Host review observation is not qualified', [question('review-observation',
           options.authorization.reviewPolicy === 'independent-subject' ? 'Configure an independently authorized reviewer and its actual execution evidence' :
             'Configure the actual semantic review execution observer', ['configure-host-review', 'cancel'])]);

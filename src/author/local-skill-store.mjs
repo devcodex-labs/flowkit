@@ -1,9 +1,31 @@
 import { DatabaseSync } from 'node:sqlite';
-import { closeSync, openSync, statSync } from 'node:fs';
+import { closeSync, openSync, statSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { verifiedCollectionPlan } from './collections.mjs';
+import { authorIdentity } from './host-target.mjs';
 import { checkProfessionalSkill } from './professional-skills.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
+
+const FORMAL_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS fk_author_collections (collection_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, payload TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS fk_author_versions (
+    collection_id TEXT NOT NULL, skill_id TEXT NOT NULL, candidate_hash TEXT NOT NULL, version TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY(collection_id,skill_id,candidate_hash), UNIQUE(collection_id,skill_id,version)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS fk_author_active (
+    collection_id TEXT NOT NULL, skill_id TEXT NOT NULL, name TEXT NOT NULL, candidate_hash TEXT NOT NULL,
+    PRIMARY KEY(collection_id,skill_id), UNIQUE(collection_id,name),
+    FOREIGN KEY(collection_id,skill_id,candidate_hash) REFERENCES fk_author_versions(collection_id,skill_id,candidate_hash)
+  ) STRICT;`;
+const AUTHOR_COLUMNS = {
+  fk_author_meta: 'singleton,namespace,schema_version,store_id',
+  fk_author_drafts: 'draft_id,state_version,content_revision,status,payload',
+  fk_author_turns: 'draft_id,turn_id,fingerprint,status,payload',
+  fk_author_collections: 'collection_id,name,payload',
+  fk_author_versions: 'collection_id,skill_id,candidate_hash,version,payload',
+  fk_author_active: 'collection_id,skill_id,name,candidate_hash'
+};
 
 function checkPublishedSkill(candidate) {
   if (candidate.manifest.kind === 'professional') checkProfessionalSkill(candidate);
@@ -17,11 +39,21 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
   if (namespace !== undefined) {
     if (typeof namespace !== 'string' || !namespace.trim()) throw new TypeError('A namespace is required');
     try {
+      if (statSync(file).nlink > 1) throw new Error('Hard-linked Author databases cannot share a WAL safely');
+      file = realpathSync(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      file = path.join(realpathSync(path.dirname(path.resolve(file))), path.basename(file));
+    }
+    try {
       if (statSync(file).size) {
         const probe = new DatabaseSync(file, { readOnly: true });
         try {
-          const meta = probe.prepare('SELECT namespace, schema_version FROM fk_author_meta WHERE singleton=1').get();
-          if (meta?.namespace !== namespace || meta.schema_version !== 1) throw new Error('Author namespace or schema differs');
+          const meta = probe.prepare('SELECT namespace, schema_version, store_id FROM fk_author_meta WHERE singleton=1').get();
+          if (meta?.namespace !== namespace || meta.schema_version !== 2) throw new Error('Author namespace or schema differs');
+          for (const [table, columns] of Object.entries(AUTHOR_COLUMNS)) {
+            if (probe.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name).join(',') !== columns) throw new Error('Author schema differs');
+          }
         } finally { probe.close(); }
       }
     } catch (error) {
@@ -40,9 +72,9 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           singleton INTEGER PRIMARY KEY CHECK(singleton=1), namespace TEXT NOT NULL,
           schema_version INTEGER NOT NULL, store_id TEXT NOT NULL
         ) STRICT`);
-        db.prepare('INSERT OR IGNORE INTO fk_author_meta VALUES (1, ?, 1, ?)').run(namespace, randomUUID());
+        db.prepare('INSERT OR IGNORE INTO fk_author_meta VALUES (1, ?, 2, ?)').run(namespace, randomUUID());
         const meta = db.prepare('SELECT * FROM fk_author_meta WHERE singleton=1').get();
-        if (meta.namespace !== namespace || meta.schema_version !== 1) throw new Error('Author namespace or schema differs');
+        if (meta.namespace !== namespace || meta.schema_version !== 2) throw new Error('Author namespace or schema differs');
         db.exec(`CREATE TABLE IF NOT EXISTS fk_author_drafts (
           draft_id TEXT PRIMARY KEY, state_version INTEGER NOT NULL, content_revision INTEGER NOT NULL,
           status TEXT NOT NULL, payload TEXT NOT NULL
@@ -52,8 +84,10 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           PRIMARY KEY(draft_id, turn_id), FOREIGN KEY(draft_id) REFERENCES fk_author_drafts(draft_id)
         ) STRICT;
         CREATE INDEX IF NOT EXISTS fk_author_draft_status ON fk_author_drafts(status);
-        CREATE INDEX IF NOT EXISTS fk_author_turn_status ON fk_author_turns(status);
-        COMMIT`);
+        CREATE INDEX IF NOT EXISTS fk_author_turn_status ON fk_author_turns(status);`);
+        db.exec("CREATE INDEX IF NOT EXISTS fk_author_start_request ON fk_author_drafts(json_extract(payload,'$.startRequestId'))");
+        db.exec(FORMAL_SCHEMA);
+        db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     db.exec(`
@@ -63,21 +97,7 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
       PRAGMA synchronous = FULL;
     `);
     if (db.prepare('PRAGMA journal_mode').get().journal_mode !== 'wal') throw new Error('Use a file-backed Skill store with WAL');
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS fk_author_collections (
-        collection_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS fk_author_versions (
-        collection_id TEXT NOT NULL, skill_id TEXT NOT NULL, candidate_hash TEXT NOT NULL,
-        version TEXT NOT NULL, payload TEXT NOT NULL,
-        PRIMARY KEY (collection_id, skill_id, candidate_hash), UNIQUE (collection_id, skill_id, version)
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS fk_author_active (
-        collection_id TEXT NOT NULL, skill_id TEXT NOT NULL, name TEXT NOT NULL, candidate_hash TEXT NOT NULL,
-        PRIMARY KEY (collection_id, skill_id), UNIQUE (collection_id, name),
-        FOREIGN KEY (collection_id, skill_id, candidate_hash) REFERENCES fk_author_versions (collection_id, skill_id, candidate_hash)
-      ) STRICT;
-    `);
+    if (namespace === undefined) db.exec(FORMAL_SCHEMA);
     const current = db.prepare('SELECT candidate_hash FROM fk_author_active WHERE collection_id = ? AND skill_id = ?');
     const read = db.prepare('SELECT payload FROM fk_author_versions WHERE collection_id = ? AND skill_id = ? AND candidate_hash = ?');
     const active = db.prepare(`SELECT payload FROM fk_author_active JOIN fk_author_versions USING (collection_id, skill_id, candidate_hash)
@@ -126,7 +146,29 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
             const state = {
               meta: () => ({ ...db.prepare('SELECT * FROM fk_author_meta WHERE singleton=1').get() }),
               readDraft: id => { const row = db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(id); return row ? JSON.parse(row.payload) : null; },
-              drafts: () => db.prepare('SELECT payload FROM fk_author_drafts').all().map(row => JSON.parse(row.payload)),
+              drafts: (limit = 10001) => db.prepare('SELECT payload FROM fk_author_drafts ORDER BY draft_id LIMIT ?').all(limit).map(row => JSON.parse(row.payload)),
+              activeDrafts: limit => db.prepare("SELECT payload FROM fk_author_drafts WHERE status!='expired' ORDER BY draft_id LIMIT ?").all(limit).map(row => JSON.parse(row.payload)),
+              findStartRequest: requestId => { const row = db.prepare("SELECT payload FROM fk_author_drafts WHERE json_extract(payload,'$.startRequestId')=? LIMIT 1").get(requestId); return row ? JSON.parse(row.payload) : null; },
+              findToolOperation: key => {
+                const row = db.prepare(`SELECT turns.draft_id,turns.turn_id,operations.value AS operation
+                  FROM fk_author_turns AS turns,json_each(json_extract(turns.payload,'$.budget.toolOperations')) AS operations
+                  WHERE operations.key=? ORDER BY CASE json_extract(operations.value,'$.status') WHEN 'no-effect' THEN 1 WHEN 'not-sent' THEN 1 ELSE 0 END LIMIT 1`).get(key);
+                return row ? { draftId: row.draft_id, turnId: row.turn_id, ...JSON.parse(row.operation) } : null;
+              },
+              nextPublicationSequence: collectionId => db.prepare(`SELECT coalesce(max(json_extract(operations.value,'$.sequence')),0)+1 AS sequence
+                FROM fk_author_drafts AS drafts,json_each(json_extract(drafts.payload,'$.publications')) AS operations
+                WHERE json_extract(drafts.payload,'$.collectionId')=?`).get(collectionId).sequence,
+              findPublication: operationId => {
+                if (!operationId) return null;
+                const row = db.prepare(`SELECT operations.value AS operation FROM fk_author_drafts AS drafts,
+                  json_each(json_extract(drafts.payload,'$.publications')) AS operations WHERE json_extract(operations.value,'$.operationId')=? LIMIT 1`).get(operationId);
+                return row ? JSON.parse(row.operation) : null;
+              },
+              usage: () => ({ ...db.prepare(`SELECT count(*) AS drafts,
+                coalesce(sum(CASE WHEN status!='expired' THEN length(CAST(payload AS BLOB)) ELSE 0 END),0) AS draftBytes,
+                coalesce(sum(CASE WHEN status='expired' THEN length(CAST(payload AS BLOB)) ELSE 0 END),0) AS tombstoneBytes
+                FROM fk_author_drafts`).get(),
+                ...db.prepare('SELECT count(*) AS turns,coalesce(sum(length(CAST(payload AS BLOB))),0) AS receiptBytes FROM fk_author_turns').get() }),
               writeDraft(draft, expected) {
                 const payload = JSON.stringify(draft);
                 if (expected === null) db.prepare('INSERT INTO fk_author_drafts VALUES (?, ?, ?, ?, ?)').run(draft.id, draft.stateVersion, draft.contentRevision, draft.status, payload);
@@ -134,7 +176,7 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
                   .run(draft.stateVersion, draft.contentRevision, draft.status, payload, draft.id, expected).changes !== 1) throw new Error('Author state CAS conflict');
               },
               readTurn: (id, turnId) => { const row = db.prepare('SELECT payload FROM fk_author_turns WHERE draft_id=? AND turn_id=?').get(id, turnId); return row ? JSON.parse(row.payload) : null; },
-              turns: id => db.prepare('SELECT payload FROM fk_author_turns WHERE draft_id=?').all(id).map(row => JSON.parse(row.payload)),
+              turns: (id, limit = 10001) => db.prepare('SELECT payload FROM fk_author_turns WHERE draft_id=? ORDER BY turn_id LIMIT ?').all(id, limit).map(row => JSON.parse(row.payload)),
               writeTurn: turn => db.prepare(`INSERT INTO fk_author_turns VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(draft_id, turn_id) DO UPDATE SET fingerprint=excluded.fingerprint,status=excluded.status,payload=excluded.payload`)
                 .run(turn.draftId, turn.turnId, turn.fingerprint, turn.status, JSON.stringify(turn))
@@ -176,6 +218,9 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           const previous = registered.get(id)?.name ?? null;
           const expected = plan.operation === 'rename' ? plan.directory[0] : null;
           if (previous !== expected) throw new Error('Collection changed after review');
+          if (plan.operation === 'rename' && authorIdentity(this.readCollectionMetadata(id, { limit: 10001 })) !== plan.expectedSnapshotHash) {
+            throw new Error('Collection snapshot changed after review');
+          }
           if (authorizeCollectionChange({ plan, planHash, approvalRef, previous }) !== true) {
             throw new Error('Host denied the collection plan');
           }

@@ -3,13 +3,14 @@ import { createWorkflowAuthorHost } from '@devcodex-labs/flowkit/host';
 import { runArtifact, isControlSignal } from '@devcodex-labs/flowkit';
 import { writeFile } from 'node:fs/promises';
 
-const context = { namespace: 'installed', principalId: 'user', sessionId: 'local', workspaceRef: 'consumer', collectionIds: ['team'] };
+const context = { namespace: 'installed', principalId: 'user', sessionId: 'local', workspaceId: 'consumer', authorizedCollections: ['team'], authorizationSnapshotRef: 'installed-fixture-permissions' };
 const hash = 'sha256:' + 'a'.repeat(64);
 const plan = { entryNodeId: 'done', nodes: [{ id: 'done', kind: 'terminal' }], edges: [],
   coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['done'] }] };
 const intent = { effective: { intents: [{ id: 'goal', goal: 'Done', children: [], constraints: [] }],
   constraints: [], coverage: 'complete', relations: [], unresolved: [] }, turn: { changes: [], facts: {} }, issues: [], inferences: [] };
 const host = await createWorkflowAuthorHost({ namespace: 'installed', storageFile: 'installed-author.sqlite', collectionIds: ['team'],
+  capacity: { maxPhysicalExecutions: 2, maxDrafts: 16, maxDraftBytes: 1048576, maxRetainedDraftBytes: 8388608, maxReceiptBytes: 8388608, maxTurnsPerDraft: 32 },
   hostProfile: { id: 'controlled-installed-fixture', digest: hash }, defaults: { executionMode: 'standard' },
   authorization: { authorize: async () => true, observeReview: async ({ task }) => ({ passed: true, subjectId: 'controlled-review', executionId: task.execution.requestId }),
     verifyApproval: async () => ({ approved: false, subjectId: 'user', approvalId: 'none' }) },

@@ -12,6 +12,7 @@ import { runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs
 import { createOpenAINativeSkillPort } from '../../src/author/openai-native-skills.mjs';
 import { stageCollectionForDiscovery,removeCollectionGeneration } from '../../src/author/collection-layout.mjs';
 import { collectionSkill, planCollectionRename, planNewCollection, verifiedCollectionPlan } from '../../src/author/collections.mjs';
+import { authorIdentity } from '../../src/author/host-target.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
 import { planProfessionalSkills, prepareProfessionalSkill, publishProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { startAuthorDraft } from '../../src/author/draft.mjs';
@@ -207,7 +208,7 @@ test('collection previews keep two layers, scope Skill IDs, and reject name or m
   assert.equal(original.directory, 'flowkit-workflows/skills/inspect');
   const rename = planCollectionRename({ id: first.id, name: 'team-move' }, [first, copy], {
     directoryOwner: free,
-    previewMigration: () => ({ hostMapping: ['old', 'next'], mcpResources: [], workflowReferences: [] })
+    previewMigration: () => ({ expectedSnapshotHash: 'sha256:' + '0'.repeat(64), hostMapping: ['old', 'next'], mcpResources: [], workflowReferences: [] })
   });
   const renamed = collectionSkill(rename.destination, item);
   assert.deepEqual(rename.directory, ['flowkit-workflows', 'team-move']);
@@ -352,7 +353,7 @@ test('approved collection generation exposes a two-layer tree and preserves prev
 
   const migrate = planCollectionRename({ id, name: 'team-flows' }, [initial.destination], {
     directoryOwner: () => null,
-    previewMigration: () => ({ hostMapping: ['project-flows', 'team-flows'], workflowReferences: [], mcpResources: [] })
+    previewMigration: () => ({ expectedSnapshotHash: authorIdentity(store.readCollectionMetadata(id)), hostMapping: ['project-flows', 'team-flows'], workflowReferences: [], mcpResources: [] })
   });
   grants.set('rename', verifiedCollectionPlan(migrate).planHash);
   store.applyCollectionPlan(migrate, 'rename');

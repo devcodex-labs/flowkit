@@ -2,8 +2,8 @@ import type { AgentExecutionResult, PreparedAgentTask, HostPreparationContext, R
 import type { FlowkitMcpOptions } from './mcp.js';
 
 export interface AuthorRequestContext {
-  namespace: string; principalId: string; sessionId: string; workspaceRef: string; collectionIds: string[];
-  authorizationSnapshot?: unknown;
+  namespace: string; principalId: string; sessionId: string; workspaceId: string; authorizedCollections: string[];
+  authorizationSnapshotRef: string;
 }
 export interface AuthorBudgetPolicy {
   durationMs: number; maxRequests: number; maxToolCalls: number; maxIoCalls: number; maxBytes: number; maxResponseBytes: number;
@@ -11,7 +11,7 @@ export interface AuthorBudgetPolicy {
 export interface AuthorPortContext { signal: AbortSignal; requestContext: AuthorRequestContext; [key: string]: unknown }
 export interface AuthorGuardedPorts {
   request(input: unknown, context?: object): Promise<unknown>;
-  tool(input: unknown, context?: object): Promise<unknown>;
+  tool(input: unknown, context: { sideEffect: 'read' | 'write'; toolName: string; operationKey?: string; [key: string]: unknown }): Promise<unknown>;
   io(input: unknown, context?: object): Promise<unknown>;
 }
 export interface AuthorTarget { skillId?: string; name: string; description: string; version: string }
@@ -34,7 +34,18 @@ export interface AuthorHostOptions {
   hostProfile: { id: string; digest: string; [key: string]: unknown };
   defaults?: AuthorChoices;
   budgetPolicy?: Partial<AuthorBudgetPolicy>;
-  capacity?: Partial<{ maxPhysicalExecutions: number; maxPendingCandidates: number; maxDrafts: number; maxDraftBytes: number }>;
+  capacity: { maxPhysicalExecutions: number; maxPendingCandidates?: number; maxDrafts: number; maxDraftBytes: number;
+    maxRetainedDraftBytes: number; maxReceiptBytes: number; maxTurnsPerDraft: number };
+  retention?: { policyRef: string; idempotencyRetentionMs: number };
+  discovery?: {
+    root: string;
+    readMapping(scope: { namespace: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<AuthorDiscoveryMapping | null>;
+    compareAndSetMapping(scope: { namespace: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal;
+      expected: AuthorDiscoveryMapping | null; next: AuthorDiscoveryMapping | null; operationId: string }): Promise<unknown>;
+    /** Host must keep new Run admission closed for this generation through cleanup. */
+    readReferences?(scope: { namespace: string; collectionId: string; generationId: string; discoveryRoot: string; requestContext: AuthorRequestContext; signal?: AbortSignal }):
+      Promise<{ generationId: string; evidenceRef: string; referenced: boolean; closedForNewRuns: boolean }>;
+  };
   execution: {
     request(input: unknown, context: AuthorPortContext): Promise<unknown>;
     tool?(input: unknown, context: AuthorPortContext): Promise<unknown>;
@@ -46,10 +57,13 @@ export interface AuthorHostOptions {
   authorization: {
     authorize(binding: { action: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal; [key: string]: unknown }): boolean | Promise<boolean>;
     observeReview(binding: { task: unknown; result: unknown; requestContext: AuthorRequestContext; [key: string]: unknown }):
-      Promise<{ passed: boolean; subjectId: string; executionId: string; requestId?: string; authorSubjectId?: string }>;
+      Promise<{ passed: boolean; subjectId: string; executionId: string; requestId?: string; authorSubjectId?: string;
+        sessionId?: string; authorSessionId?: string; workspaceId?: string; authorWorkspaceId?: string }>;
     verifyApproval(binding: { approvalRef: string; candidateHash?: string; requestContext: AuthorRequestContext; [key: string]: unknown }):
       Promise<{ approved: boolean; subjectId: string; approvalId: string }>;
-    verifySettlement?(binding: object): Promise<{ verified: boolean; physicalDone: boolean; noEffect?: boolean }>;
+    verifySettlement?(binding: { draftId: string; turnId: string; attemptId: string; evidenceRef: string; resultHash: string | null; [key: string]: unknown }):
+      Promise<{ verified: boolean; draftId: string; turnId: string; attemptId: string; evidenceRef: string;
+        physicalDone: boolean; noEffect?: boolean; resultHash?: string | null }>;
     verifySafetyPolicy?(binding: object): boolean | Promise<boolean>;
     verifyImport?(binding: object): boolean | Promise<boolean>;
     reviewPolicy?: 'separate-pass' | 'independent-subject';
@@ -60,6 +74,10 @@ export interface AuthorHostOptions {
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
   resolveProfessionalSkill?(pin: object, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ id: string; version: string; digest: string; approved: boolean } | null>;
   resolveAuthoringInput?: FlowkitMcpOptions['resolveAuthoringInput'];
+}
+export interface AuthorDiscoveryMapping {
+  generationId: string; discoveryRoot: string; snapshotHash: string; manifestHash: string; operationId: string;
+  [key: string]: unknown;
 }
 export interface AuthorTargetRef { collectionId: string; skillId: string; baseArtifactHash: string; baseVersion: string }
 export interface AuthorStartInput { collectionId: string; requestId: string; goal: string; choices?: AuthorChoices; target?: AuthorTarget; operation?: 'create' | 'update' | 'import'; targetRef?: AuthorTargetRef; importSource?: { sourceRef: string; mode: 'new-collection' | 'migration' } }
@@ -80,8 +98,8 @@ export interface WorkflowAuthorHost {
   reviewCandidate(input: AuthorCandidateIdentity, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ diff: unknown; receipt: AuthorDraftView['reviewReceipt'] }>;
   recordApproval(input: AuthorApprovalInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   publish(input: AuthorPublicationInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ status: string; currentActive: string | null; [key: string]: unknown }>;
-  settleTurn(input: { draftId: string; expectedStateVersion: number; turnId: string; decision: 'confirm-result' | 'confirm-no-effect' | 'abandon' }, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ retryRef: string | null; stateVersion: number; budget: unknown }>;
-  discard(input: { draftId: string; expectedStateVersion: number; candidateHash: string | null }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
+  settleTurn(input: { draftId: string; expectedStateVersion: number; turnId: string; evidenceRef: string; decision: 'confirm-result' | 'confirm-no-effect' | 'abandon' }, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ retryRef: string | null; stateVersion: number; budget: unknown; result?: AuthorDraftView }>;
+  discard(input: { draftId: string; expectedStateVersion: number; candidateHash: string | null; purgeBody?: boolean; retentionPolicyRef?: string; generationId?: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   cancelTurn(input: { draftId: string; expectedStateVersion: number; turnId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   createMcpOptions(context?: AuthorRequestContext, bindings?: Pick<FlowkitMcpOptions, 'resolveAuthoringInput' | 'resolveCollectionPlan' | 'runWorkflow' | 'limits'>): FlowkitMcpOptions;
   close(options?: { mode?: 'drain' | 'cancel'; timeoutMs?: number }): Promise<{ closed: boolean; outstanding: number }>;
