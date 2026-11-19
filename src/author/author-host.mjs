@@ -164,7 +164,7 @@ export async function createWorkflowAuthorHost(supplied) {
     if (draft.contentHash !== contentHash) { draft.contentRevision++; draft.contentHash = contentHash; draft.reviewReceipt = null; draft.approvalReceipt = null; }
     draft.status = result.outcome; draft.activeExecution = null; draft.reconciliationRequired = false; delete draft.recoveryRef;
     draft.questions = result.outcome === 'needs-clarification' ? value.questions ?? draft.questions : [];
-    draft.diagnostics = [...(value.planDiagnostics ?? []), ...(value.compileDiagnostics ?? [])];
+    draft.diagnostics = [...(value.planDiagnostics ?? []), ...(value.compileDiagnostics ?? []), ...(value.reviewDiagnostics ?? [])];
     if (value.reuseReview && turn.priorReview?.contentHash === draft.contentHash &&
       Object.entries(receiptBinding(draft)).every(([key, item]) => turn.priorReview[key] === item)) {
       draft.reviewReceipt = turn.priorReview; draft.approvalReceipt = turn.priorApproval;
@@ -322,18 +322,40 @@ export async function createWorkflowAuthorHost(supplied) {
           if (draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version) throw authorError('author-target', 'Choose a new unused target version');
         }
         startAuthorDraft(draft.goal, draft.choices);
-        // Capture the prior state before marking this turn running. Retries retain
-        // this decision together with the original request and its fingerprint.
+        // Follow the last admitted authoring turn, including a turn that never
+        // produced a core result. Client-provided turn IDs have no ordering.
+        const lastTurn = draft.lastAuthoringTurnId && state.readTurn(draft.id, draft.lastAuthoringTurnId);
+        const previous = draft.authorizedRequest;
+        const previousInput = lastTurn?.request.input ?? previous?.input;
+        const awaitingAnswer = draft.status === 'needs-clarification' &&
+          (request.input !== previousInput || draft.questions.some(({ id }) => id !== 'execution-mode' && id !== 'target-version'));
+        const afterFailure = draft.status === 'failed' || draft.status === 'needs-revision';
         const clarifyingDraft = input.kind !== 'review-only' && draft.operation === 'create' && !draft.candidate &&
-          draft.status === 'needs-clarification' && input.input !== draft.authorizedRequest?.input &&
-          typeof draft.authorizedRequest?.input === 'string' && !request.confirmedPlanHash &&
+          (awaitingAnswer || afterFailure) && typeof previousInput === 'string' && !request.confirmedPlanHash &&
           !Object.hasOwn(request, 'baseline') && !request.confirmedConstraintIds?.length &&
           !ownTurns.some(item => item.result?.candidate || Object.hasOwn(item.request ?? {}, 'baseline') ||
-            item.request?.confirmedConstraintIds?.length);
+            item.request?.confirmedPlanHash || item.request?.confirmedConstraintIds?.length);
+        let draftInputs, draftContextSnapshot, answeredQuestionIds;
+        if (clarifyingDraft) {
+          draftInputs = [...(lastTurn?.draftInputs ?? previous?.draftInputs ?? [draft.goal])];
+          if (draftInputs.at(-1) !== previousInput) draftInputs.push(previousInput);
+          if (draftInputs.at(-1) !== request.input) draftInputs.push(request.input);
+          draftContextSnapshot = request.contextSnapshot ?? lastTurn?.draftContextSnapshot ??
+            lastTurn?.request.contextSnapshot ?? previous?.contextSnapshot ?? null;
+          const answer = request.input.trim();
+          const matchingQuestions = draft.questions.filter(item =>
+            item.options?.some(({ value, label }) => !['keep-draft', 'provide-details', 'clarify', 'revise'].includes(value) &&
+              (value === answer || label === answer)));
+          const resolved = new Set(lastTurn?.answeredQuestionIds);
+          if (matchingQuestions.length === 1) resolved.add(matchingQuestions[0].id);
+          answeredQuestionIds = [...resolved];
+        }
         turn = { draftId: draft.id, turnId: input.turnId, kind: input.kind ?? 'authoring', attemptId: randomUUID(), executionToken: randomUUID(),
           ownerId, baseContentHash: draft.contentHash, clarifyingDraft,
+          ...(clarifyingDraft ? { draftInputs, draftContextSnapshot, answeredQuestionIds } : {}),
           priorReview: draft.reviewReceipt ?? null, priorApproval: draft.approvalReceipt ?? null,
           request, fingerprint, status: 'running', physicalOutstanding: true, budget: newTurnBudget(policy) };
+        if (turn.kind === 'authoring') draft.lastAuthoringTurnId = turn.turnId;
         draft.activeExecution = turn.executionToken; draft.status = 'running';
         draft.reviewReceipt = null; draft.approvalReceipt = null;
         state.writeTurn(turn);
@@ -618,6 +640,7 @@ export async function createWorkflowAuthorHost(supplied) {
           for (const key of Object.keys(current)) delete current[key]; Object.assign(current, tombstone);
           for (const turn of turns) {
             delete turn.request; delete turn.result; delete turn.preparedResult; delete turn.priorReview; delete turn.priorApproval;
+            delete turn.draftInputs; delete turn.draftContextSnapshot; delete turn.answeredQuestionIds;
             turn.status = 'expired'; turn.retryRef = null; turn.executionToken = null; state.writeTurn(turn);
           }
         }

@@ -7,11 +7,11 @@ import { reviewStandardCandidate } from './standard-artifact.mjs';
 import { materializePlan } from './workflow-plan.mjs';
 import { runArtifact } from '../runtime/run.mjs';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
-import { authorError } from './host-budget.mjs';
+import { authorError, isIntentModelOutputError } from './host-budget.mjs';
 import { authorIdentity } from './host-target.mjs';
 import { evalWhen } from '../when/evaluate.mjs';
 
-function clarificationQuestions(draft, intent) {
+function clarificationQuestions(draft, intent, continuation, answered) {
   const questions = draft.questions.filter(({ id }) =>
     id === 'execution-mode' && !draft.choices.executionMode ||
     id === 'target-version' && draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version);
@@ -22,18 +22,24 @@ function clarificationQuestions(draft, intent) {
   if (!unresolved.size && intent.coverage !== 'complete') unresolved.add('workflow-goal');
   const shown = new Set();
   for (const id of unresolved) {
+    const questionId = `intent:${id}`;
+    if (answered.has(questionId)) continue;
     const isDestination = ['publication-destination', 'publication-target', 'delivery-target'].includes(id);
     const issue = byId.get(id);
     const proposed = issue?.questions?.find(item => typeof item.question === 'string' && item.question.trim());
     const text = isDestination ? 'Where should the workflow deliver or publish its result?' :
       proposed?.question ?? issue?.message ?? 'Which inputs or rules should the workflow use where the behavior is still undecided?';
-    if (shown.has(text)) continue;
-    shown.add(text);
     const options = proposed?.optionIds?.map(value => {
       const candidate = issue.candidates?.find(item => item.id === value);
       return candidate && { value, label: candidate.description, reason: 'Use this option for the current decision.' };
     }).filter(Boolean) ?? [];
-    questions.push({ id: `intent:${id}`,
+    if (continuation && (!['ambiguity', 'missing', 'conflict'].includes(issue?.category) ||
+      !issue.sourceRefs?.some(ref => ref.root === 'input' || ref.root === 'context') ||
+      !proposed || new Set(options.map(option => option.value)).size < 2 ||
+      new Set(options.map(option => option.label)).size < 2)) continue;
+    if (shown.has(text)) continue;
+    shown.add(text);
+    questions.push({ id: questionId,
       question: text,
       options: [
         { value: 'keep-draft', label: 'Keep this as a draft', reason: 'Wait for this decision before generating the workflow.' },
@@ -45,16 +51,21 @@ function clarificationQuestions(draft, intent) {
   return questions;
 }
 
-function planDecision(issue, question) {
-  if (issue.id.startsWith('unsupported-')) return question(issue.id, issue.description, ['standard', 'revise']);
+function concretePlanDecision(issue) {
+  if (typeof issue.id !== 'string' || !issue.id.trim() || typeof issue.description !== 'string' || !issue.description.trim()) return;
   const options = Array.isArray(issue.options) ? issue.options.filter(option => option &&
     ['value', 'label', 'reason'].every(key => typeof option[key] === 'string' && option[key].trim() && option[key].length <= 500)) : [];
   if (options.length >= 2 && options.length <= 5 &&
-    new Set(options.map(x => x.value)).size === options.length && options.some(x => x.value === issue.recommended)) {
+    new Set(options.map(x => x.value)).size === options.length && new Set(options.map(x => x.label)).size === options.length &&
+    options.some(x => x.value === issue.recommended)) {
     return { id: issue.id, question: issue.description, options: options.map(({ value, label, reason }) => ({ value, label, reason })),
       recommended: issue.recommended, customAllowed: true };
   }
-  return question(issue.id, issue.description);
+}
+
+function planDecision(issue, question) {
+  if (issue.id.startsWith('unsupported-')) return question(issue.id, issue.description, ['standard', 'revise']);
+  return concretePlanDecision(issue) ?? question(issue.id, issue.description);
 }
 
 /** Real domain operations for the compiled fixed core. Semantic failures never enter syntax repair. */
@@ -82,6 +93,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const workspace = await mkdtemp(path.join(options.workRoot, '.flowkit-author-'));
   let reviewObservation;
   const state = { reviewOnly: turn.kind === 'review-only' };
+  const answered = new Set(turn.answeredQuestionIds);
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
   const clarify = (message, questions) => Object.assign(authorError('author-resource', message), { outcome: 'needs-clarification', questions });
@@ -118,10 +130,11 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       let draftContext;
       if (turn.clarifyingDraft) {
         const previous = draft.authorizedRequest;
-        const earlier = previous.draftInputs ?? (draft.goal === previous.input ? [draft.goal] : [draft.goal, previous.input]);
-        const draftInputs = [...earlier, input];
+        // Old in-flight turns have the continuation flag but no saved dialogue.
+        const draftInputs = turn.draftInputs ?? [...(previous.draftInputs ??
+          (draft.goal === previous.input ? [draft.goal] : [draft.goal, previous.input])), input];
         input = draftInputs.map((value, index) => `${index === 0 ? 'Initial workflow request' : 'User clarification ' + index}:\n${value}`).join('\n\n');
-        context ??= previous.contextSnapshot;
+        context ??= turn.draftContextSnapshot ?? previous?.contextSnapshot;
         ctx.state.authorizedRequest.draftInputs = draftInputs;
         ctx.state.authorizedRequest.contextSnapshot = context ?? null;
         draftContext = { draftId: draft.id, operation: draft.operation, goal: draft.goal };
@@ -129,11 +142,34 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         if (draft.choices.executionMode === 'standard') ctx.state.authorizedRequest.planSource = 'node-options';
       }
       const baseline = turn.clarifyingDraft ? undefined : Object.hasOwn(turn.request, 'baseline') ? turn.request.baseline : draft.intentBaseline;
-      ctx.state.effectiveIntent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, { input,
+      const mayRepairIntentOutput = draft.operation === 'create' && !draft.candidate && !baseline;
+      const request = { input,
         context: draftContext ? { currentDraft: draftContext, suppliedContext: context ?? null } : context,
         baseline, baselineId: turn.request.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
-        confirmedConstraintIds: turn.request.confirmedConstraintIds, signal }))));
-      ctx.state.questions = clarificationQuestions(draft, ctx.state.effectiveIntent);
+        confirmedConstraintIds: turn.request.confirmedConstraintIds, signal };
+      for (let attempt = 0; attempt <= 1; attempt++) {
+        try {
+          const intent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, request))));
+          const questions = clarificationQuestions(draft, intent, turn.clarifyingDraft, answered);
+          if (!turn.clarifyingDraft || questions.length ||
+            (intent.coverage === 'complete' && !intent.issues.length && !intent.unresolved.length)) {
+            ctx.state.effectiveIntent = intent;
+            ctx.state.questions = questions;
+            break;
+          }
+          if (!attempt) { ports.retryIntentOutput(); continue; }
+          throw Object.assign(authorError('FKA_INTENT_CLARIFICATION_UNVERIFIED',
+            'The model did not identify a concrete business decision. Continue on this draft with the answers already saved.'),
+          { outcome: 'needs-revision' });
+        } catch (error) {
+          if (!mayRepairIntentOutput || !isIntentModelOutputError(error)) throw error;
+          ports.retryIntentOutput(error);
+          if (!attempt) continue;
+          throw Object.assign(authorError(error.code,
+            'The model could not interpret the saved input. Continue on this draft without re-entering your answers.'),
+          { outcome: 'needs-revision', cause: error });
+        }
+      }
       ctx.state.intentChanges = ctx.state.effectiveIntent.changes;
       ctx.state.baselineEvidence = { ...(draft.intent ? { intent: draft.intent } : {}),
         plan: draft.plan ?? null, candidateHash: draft.candidate?.hash ?? null,
@@ -173,8 +209,15 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         if (draft.plan?.intentRef?.effectiveIntentHash === planningIntent.intentRef.effectiveIntentHash &&
           draft.plan.intentRef.changeSetHash === planningIntent.intentRef.changeSetHash) planningIntent.intentRef = draft.plan.intentRef;
         const confirmedSource = ctx.state.confirmedPlan && draft.plan.sourceHash;
-        const awaitingDecision = (proposal.unresolvedIssues ?? []).some(item => item.blocking) ||
-          (proposal.assumptions ?? []).some(item => item.requiresConfirmation);
+        const declaredDecisions = (proposal.unresolvedIssues ?? []).filter(item => item.blocking);
+        const assumedDecision = (proposal.assumptions ?? []).some(item => item.requiresConfirmation);
+        if (turn.clarifyingDraft && !ctx.state.confirmedPlan &&
+          (assumedDecision || declaredDecisions.some(issue => answered.has(issue.id) || !concretePlanDecision(issue)))) {
+          ctx.state.planDiagnostics = [{ code: 'FKA_PLAN_DECISION_UNVERIFIED',
+            message: 'Use known choices and Host facts. For a still-missing business decision, supply a distinct question, concrete options with reasons, and a recommendation. Keep already-answered decisions out of blocking issues.' }];
+          return;
+        }
+        const awaitingDecision = declaredDecisions.length > 0 || assumedDecision;
         let compiledPlan;
         if (confirmedSource || (ctx.state.authorizedRequest.planSource === 'node-options' && !awaitingDecision)) {
           compiledPlan = await materializePlan(draft, proposal, { filename: path.join(workspace, 'candidate.workflow.js'), projectRoot: workspace });
@@ -274,7 +317,12 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
     },
     async bindReviewReceipt(ctx) {
-      if (ctx.state.passed !== true || ctx.state.findings.length) return;
+      if (ctx.state.passed !== true || ctx.state.findings.length) {
+        ctx.state.reviewDiagnostics = [{ code: 'FKA_REVIEW_NOT_QUALIFIED',
+          message: 'Independent review did not pass. Use review-only to review the same candidate, or revise it to address a confirmed issue.',
+          candidateHash: ctx.state.candidate.hash, nextAction: 'review-only' }];
+        return;
+      }
       if (!reviewObservation) throw authorError('author-review', 'No actual semantic review execution was observed');
       const observation = await observeReview({ ...reviewObservation, requestContext, signal });
       if (observation && (observation.requestId ?? observation.executionId) !== reviewObservation.task.execution.requestId) {
@@ -321,6 +369,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     const identity = options.coreIdentity;
     const result = await runArtifact(fileURLToPath(new URL('workflow.js', coreRoot)), identity.artifactHash, runtime, state,
       { signal, projectRoot: options.workRoot, skillCheck: false });
+    // The generated workflow routes action failures through its needs-info
+    // terminal. Preserve the explicit technical recovery state in the Host.
+    if (result.error?.outcome === 'needs-revision') throw result.error;
     return { outcome: result.terminal === 'candidate-ready' ? 'candidate-ready' : result.terminal === 'needs-info' ?
       'needs-clarification' : 'needs-revision', state: result.state, coreIdentity: identity, intentBaseline };
   } finally {

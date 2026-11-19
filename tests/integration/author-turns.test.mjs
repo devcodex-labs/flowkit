@@ -7,6 +7,7 @@ import { fixture, context, intent, proposal, executableProposal, source } from '
 import { runArtifact, isControlSignal } from '../../src/index.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { compileArtifactDraft } from '../../src/compiler/api.mjs';
+import { createWorkflowAuthorHost } from '../../dist/host.mjs';
 
 async function setup(t, overrides) {
   const dir = await mkdtemp(path.join(tmpdir(), 'flowkit-author-turns-'));
@@ -156,6 +157,33 @@ test('I2 review-only observes a fresh semantic task without parsing, proposing, 
   assert.equal(reviewed.status, 'candidate-ready', JSON.stringify(reviewed.diagnostics));
   assert.equal(reviewed.candidate.hash, ready.candidate.hash); assert.equal(reviewed.contentRevision, ready.contentRevision);
   assert.notEqual(reviewed.reviewReceipt.reviewRef, ready.reviewReceipt.reviewRef); assert.equal(reviewed.approvalReceipt, null);
+  assert.deepEqual(f.calls.slice(calls).map(call => call.prepared.task.node.id), ['semantic-review']);
+});
+
+test('A rejected semantic review points to review-only on the saved, unapproved candidate', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  let reject = true;
+  f.options.execution.request = input => {
+    if (reject && input.prepared?.task.node.id === 'semantic-review') {
+      f.calls.push(input);
+      return agentResult({ passed: false, findings: ['Review the declared failure control.'] });
+    }
+    return request(input);
+  };
+  const pending = await advance(f, await f.start());
+  assert.equal(pending.status, 'needs-revision');
+  assert(!pending.reviewReceipt && !pending.approvalReceipt);
+  assert.deepEqual(pending.diagnostics.map(({ code, candidateHash, nextAction }) => [code, candidateHash, nextAction]),
+    [['FKA_REVIEW_NOT_QUALIFIED', pending.candidate.hash, 'review-only']]);
+  assert.deepEqual((await current(f, pending)).diagnostics, pending.diagnostics);
+  reject = false;
+  const calls = f.calls.length;
+  const result = await advance(f, pending, { kind: 'review-only', input: 'Review the same candidate.' });
+  assert.equal(result.status, 'candidate-ready');
+  assert.equal(result.candidate.hash, pending.candidate.hash);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.approvalReceipt, null);
   assert.deepEqual(f.calls.slice(calls).map(call => call.prepared.task.node.id), ['semantic-review']);
 });
 
@@ -431,6 +459,167 @@ test('A one-sentence draft asks only the unresolved business decision and contin
   assert.deepEqual(ready.plan.edges, [{ from: 'work', to: 'done', kind: 'control' }]);
   assert.deepEqual(f.calls.slice(2).map(call => call.stage === 'intent' ? 'intent' : call.prepared.task.node.id),
     ['intent', 'proposal', 'plan-repair', 'semantic-review']);
+});
+
+test('A clarification with invalid Intent output resumes after restart using both authorized turns', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const goal = 'Reconcile inventory';
+  const answer = 'Preview differences locally. Do not change inventory.';
+  const contextSnapshot = { binding: 'local-preview' };
+  let failures = 2;
+  const attempts = [];
+  f.options.execution.request = async input => {
+    if (input.stage !== 'intent') return request(input);
+    attempts.push(input.request);
+    if (input.request.input === goal) {
+      const result = await request(input);
+      result.effective.coverage = 'partial';
+      result.effective.unresolved = ['publication-destination'];
+      return result;
+    }
+    if (failures > 0) {
+      failures--;
+      f.calls.push(input);
+      throw Object.assign(new Error('Provider output referenced a missing field'), { code: 'MODEL_OUTPUT_INVALID' });
+    }
+    return request(input);
+  };
+  const draft = await f.start({ goal });
+  const waiting = await advance(f, draft, { input: goal, turnId: 'z-initial' });
+  assert.equal(waiting.status, 'needs-clarification');
+  const pending = await advance(f, waiting, { input: answer, contextSnapshot, turnId: 'a-answer' });
+  assert.equal(pending.status, 'needs-revision', JSON.stringify({ diagnostics: pending.diagnostics, dispatches: attempts.length }));
+  assert.equal(pending.diagnostics[0].code, 'MODEL_OUTPUT_INVALID');
+  assert.equal(pending.candidate, null);
+  assert.deepEqual(pending.questions, []);
+  assert.equal(attempts.length, 3);
+  assert.deepEqual(attempts[1], attempts[2]);
+  assert.equal(attempts[1].baseline, undefined);
+  await f.host.close({ mode: 'cancel' });
+  const reopened = await createWorkflowAuthorHost(f.options);
+  try {
+    const now = await reopened.readDraft({ draftId: draft.id }, context);
+    const ready = await reopened.advanceTurn({ draftId: draft.id, expectedStateVersion: now.stateVersion,
+      turnId: 'resume', input: 'Continue with my saved answer.' }, context);
+    const observed = attempts.at(-1);
+    assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+    assert.equal(ready.id, draft.id);
+    assert.equal(ready.choices.executionMode, 'standard');
+    assert.equal(ready.candidate.manifest.sourceHash, ready.plan.sourceHash);
+    assert.equal(observed.baseline, undefined);
+    assert.deepEqual(observed.context.suppliedContext, contextSnapshot);
+    assert.equal(observed.context.currentDraft.draftId, draft.id);
+    assert(observed.input.includes(goal) && observed.input.includes(answer));
+    assert(!ready.approvalReceipt);
+  } finally { await reopened.close({ mode: 'cancel' }); }
+});
+
+test('Malformed Plan output can exhaust repair and accept the exact same answer in a later turn', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const goal = 'Reconcile inventory';
+  const answer = 'Only preview inventory differences.';
+  let broken = true;
+  f.options.execution.request = async input => {
+    if (input.stage === 'intent' && input.request.input === goal) {
+      const result = await request(input);
+      result.effective.coverage = 'partial';
+      result.effective.unresolved = ['publication-destination'];
+      return result;
+    }
+    if (broken && ['proposal', 'plan-repair'].includes(input.prepared?.task.node.id)) {
+      f.calls.push(input);
+      return agentResult({ rawText: JSON.stringify({ ...executableProposal, assumptions: ['Known Host fact'] }) });
+    }
+    return request(input);
+  };
+  const draft = await f.start({ goal });
+  const waiting = await advance(f, draft, { input: goal });
+  const pending = await advance(f, waiting, { input: answer });
+  assert.equal(pending.status, 'needs-revision');
+  assert.match(pending.diagnostics[0].message, /Plan assumptions must declare/);
+  assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'plan-repair').length, 2);
+  assert.deepEqual(pending.questions, []);
+  broken = false;
+  const ready = await advance(f, pending, { input: answer });
+  assert.equal(ready.status, 'candidate-ready');
+  assert.equal(ready.id, draft.id);
+  const intentCall = f.calls.filter(call => call.stage === 'intent').at(-1);
+  assert.equal(intentCall.request.baseline, undefined);
+  assert.equal(intentCall.request.input, `Initial workflow request:\n${goal}\n\nUser clarification 1:\n${answer}`);
+});
+
+test('Clarification rechecks unsupported assertions and asks for a grounded missing decision', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const goal = 'Reconcile inventory';
+  const answer = 'Preview the result. Inventory must remain read-only.';
+  let pass = 0;
+  f.options.execution.request = async input => {
+    if (input.stage !== 'intent') return request(input);
+    const result = await request(input);
+    if (input.request.input === goal) {
+      result.effective.coverage = 'partial';
+      result.effective.unresolved = ['publication-destination'];
+    } else if (++pass === 1) {
+      result.issues = [{ id: 'context-note', category: 'context', message: 'There is no existing workflow to modify.' }];
+      result.effective.unresolved = [result.issues[0].message];
+      result.effective.coverage = 'partial';
+    } else if (pass === 2) {
+      const refs = [{ root: 'input', pointer: '' }];
+      result.issues = [{ id: 'missing-units', category: 'missing', message: 'Units are unresolved.', sourceRefs: refs,
+        candidates: [{ id: 'items', description: 'Count individual items', sourceRefs: refs },
+          { id: 'boxes', description: 'Count sealed boxes', sourceRefs: refs }],
+        questions: [{ question: 'Which unit should the workflow compare?', optionIds: ['items', 'boxes'] }] }];
+      result.effective.unresolved = [result.issues[0].message];
+      result.effective.coverage = 'partial';
+    }
+    return result;
+  };
+  const draft = await f.start({ goal });
+  const waiting = await advance(f, draft, { input: goal });
+  const missing = await advance(f, waiting, { input: answer });
+  assert.equal(pass, 2);
+  assert.equal(missing.status, 'needs-clarification');
+  assert.deepEqual(missing.questions.map(question => [question.id, question.question]),
+    [['intent:missing-units', 'Which unit should the workflow compare?']]);
+  assert(missing.questions[0].options.some(option => option.value === 'items'));
+  const ready = await advance(f, missing, { input: 'items' });
+  assert.equal(ready.status, 'candidate-ready');
+  assert.equal(ready.id, draft.id);
+});
+
+test('An already-answered or unsupported Plan assumption is repaired without asking again', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const goal = 'Reconcile inventory';
+  const decision = { id: 'result-destination', kind: 'ambiguity', blocking: true, description: 'Where should results go?',
+    options: [{ value: 'preview', label: 'Local preview', reason: 'Keep results on this device.' },
+      { value: 'review', label: 'Internal review queue', reason: 'Send to the authorized team.' }], recommended: 'preview' };
+  let proposals = 0;
+  f.options.execution.request = input => {
+    const task = input.prepared?.task;
+    if (task?.node.id === 'proposal') {
+      const plan = ++proposals === 1 ? { ...proposal, unresolvedIssues: [decision] } :
+        { ...executableProposal, assumptions: [{ id: 'host-knows', statement: 'Host provides preview.', requiresConfirmation: true }],
+          unresolvedIssues: [decision] };
+      f.calls.push(input);
+      return agentResult({ rawText: JSON.stringify(plan) });
+    }
+    if (task?.node.id === 'plan-repair') {
+      assert.equal(task.input.planDiagnostics[0].code, 'FKA_PLAN_DECISION_UNVERIFIED');
+      assert.deepEqual(task.input.authorizedRequest.draftInputs, [goal, 'preview']);
+    }
+    return request(input);
+  };
+  const draft = await f.start({ goal });
+  const waiting = await advance(f, draft, { input: goal });
+  assert.equal(waiting.questions[0].recommended, 'preview');
+  const ready = await advance(f, waiting, { input: 'preview' });
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.deepEqual(ready.questions, []);
+  assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'plan-repair').length, 1);
 });
 
 test('Clarifying a creation with a caller-supplied Intent baseline keeps the amendment contract', async t => {

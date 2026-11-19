@@ -12,6 +12,9 @@ const codes = { 'author-executor': 'FKA_HOST_BINDING_MISSING', 'author-input': '
   'author-turn-missing': 'FKA_TURN_NOT_FOUND', 'author-cancelled': 'FKA_CANCELLED' };
 export const authorError = (reasonCode, message) => Object.assign(new Error(message), {
   code: codes[reasonCode] ?? reasonCode, reasonCode, retryable: false, sideEffectStatus: 'none' });
+export const isIntentModelOutputError = error =>
+  ['MODEL_OUTPUT_INVALID', 'MODEL_OUTPUT_INCOMPLETE'].includes(error?.code) &&
+  (error.sideEffectStatus === undefined || error.sideEffectStatus === 'none');
 export const jsonBytes = value => Buffer.byteLength(JSON.stringify(value) ?? 'null');
 export const positive = (value, fallback, name) => {
   value ??= fallback;
@@ -35,7 +38,7 @@ export function newTurnBudget(policy) {
 /** Reserve before actual dispatch, not around a black-box completed turn. Unknown usage stays charged. */
 export function createTurnPorts({ changeTurn, signal, requestContext, execution, track, beforeDispatch }) {
   let dispatchFailure;
-  const guarded = promise => promise.catch(error => { dispatchFailure = error; throw error; });
+  const guarded = (promise, kind) => promise.catch(error => { dispatchFailure ??= { error, kind }; throw error; });
   function check(turn) {
     signal.throwIfAborted();
     if (Date.now() >= turn.budget.deadlineMs) throw authorError('author-deadline', 'Turn deadline exhausted');
@@ -157,10 +160,21 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
   }
   const port = kind => (input, context) => {
     if (typeof execution[kind] !== 'function') throw authorError('author-executor', `Host ${kind} port is unavailable`);
-    return guarded(call(kind, input, execution[kind], context));
+    return guarded(call(kind, input, execution[kind], context), kind);
   };
   return Object.freeze({ request: port('request'), tool: port('tool'), io: port('io'),
-    read: (input, operation) => guarded(call('io', input, operation)),
+    read: (input, operation) => guarded(call('io', input, operation), 'io'),
+    retryIntentOutput(error) {
+      if (error && !isIntentModelOutputError(error)) throw error;
+      if (dispatchFailure && (!error || dispatchFailure.error !== error || dispatchFailure.kind !== 'request')) throw dispatchFailure.error;
+      changeTurn(turn => {
+        check(turn);
+        if (Object.values(turn.budget.reservations).some(item => item.sideEffect === 'write' && item.status !== 'not-sent')) {
+          throw authorError('author-reconcile', 'Intent output cannot be retried after a Tool write');
+        }
+      }, { read: true });
+      dispatchFailure = undefined;
+    },
     repair(repairId) {
       changeTurn(turn => {
         check(turn);
@@ -170,6 +184,6 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       });
     },
     observed() { let count; changeTurn(turn => { count = turn.budget.used.requests; }, { read: true }); return count; },
-    check() { if (dispatchFailure) throw dispatchFailure; changeTurn(check, { read: true }); }
+    check() { if (dispatchFailure) throw dispatchFailure.error; changeTurn(check, { read: true }); }
   });
 }

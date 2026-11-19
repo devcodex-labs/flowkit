@@ -20,6 +20,7 @@ Plan 与编译器共用节点校验规则。节点 ID 使用 kebab-case，最长
 Standard Parallel 的成员各自只有一条通往汇合后节点的派生控制边。成员失败由并行运行语义处理。
 
 对于无既有候选和外部基线的新建草稿，AuthorHost 使用原始请求与补答重建完整意图。Standard 草稿从已校验的 Plan 节点选项生成 DSL，控制边由编译器推导。候选继续绑定来源摘要并进入语义复审。
+模型输出不合规时，在当前请求预算内可再解析一次。技术修复耗尽后，用户可在原草稿发起新一轮继续或原样重发补答，AuthorHost 保留已授权的上下文与选择。补答后的业务问题必须提供可选方案，技术诊断交给校验流程处理。
 约束覆盖项可用 `constraintId` 指向精确的已授权约束。Plan 保存时统一为 `intentId`，冲突或未知引用会被拒绝。
 
 集合发现目录按保存事务固定的完整批准快照生成，写文件前持久分配路径。映射须 CAS 和实际读回；失败如实 saved/discovery-pending，旧发布重试不反激活旧版。清理先撤映射、核 Run 无引用且新 Run 接入关闭，再核验全文件；用户增改、链接或所有权不符保留并对账。历史 Artifact 保留。配置与恢复见 [Author Host](/guide/host-integration#author-host)。
@@ -27,6 +28,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 宿主可安装随包交付的 `dist/author/flowkit-workflow-author/SKILL.md`。启用前由宿主配置 Author、Intent Runtime、已授权的 Capability Graph、候选审查与执行授权。用户可以从一句项目目标开始，Author 沿用明确选择，针对会影响控制流或交付的未知项提供方案和推荐。
 
 用户先核对候选目标、控制流和文件差异。Standard workflow 使用同一次编译的 `workflow.js` 与 `workflow.mmd`，与 `SKILL.md` 同目录。需要保留 DSL 时显式启用 `source/workflow.dsl.js`。Workflow Skill 与 Professional Skill 都出现在主集合的 `skills/` 目录下。集合逻辑 ID 在重命名时保持，旧版本继续保持原 Artifact 身份。
+独立复审未通过时，草稿诊断 `FKA_REVIEW_NOT_QUALIFIED` 会指向保留的候选。Host 可用新 turnId 调用 `advanceTurn({kind:'review-only', ...})` 复审同一候选；用户批准仍需单独记录。
 
 宿主验证候选摘要与审批，发布完整版本并将获准的目录映射到发现位置。执行已有 Workflow Skill 时，宿主核对下载或本地文件与已批准 Artifact、固定资源版本和当前权限，再经 [runArtifact](/reference/sdk#runArtifact) 执行。Standard 运行无需安装 Author。
 
