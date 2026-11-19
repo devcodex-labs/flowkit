@@ -108,6 +108,24 @@ test('real HTTP MCP authenticates requests and returns R-03 S03 clarification be
   assert.equal(pending.questions[0].recommended, 'keep-draft');
   assert.equal(pending.questions[0].customAllowed, true);
   assert.deepEqual(fixture.calls.map(call => Boolean(call.intent)), [true]);
+  const rejectedStart = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+    collectionId: 'test-collection', requestId: 'rejected-review', operation: 'create', goal: 'Inspect the rejected review'
+  } });
+  const rejectedDraft = JSON.parse(rejectedStart.content[0].text);
+  fixture.controls.reviewFindings = [{ message: 'The declared action needs review.', nodeIds: ['work'] }];
+  const rejectedResult = await client.callTool({ name: 'flowkit_prepare_workflow',
+    arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + rejectedDraft.id } });
+  fixture.controls.reviewFindings = [];
+  assert.equal(rejectedResult.isError, undefined);
+  const rejected = JSON.parse(rejectedResult.content[0].text);
+  assert.equal(rejected.status, 'needs-revision');
+  assert.equal(rejected.reviewRejection.candidateHash, rejected.candidate.hash);
+  const viewed = await client.callTool({ name: 'flowkit_review_candidate', arguments: { collectionId: 'test-collection',
+    draftId: rejected.id, candidateHash: rejected.candidate.hash, previousHash: rejected.previousHash } });
+  assert.equal(viewed.isError, undefined);
+  const failure = JSON.parse(viewed.content[0].text);
+  assert.deepEqual(failure.rejection, rejected.reviewRejection);
+  assert.equal(failure.receipt, null);
   const draft = await assertClient(client, true);
   const prepared = await client.callTool({name:'flowkit_prepare_workflow',arguments:{collectionId:'test-collection',inputRef:'fixture-input-' + draft.id}});
   assert.equal(prepared.isError,undefined);

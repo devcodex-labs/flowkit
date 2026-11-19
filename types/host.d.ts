@@ -1,6 +1,6 @@
 import type { AgentTaskV2, PreparedAgentTask, AgentExecutionResult, HostPreparationContext, TaskJsonObject } from './index.js';
 export { createWorkflowAuthorHost } from './author-host.js';
-export type { AuthorHostOptions, WorkflowAuthorHost, AuthorRequestContext, AuthorDraftView, AuthorTurnInput, AuthorCandidate, AuthorBudgetPolicy } from './author-host.js';
+export type { AuthorHostOptions, WorkflowAuthorHost, AuthorRequestContext, AuthorDraftView, AuthorTurnInput, AuthorCandidate, AuthorBudgetPolicy, AuthorReviewRejection } from './author-host.js';
 export interface CompilationCacheLimits {maxEntries:number;maxBytes:number;ttlMs:number;maxModuleIdentities:number;maxModuleBytes:number}
 export interface CompilationCacheStatus extends CompilationCacheLimits {
   entries:number;bytes:number;residentModuleIdentities:number;residentModuleBytes:number;hits:number;misses:number;evictions:number;

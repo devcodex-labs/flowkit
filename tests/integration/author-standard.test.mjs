@@ -619,6 +619,22 @@ test('diagram control branches, joins, and bounded repair match executable Stand
     const file = fileURLToPath(new URL(`../../examples/docs/${example}.workflow.js`, import.meta.url));
     const { candidate } = await prepareStandardSkill({ ...options, file });
     for (const expected of assertions) assert.ok(candidate.files['workflow.mmd'].includes(expected), expected);
+    if (example === 'conditional-routing/sample') {
+      const facts = reviewStandardCandidate(candidate).compilerEvidence;
+      assert.deepEqual(facts.conditions, [{ nodeId: 'choose', firstMatch: [
+        { when: 'urgent', next: 'fast' }, { when: 'true', next: 'normal' }
+      ] }]);
+      assert.deepEqual(facts.documentationFiles, ['SKILL.md', 'workflow.mmd']);
+    }
+    if (example === 'parallel-review/all') {
+      const facts = reviewStandardCandidate(candidate).compilerEvidence;
+      assert.deepEqual(facts.declaredNodeIds, ['reviews', 'fast', 'slow', 'done']);
+      assert.deepEqual(facts.declaredTerminalIds, ['done']);
+      assert(facts.rendererOnlyIds.includes('_FlowkitException'));
+      assert(facts.rendererOnlyIds.includes('_Flowkit0Join'));
+      assert.deepEqual(facts.parallel, [{ nodeId: 'reviews', members: ['fast', 'slow'], continuation: 'done',
+        strategy: 'all_succeeded', continuationRequires: 'all-members-succeeded', memberToContinuationEdges: 'derived-after-join' }]);
+    }
     const entry = path.join(dir, 'workflow.js');
     await writeFile(entry, candidate.files['workflow.js']);
     return (runtime, state) => runArtifact(entry, candidate.manifest.artifactHash, { evalWhen, isControlSignal, ...runtime }, state);

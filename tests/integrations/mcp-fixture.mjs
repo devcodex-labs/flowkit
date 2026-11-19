@@ -14,7 +14,7 @@ import { isControlSignal } from '../../src/index.mjs';
 
 export async function fixtureOptions(file, collectionId = 'test-collection', namespace = 'test-project') {
   let authorized = true;
-  const approved = new Map(), calls = [], controls = { barrier: null, intentGap: null };
+  const approved = new Map(), calls = [], controls = { barrier: null, intentGap: null, reviewFindings: [] };
   const requestContext = { namespace, principalId: 'fixture-user', sessionId: 'fixture-session', workspaceId: path.dirname(file), authorizedCollections: [collectionId], authorizationSnapshotRef: 'fixture-permissions-v1' };
   const hostProfile = { id:'fixture-host',digest:artifactDigest('fixture host profile') };
   const sourceText = `import {defineWorkflow,action,terminal} from '@devcodex-labs/flowkit/dsl';
@@ -31,7 +31,7 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
       const proposal = { entryNodeId:'work', nodes:[{id:'work',kind:'action'},{id:'done',kind:'terminal'}],
         edges:[{from:'work',to:'done',kind:'control'}], coverage:[{intentId:'inspect',status:'covered',coveredBy:['work']}] };
       return { status: 'succeeded', events: [], result: id === 'proposal' ? { rawText: JSON.stringify(proposal) } :
-        id === 'semantic-review' ? { passed: true, findings: [] } : { rawText: sourceText } };
+        id === 'semantic-review' ? { passed: controls.reviewFindings.length === 0, findings: controls.reviewFindings } : { rawText: sourceText } };
     }, async createSession(ports) { return { intentRuntime: { parse: intent => ports.request({ intent }) },
       runtime: { validateResult: () => [], runAgentTask: prepared => ports.request({ prepared }) } }; } },
     authorization: { authorize: async ({ requestContext: context }) => authorized && context.principalId !== 'denied',

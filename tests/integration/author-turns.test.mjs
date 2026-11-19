@@ -160,14 +160,15 @@ test('I2 review-only observes a fresh semantic task without parsing, proposing, 
   assert.deepEqual(f.calls.slice(calls).map(call => call.prepared.task.node.id), ['semantic-review']);
 });
 
-test('A rejected semantic review points to review-only on the saved, unapproved candidate', async t => {
+test('A rejected semantic review exposes findings and actions bound to the exact candidate', async t => {
   const f = await setup(t);
   const request = f.options.execution.request;
   let reject = true;
   f.options.execution.request = input => {
     if (reject && input.prepared?.task.node.id === 'semantic-review') {
       f.calls.push(input);
-      return agentResult({ passed: false, findings: ['Review the declared failure control.'] });
+      return agentResult({ passed: false, findings: [{ message: 'Review the declared failure control.',
+        nodeIds: ['work', '_FlowkitException', 'work'], rule: 'Keep the preview local.' }] });
     }
     return request(input);
   };
@@ -177,14 +178,83 @@ test('A rejected semantic review points to review-only on the saved, unapproved 
   assert.deepEqual(pending.diagnostics.map(({ code, candidateHash, nextAction }) => [code, candidateHash, nextAction]),
     [['FKA_REVIEW_NOT_QUALIFIED', pending.candidate.hash, 'review-only']]);
   assert.deepEqual((await current(f, pending)).diagnostics, pending.diagnostics);
+  const rejection = pending.reviewRejection;
+  assert.equal(rejection.candidateHash, pending.candidate.hash);
+  assert.deepEqual(rejection.findings, [{ message: 'Review the declared failure control.', nodeIds: ['work'], rule: 'Keep the preview local.' }]);
+  assert.deepEqual(rejection.actions.map(({ kind, candidateHash }) => [kind, candidateHash]),
+    [['review-only', pending.candidate.hash], ['authoring', pending.candidate.hash]]);
+  const selected = await f.host.reviewCandidate({ draftId: pending.id, candidateHash: pending.candidate.hash,
+    previousHash: pending.previousHash }, context);
+  assert.deepEqual(selected.rejection, rejection);
+  const before = f.calls.length;
+  await assert.rejects(() => advance(f, pending, { kind: 'review-only', candidateHash: artifactDigest('stale') }), /exact current candidate/);
+  assert.equal(f.calls.length, before);
   reject = false;
   const calls = f.calls.length;
-  const result = await advance(f, pending, { kind: 'review-only', input: 'Review the same candidate.' });
+  const result = await advance(f, pending, { ...rejection.actions[0], input: 'Review the same candidate.' });
   assert.equal(result.status, 'candidate-ready');
   assert.equal(result.candidate.hash, pending.candidate.hash);
   assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.reviewRejection, undefined);
   assert.equal(result.approvalReceipt, null);
   assert.deepEqual(f.calls.slice(calls).map(call => call.prepared.task.node.id), ['semantic-review']);
+  await assert.rejects(() => advance(f, result, { ...rejection.actions[1], input: 'Use the old rejection.' }),
+    /rejected review is no longer current/);
+});
+
+test('Revising a rejected candidate preserves authorized dialogue and treats the findings as evidence', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const goal = 'Prepare an inventory reconciliation';
+  const answer = 'When emergency is true only inspect. Never write inventory.';
+  const revision = 'Fix the reported emergency route and keep my previous decisions.';
+  const finding = 'Check whether the emergency path has an extra action.';
+  let phase = 'initial';
+  f.options.execution.request = async input => {
+    if (input.prepared?.task.node.id === 'semantic-review' && phase !== 'revise') {
+      f.calls.push(input);
+      return agentResult({ passed: false, findings: [finding] });
+    }
+    if (input.stage === 'intent' && phase === 'revise') {
+      assert.equal(input.request.baseline, undefined);
+      assert.equal(input.request.context.currentDraft.draftId, draft.id);
+      assert(input.request.input.includes(goal) && input.request.input.includes(answer) && input.request.input.includes(revision));
+      assert(!input.request.input.includes(finding) && !input.request.input.includes('review evidence only'));
+    }
+    if (input.prepared?.task.node.id === 'proposal' && phase === 'revise') {
+      f.calls.push(input);
+      const plan = structuredClone(executableProposal);
+      plan.nodes[0].options.action = 'inspect-emergency';
+      return agentResult({ rawText: JSON.stringify(plan) });
+    }
+    const result = await request(input);
+    if (input.stage === 'intent' && phase === 'initial') {
+      result.effective.coverage = 'partial';
+      result.effective.unresolved = ['publication-destination'];
+    }
+    return result;
+  };
+  const draft = await f.start({ goal });
+  const pending = await advance(f, draft, { input: goal });
+  phase = 'answer';
+  const rejected = await advance(f, pending, { input: answer, contextSnapshot: { binding: 'read-only' } });
+  assert.equal(rejected.status, 'needs-revision');
+  assert.deepEqual(rejected.reviewRejection.findings, [{ message: finding, nodeIds: [] }]);
+  const retained = await advance(f, rejected, { ...rejected.reviewRejection.actions[0], input: 'review evidence only' });
+  assert.equal(retained.candidate.hash, rejected.candidate.hash);
+  phase = 'revise';
+  const ready = await advance(f, retained, { ...retained.reviewRejection.actions[1], input: revision });
+  assert.equal(ready.id, draft.id);
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.notEqual(ready.candidate.hash, retained.candidate.hash);
+  assert.equal(ready.plan.sourceHash, ready.candidate.manifest.sourceHash);
+  assert.equal(ready.reviewRejection, undefined);
+  assert.equal(ready.approvalReceipt, null);
+  const reviewed = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').at(-1).prepared.task.input;
+  assert.deepEqual(reviewed.authorizedRequest.draftInputs, [goal, answer, revision]);
+  assert.deepEqual(reviewed.authorizedRequest.contextSnapshot, { binding: 'read-only' });
+  assert.deepEqual(reviewed.baselineEvidence.reviewRejection,
+    { candidateHash: retained.candidate.hash, findings: retained.reviewRejection.findings });
 });
 
 test('I2 S06/S07/S56/S57/S58/S81: update pins an exact no-DSL baseline and preserves old approved Run bytes', async t => {

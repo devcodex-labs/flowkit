@@ -180,6 +180,26 @@ export function checkCandidate({ files, manifest, hash }) {
   }
 }
 
+/** Describe compiler facts separately from the rendered Mermaid view. */
+export function standardReviewEvidence({ manifest, files }) {
+  const nodes = manifest.workflowDefinition?.nodes ?? [];
+  const rendererOnlyIds = [...files['workflow.mmd'].matchAll(/^\s*(_Flowkit\w+)\(/gm)].map(match => match[1]);
+  return {
+    declaredNodeIds: nodes.map(node => node.id),
+    declaredTerminalIds: nodes.filter(node => node.type === 'terminal').map(node => node.id),
+    rendererOnlyIds: [...new Set(rendererOnlyIds)],
+    documentationFiles: ['SKILL.md', 'workflow.mmd'],
+    conditions: nodes.filter(node => node.type === 'condition').map(node => ({
+      nodeId: node.id, firstMatch: node.branches.map(({ when, next }) => ({ when, next }))
+    })),
+    parallel: nodes.filter(node => node.type === 'parallel').map(node => ({
+      nodeId: node.id, members: [...node.branches], continuation: node.join.next, strategy: node.join.strategy,
+      continuationRequires: node.join.strategy === 'all_succeeded' ? 'all-members-succeeded' : 'one-member-succeeded',
+      memberToContinuationEdges: 'derived-after-join'
+    }))
+  };
+}
+
 /** Show exactly what a candidate would change before the Host collects approval. */
 export function reviewStandardCandidate(candidate, previous = null) {
   checkCandidate(candidate);
@@ -195,6 +215,7 @@ export function reviewStandardCandidate(candidate, previous = null) {
   })).filter(entry => entry.previousHash !== entry.candidateHash);
   return { collectionId, skillId, previousHash: previous?.hash ?? null, candidateHash: candidate.hash,
     previousVersion: previous?.manifest.version ?? null, candidateVersion: candidate.manifest.version, files,
+    compilerEvidence: standardReviewEvidence(candidate),
     semantics:{previousMode:previous?.manifest.mode??null,candidateMode:candidate.manifest.mode,
       previousDefinitionAvailable:!!previous?.manifest.workflowDefinition,
       nodes:[...new Set([...(previous?.manifest.workflowDefinition?.nodes??[]).map(node=>node.id),

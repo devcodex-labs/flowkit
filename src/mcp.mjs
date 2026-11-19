@@ -48,7 +48,8 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     return authorHost;
   };
   const draftView = draft => Object.fromEntries(['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash',
-    'goal', 'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt']
+    'goal', 'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt',
+    'reviewRejection']
     .filter(key => Object.hasOwn(draft, key)).map(key => [key, draft[key]]));
   async function exactDraft(collectionId, draftId, signal) {
     const draft = await author().readDraft({ draftId }, requestContext, signal);
@@ -98,7 +99,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       // An HTTP disconnect stops waiting. Only explicit SDK cancellation fences this shared turn.
       return draftView(await author().advanceTurn(input, requestContext));
     });
-  tool('flowkit_review_candidate', 'Read the exact candidate file difference before approval.',
+  tool('flowkit_review_candidate', 'Read the exact candidate difference, review receipt or rejected review findings.',
     { collectionId: id, draftId: id, candidateHash: hash, previousHash: hash.nullable() }, async ({ collectionId, ...input }, ctx) => {
       await exactDraft(collectionId, input.draftId, ctx.signal);
       return author().reviewCandidate(input, requestContext, ctx.signal);

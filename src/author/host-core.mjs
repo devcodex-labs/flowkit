@@ -68,6 +68,29 @@ function planDecision(issue, question) {
   return concretePlanDecision(issue) ?? question(issue.id, issue.description);
 }
 
+function isReviewFinding(item) {
+  return typeof item === 'string' || (item !== null && typeof item === 'object' && typeof item.message === 'string' &&
+    (item.rule === undefined || typeof item.rule === 'string') &&
+    (item.nodeIds === undefined || Array.isArray(item.nodeIds) && item.nodeIds.every(id => typeof id === 'string')));
+}
+
+export function rejectedReview(candidate, findings = []) {
+  const candidateHash = candidate.hash;
+  const declaredIds = new Set(candidate.manifest.workflowDefinition?.nodes.map(node => node.id));
+  return {
+    candidateHash,
+    findings: findings.slice(0, 8).map(item => {
+      const { message, nodeIds = [], rule } = typeof item === 'string' ? { message: item } : item;
+      const linkedNodes = [...new Set(nodeIds.filter(id => declaredIds.has(id)))].slice(0, 8);
+      return { message: message.trim().slice(0, 800), nodeIds: linkedNodes, ...(rule?.trim() ? { rule: rule.trim().slice(0, 360) } : {}) };
+    }).filter(item => item.message),
+    actions: [
+      { kind: 'review-only', candidateHash, label: 'Review the same candidate' },
+      { kind: 'authoring', candidateHash, label: 'Revise from findings' }
+    ]
+  };
+}
+
 /** Real domain operations for the compiled fixed core. Semantic failures never enter syntax repair. */
 export async function executeAuthorCore({ draft, turn, options, ports, signal, requestContext, observeReview, track }) {
   const execution = options.execution;
@@ -93,6 +116,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const workspace = await mkdtemp(path.join(options.workRoot, '.flowkit-author-'));
   let reviewObservation;
   const state = { reviewOnly: turn.kind === 'review-only' };
+  const continuation = turn.clarifyingDraft || !!turn.reviewRevision;
   const answered = new Set(turn.answeredQuestionIds);
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
@@ -122,18 +146,20 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.resourceSnapshot = draft.resources;
     },
     async parseIntent(ctx) {
-      ctx.state.authorizedRequest = structuredClone(turn.request);
+      const authorization = { ...turn.reviewAuthorization, ...turn.request };
+      ctx.state.authorizedRequest = structuredClone(authorization);
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
       ctx.state.authorizedRequest.choices = draft.choices;
       let input = turn.request.input;
       let context = turn.request.contextSnapshot;
       let draftContext;
-      if (turn.clarifyingDraft) {
+      if (continuation) {
         const previous = draft.authorizedRequest;
         // Old in-flight turns have the continuation flag but no saved dialogue.
         const draftInputs = turn.draftInputs ?? [...(previous.draftInputs ??
           (draft.goal === previous.input ? [draft.goal] : [draft.goal, previous.input])), input];
-        input = draftInputs.map((value, index) => `${index === 0 ? 'Initial workflow request' : 'User clarification ' + index}:\n${value}`).join('\n\n');
+        const followUp = turn.reviewRevision ? 'User follow-up ' : 'User clarification ';
+        input = draftInputs.map((value, index) => `${index === 0 ? 'Initial workflow request' : followUp + index}:\n${value}`).join('\n\n');
         context ??= turn.draftContextSnapshot ?? previous?.contextSnapshot;
         ctx.state.authorizedRequest.draftInputs = draftInputs;
         ctx.state.authorizedRequest.contextSnapshot = context ?? null;
@@ -141,17 +167,17 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         ctx.state.authorizedRequest.currentDraft = draftContext;
         if (draft.choices.executionMode === 'standard') ctx.state.authorizedRequest.planSource = 'node-options';
       }
-      const baseline = turn.clarifyingDraft ? undefined : Object.hasOwn(turn.request, 'baseline') ? turn.request.baseline : draft.intentBaseline;
-      const mayRepairIntentOutput = draft.operation === 'create' && !draft.candidate && !baseline;
+      const baseline = Object.hasOwn(authorization, 'baseline') ? authorization.baseline : continuation ? undefined : draft.intentBaseline;
+      const mayRepairIntentOutput = draft.operation === 'create' && (!draft.candidate || !!turn.reviewRevision) && !baseline;
       const request = { input,
         context: draftContext ? { currentDraft: draftContext, suppliedContext: context ?? null } : context,
-        baseline, baselineId: turn.request.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
-        confirmedConstraintIds: turn.request.confirmedConstraintIds, signal };
+        baseline, baselineId: authorization.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
+        confirmedConstraintIds: authorization.confirmedConstraintIds, signal };
       for (let attempt = 0; attempt <= 1; attempt++) {
         try {
           const intent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, request))));
-          const questions = clarificationQuestions(draft, intent, turn.clarifyingDraft, answered);
-          if (!turn.clarifyingDraft || questions.length ||
+          const questions = clarificationQuestions(draft, intent, continuation, answered);
+          if (!continuation || questions.length ||
             (intent.coverage === 'complete' && !intent.issues.length && !intent.unresolved.length)) {
             ctx.state.effectiveIntent = intent;
             ctx.state.questions = questions;
@@ -176,6 +202,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         workflow: draft.previousCandidate ? { manifest: draft.previousCandidate.manifest, files: draft.previousCandidate.files } : null,
         materials: context ?? null };
       if (baseline) ctx.state.baselineEvidence.intentBaseline = baseline;
+      if (turn.reviewRevision) ctx.state.baselineEvidence.reviewRejection = turn.reviewRevision;
     },
     async readCatalog(ctx) {
       const pins = options.initialDocuments ?? [];
@@ -211,7 +238,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         const confirmedSource = ctx.state.confirmedPlan && draft.plan.sourceHash;
         const declaredDecisions = (proposal.unresolvedIssues ?? []).filter(item => item.blocking);
         const assumedDecision = (proposal.assumptions ?? []).some(item => item.requiresConfirmation);
-        if (turn.clarifyingDraft && !ctx.state.confirmedPlan &&
+        if (continuation && !ctx.state.confirmedPlan &&
           (assumedDecision || declaredDecisions.some(issue => answered.has(issue.id) || !concretePlanDecision(issue)))) {
           ctx.state.planDiagnostics = [{ code: 'FKA_PLAN_DECISION_UNVERIFIED',
             message: 'Use known choices and Host facts. For a still-missing business decision, supply a distinct question, concrete options with reasons, and a recommendation. Keep already-answered decisions out of blocking issues.' }];
@@ -318,6 +345,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     },
     async bindReviewReceipt(ctx) {
       if (ctx.state.passed !== true || ctx.state.findings.length) {
+        ctx.state.reviewRejection = rejectedReview(ctx.state.candidate, ctx.state.findings);
         ctx.state.reviewDiagnostics = [{ code: 'FKA_REVIEW_NOT_QUALIFIED',
           message: 'Independent review did not pass. Use review-only to review the same candidate, or revise it to address a confirmed issue.',
           candidateHash: ctx.state.candidate.hash, nextAction: 'review-only' }];
@@ -347,7 +375,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       if (id.endsWith('-repair')) ports.repair(`${turn.attemptId}/${prepared.task.execution.activationId}`);
       const result = await observed(() => session.runtime.runAgentTask(prepared, context));
       if (result?.status === 'succeeded' && (id === 'semantic-review' ?
-        typeof result.result?.passed !== 'boolean' || !Array.isArray(result.result?.findings) || result.result.findings.some(item => typeof item !== 'string') :
+        typeof result.result?.passed !== 'boolean' || !Array.isArray(result.result?.findings) || result.result.findings.some(item => !isReviewFinding(item)) :
         typeof result.result?.rawText !== 'string')) throw authorError('author-schema', 'Author TaskV2 result does not satisfy its declared output contract');
       if (id === 'semantic-review') reviewObservation = { task: prepared.task, result: structuredClone(result),
         attemptId: turn.attemptId, candidateHash: prepared.task.input.candidate.hash };

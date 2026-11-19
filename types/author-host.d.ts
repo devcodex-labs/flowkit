@@ -20,11 +20,17 @@ export interface AuthorCandidate {
   files: Record<string, string>; hash: string;
   manifest: { collectionId: string; skillId: string; name: string; version: string; artifactHash: string; [key: string]: unknown };
 }
+export interface AuthorReviewRejection {
+  candidateHash: string;
+  findings: Array<{ message: string; nodeIds: string[]; rule?: string }>;
+  actions: Array<{ kind: 'review-only' | 'authoring'; candidateHash: string; label: string }>;
+}
 export interface AuthorDraftView {
   id: string; namespace: string; storeId: string; collectionId: string; stateVersion: number; contentRevision: number; contentHash: string;
   status: string; goal: string; choices: AuthorChoices; questions: Array<{ id: string; question: string; options: unknown[]; recommended: string; customAllowed?: boolean }>;
   candidate?: AuthorCandidate | null; previousHash: string | null;
   reviewReceipt?: { qualified: boolean; reviewRef: string; candidateHash: string; [key: string]: unknown } | null;
+  reviewRejection?: AuthorReviewRejection;
   approvalReceipt?: { approvalRef: string; [key: string]: unknown } | null;
   diagnostics?: Array<{ code?: string; message?: string; [key: string]: unknown }>;
   [key: string]: unknown;
@@ -83,6 +89,7 @@ export interface AuthorTargetRef { collectionId: string; skillId: string; baseAr
 export interface AuthorStartInput { collectionId: string; requestId: string; goal: string; choices?: AuthorChoices; target?: AuthorTarget; operation?: 'create' | 'update' | 'import'; targetRef?: AuthorTargetRef; importSource?: { sourceRef: string; mode: 'new-collection' | 'migration' } }
 export interface AuthorTurnInput {
   draftId: string; expectedStateVersion: number; turnId: string; input: string; kind?: 'authoring' | 'review-only' | 'retry';
+  candidateHash?: string;
   choices?: AuthorChoices; contextSnapshot?: unknown; baseline?: unknown; baselineId?: string; confirmedConstraintIds?: string[];
   safetyPolicies?: Array<{ nodeId: string; policyRef: string }>; retryRef?: string;
   confirmedPlanHash?: string;
@@ -95,7 +102,9 @@ export interface WorkflowAuthorHost {
   start(input: AuthorStartInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   advanceTurn(input: AuthorTurnInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   readDraft(input: { draftId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
-  reviewCandidate(input: AuthorCandidateIdentity, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ diff: unknown; receipt: AuthorDraftView['reviewReceipt'] }>;
+  reviewCandidate(input: AuthorCandidateIdentity, context: AuthorRequestContext, signal?: AbortSignal): Promise<{
+    diff: unknown; receipt: AuthorDraftView['reviewReceipt']; rejection?: AuthorReviewRejection
+  }>;
   recordApproval(input: AuthorApprovalInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   publish(input: AuthorPublicationInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ status: string; currentActive: string | null; [key: string]: unknown }>;
   settleTurn(input: { draftId: string; expectedStateVersion: number; turnId: string; evidenceRef: string; decision: 'confirm-result' | 'confirm-no-effect' | 'abandon' }, context: AuthorRequestContext, signal?: AbortSignal): Promise<{ retryRef: string | null; stateVersion: number; budget: unknown; result?: AuthorDraftView }>;

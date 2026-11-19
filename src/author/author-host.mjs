@@ -7,7 +7,7 @@ import { openLocalSkillStore } from './local-skill-store.mjs';
 import { startAuthorDraft } from './draft.mjs';
 import { checkCandidate, reviewStandardCandidate, prepareImportedStandardSkill } from './standard-artifact.mjs';
 import { authorInput, authorTarget, authorIdentity as hash } from './host-target.mjs';
-import { executeAuthorCore } from './host-core.mjs';
+import { executeAuthorCore, rejectedReview } from './host-core.mjs';
 import { discoverPublication, cleanupPublicationGeneration } from './host-discovery.mjs';
 import { authorError, budgetPolicy, newTurnBudget, positive, createTurnPorts, jsonBytes } from './host-budget.mjs';
 
@@ -27,6 +27,14 @@ const requiredId = (value, label) => {
 const physicalExecutions = new Map();
 const NO_CHANGE = Symbol('no-change');
 const isTerminalDraft = draft => ['discarded', 'abandoned', 'saved', 'expired'].includes(draft.status);
+
+function activeReviewRejection(draft) {
+  if (!draft.candidate) return;
+  if (draft.reviewRejection?.candidateHash === draft.candidate.hash) return draft.reviewRejection;
+  if (draft.diagnostics?.some(entry => entry.code === 'FKA_REVIEW_NOT_QUALIFIED' && entry.candidateHash === draft.candidate.hash)) {
+    return rejectedReview(draft.candidate);
+  }
+}
 
 function assertUncommittedTurn(draft, turn, decision) {
   // An abandoned attempt may still need to release an external hold after trusted reconciliation.
@@ -83,6 +91,8 @@ export async function createWorkflowAuthorHost(supplied) {
     const result = select(draft, ['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash', 'goal', 'operation',
       'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt', 'coreIdentity',
       'reconciliationRequired', 'pendingTurnIds', 'bodyPurged']);
+    const rejection = activeReviewRejection(draft);
+    if (rejection) result.reviewRejection = rejection;
     if (result.reviewReceipt && Object.entries(receiptBinding(draft)).some(([key, value]) => result.reviewReceipt[key] !== value)) {
       result.reviewReceipt = { ...result.reviewReceipt, qualified: false, reason: 'Current content/core/Host policy differs; run review-only or rebuild' };
       result.approvalReceipt = null;
@@ -172,6 +182,8 @@ export async function createWorkflowAuthorHost(supplied) {
       const receipt = { ...receiptBinding(draft), ...value.reviewReceipt, qualified: true };
       draft.reviewReceipt = { ...receipt, reviewRef: hash(receipt) };
     }
+    if (value.reviewRejection) draft.reviewRejection = value.reviewRejection;
+    if (draft.reviewRejection?.candidateHash !== draft.candidate?.hash || draft.reviewReceipt?.qualified) delete draft.reviewRejection;
     if (result.outcome === 'candidate-ready' && !draft.reviewReceipt?.qualified) throw authorError('author-review', 'Completed result has no applicable review qualification');
     if (draft.approvalReceipt && draft.reviewReceipt?.qualified) draft.status = 'approved';
     turn.status = result.outcome; turn.executionToken = null; turn.reconciliationRequired = false;
@@ -261,6 +273,7 @@ export async function createWorkflowAuthorHost(supplied) {
       if ((input.baseline === undefined) !== (input.baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
       if (!['authoring', 'review-only', 'retry'].includes(input.kind ?? 'authoring')) throw new TypeError('Unknown Author turn kind');
       const request = clone({ input: input.input, contextSnapshot: input.contextSnapshot ?? null,
+        ...(input.candidateHash === undefined ? {} : { candidateHash: input.candidateHash }),
         ...(input.confirmedPlanHash ? { confirmedPlanHash: input.confirmedPlanHash } : {}),
         ...(input.baseline === undefined ? {} : { baseline: input.baseline, baselineId: input.baselineId }),
         ...(input.confirmedConstraintIds ? { confirmedConstraintIds: input.confirmedConstraintIds } : {}),
@@ -295,6 +308,12 @@ export async function createWorkflowAuthorHost(supplied) {
         if (input.kind === 'retry') throw authorError('author-settlement', 'Unknown original turn cannot be retried');
         if (draft.stateVersion !== input.expectedStateVersion) throw authorError('author-conflict', 'Draft stateVersion changed');
         if (isTerminalDraft(draft)) throw authorError('author-terminal', 'Draft is terminal; start an explicit update draft for a saved version');
+        if (Object.hasOwn(request, 'candidateHash') && request.candidateHash !== draft.candidate?.hash) {
+          throw authorError('author-conflict', 'Review action must address the exact current candidate');
+        }
+        if (Object.hasOwn(request, 'candidateHash') && input.kind !== 'review-only' && !activeReviewRejection(draft)) {
+          throw authorError('author-conflict', 'The rejected review is no longer current');
+        }
         const ownTurns = state.turns(draft.id, capacity.maxTurnsPerDraft + 1);
         if (ownTurns.length >= capacity.maxTurnsPerDraft) throw authorError('author-capacity', 'Retained turn receipt capacity reached');
         const all = state.activeDrafts(capacity.maxDrafts + 1);
@@ -330,15 +349,18 @@ export async function createWorkflowAuthorHost(supplied) {
         const awaitingAnswer = draft.status === 'needs-clarification' &&
           (request.input !== previousInput || draft.questions.some(({ id }) => id !== 'execution-mode' && id !== 'target-version'));
         const afterFailure = draft.status === 'failed' || draft.status === 'needs-revision';
+        const rejection = input.kind === 'review-only' ? undefined : activeReviewRejection(draft);
+        const reviewRevision = rejection ? select(rejection, ['candidateHash', 'findings']) :
+          input.kind !== 'review-only' && !draft.candidate && (awaitingAnswer || afterFailure) ? lastTurn?.reviewRevision : undefined;
         const clarifyingDraft = input.kind !== 'review-only' && draft.operation === 'create' && !draft.candidate &&
           (awaitingAnswer || afterFailure) && typeof previousInput === 'string' && !request.confirmedPlanHash &&
           !Object.hasOwn(request, 'baseline') && !request.confirmedConstraintIds?.length &&
           !ownTurns.some(item => item.result?.candidate || Object.hasOwn(item.request ?? {}, 'baseline') ||
             item.request?.confirmedPlanHash || item.request?.confirmedConstraintIds?.length);
         let draftInputs, draftContextSnapshot, answeredQuestionIds;
-        if (clarifyingDraft) {
+        if (clarifyingDraft || reviewRevision) {
           draftInputs = [...(lastTurn?.draftInputs ?? previous?.draftInputs ?? [draft.goal])];
-          if (draftInputs.at(-1) !== previousInput) draftInputs.push(previousInput);
+          if (typeof previousInput === 'string' && draftInputs.at(-1) !== previousInput) draftInputs.push(previousInput);
           if (draftInputs.at(-1) !== request.input) draftInputs.push(request.input);
           draftContextSnapshot = request.contextSnapshot ?? lastTurn?.draftContextSnapshot ??
             lastTurn?.request.contextSnapshot ?? previous?.contextSnapshot ?? null;
@@ -352,7 +374,10 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         turn = { draftId: draft.id, turnId: input.turnId, kind: input.kind ?? 'authoring', attemptId: randomUUID(), executionToken: randomUUID(),
           ownerId, baseContentHash: draft.contentHash, clarifyingDraft,
-          ...(clarifyingDraft ? { draftInputs, draftContextSnapshot, answeredQuestionIds } : {}),
+          ...(draftInputs ? { draftInputs, draftContextSnapshot, answeredQuestionIds } : {}),
+          ...(reviewRevision ? { reviewRevision, reviewAuthorization: select({
+            ...previous, ...lastTurn?.reviewAuthorization, ...lastTurn?.request
+          }, ['baseline', 'baselineId', 'confirmedConstraintIds']) } : {}),
           priorReview: draft.reviewReceipt ?? null, priorApproval: draft.approvalReceipt ?? null,
           request, fingerprint, status: 'running', physicalOutstanding: true, budget: newTurnBudget(policy) };
         if (turn.kind === 'authoring') draft.lastAuthoringTurnId = turn.turnId;
@@ -466,7 +491,8 @@ export async function createWorkflowAuthorHost(supplied) {
       if (receipt && Object.entries(receiptBinding(draft)).some(([key, value]) => receipt[key] !== value)) {
         receipt.qualified = false; receipt.reason = 'Current content/core/Host policy differs; run review-only or rebuild';
       }
-      return { diff: reviewStandardCandidate(draft.candidate, draft.previousCandidate), receipt };
+      const rejection = activeReviewRejection(draft);
+      return { diff: reviewStandardCandidate(draft.candidate, draft.previousCandidate), receipt, ...(rejection ? { rejection: clone(rejection) } : {}) };
     },
     async recordApproval(input, currentRequestContext, signal) {
       const draft = read(input.draftId);
@@ -641,6 +667,7 @@ export async function createWorkflowAuthorHost(supplied) {
           for (const turn of turns) {
             delete turn.request; delete turn.result; delete turn.preparedResult; delete turn.priorReview; delete turn.priorApproval;
             delete turn.draftInputs; delete turn.draftContextSnapshot; delete turn.answeredQuestionIds;
+            delete turn.reviewRevision; delete turn.reviewAuthorization;
             turn.status = 'expired'; turn.retryRef = null; turn.executionToken = null; state.writeTurn(turn);
           }
         }

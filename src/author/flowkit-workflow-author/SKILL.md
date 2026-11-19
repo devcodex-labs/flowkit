@@ -18,8 +18,8 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
    Standard Parallel 中，每个成员只有一条派生控制边通往汇合后的节点。成员失败由并行运行语义处理。
    无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。Standard 草稿补答的 Plan 以各节点的 DSL 选项为准，由编译器推导控制边，并由 AuthorHost 从已校验的选项直接生成候选源码。
    新建草稿的模型输出无效或不完整时，AuthorHost 在同一轮预算内至多再解析一次，已有答案保留。修复预算耗尽时，以新 turnId 在原草稿继续即可。原样重发一条补答只计入一次，不把模型的早期理解当作用户基线。
-   补答后，模型报告的待确认事项必须指向仍未决定的业务选项。已经选定的方案、已知 Host 事实和技术诊断留在 Plan 校验路径。独立复审未通过时，保留候选并通过 `FKA_REVIEW_NOT_QUALIFIED` 提示用 `review-only` 复审同一候选。
-5. 用 `reviewCandidate` 展示准确 Diff 与真实 ReviewReceipt。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。
+   补答后，模型报告的待确认事项必须指向仍未决定的业务选项。已经选定的方案、已知 Host 事实和技术诊断留在 Plan 校验路径。独立复审未通过时，展示 `reviewRejection.findings` 及绑定同一 `candidateHash` 的两个动作。用户可选 `review-only` 重审原候选，或用 `authoring` 按意见修订。修订沿用同草稿的原始授权对话，审查意见作为证据随 Plan 提供。
+5. 用 `reviewCandidate` 展示准确 Diff、真实 ReviewReceipt 或 `rejection`。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。使用 `candidateDiff.compilerEvidence` 区分声明节点、声明终点、Mermaid 渲染标记和 Parallel 实际后继。
 6. 用户审阅精确候选后，Host 核验批准引用，通过 `recordApproval` 或在 `publish` 中原子登记批准并保存。绑定 contentHash、candidateHash、previousHash 和最新 stateVersion。模型声称“已批准”不能授予发布权。publicationId 重试读回原保存操作，不反激活旧版本；saved/discovery-pending 必须如实显示。
 7. stdio/HTTP 使用同一服务的 `createMcpOptions(currentRequestContext, bindings)`，每次请求传当前身份和 Host 解析的 inputRef。八个既有 MCP 工具不增加名称；连接关闭不关闭共享 AuthorHost。仅服务所有者调用 `close`。取消后未知结果先用 SDK `settleTurn` 对账；一次性 retryRef 不重置原回合预算，不能自动重发未知写。
 
