@@ -13,6 +13,16 @@ export const DSL_FIELDS = Object.freeze(Object.fromEntries(Object.entries({
   terminal: ['name', 'status'],
 }).map(([key, fields]) => [key, Object.freeze(fields)])));
 export const NODE_TYPES = Object.freeze({ node: 'agent', action: 'action', verification: 'verification', parallel: 'parallel', condition: 'condition', loop: 'loop', human: 'human', terminal: 'terminal' });
+export const WORKFLOW_ID_MAX_LENGTH = 64;
+export function isWorkflowId(value) {
+  return typeof value === 'string' && value.length <= WORKFLOW_ID_MAX_LENGTH &&
+    /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.exec(value)?.[0] === value;
+}
+export const WORKFLOW_NODE_NAME_MAX_LENGTH = 40;
+export function isWorkflowNodeName(name) {
+  return typeof name === 'string' && name.length > 0 && name.length <= WORKFLOW_NODE_NAME_MAX_LENGTH &&
+    !/[\r\n\u2028\u2029'"`\\]/.test(name) && !name.includes('*/');
+}
 export const ERROR_CATALOG = Object.freeze({
   FK_C001: Object.freeze({ severity: 'error', reserved: false, message: "workflow id 不合法" }),
   FK_C002: Object.freeze({ severity: 'error', reserved: false, message: "version 非法" }),

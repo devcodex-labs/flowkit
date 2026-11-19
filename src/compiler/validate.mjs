@@ -1,11 +1,10 @@
-import { DSL_FIELDS } from '../shared/contracts.mjs';
+import { DSL_FIELDS, isWorkflowId, isWorkflowNodeName } from '../shared/contracts.mjs';
 import { DESCRIPTION_MAX_BYTES, hasTaskSpec, isSemVer, localTextResource, remoteTextResource, taskIntegrity } from '../shared/task-spec.mjs';
 import { allowedSkillHost } from '../shared/skill-ref.mjs';
 import { diagnostic, pointerChild } from './source.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonempty = value => typeof value === 'string' && value.length > 0;
-const idValid = value => typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.exec(value)?.[0] === value;
 const lineBreak = /[\r\n\u2028\u2029]/;
 
 export { isSemVer };
@@ -26,7 +25,7 @@ export function validateFields(literal, context) {
     }
   }
   unknown(definition, DSL_FIELDS.defineWorkflow, '', 'FK_C006');
-  if (!idValid(definition.id)) report('FK_C001', '/id', 'Workflow id must be kebab-case with at most 64 characters');
+  if (!isWorkflowId(definition.id)) report('FK_C001', '/id', 'Workflow id must be kebab-case with at most 64 characters');
   if (!isSemVer(definition.version)) report('FK_C002', '/version', 'Version must follow SemVer 2.0');
   if (!nonempty(definition.name) || definition.name.length > 80 || lineBreak.test(definition.name) || definition.name.includes('*/')) {
     report('FK_C003', '/name', 'Invalid workflow name');
@@ -67,10 +66,10 @@ export function validateFields(literal, context) {
         seen.add(item);
       });
     };
-    if (!idValid(node.id)) emit('FK_C010', 'id', 'Node id must be kebab-case with at most 64 characters');
+    if (!isWorkflowId(node.id)) emit('FK_C010', 'id', 'Node id must be kebab-case with at most 64 characters');
     if (ids.has(node.id)) emit('FK_C011', 'id', 'Duplicate node id');
     ids.add(node.id);
-    if (!nonempty(node.name) || node.name.length > 40 || /[\r\n\u2028\u2029'"`\\]/.test(node.name) || node.name.includes('*/')) {
+    if (!isWorkflowNodeName(node.name)) {
       emit('FK_C012', 'name', 'Invalid node name');
     }
     if (typeof node.name === 'string' && names.has(node.name)) emit('FK_C013', 'name', 'Duplicate node name');

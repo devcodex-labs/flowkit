@@ -17,14 +17,14 @@ export function createWorkflowAuthor({ intentRuntime, capabilityGraph, publicati
       if(readDocuments.size>64)readDocuments.delete(readDocuments.keys().next().value);
       return result;
     },
-    async plan(draft, intent, proposal, { previous, graphContext } = {}) {
+    async plan(draft, intent, proposal, { previous, graphContext, sourceHash } = {}) {
       const requested = proposal.capabilityRequirements ?? [];
       const result = capabilityGraph ? await checkPlanCapabilities(capabilityGraph, requested, graphContext) : null;
       const unresolvedIssues = [...(proposal.unresolvedIssues ?? [])];
       if (requested.length && !result?.supported) unresolvedIssues.push({ id: 'graph-capabilities', kind: 'capability-gap',
         description: 'The requested capabilities could not all be resolved in this Host’s authorized Graph.', blocking: true,
         relatedIntentIds: [], unresolved: result?.unresolved ?? requested });
-      return createWorkflowPlan(draft, intent, { ...proposal, unresolvedIssues }, previous);
+      return createWorkflowPlan(draft, intent, { ...proposal, unresolvedIssues }, previous, sourceHash);
     },
     async prepare(plan, options) {
       if (!plan) throw new TypeError('A current WorkflowPlan is required');

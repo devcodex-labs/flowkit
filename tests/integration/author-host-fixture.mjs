@@ -7,6 +7,10 @@ export default defineWorkflow({id:'sample',version:'1.0.0',name:'Sample',nodes:[
 action('work',{name:'Work',action:'inspect',next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});`;
 export const proposal = { entryNodeId: 'work', nodes: [{ id: 'work', kind: 'action' }, { id: 'done', kind: 'terminal' }],
   edges: [{ from: 'work', to: 'done', kind: 'control' }], coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['work'] }] };
+export const executableProposal = { ...proposal, edges: [], nodes: [
+  { id: 'work', kind: 'action', name: 'Work', options: { action: 'inspect', next: 'done' } },
+  { id: 'done', kind: 'terminal', name: 'Done', options: { status: 'succeeded' } }
+] };
 export const intent = { effective: { intents: [{ id: 'goal', goal: 'Inspect', understanding: 'clear', children: [], constraints: [] }],
   constraints: [], relations: [], coverage: 'complete', unresolved: [] }, turn: { changes: [], facts: {} }, issues: [], inferences: [], evidence: [] };
 export const context = { namespace: 'test', principalId: 'user', sessionId: 'host-session', workspaceId: 'project', authorizedCollections: ['team'], authorizationSnapshotRef: 'controlled-permissions-v1' };
@@ -23,7 +27,8 @@ export async function fixture(file, overrides = {}) {
         calls.push(input);
         if (input.stage === 'intent') return structuredClone(intent);
         const id = input.prepared.task.node.id;
-        const result = id === 'proposal' || id === 'plan-repair' ? { rawText: JSON.stringify(proposal) } :
+        const plan = input.prepared.task.input.authorizedRequest?.planSource === 'node-options' ? executableProposal : proposal;
+        const result = id === 'proposal' || id === 'plan-repair' ? { rawText: JSON.stringify(plan) } :
           id === 'semantic-review' ? { passed: true, findings: [] } : { rawText: source };
         return { status: 'succeeded', result, events: [] };
       },

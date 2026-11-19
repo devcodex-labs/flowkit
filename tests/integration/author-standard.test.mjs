@@ -66,6 +66,94 @@ test('Standard candidate uses real Compiler output, has three files, and runs tw
   assert.deepEqual(calls, ['inspect', 'inspect']);
 });
 
+test('Plan enforces compiler node IDs, names and distinct Loop exit roles before DSL', async t => {
+  const loopSource = `import { defineWorkflow, loop, verification, action, terminal } from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({ id: 'example', version: '1.0.0', name: 'Example', nodes: [
+  loop('quality', { name: 'Quality', maxIterations: 3, body: 'check', onSuccess: 'done', onMaxExceeded: 'fail' }),
+  verification('check', { name: 'Check', verifier: 'check', onSuccess: 'quality', onFailure: 'revise' }),
+  action('revise', { name: 'Revise', action: 'repair', next: 'check' }),
+  terminal('done', { name: ${JSON.stringify('D'.repeat(40))}, status: 'succeeded' }),
+  terminal('fail', { name: 'Fail', status: 'failed' })
+] });`;
+  const { options } = await fixture(t, loopSource);
+  const draft = startAuthorDraft('Check quality', { executionMode: 'standard' });
+  const intent = { intentRef: { effectiveIntentHash: artifactDigest('quality requirements') }, coverage: 'complete',
+    issues: [], unresolved: [], goals: [{ id: 'quality' }], constraints: [{ id: 'finite' }] };
+  const proposal = { entryNodeId: 'quality', nodes: [
+    { id: 'quality', name: 'Quality', kind: 'loop', onSuccess: 'done', onMaxExceeded: 'fail' },
+    { id: 'check', kind: 'verification' }, { id: 'revise', kind: 'action' },
+    { id: 'done', name: 'D'.repeat(40), kind: 'terminal' }, { id: 'fail', kind: 'terminal' }
+  ], edges: [['quality','check'], ['quality','done'], ['quality','fail'], ['check','quality'], ['check','revise'],
+    ['check','done'], ['check','fail'], ['revise','check']].map(([from,to]) => ({ from, to, kind: 'control' })),
+  coverage: [{ intentId: 'quality', status: 'covered', coveredBy: ['quality'] },
+    { constraintId: 'finite', status: 'covered', coveredBy: ['quality'] }] };
+  const plan = createWorkflowPlan(draft, intent, proposal);
+  assert.deepEqual(plan.coverage[1], { intentId: 'finite', status: 'covered', coveredBy: ['quality'] });
+  const keyed = createWorkflowPlan(draft, intent, { ...proposal, coverage: { quality: ['quality'], finite: ['quality'] } }, plan);
+  assert.equal(keyed, plan);
+  assert.throws(() => createWorkflowPlan(draft, intent, { ...proposal, coverage: { unknown: ['quality'] } }), /exact authorized requirement IDs/);
+  assert.equal(createWorkflowPlan(draft, intent, { ...proposal, coverage: { quality: ['quality'], finite: ['absent'] } }).status,
+    'needs-clarification');
+  const unbound = structuredClone(proposal);
+  unbound.coverage[1].constraintId = 'not-authorized';
+  assert.throws(() => createWorkflowPlan(draft, intent, unbound), /exact authorized constraint/);
+  unbound.coverage[1] = { ...proposal.coverage[1], intentId: 'quality' };
+  assert.throws(() => createWorkflowPlan(draft, intent, unbound), /conflicting intentId/);
+  assert.ok((await prepareStandardSkill({ ...options, plan })).candidate);
+
+  const badId = structuredClone(proposal);
+  for (const invalidId of ['quality_check', 'x'.repeat(65), 'quality\n']) {
+    badId.nodes[0].id = invalidId;
+    assert.throws(() => createWorkflowPlan(draft, intent, badId), /node ID.*kebab-case with at most 64 characters/);
+  }
+  const longName = structuredClone(proposal); longName.nodes[3].name += 'D';
+  assert.throws(() => createWorkflowPlan(draft, intent, longName), /name of at most 40 characters/);
+  const badExit = structuredClone(proposal); badExit.nodes[0].onSuccess = 'fail';
+  assert.throws(() => createWorkflowPlan(draft, intent, badExit), /distinct onSuccess and onMaxExceeded/);
+  badExit.nodes[0].onSuccess = 'check'; badExit.edges = badExit.edges.filter(edge => edge.to !== 'check');
+  assert.throws(() => createWorkflowPlan(draft, intent, badExit), /matching control edges/);
+
+  await writeFile(options.file, loopSource.replace("onSuccess: 'done', onMaxExceeded: 'fail'", "onSuccess: 'fail', onMaxExceeded: 'done'"));
+  await assert.rejects(prepareStandardSkill({ ...options, plan }), error => error.code === 'FKA_PLAN_MISMATCH' &&
+    error.detail.loopMismatches[0].actual.onSuccess === 'fail');
+});
+
+test('A source-bound Plan rejects a different Host action even with the same node identities and edges', async t => {
+  const { options } = await fixture(t);
+  const draft = startAuthorDraft('Inspect', { executionMode: 'standard' });
+  const effective = { intentRef: { effectiveIntentHash: artifactDigest('inspect') }, coverage: 'complete',
+    issues: [], unresolved: [], goals: [{ id: 'goal' }], constraints: [] };
+  const plan = createWorkflowPlan(draft, effective, {
+    entryNodeId: 'work', nodes: [{ id: 'work', kind: 'action' }, { id: 'done', kind: 'terminal' }],
+    edges: [{ from: 'work', to: 'done', kind: 'control' }],
+    coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['work'] }]
+  }, undefined, artifactDigest(source));
+  assert.ok((await prepareStandardSkill({ ...options, plan })).candidate);
+  await writeFile(options.file, source.replace("action: 'inspect'", "action: 'unrelated'"));
+  await assert.rejects(prepareStandardSkill({ ...options, plan }), error => error.code === 'FKA_PLAN_MISMATCH' &&
+    error.detail.expectedSourceHash === plan.sourceHash && error.detail.actualSourceHash !== plan.sourceHash);
+});
+
+test('Standard Plan rejects a parallel member failure edge before generating DSL', () => {
+  const draft = startAuthorDraft('Reconcile inventory', { executionMode: 'standard' });
+  const intent = { coverage: 'complete', issues: [], unresolved: [], goals: [{ id: 'inventory' }], constraints: [] };
+  const proposal = {
+    entryNodeId: 'read-all',
+    nodes: [
+      { id: 'read-all', kind: 'parallel' }, { id: 'warehouse', kind: 'action' }, { id: 'shelf', kind: 'action' },
+      { id: 'reconcile', kind: 'action' }, { id: 'done', kind: 'terminal' }
+    ],
+    edges: [['read-all', 'warehouse'], ['read-all', 'shelf'], ['read-all', 'reconcile'],
+      ['warehouse', 'reconcile'], ['shelf', 'reconcile'], ['reconcile', 'done']]
+      .map(([from, to]) => ({ from, to, kind: 'control' })),
+    coverage: [{ intentId: 'inventory', status: 'covered', coveredBy: ['reconcile'] }]
+  };
+  assert.equal(createWorkflowPlan(draft, intent, proposal).status, 'ready-for-dsl');
+  proposal.nodes.push({ id: 'fail', kind: 'terminal' });
+  proposal.edges.push({ from: 'shelf', to: 'fail', kind: 'control' });
+  assert.throws(() => createWorkflowPlan(draft, intent, proposal), /member's only control edge/);
+});
+
 test('source retention preserves original UTF-8 bytes and compile errors leave no candidate', async t => {
   const text = '\uFEFF' + source.replaceAll('\n', '\r\n');
   const { dir, options } = await fixture(t, text);

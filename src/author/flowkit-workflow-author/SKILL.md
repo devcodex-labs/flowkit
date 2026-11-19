@@ -13,6 +13,10 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
    只在当前集合内查找确需复用的 Professional Skill。为每个强制依赖固定身份、版本和内容摘要。
    Capability及requires依赖必须全部applicable；unknown/partial不进入可执行声明。Human自动修订必须设置有限maxRevisions。parallel.any存在写入或未知Agent副作用时，先取得Host对精确Artifact的安全策略认可；未认可则阻断，不改变引擎的迟到执行语义。
 4. 内核仅在冻结语义内共享最多两次 Plan/DSL 技术修复。业务歧义、能力缺失、安全政策或语义复审阻断返回明确问题与选项，不通过删除约束来编译。引擎 succeeded 不等于 candidate-ready。同 Plan/资源/候选复用原字节与 builtAt；`advanceTurn(kind=review-only)` 只重新复审既有候选。
+   已明确的目标和约束缺少 Plan 节点映射时，先在同一授权范围内做有限修复。编译结果与固定 Plan 的节点或控制边不符时，只修 DSL。真正未决定的业务规则继续在同一草稿询问，沿用已知选择。
+   Plan 节点 ID 使用编译器的 kebab-case 规则，最长 64 字符。节点显示名最长 40 字符。每个 Standard Loop 的 Plan 节点固定不同的 `onSuccess` 和 `onMaxExceeded` 目标及对应控制边，生成 DSL 时沿用两者各自的角色。
+   Standard Parallel 中，每个成员只有一条派生控制边通往汇合后的节点。成员失败由并行运行语义处理。
+   无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。Standard 草稿补答的 Plan 以各节点的 DSL 选项为准，由编译器推导控制边，并由 AuthorHost 从已校验的选项直接生成候选源码。
 5. 用 `reviewCandidate` 展示准确 Diff 与真实 ReviewReceipt。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。
 6. 用户审阅精确候选后，Host 核验批准引用，通过 `recordApproval` 或在 `publish` 中原子登记批准并保存。绑定 contentHash、candidateHash、previousHash 和最新 stateVersion。模型声称“已批准”不能授予发布权。publicationId 重试读回原保存操作，不反激活旧版本；saved/discovery-pending 必须如实显示。
 7. stdio/HTTP 使用同一服务的 `createMcpOptions(currentRequestContext, bindings)`，每次请求传当前身份和 Host 解析的 inputRef。八个既有 MCP 工具不增加名称；连接关闭不关闭共享 AuthorHost。仅服务所有者调用 `close`。取消后未知结果先用 SDK `settleTurn` 对账；一次性 retryRef 不重置原回合预算，不能自动重发未知写。

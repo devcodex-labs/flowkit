@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createWorkflowAuthor } from './author.mjs';
 import { checkPlanCapabilities } from './draft.mjs';
 import { reviewStandardCandidate } from './standard-artifact.mjs';
+import { materializePlan } from './workflow-plan.mjs';
 import { runArtifact } from '../runtime/run.mjs';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { authorError } from './host-budget.mjs';
@@ -14,20 +15,46 @@ function clarificationQuestions(draft, intent) {
   const questions = draft.questions.filter(({ id }) =>
     id === 'execution-mode' && !draft.choices.executionMode ||
     id === 'target-version' && draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version);
-  const unresolved = new Set([...intent.unresolved, ...intent.issues.map(issue => issue.id)]
+  const byId = new Map(intent.issues.map(issue => [issue.id, issue]));
+  const messages = new Set(intent.issues.map(issue => issue.message).filter(Boolean));
+  const unresolved = new Set([...intent.unresolved.filter(value => !messages.has(value)), ...byId.keys()]
     .filter(id => typeof id === 'string' && id.trim()));
-  if (!unresolved.size && (intent.coverage !== 'complete' || intent.issues.length || intent.unresolved.length)) unresolved.add('workflow-goal');
+  if (!unresolved.size && intent.coverage !== 'complete') unresolved.add('workflow-goal');
+  const shown = new Set();
   for (const id of unresolved) {
     const isDestination = ['publication-destination', 'publication-target', 'delivery-target'].includes(id);
+    const issue = byId.get(id);
+    const proposed = issue?.questions?.find(item => typeof item.question === 'string' && item.question.trim());
+    const text = isDestination ? 'Where should the workflow deliver or publish its result?' :
+      proposed?.question ?? issue?.message ?? 'Which inputs or rules should the workflow use where the behavior is still undecided?';
+    if (shown.has(text)) continue;
+    shown.add(text);
+    const options = proposed?.optionIds?.map(value => {
+      const candidate = issue.candidates?.find(item => item.id === value);
+      return candidate && { value, label: candidate.description, reason: 'Use this option for the current decision.' };
+    }).filter(Boolean) ?? [];
     questions.push({ id: `intent:${id}`,
-      question: isDestination ? 'Where should the workflow deliver or publish its result?' : `What should the workflow do about ${id}?`,
+      question: text,
       options: [
         { value: 'keep-draft', label: 'Keep this as a draft', reason: 'Wait for this decision before generating the workflow.' },
+        ...options,
         { value: 'provide-details', label: isDestination ? 'Specify the destination' : 'Specify the expected behavior',
           reason: 'Use the details you provide in the next turn.' }
       ], recommended: 'keep-draft', customAllowed: true });
   }
   return questions;
+}
+
+function planDecision(issue, question) {
+  if (issue.id.startsWith('unsupported-')) return question(issue.id, issue.description, ['standard', 'revise']);
+  const options = Array.isArray(issue.options) ? issue.options.filter(option => option &&
+    ['value', 'label', 'reason'].every(key => typeof option[key] === 'string' && option[key].trim() && option[key].length <= 500)) : [];
+  if (options.length >= 2 && options.length <= 5 &&
+    new Set(options.map(x => x.value)).size === options.length && options.some(x => x.value === issue.recommended)) {
+    return { id: issue.id, question: issue.description, options: options.map(({ value, label, reason }) => ({ value, label, reason })),
+      recommended: issue.recommended, customAllowed: true };
+  }
+  return question(issue.id, issue.description);
 }
 
 /** Real domain operations for the compiled fixed core. Semantic failures never enter syntax repair. */
@@ -86,16 +113,32 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.authorizedRequest = structuredClone(turn.request);
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
       ctx.state.authorizedRequest.choices = draft.choices;
-      const baseline = Object.hasOwn(turn.request, 'baseline') ? turn.request.baseline : draft.intentBaseline;
-      ctx.state.effectiveIntent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, { input: turn.request.input,
-        context: turn.request.contextSnapshot, baseline, baselineId: turn.request.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
+      let input = turn.request.input;
+      let context = turn.request.contextSnapshot;
+      let draftContext;
+      if (turn.clarifyingDraft) {
+        const previous = draft.authorizedRequest;
+        const earlier = previous.draftInputs ?? (draft.goal === previous.input ? [draft.goal] : [draft.goal, previous.input]);
+        const draftInputs = [...earlier, input];
+        input = draftInputs.map((value, index) => `${index === 0 ? 'Initial workflow request' : 'User clarification ' + index}:\n${value}`).join('\n\n');
+        context ??= previous.contextSnapshot;
+        ctx.state.authorizedRequest.draftInputs = draftInputs;
+        ctx.state.authorizedRequest.contextSnapshot = context ?? null;
+        draftContext = { draftId: draft.id, operation: draft.operation, goal: draft.goal };
+        ctx.state.authorizedRequest.currentDraft = draftContext;
+        if (draft.choices.executionMode === 'standard') ctx.state.authorizedRequest.planSource = 'node-options';
+      }
+      const baseline = turn.clarifyingDraft ? undefined : Object.hasOwn(turn.request, 'baseline') ? turn.request.baseline : draft.intentBaseline;
+      ctx.state.effectiveIntent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, { input,
+        context: draftContext ? { currentDraft: draftContext, suppliedContext: context ?? null } : context,
+        baseline, baselineId: turn.request.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
         confirmedConstraintIds: turn.request.confirmedConstraintIds, signal }))));
       ctx.state.questions = clarificationQuestions(draft, ctx.state.effectiveIntent);
       ctx.state.intentChanges = ctx.state.effectiveIntent.changes;
       ctx.state.baselineEvidence = { ...(draft.intent ? { intent: draft.intent } : {}),
         plan: draft.plan ?? null, candidateHash: draft.candidate?.hash ?? null,
         workflow: draft.previousCandidate ? { manifest: draft.previousCandidate.manifest, files: draft.previousCandidate.files } : null,
-        materials: turn.request.contextSnapshot ?? null };
+        materials: context ?? null };
       if (baseline) ctx.state.baselineEvidence.intentBaseline = baseline;
     },
     async readCatalog(ctx) {
@@ -115,12 +158,13 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         }
         const proposal = structuredClone(draft.plan);
         proposal.assumptions = proposal.assumptions.map(item => ({ ...item, requiresConfirmation: false }));
-        proposal.unresolvedIssues = proposal.unresolvedIssues.filter(item => !item.id.startsWith('assumption-'));
+        proposal.unresolvedIssues = proposal.unresolvedIssues.filter(item => !item.id.startsWith('assumption-') && item.kind !== 'coverage-gap');
         ctx.state.rawText = JSON.stringify(proposal); ctx.state.confirmedPlan = true;
       }
     },
     async validatePlan(ctx) {
       ctx.state.currentPlan = null; ctx.state.planDiagnostics = [];
+      ctx.state.planSource = null; ctx.state.planHasSource = false;
       let proposal;
       try { proposal = JSON.parse(ctx.state.rawText); }
       catch (error) { ctx.state.planDiagnostics = [{ message: error.message }]; return; }
@@ -128,10 +172,34 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         const planningIntent = structuredClone(ctx.state.effectiveIntent);
         if (draft.plan?.intentRef?.effectiveIntentHash === planningIntent.intentRef.effectiveIntentHash &&
           draft.plan.intentRef.changeSetHash === planningIntent.intentRef.changeSetHash) planningIntent.intentRef = draft.plan.intentRef;
+        const confirmedSource = ctx.state.confirmedPlan && draft.plan.sourceHash;
+        const awaitingDecision = (proposal.unresolvedIssues ?? []).some(item => item.blocking) ||
+          (proposal.assumptions ?? []).some(item => item.requiresConfirmation);
+        let compiledPlan;
+        if (confirmedSource || (ctx.state.authorizedRequest.planSource === 'node-options' && !awaitingDecision)) {
+          compiledPlan = await materializePlan(draft, proposal, { filename: path.join(workspace, 'candidate.workflow.js'), projectRoot: workspace });
+          if (confirmedSource && compiledPlan.sourceHash !== confirmedSource) throw authorError('author-conflict', 'Confirmed Plan source changed');
+          if (compiledPlan.diagnostics) {
+            ctx.state.planDiagnostics = compiledPlan.diagnostics.map(({ code, message, nodeId }) => ({ code, message, nodeId }));
+            return;
+          }
+          proposal = compiledPlan.proposal;
+        }
         ctx.state.currentPlan = await author.plan(draft, planningIntent, proposal,
-          { previous: draft.plan, graphContext: requestContext });
-        ctx.state.questions = ctx.state.currentPlan.unresolvedIssues.filter(item => item.blocking).map(item =>
-          question(item.id, item.description, item.id.startsWith('unsupported-') ? ['standard', 'revise'] : ['clarify', 'revise']));
+          { previous: draft.plan, graphContext: requestContext, sourceHash: compiledPlan?.sourceHash });
+        if (compiledPlan) {
+          ctx.state.planSource = compiledPlan.source;
+          ctx.state.planHasSource = true;
+        }
+        const blocking = ctx.state.currentPlan.unresolvedIssues.filter(item => item.blocking);
+        if (!ctx.state.confirmedPlan && blocking.length && blocking.every(item => item.kind === 'coverage-gap')) {
+          ctx.state.planDiagnostics = blocking.map(({ intentId, description }) => ({
+            code: 'FKA_PLAN_COVERAGE_REQUIRED', intentId, message: description
+          }));
+        }
+        const business = blocking.filter(item => item.kind !== 'coverage-gap');
+        ctx.state.questions = (ctx.state.confirmedPlan && business.length === 0 ? blocking : business)
+          .map(item => planDecision(item, question));
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;
         ctx.state.planDiagnostics = [{ message: error.message }];
@@ -173,21 +241,30 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     async prepareCandidate(ctx) {
       ctx.state.candidate = null; ctx.state.candidateDiff = null; ctx.state.compileDiagnostics = [];
       const file = path.join(workspace, 'candidate.workflow.js');
-      await ports.read({ writeCandidateSource: artifactDigest(ctx.state.rawText) }, async () => { await writeFile(file, ctx.state.rawText); return true; });
+      const source = ctx.state.planSource ?? ctx.state.rawText;
+      await ports.read({ writeCandidateSource: artifactDigest(source) }, async () => { await writeFile(file, source); return true; });
       let result;
-      try { result = await ports.read({ compileSource: artifactDigest(ctx.state.rawText) }, () => author.prepare(ctx.state.currentPlan, { file, ...draft.target, collectionId: draft.collectionId,
-        hostProfile: options.hostProfile, buildId: turn.attemptId, includeSource: draft.choices.includeSource,
-        executionMode: draft.choices.executionMode, compilerOptions: { projectRoot: workspace, skillCheck: false },
-        documents: ctx.state.resourceSnapshot.documents.map(item => item.evidence),
-        professionalSkills: ctx.state.resourceSnapshot.professionalSkills.map(({ nodeId, id, version, digest }) => ({ nodeId, id, version, digest })),
-        safetyPolicies: ctx.state.resourceSnapshot.safetyPolicies })); }
+      try {
+        result = await ports.read({ compileSource: artifactDigest(source) }, async () => {
+          try {
+            return await author.prepare(ctx.state.currentPlan, { file, ...draft.target, collectionId: draft.collectionId,
+              hostProfile: options.hostProfile, buildId: turn.attemptId, includeSource: draft.choices.includeSource,
+              executionMode: draft.choices.executionMode, compilerOptions: { projectRoot: workspace, skillCheck: false },
+              documents: ctx.state.resourceSnapshot.documents.map(item => item.evidence),
+              professionalSkills: ctx.state.resourceSnapshot.professionalSkills.map(({ nodeId, id, version, digest }) => ({ nodeId, id, version, digest })),
+              safetyPolicies: ctx.state.resourceSnapshot.safetyPolicies });
+          } catch (error) {
+            if (error.code !== 'FKA_PLAN_MISMATCH') throw error;
+            return { candidate: null, diagnostics: [{ code: error.code, message: error.message, ...error.detail }] };
+          }
+        });
+      }
       catch (error) {
         if (error.code === 'FKA_HUMAN_LIMIT_REQUIRED') throw clarify(error.message,
           [question(error.nodeId, 'Choose a finite Human revision limit', [2, 1, 3])]);
         if (error.code === 'FKA_SAFETY_POLICY_REQUIRED') throw clarify(error.message,
           [question(error.nodeId, `Approve a Host policy for exact Artifact ${error.artifactHash}`, ['review-exact-policy', 'revise'])]);
         if (/Document|document|Graph/.test(error.message)) throw clarify(error.message, [question('resource-drift', 'Refresh and review the changed resource', ['refresh-review', 'cancel'])]);
-        if (/differ.*WorkflowPlan|control flow differs/.test(error.message)) error.outcome = 'needs-revision';
         throw error;
       }
       ctx.state.compileDiagnostics = result.diagnostics;
@@ -234,7 +311,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       return { intentReady: () => value.effectiveIntent.coverage === 'complete' && !value.effectiveIntent.issues.length &&
           !value.effectiveIntent.unresolved.length && !!draft.choices.executionMode &&
           !(draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version),
-        planValid: () => !!value.currentPlan, planReady: () => value.currentPlan.status === 'ready-for-dsl',
+        planValid: () => !!value.currentPlan && !value.planDiagnostics.length, planReady: () => value.currentPlan.status === 'ready-for-dsl',
         resourcesReady: () => value.resourceSnapshot.ready === true, compiled: () => !!value.candidate,
         reviewPassed: () => !!value.reviewReceipt }[name]();
     }

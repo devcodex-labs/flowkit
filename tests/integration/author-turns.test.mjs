@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fixture, context, intent, proposal, source } from './author-host-fixture.mjs';
+import { fixture, context, intent, proposal, executableProposal, source } from './author-host-fixture.mjs';
 import { runArtifact, isControlSignal } from '../../src/index.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { compileArtifactDraft } from '../../src/compiler/api.mjs';
@@ -64,10 +64,20 @@ test('R-03 S03: unresolved publication offers a draft recommendation and custom 
   assert.equal(f.host.createMcpOptions().store.readActive('team', ready.target.skillId), null);
 });
 
-function replacePlan(f, change) {
+function replacePlan(f, change, controlScope) {
   const request = f.options.execution.request;
-  f.options.execution.request = async input => input.prepared?.task.node.id === 'proposal' ?
-    (f.calls.push(input), agentResult({ rawText: JSON.stringify(change(structuredClone(proposal))) })) : request(input);
+  f.options.execution.request = async input => {
+    if (input.stage === 'intent' && controlScope) {
+      const parsed = await request(input);
+      parsed.effective.constraints.push({id: 'explicit-controls', kind: 'requirement', text: controlScope, scope: {}});
+      return parsed;
+    }
+    if (input.prepared?.task.node.id !== 'proposal') return request(input);
+    f.calls.push(input);
+    const result = change(structuredClone(proposal));
+    if (controlScope) result.coverage.push({intentId:'explicit-controls',status:'covered',coveredBy:[result.entryNodeId]});
+    return agentResult({ rawText: JSON.stringify(result) });
+  };
 }
 
 test('I4 S05/S25/S88/S90/S91/S92: mode changes invalidate approval, new turns get fresh deadlines and independent review needs observed distinct identities', async t => {
@@ -101,8 +111,10 @@ human('approve',{name:'Approve',onApprove:'done',onReject:'revise',maxRevisions:
 action('revise',{name:'Revise',action:'revise',next:'approve'}),terminal('done',{name:'Done',status:'succeeded'})]});`;
   const file = path.join(f.dir, 'combined.workflow.js'); await writeFile(file, text);
   const compiled = await compileArtifactDraft(file, { skillCheck: false }); assert.ok(compiled.artifact);
-  replacePlan(f, plan => ({ ...plan, entryNodeId: 'race', nodes: compiled.definition.nodes.map(node => ({ id: node.id, kind: node.type })),
-    edges: [...compiled.graph.referenceEdges, ...compiled.graph.executionEdges].map(({ from, to }) => ({ from, to, kind: 'control' })) }));
+  replacePlan(f, plan => ({ ...plan, entryNodeId: 'race', coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['race'] }],
+    nodes: compiled.definition.nodes.map(node => ({ id: node.id, kind: node.type })),
+    edges: [...compiled.graph.referenceEdges, ...compiled.graph.executionEdges].map(({ from, to }) => ({ from, to, kind: 'control' })) }),
+  'Run the selected parallel policy, then request approval with at most one revision.');
   const request = f.options.execution.request;
   f.options.execution.request = async input => ['dsl-source', 'dsl-repair'].includes(input.prepared?.task.node.id) ?
     (f.calls.push(input), agentResult({ rawText: input.prepared.task.node.id === 'dsl-source' ? 'broken' : text })) : request(input);
@@ -214,8 +226,10 @@ test('I2 S48/S65: semantic review receives changed current request even when sta
 test('I2 S18/S20: missing finite Human policy and unsupported P0-A are decisions, not syntax-repair attempts', async t => {
   for (const mode of ['standard', 'interactive-p0-a']) {
     const f = await setup(t);
-    replacePlan(f, plan => ({ ...plan, entryNodeId: 'approval', nodes: [{ id: 'approval', kind: 'human' }, { id: 'revise', kind: 'action' }, { id: 'done', kind: 'terminal' }], edges: [
-      { from: 'approval', to: 'done', kind: 'control' }, { from: 'approval', to: 'revise', kind: 'control' }, { from: 'revise', to: 'approval', kind: 'control' }] }));
+    replacePlan(f, plan => ({ ...plan, entryNodeId: 'approval', coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['approval'] }],
+      nodes: [{ id: 'approval', kind: 'human' }, { id: 'revise', kind: 'action' }, { id: 'done', kind: 'terminal' }], edges: [
+      { from: 'approval', to: 'done', kind: 'control' }, { from: 'approval', to: 'revise', kind: 'control' }, { from: 'revise', to: 'approval', kind: 'control' }] }),
+    'Ask for approval and allow revision; its maximum is not yet supplied.');
     const request = f.options.execution.request;
     f.options.execution.request = async input => input.prepared?.task.node.id === 'dsl-source' ? (f.calls.push(input), agentResult({ rawText:
       `import {defineWorkflow,human,action,terminal} from '@devcodex-labs/flowkit/dsl';export default defineWorkflow({id:'human',version:'1.0.0',name:'Human',nodes:[human('approval',{name:'Approve',onApprove:'done',onReject:'revise'}),action('revise',{name:'Revise',action:'revise',next:'approval'}),terminal('done',{name:'Done',status:'succeeded'})]});` })) : request(input);
@@ -310,6 +324,141 @@ test('I2 S15/S16/S83: one Plan repair plus one DSL repair share exactly two disp
     ['proposal', 'plan-repair', 'dsl-source', 'dsl-repair', 'semantic-review']);
 });
 
+test('Plan repair receives a specific diagnostic when the proposal omits a terminal', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  f.options.execution.request = async input => {
+    const task = input.prepared?.task;
+    if (task?.node.id === 'proposal') {
+      const result = await request(input);
+      const proposal = JSON.parse(result.result.rawText);
+      return agentResult({ rawText: JSON.stringify({ ...proposal,
+        nodes: proposal.nodes.filter(node => node.kind !== 'terminal'), edges: [] }) });
+    }
+    if (task?.node.id === 'plan-repair') {
+      assert.match(task.input.planDiagnostics[0].message, /needs a terminal node/);
+    }
+    return request(input);
+  };
+  const result = await advance(f, await f.start());
+  assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
+  assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'plan-repair').length, 1);
+});
+
+test('Known constraints with invalid coverage and a stale DSL graph repair within the existing shared budget', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const requirement = { id: 'no-publish', kind: 'prohibition', text: 'Keep the result local', scope: {} };
+  const coverage = { intentId: requirement.id, status: 'covered', coveredBy: ['work'] };
+  f.options.execution.request = async input => {
+    if (input.stage === 'intent') {
+      const parsed = await request(input);
+      parsed.effective.constraints.push(requirement);
+      assert.deepEqual(input.request.output, { evidence: true, suggestions: false });
+      return parsed;
+    }
+    const task = input.prepared.task;
+    if (task.node.id === 'proposal' || task.node.id === 'plan-repair') {
+      f.calls.push(input);
+      if (task.node.id === 'plan-repair') {
+        assert.equal(task.input.planDiagnostics[0].intentId, requirement.id);
+        assert.equal(task.input.planDiagnostics[0].message, requirement.text);
+        assert.equal(JSON.parse(task.input.rawText).coverage.at(-1).coveredBy[0], 'missing-node');
+      }
+      const item = task.node.id === 'proposal' ? { ...coverage, coveredBy: ['missing-node'] } : coverage;
+      return agentResult({ rawText: JSON.stringify({ ...proposal, coverage: [...proposal.coverage, item] }) });
+    }
+    if (task.node.id === 'dsl-source') {
+      f.calls.push(input);
+      return agentResult({ rawText: source.replace("action('work'", "action('wrong'") });
+    }
+    if (task.node.id === 'dsl-repair') {
+      assert.equal(task.input.compileDiagnostics[0].code, 'FKA_PLAN_MISMATCH');
+      assert.match(task.input.rawText, /action\('wrong'/);
+    }
+    return request(input);
+  };
+  const ready = await advance(f, await f.start());
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id),
+    ['proposal', 'plan-repair', 'dsl-source', 'dsl-repair', 'semantic-review']);
+  assert.equal(ready.candidate.manifest.workflowDefinition.nodes[0].id, 'work');
+});
+
+test('A one-sentence draft asks only the unresolved business decision and continues on the same draft', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  let answered = false;
+  f.options.execution.request = async input => {
+    if (input.stage === 'intent' && answered) {
+      assert.equal(input.request.baseline, undefined, 'A provisional model snapshot is not a user baseline');
+      assert.match(input.request.input, /Initial workflow request:\nReconcile inventory\n\nUser clarification 1:\nPut discrepancies in a local preview/);
+      assert.deepEqual(input.request.context.currentDraft, { draftId: draft.id, operation: 'create', goal: 'Reconcile inventory' });
+    }
+    const task = input.prepared?.task;
+    if (answered && task?.node.id === 'proposal') {
+      assert.equal(task.input.authorizedRequest.planSource, 'node-options');
+      assert.deepEqual(task.input.authorizedRequest.draftInputs, ['Reconcile inventory', 'Put discrepancies in a local preview']);
+      f.calls.push(input);
+      const broken = structuredClone(executableProposal);
+      delete broken.nodes[0].options.next;
+      return agentResult({ rawText: JSON.stringify(broken) });
+    }
+    if (answered && task?.node.id === 'plan-repair') {
+      assert(task.input.planDiagnostics.some(item => item.code === 'FK_C016' && item.nodeId === 'work'));
+    }
+    if (input.stage !== 'agent' || input.prepared.task.node.id !== 'proposal' || answered) return request(input);
+    f.calls.push(input);
+    return agentResult({ rawText: JSON.stringify({ ...proposal, unresolvedIssues: [{
+      id: 'difference-policy', kind: 'ambiguity', blocking: true, description: 'Where should discrepancies go?',
+      recommended: 'preview', options: [{ value: 'preview', label: 'Local preview', reason: 'Avoid any write' },
+        { value: 'manual', label: 'Manual review', reason: 'Let the owner decide' }]
+    }] }) });
+  };
+  const draft = await f.start({ goal: 'Reconcile inventory' });
+  const waiting = await advance(f, draft, { input: draft.goal });
+  assert.equal(waiting.status, 'needs-clarification');
+  assert.equal(waiting.candidate, null);
+  assert.deepEqual(waiting.questions.map(q => [q.id, q.recommended, q.customAllowed]), [['difference-policy', 'preview', true]]);
+  assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id), ['proposal']);
+  answered = true;
+  const ready = await advance(f, waiting, { input: 'Put discrepancies in a local preview' });
+  assert.equal(ready.id, draft.id);
+  assert.equal(ready.choices.executionMode, 'standard');
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.equal(ready.approvalReceipt, null);
+  assert.equal(ready.plan.sourceHash, ready.candidate.manifest.sourceHash);
+  assert.deepEqual(ready.plan.edges, [{ from: 'work', to: 'done', kind: 'control' }]);
+  assert.deepEqual(f.calls.slice(2).map(call => call.stage === 'intent' ? 'intent' : call.prepared.task.node.id),
+    ['intent', 'proposal', 'plan-repair', 'semantic-review']);
+});
+
+test('Clarifying a creation with a caller-supplied Intent baseline keeps the amendment contract', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  const provisional = { ...structuredClone(intent), effective: { ...intent.effective, coverage: 'partial', unresolved: ['delivery'] } };
+  let calls = 0;
+  f.options.execution.request = async input => {
+    const result = await request(input);
+    if (input.stage !== 'intent') return result;
+    if (++calls === 1) {
+      assert.deepEqual(input.request.baseline, intent.effective);
+      return provisional;
+    }
+    assert.deepEqual(input.request.baseline, provisional.effective);
+    assert.equal(input.request.input, 'Deliver to the approved local preview');
+    assert.equal(input.request.context?.currentDraft, undefined);
+    return result;
+  };
+  const draft = await f.start();
+  const waiting = await advance(f, draft, { baseline: intent.effective, baselineId: 'supplied-by-host' });
+  assert.equal(waiting.status, 'needs-clarification');
+  const ready = await advance(f, waiting, { input: 'Deliver to the approved local preview' });
+  assert.equal(ready.id, draft.id);
+  assert.equal(ready.status, 'candidate-ready');
+  assert.equal(ready.plan.sourceHash, undefined);
+});
+
 test('I2 S19/S75/S80: exact compiled any policy is required; supported P0-A Agent target stays in its selected mode', async t => {
   for (const variant of ['any-denied', 'any-approved', 'p0-a']) {
     const f = await setup(t); const any = variant.startsWith('any');
@@ -319,8 +468,10 @@ export default defineWorkflow({id:'any',version:'1.0.0',name:'Any',nodes:[parall
     const file = path.join(f.dir, 'target.workflow.js'); await writeFile(file, text);
     const compiled = await compileArtifactDraft(file, { skillCheck: false });
     replacePlan(f, plan => ({ ...plan, entryNodeId: compiled.definition.nodes[0].id,
+      coverage: [{ intentId: 'goal', status: 'covered', coveredBy: [compiled.definition.nodes[0].id] }],
       nodes: compiled.definition.nodes.map(node => ({ id: node.id, kind: node.type })),
-      edges: [...compiled.graph.referenceEdges, ...compiled.graph.executionEdges].map(({ from, to }) => ({ from, to, kind: 'control' })) }));
+      edges: [...compiled.graph.referenceEdges, ...compiled.graph.executionEdges].map(({ from, to }) => ({ from, to, kind: 'control' })) }),
+    any ? 'Use parallel.any with the exact Host policy.' : undefined);
     const request = f.options.execution.request;
     f.options.execution.request = async input => input.prepared?.task.node.id === 'dsl-source' ?
       (f.calls.push(input), agentResult({ rawText: text })) : request(input);

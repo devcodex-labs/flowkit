@@ -61,7 +61,7 @@ export function readIntentForPlan(result, { baselineId, confirmedConstraintIds =
 export async function analyzeAuthorDraft(draft, intentRuntime, { input = draft.goal, baseline, baselineId,
   context, confirmedConstraintIds, signal } = {}) {
   if ((baseline === undefined) !== (baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
-  const result = await intentRuntime.parse({ input, context, baseline, output: { evidence: true, suggestions: true } }, { signal });
+  const result = await intentRuntime.parse({ input, context, baseline, output: { evidence: true, suggestions: false } }, { signal });
   return readIntentForPlan(result, { baselineId, confirmedConstraintIds });
 }
 

@@ -322,8 +322,16 @@ export async function createWorkflowAuthorHost(supplied) {
           if (draft.operation === 'update' && draft.target.version === draft.previousCandidate.manifest.version) throw authorError('author-target', 'Choose a new unused target version');
         }
         startAuthorDraft(draft.goal, draft.choices);
+        // Capture the prior state before marking this turn running. Retries retain
+        // this decision together with the original request and its fingerprint.
+        const clarifyingDraft = input.kind !== 'review-only' && draft.operation === 'create' && !draft.candidate &&
+          draft.status === 'needs-clarification' && input.input !== draft.authorizedRequest?.input &&
+          typeof draft.authorizedRequest?.input === 'string' && !request.confirmedPlanHash &&
+          !Object.hasOwn(request, 'baseline') && !request.confirmedConstraintIds?.length &&
+          !ownTurns.some(item => item.result?.candidate || Object.hasOwn(item.request ?? {}, 'baseline') ||
+            item.request?.confirmedConstraintIds?.length);
         turn = { draftId: draft.id, turnId: input.turnId, kind: input.kind ?? 'authoring', attemptId: randomUUID(), executionToken: randomUUID(),
-          ownerId, baseContentHash: draft.contentHash,
+          ownerId, baseContentHash: draft.contentHash, clarifyingDraft,
           priorReview: draft.reviewReceipt ?? null, priorApproval: draft.approvalReceipt ?? null,
           request, fingerprint, status: 'running', physicalOutstanding: true, budget: newTurnBudget(policy) };
         draft.activeExecution = turn.executionToken; draft.status = 'running';

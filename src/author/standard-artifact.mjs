@@ -84,6 +84,11 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   const {snapshot,definition,graph} = compiled;
   const artifact = executionMode === 'standard' ? compiled.artifact : {...compiled,artifactHash:compiled.programIdentity?.artifactHash};
   if (!artifact.artifactHash) return { candidate: null, diagnostics: artifact.diagnostics };
+  if (plan?.sourceHash !== undefined && plan.sourceHash !== `sha256:${snapshot.sourceHash}`) {
+    throw Object.assign(new Error('Compiled source bytes differ from the WorkflowPlan.'), {
+      code: 'FKA_PLAN_MISMATCH', detail: { expectedSourceHash: plan.sourceHash, actualSourceHash: `sha256:${snapshot.sourceHash}` }
+    });
+  }
   const approvedSafety=[];
   if(!Array.isArray(safetyPolicies))throw new TypeError('Host safety policies must be an array');
   for(const node of definition.nodes) {
@@ -104,14 +109,33 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   }
   if (plan && (definition.nodes[0].id !== plan.entryNodeId || definition.nodes.length !== plan.nodes.length ||
     plan.nodes.some(node => graph.byId.get(node.id)?.type !== node.kind))) {
-    throw new Error('Compiled entry or node identities differ from the WorkflowPlan. Review the changes before building a candidate.');
+    throw Object.assign(new Error('Compiled entry or node identities differ from the WorkflowPlan.'), {
+      code: 'FKA_PLAN_MISMATCH',
+      detail: { expectedEntry: plan.entryNodeId, actualEntry: definition.nodes[0].id,
+        expectedNodes: plan.nodes.map(({id,kind}) => [id,kind]), actualNodes: definition.nodes.map(({id,type}) => [id,type]) }
+    });
   }
   if (plan) {
+    const loopMismatches = plan.nodes.filter(node => node.kind === 'loop').flatMap(node => {
+      const actual = graph.byId.get(node.id);
+      if (node.onSuccess === actual.onSuccess && node.onMaxExceeded === actual.onMaxExceeded) return [];
+      return [{ nodeId: node.id, expected: { onSuccess: node.onSuccess, onMaxExceeded: node.onMaxExceeded },
+        actual: { onSuccess: actual.onSuccess, onMaxExceeded: actual.onMaxExceeded } }];
+    });
+    if (loopMismatches.length) {
+      throw Object.assign(new Error('Compiled Loop exits differ from the WorkflowPlan.'), {
+        code: 'FKA_PLAN_MISMATCH', detail: { loopMismatches }
+      });
+    }
     const controlKey = ({ from, to }) => JSON.stringify([from, to]);
     const compiledEdges = new Set([...graph.referenceEdges, ...graph.executionEdges].map(controlKey));
     const plannedEdges=new Set(plan.edges.filter(edge=>edge.kind==='control').map(controlKey));
     if (plannedEdges.size!==compiledEdges.size || [...plannedEdges].some(edge=>!compiledEdges.has(edge))) {
-      throw new Error('Compiled control flow differs from the WorkflowPlan. Review the changes before building a candidate.');
+      throw Object.assign(new Error('Compiled control flow differs from the WorkflowPlan.'), {
+        code: 'FKA_PLAN_MISMATCH',
+        detail: { missingEdges: [...plannedEdges].filter(edge => !compiledEdges.has(edge)).map(edge => JSON.parse(edge)),
+          extraEdges: [...compiledEdges].filter(edge => !plannedEdges.has(edge)).map(edge => JSON.parse(edge)) }
+      });
     }
   }
   const files = Object.freeze({ 'SKILL.md': entry, 'workflow.js': artifact.code, 'workflow.mmd': artifact.mermaid,
