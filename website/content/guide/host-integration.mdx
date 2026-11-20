@@ -31,7 +31,9 @@
 
 start 只用一句 goal、幂等 requestId 和已知选择起草；未知模式提供 Standard 推荐。update 要准确 `TargetRef={collectionId,skillId,baseArtifactHash,baseVersion}` 和未占用新版本，不按名字覆盖。advanceTurn 使用 draftId、expectedStateVersion、turnId、本轮 input/实际上下文和基线，执行 Intent→目录/文档→Plan→最终 requires/资源→DSL→编译→复审。纯解释走 readDraft，review-only 只重审已有候选。
 
-reviewCandidate 展示准确 Diff 和实际 ReviewReceipt。复审八项输入是当前授权原文、有效意图、变更、基线证据、Plan、候选、Diff、资源。默认 separate-pass；independent-subject 必须观察实现者与审查者各自不同的主体、会话和工作区，缺项不通过。
+`reviewCandidate` 返回准确的 `diff` 和 `receipt`。复审拒绝时，候选读回的 `rejection` 与草稿的 `reviewRejection` 提供当前候选的发现及可用动作。复审八项输入是当前授权原文、有效意图、变更、基线证据、Plan、候选、Diff、资源。默认 separate-pass；independent-subject 必须观察实现者与审查者各自不同的主体、会话和工作区，缺项不通过。
+
+Host 选择动作后，使用同一 `draftId`、当前 `expectedStateVersion`、新 `turnId` 和动作携带的 `candidateHash` 调用 `advanceTurn`。`review-only` 重审原候选，`authoring` 按拒绝发现修订同一草稿，沿用已授权的原请求、补答及基线。候选或状态版本变化时，先重新读取并确认当前动作。批准仍在合格复审后独立登记。
 
 Host 展示精确候选和旧 Hash，核验用户批准后 recordApproval，再用新 stateVersion、唯一 publicationId 和同一身份 publish。MCP publish 可原子登记相同可信批准并保存。版本、active CAS、savedReceipt 与全集合快照同一 SQLite 事务。A 后已有 B 时重试 A 仅返回旧回执和 currentActive=B，不反激活 A。保存批准不替代目标业务运行授权。
 
@@ -82,6 +84,8 @@ settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提�
 本地通过 stdio 连接。HTTP handler 由 Host 放进自己的服务，传入逐请求认证函数，返回 `authorHost.createMcpOptions(currentRequestContext, bindings)`。同一长期 AuthorHost 使用 namespace 独占的文件数据库保存草稿、回合和批准，不使用连接内候选 Map。每次请求都传当前主体、会话、工作区与授权集合；连接关闭不会关闭共享 AuthorHost。
 
 `flowkit_start_workflow` 接收 `requestId`、明确的 create/update/import 操作和目标引用。`flowkit_prepare_workflow` 的 `inputRef` 由 Host 解析为准确 draftId、turnId、expectedStateVersion、当前输入及实际上下文，再调用同一 `advanceTurn`。查看差异需要 draftId/candidateHash/previousHash；发布还需最新状态版本、publicationId、真实 reviewRef 和用户 approvalRef。批准登记与保存可以在一个事务中完成。取消、对账和关闭由服务所有者使用 SDK；不增加 MCP 工具名。
+
+`flowkit_review_candidate` 返回的 `rejection.actions` 使用相同的两种动作。Host 将动作的 `kind`、`candidateHash` 及当轮材料绑定到新的 `inputRef`，再调用 `flowkit_prepare_workflow`。客户端继续使用现有工具参数，候选变化后需要按当前草稿重新生成引用。
 
 工具覆盖起草、编译候选、查看差异、批准发布、丢弃候选、集合操作和运行。运行回调使用当前授权以及已批准 Artifact。Resources 使用包含 namespace、集合、Skill 和版本摘要的 URI。正文按需读取并受单次字节预算限制。
 

@@ -57,7 +57,7 @@ import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@
 import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex-labs/flowkit/dsl';
 ```
 
-根入口提供Standard SDK，`/dsl`提供定义构造器，`/capability-graph`提供可选Provider与宿主绑定适配器（使用时另行安装`@devcodex/capability-graph`）。`/interactive`提供独立的P0-A Host/Store协议，按[接入指南](/guide/interactive)选择接口层；`/package.json`只提供包元数据。不要从包的内部`src`或`dist`子路径导入。安装后的`flowkit`命令只有compile/check；执行选择[SDK或直接Host](/guide/direct-host)，Interactive另用其Host协议。
+根入口提供 Standard SDK，`/dsl` 提供定义构造器，`/capability-graph` 提供可选 Provider 与宿主绑定适配器（使用时另行安装 `@devcodex/capability-graph`）。`/interactive` 提供独立的 P0-A Host/Store 协议，按[接入指南](/guide/interactive)选择接口层。`/host` 提供 AuthorHost 和执行适配，`/mcp` 提供 MCP 服务及 stdio、HTTP 接入函数，见[宿主接入](/guide/host-integration)。`/package.json` 只提供包元数据。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 命令提供 `compile` 和 `check`。执行使用 [SDK 或直接 Host](/guide/direct-host)，Interactive 使用自己的 Host 协议。
 
 ## 准备文件目录
 
@@ -79,7 +79,7 @@ flowkit-demo/
 | 找不到 `node` / `npm` | 在新终端检查 PATH，确认安装的 Node 版本；先让版本命令可执行 |
 | registry 超时或无法访问 | 检查网络和 `npm config get registry`；FlowKit 的 scoped registry 应为 npm.pkg.github.com；检查令牌、SSO、包权限和组织 Scope |
 | `ERR_MODULE_NOT_FOUND` | 在有 package.json 的消费者目录安装，确认 host 文件位于该项目内 |
-| `ERR_PACKAGE_PATH_NOT_EXPORTED` | 改用上面的三个受支持入口，不访问内部文件 |
+| `ERR_PACKAGE_PATH_NOT_EXPORTED` | 核对上面的公开导入入口，并从安装包公开的路径导入 |
 | CLI 命令不存在 | 在已安装包的目录使用 `npx --no-install flowkit ...`；此写法不会偷偷下载其他版本 |
 | 版本不存在或安装内容不匹配 | 保留错误与registry信息，核查精确版本；不要把未成功的安装当成可运行环境 |
 
