@@ -8,6 +8,32 @@
 
 本页为人类作者及开发宿主模型提供同一份编写依据。从业务目的选择现有能力，形成合法 DSL 和必要 Host 绑定，再检查业务结果。启用 Author 的宿主可以调用以下工作流编写路径。编译／检查和 Host 执行入口也可直接使用。
 
+## 用 Codex 插件起草和导出
+
+<a id="flowkit-doc-codex-plugin"></a>
+
+内部维护者可用 Codex 和 Node.js 22.13 或更高版本安装本地 FlowKit 插件。拥有源码的维护者在仓库根目录构建 marketplace。构建输出包含可供安装的完整目录和插件名称，安装方也可以使用维护者提供的整个目录。
+
+```powershell
+npm ci --ignore-scripts
+$flowkitPlugin = node scripts/build-codex-plugin.mjs | ConvertFrom-Json
+codex plugin marketplace add "$($flowkitPlugin.marketplace)"
+codex plugin add "$($flowkitPlugin.selector)"
+codex plugin list --marketplace flowkit-local
+```
+
+每次构建生成一个新目录。保留已登记的 marketplace 目录，便于 Codex 重启后读取或重新安装。已有目录时直接从登记 marketplace 一步开始。用相同 Codex 用户配置重新打开工作区，在会话中调用 FlowKit 插件的 `flowkit-codex:flowkit-author` Skill。
+
+首次使用可输入「用 FlowKit 起草一个检查导入文件的工作流。文件可读时执行核对，文件不可读时返回失败。把编译出的节点和终点对照需求复审，之后导出到工作区的新目录」。遇到影响分支或交付的缺项时，在同一草稿继续补答。复审结论应包含确切候选摘要和 Host 需要提供的业务回调。改稿后会生成新候选，需要按新摘要复审。
+
+默认交付 `SKILL.md`、`workflow.js` 和 `workflow.mmd`。明确要求保留 DSL 时，额外导出 `source/workflow.dsl.js`。导出时选择新的目标目录。若编译或复审发现问题，修订草稿再编译。旧摘要只对应原候选。
+
+把导出的文件与可信的产物 SHA-256 交给现有执行方。执行方用 [SDK runArtifact](/reference/sdk#runArtifact) 或 [直接 Host](/guide/direct-host)，提供所需 Runtime 方法和数据，再按既有权限运行。停用或卸载插件后，导出目录仍可用于该流程。
+
+```text
+codex plugin remove flowkit-codex@flowkit-local
+```
+
 ## 用 Author 准备 Workflow Skill
 
 Author 读取的文档 revision、来源 URI 和内容 Hash 随候选保存，编译前重新检查当前来源；过期或错版不继续编写。复审同时显示实际编译节点的语义差异和文件差异。可选 `references` 只接收工作流专属资料，禁止嵌套 Skill；默认三文件保持不变，不复制整套 DSL 文档。

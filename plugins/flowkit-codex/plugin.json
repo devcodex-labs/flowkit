@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flowkit-codex",
+  "version": "0.1.0",
+  "description": "Draft, review, and export FlowKit workflows in Codex.",
+  "author": { "name": "DevCodex Labs" },
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "FlowKit",
+        "shortDescription": "Draft and review workflows",
+        "longDescription": "Create a FlowKit workflow from a goal, review the compiled candidate, and export files for an existing SDK or Host.",
+        "developerName": "DevCodex Labs",
+        "category": "Productivity",
+        "defaultPrompt": "Draft and review a FlowKit workflow from my goal."
+      }
+    }
+  }
+}
