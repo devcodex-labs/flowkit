@@ -28,7 +28,7 @@ function header(analysis, paths, bodyHash) {
   if (interaction.length) conventions.push(interaction.join(' '));
   if (has('action')) conventions.push(analysis.graph.executionEdges.some(edge => edge.role === 'action-failure') ?
     'runAction resolve means success. An action with a compiled failure edge sets ctx.error and takes that edge for every non-control error, skipping the next verification. Other actions reject; control signals are rethrown.' :
-    'runAction resolve means success. Action errors reject; control signals are rethrown.');
+    'runAction resolve means success; other errors reject; control signals are rethrown.');
   if (has('parallel')) {
     const parallel = nodes.filter(node => node.type === 'parallel');
     const strategies = [];
