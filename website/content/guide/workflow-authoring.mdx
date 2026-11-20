@@ -35,7 +35,7 @@ codex login status
 npm run mcp:local -- --config ./flowkit-mcp.local.json
 ```
 
-启动输出包含 `url` 和一次性 `operatorUrl`。用常用浏览器打开 `operatorUrl` 建立本机会话。客户端通过 `url` 使用 MCP。在 Codex 中可以直接配置 MCP，或安装下文的纯 MCP 插件，连接同一套工具。直接连接时，在 Codex 的配置文件中设置：
+启动输出包含 `url` 和一次性 `operatorUrl`。用常用浏览器打开 `operatorUrl` 建立本机会话。看到「操作员已连接」后回到 Codex 继续操作。客户端通过 `url` 使用 MCP，可直接配置连接，也可安装下文的纯 MCP 插件。直接连接时，在 Codex 的配置文件中设置：
 
 ```toml
 [mcp_servers.flowkit]
@@ -61,10 +61,17 @@ codex plugin list --marketplace flowkit-local
 1. 在 Codex 输入「用 FlowKit 起草一个核对导入文件的工作流。文件可读时核对字段，核对通过才返回结果。读取或核对失败时结束并返回原因。请复审候选并给我流程图预览」。有待决定的分支时，在原草稿补答。
 2. 打开候选的预览链接。页面用这个候选的 `workflow.mmd` 渲染图，核对步骤、分支和终点后确认候选。改稿后按新候选重新预览和确认。
 3. 要求导出选中的候选。打开 `workflow.html` 即可离线查看流程图，`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、下载链接及每个文件的 SHA-256。
-4. 要求「把这个工作流添加到 FlowKit」。来源和候选已核验后，打开添加确认链接，确认目标集合，再回到对话读取保存结果。以后可让 FlowKit 列出这个集合中的工作流。
-5. 添加已有工作流时，可在本机页面提交已有三文件或可信候选资料，再把返回的来源引用交给 Codex。按页面给出的兼容性选项选择加入 FlowKit 或通过已登记的原生 Codex 插件安装。只有可验证的目标会开放选择。
+4. 在同一个 Codex 会话说「把这个工作流添加到 FlowKit」。Codex 使用当前候选发起添加。打开返回的链接，核对候选名称和版本，再点「确认并加入 FlowKit」。回到 Codex 查看保存结果，或让 FlowKit 列出默认集合中的工作流。
 
 执行方通过现有 Runtime 提供业务方法和数据，并以可信的产物 SHA-256 校验工作流。见 [SDK runArtifact](/reference/sdk#runArtifact) 或 [直接 Host](/guide/direct-host)。
+
+### 已有文件的备用导入
+
+手上只有已有文件、Codex 没有候选或来源引用时，可用本机页面的「添加已有工作流」登记来源。当前 MCP 添加工具接收候选引用或已登记的来源引用。选择之前导出的三个文件，或选择可信的候选 JSON，点击「生成来源引用」，再把返回的引用交给 Codex 发起添加。
+
+如果外部工作流已有可安装的 Codex 插件，在登记来源时可填写已登记的插件标识。Codex 会列出可用去向。选择加入 FlowKit 时，服务会校验候选是否兼容。选择独立安装时，由 Codex 安装并确认结果。
+
+### 自动验证与卸载
 
 维护者可先用固定输入验证 CLI 连接和协议，再用已登录的 Codex CLI 验证真实生成。
 
