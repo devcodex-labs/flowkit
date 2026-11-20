@@ -150,6 +150,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.authorizedRequest = structuredClone(authorization);
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
       ctx.state.authorizedRequest.choices = draft.choices;
+      if (options.useNodeOptionsForNewDrafts && draft.operation === 'create' && !draft.candidate &&
+          draft.choices.executionMode === 'standard') ctx.state.authorizedRequest.planSource = 'node-options';
       let input = turn.request.input;
       let context = turn.request.contextSnapshot;
       let draftContext;

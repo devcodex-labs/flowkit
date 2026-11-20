@@ -10,7 +10,7 @@ const response = value => ({ content: [{ type: 'text', text: JSON.stringify(valu
 
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
-  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, limits = {} }) {
+  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, limits = {} }) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
@@ -22,7 +22,11 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     throw new TypeError('MCP limits must be positive integers');
   }
   const allowed = new Set(collectionIds);
-  const server = new McpServer({ name: 'flowkit', version: '1.0.0' });
+  const server = new McpServer({ name: 'flowkit', version: '1.0.0' }, workflowUi ? {
+    instructions: 'Use flowkit_start_workflow to create a draft, then flowkit_prepare_workflow with a turn to clarify or compile. ' +
+      'Open the candidate preview for visual review and user confirmation. Use flowkit_export_workflow for the three files and ' +
+      'flowkit_add_workflow only for an explicit request to add the exact candidate or import a selected source.'
+  } : undefined);
   const baseUri = `skill://${namespace}/`;
 
   async function access(operation, collectionId, ctx) {
@@ -47,7 +51,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     if (!authorHost || !requestContext || requestContext.namespace !== namespace) throw new Error('Authenticated AuthorHost request binding is unavailable');
     return authorHost;
   };
-  const draftView = draft => Object.fromEntries(['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash',
+  const draftView = draft => workflowUi ? workflowUi.present(draft, requestContext) : Object.fromEntries(['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash',
     'goal', 'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt',
     'reviewRejection']
     .filter(key => Object.hasOwn(draft, key)).map(key => [key, draft[key]]));
@@ -58,9 +62,11 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   function tool(name, description, schema, invoke, readOnlyHint = false) {
-    server.registerTool(name, { description, inputSchema: z.object(schema).strict(), annotations: { readOnlyHint } },
-      async (input, ctx) => {
+    const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
+    server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
+      async (args, ctx) => {
         try {
+        const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
         await access(name, input.collectionId, ctx);
         const result = await invoke(input, ctx);
         await access(name, input.collectionId, ctx);
@@ -78,7 +84,8 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       const offset=cursor===undefined?0:Number(cursor);
       if(!Number.isSafeInteger(offset)||offset<0||cursor!==undefined&&String(offset)!==cursor)throw new Error('Invalid Skill cursor');
       if(skills.length>maxMetadataEntries)throw new Error('Scope collection discovery within the metadata entry budget');
-      const page={collection,skills:skills.slice(offset,offset+pageSize).map(metadata),
+      const visibleCollection = workflowUi ? { id: collection.id, name: collection.name, description: collection.description } : collection;
+      const page={collection:visibleCollection,skills:skills.slice(offset,offset+pageSize).map(metadata),
         ...(offset+pageSize<skills.length?{nextCursor:String(offset+pageSize)}:{})};
       if(Buffer.byteLength(JSON.stringify(page))>maxBytes)throw new Error('Collection page exceeds the metadata byte budget');
       return page; }, true);
@@ -90,11 +97,19 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     includeSource: z.boolean().optional()
   }, async ({ collectionId, goal, requestId, operation, targetRef, executionMode, includeSource }, ctx) => draftView(await author().start({ collectionId,
     goal, requestId, operation, ...(operation === 'import' ? { importSource: targetRef } : { targetRef }), choices: { collectionName: catalog(collectionId).collection.name,
-      ...(executionMode ? { executionMode } : {}), ...(includeSource === undefined ? {} : { includeSource }) } }, requestContext, ctx.signal)));
+      ...(executionMode ? { executionMode } : {}), ...(workflowUi ? { includeSource: false } :
+        includeSource === undefined ? {} : { includeSource }) } }, requestContext, ctx.signal)));
+  const turn = z.object({
+    draftId: id, turnId: id, expectedStateVersion: z.number().int().positive(), input: z.string().min(1).max(maxBytes),
+    kind: z.enum(['authoring', 'review-only']).optional(), candidateHash: hash.optional(), confirmedPlanHash: hash.optional(),
+    choices: z.object({ executionMode: z.enum(['standard','interactive-p0-a']).optional() }).strict().optional(),
+    target: z.object({ name: id.optional(), version: id.optional() }).strict().optional()
+  }).strict();
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
-    { collectionId: id, inputRef: id }, async ({ collectionId, inputRef }, ctx) => {
-      if (typeof resolveAuthoringInput !== 'function') throw new Error('Host AuthoringInput resolver is unavailable');
-      const input = await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal: ctx.signal });
+    { collectionId: id, ...(workflowUi ? { inputRef: id.optional(), turn: turn.optional() } : { inputRef: id }) }, async ({ collectionId, inputRef, turn }, ctx) => {
+      if (Boolean(inputRef) === Boolean(turn)) throw new Error('Provide exactly one inputRef or turn');
+      if (inputRef && typeof resolveAuthoringInput !== 'function') throw new Error('Host AuthoringInput resolver is unavailable');
+      const input = turn ?? await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal: ctx.signal });
       await exactDraft(collectionId, input.draftId, ctx.signal);
       // An HTTP disconnect stops waiting. Only explicit SDK cancellation fences this shared turn.
       return draftView(await author().advanceTurn(input, requestContext));
@@ -102,7 +117,8 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   tool('flowkit_review_candidate', 'Read the exact candidate difference, review receipt or rejected review findings.',
     { collectionId: id, draftId: id, candidateHash: hash, previousHash: hash.nullable() }, async ({ collectionId, ...input }, ctx) => {
       await exactDraft(collectionId, input.draftId, ctx.signal);
-      return author().reviewCandidate(input, requestContext, ctx.signal);
+      const review = await author().reviewCandidate(input, requestContext, ctx.signal);
+      return workflowUi ? workflowUi.review(review) : review;
     }, true);
   tool('flowkit_publish_candidate', 'Publish an exact candidate after Host review and approval verification.',
     { collectionId: id, draftId: id, expectedStateVersion: z.number().int().positive(), publicationId: id,
@@ -131,6 +147,18 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       if (typeof runWorkflow !== 'function') throw new Error('Host execution binding is unavailable');
       return runWorkflow({ namespace, ...input, requestContext, signal: ctx.signal });
     });
+
+  if (workflowUi) {
+    tool('flowkit_get_workflow_draft', 'Read the current candidate and its preview after a user decision.',
+      { collectionId: id, draftId: id }, async ({ collectionId, draftId }, ctx) =>
+        draftView(await exactDraft(collectionId, draftId, ctx.signal)), true);
+    tool('flowkit_export_workflow', 'Export the three public files for an exact confirmed candidate.',
+      { collectionId: id, draftId: id, candidateHash: hash }, (input, ctx) => workflowUi.export(input, requestContext, ctx.signal));
+    tool('flowkit_add_workflow', 'Add a verified candidate or inspect the supported destinations for an external workflow.',
+      { collectionId: id, requestId: id, sourceRef: id, candidateHash: hash.optional(), approvalRef: id.optional(),
+        destination: z.enum(['flowkit','codex']).optional() }, (input, ctx) => workflowUi.add(input, requestContext, ctx.signal));
+    return server;
+  }
 
   function skillPath(candidate) {
     const { collectionId, skillId, name } = candidate.manifest;

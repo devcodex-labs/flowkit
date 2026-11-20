@@ -1,0 +1,15 @@
+{
+  "name": "flowkit-mcp",
+  "version": "0.1.0",
+  "description": "Connect to FlowKit MCP to create, review, export, and add workflows.",
+  "author": { "name": "DevCodex Labs" },
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "FlowKit MCP",
+    "shortDescription": "Connect to FlowKit workflows",
+    "longDescription": "Create, preview, export, and add workflows through a running FlowKit MCP service.",
+    "developerName": "DevCodex Labs",
+    "category": "Productivity",
+    "defaultPrompt": "Use FlowKit MCP to create a workflow from my goal."
+  }
+}

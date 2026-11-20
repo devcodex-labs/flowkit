@@ -12,7 +12,7 @@
 
 自然语言编写入口为随包交付的 `dist/author/flowkit-workflow-author/SKILL.md`，由 Host 通过 `/host.createWorkflowAuthorHost` 装配。用户一句话起草，关键未知项选择后生成可复审候选；保存需 Host 核验用户批准。完整接入、恢复和发现合同见[Workflow Author](https://devcodex-labs.github.io/flowkit/guide/workflow-authoring)与[Host 接入](https://devcodex-labs.github.io/flowkit/guide/host-integration)。已有 Workflow 的运行不依赖 Author。
 
-内部维护者也可按[工作流指南源码](https://github.com/devcodex-labs/flowkit/blob/main/website/content/guide/workflow-authoring.mdx)安装 Codex 插件，在 Codex 中起草、复审并导出文件，交由现有 SDK 或 Host 执行。
+内部维护者可启动本机 FlowKit MCP 服务，由 Codex 直接连接，或通过纯 MCP 插件 `flowkit-mcp` 连接。服务支持起草、复审、流程图预览、三文件导出及添加到工作流集合。生成的工作流交由 SDK 或 Host 执行。见[本机启动和首用指南](https://github.com/devcodex-labs/flowkit/blob/main/website/content/guide/workflow-authoring.mdx#flowkit-doc-codex-plugin)。
 
 适合需要条件分支、并行处理、校验重试、循环修复或人工决策的多步骤任务。模型调用、业务接口、Schema 校验器及人工交互由宿主提供。下方 Standard 示例在同一进程执行，并行分支共享状态，`any` 汇合后其他分支仍可继续。需要持久化暂停和跨进程续跑的内部维护者可查看 [Interactive P0-A 接入](https://devcodex-labs.github.io/flowkit/guide/interactive)。
 

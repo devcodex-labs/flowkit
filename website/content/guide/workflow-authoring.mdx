@@ -8,30 +8,70 @@
 
 本页为人类作者及开发宿主模型提供同一份编写依据。从业务目的选择现有能力，形成合法 DSL 和必要 Host 绑定，再检查业务结果。启用 Author 的宿主可以调用以下工作流编写路径。编译／检查和 Host 执行入口也可直接使用。
 
-## 用 Codex 插件起草和导出
+## 用本机 FlowKit MCP 起草、导出和添加
 
 <a id="flowkit-doc-codex-plugin"></a>
 
-内部维护者可用 Codex 和 Node.js 22.13 或更高版本安装本地 FlowKit 插件。拥有源码的维护者在仓库根目录构建 marketplace。构建输出包含可供安装的完整目录和插件名称，安装方也可以使用维护者提供的整个目录。
+首次从源码使用时，在仓库根目录安装依赖并构建。文档站依赖提供固定版本的 Mermaid 渲染器。默认模型使用本机已登录的 Codex CLI。
 
 ```powershell
-npm ci --ignore-scripts
+npm ci
+npm run build
+npm --prefix website ci
+codex login status
+```
+
+在仓库根目录保存本机配置 `flowkit-mcp.local.json`。默认集合随数据目录保存，重启后继续使用同一个集合。凭证由操作者在客户端和服务使用的环境中预先设置为同一个 `FLOWKIT_MCP_TOKEN`，长度至少 24 个字符。每次手动测试只需启动这一个服务。
+
+```json
+{
+  "listen": { "host": "127.0.0.1", "port": 8765, "mcpPath": "/mcp" },
+  "dataDir": ".flowkit/data",
+  "exportDir": "flowkit-exports"
+}
+```
+
+```powershell
+npm run mcp:local -- --config ./flowkit-mcp.local.json
+```
+
+启动输出包含 `url` 和一次性 `operatorUrl`。用常用浏览器打开 `operatorUrl` 建立本机会话。客户端通过 `url` 使用 MCP。在 Codex 中可以直接配置 MCP，或安装下文的纯 MCP 插件，连接同一套工具。直接连接时，在 Codex 的配置文件中设置：
+
+```toml
+[mcp_servers.flowkit]
+url = "http://127.0.0.1:8765/mcp"
+bearer_token_env_var = "FLOWKIT_MCP_TOKEN"
+```
+
+### 安装纯 MCP 插件
+
+构建产物为 `flowkit-mcp@flowkit-local`。面向 Codex 的包包含插件清单和 MCP 连接配置。使用非默认地址时可在构建前设置 `FLOWKIT_MCP_URL`。
+
+```powershell
 $flowkitPlugin = node scripts/build-codex-plugin.mjs | ConvertFrom-Json
 codex plugin marketplace add "$($flowkitPlugin.marketplace)"
 codex plugin add "$($flowkitPlugin.selector)"
 codex plugin list --marketplace flowkit-local
 ```
 
-每次构建生成一个新目录。保留已登记的 marketplace 目录，便于 Codex 重启后读取或重新安装。已有目录时直接从登记 marketplace 一步开始。用相同 Codex 用户配置重新打开工作区，在会话中调用 FlowKit 插件的 `flowkit-codex:flowkit-author` Skill。
+保留已登记的 marketplace 目录，然后重开 Codex 会话。使用插件连接时，可停用同地址的直接 MCP 配置，避免重复注册工具。
 
-首次使用可输入「用 FlowKit 起草一个检查导入文件的工作流。文件可读时执行核对，文件不可读时返回失败。把编译出的节点和终点对照需求复审，之后导出到工作区的新目录」。遇到影响分支或交付的缺项时，在同一草稿继续补答。复审结论应包含确切候选摘要和 Host 需要提供的业务回调。改稿后会生成新候选，需要按新摘要复审。
+### 从第一份草稿开始
 
-默认交付 `SKILL.md`、`workflow.js` 和 `workflow.mmd`。明确要求保留 DSL 时，额外导出 `source/workflow.dsl.js`。导出时选择新的目标目录。若编译或复审发现问题，修订草稿再编译。旧摘要只对应原候选。
+1. 在 Codex 输入「用 FlowKit 起草一个核对导入文件的工作流。文件可读时核对字段，核对通过才返回结果。读取或核对失败时结束并返回原因。请复审候选并给我流程图预览」。有待决定的分支时，在原草稿补答。
+2. 打开候选的预览链接。页面用这个候选的 `workflow.mmd` 渲染图，核对步骤、分支和终点后确认候选。改稿后按新候选重新预览和确认。
+3. 要求导出选中的候选。打开 `workflow.html` 即可离线查看流程图，`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、下载链接及每个文件的 SHA-256。
+4. 要求「把这个工作流添加到 FlowKit」。来源和候选已核验后，打开添加确认链接，确认目标集合，再回到对话读取保存结果。以后可让 FlowKit 列出这个集合中的工作流。
+5. 添加已有工作流时，可在本机页面提交已有三文件或可信候选资料，再把返回的来源引用交给 Codex。按页面给出的兼容性选项选择加入 FlowKit 或通过已登记的原生 Codex 插件安装。只有可验证的目标会开放选择。
 
-把导出的文件与可信的产物 SHA-256 交给现有执行方。执行方用 [SDK runArtifact](/reference/sdk#runArtifact) 或 [直接 Host](/guide/direct-host)，提供所需 Runtime 方法和数据，再按既有权限运行。停用或卸载插件后，导出目录仍可用于该流程。
+执行方通过现有 Runtime 提供业务方法和数据，并以可信的产物 SHA-256 校验工作流。见 [SDK runArtifact](/reference/sdk#runArtifact) 或 [直接 Host](/guide/direct-host)。
+
+维护者可先用固定输入验证 CLI 连接和协议，再用已登录的 Codex CLI 验证真实生成。
 
 ```text
-codex plugin remove flowkit-codex@flowkit-local
+node scripts/test-local-mcp-codex.mjs
+node scripts/test-local-mcp-codex.mjs --live
+codex plugin remove flowkit-mcp@flowkit-local
 ```
 
 ## 用 Author 准备 Workflow Skill

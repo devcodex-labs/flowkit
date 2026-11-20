@@ -39,6 +39,8 @@ export interface AuthorHostOptions {
   namespace: string; storageFile: string; collectionIds: string[];
   hostProfile: { id: string; digest: string; [key: string]: unknown };
   defaults?: AuthorChoices;
+  /** Compile the initial Standard Plan from its validated node options. */
+  useNodeOptionsForNewDrafts?: boolean;
   budgetPolicy?: Partial<AuthorBudgetPolicy>;
   capacity: { maxPhysicalExecutions: number; maxPendingCandidates?: number; maxDrafts: number; maxDraftBytes: number;
     maxRetainedDraftBytes: number; maxReceiptBytes: number; maxTurnsPerDraft: number };

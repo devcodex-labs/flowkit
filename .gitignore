@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .tmp/
+.flowkit/
+flowkit-mcp.local.json
+flowkit-exports/
 *.tgz
 website/doc_build/
 website/.rspress/
