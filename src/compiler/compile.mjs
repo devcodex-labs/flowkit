@@ -26,7 +26,9 @@ function header(analysis, paths, bodyHash) {
   if (has('human')) interaction.push('runHuman accepts boolean or approved/comment; comment defaults to null.');
   if (has('verification') || nodes.some(node => node.verify != null)) interaction.push('runVerification is strictly boolean (FK_R002).');
   if (interaction.length) conventions.push(interaction.join(' '));
-  if (has('action')) conventions.push(`runAction resolve means success; ${analysis.graph.executionEdges.some(edge => edge.role === 'action-failure') ? 'marked action errors set ctx.error and skip the next verification call; ' : ''}other errors reject; control signals are rethrown.`);
+  if (has('action')) conventions.push(analysis.graph.executionEdges.some(edge => edge.role === 'action-failure') ?
+    'runAction resolve means success. An action with a compiled failure edge sets ctx.error and takes that edge for every non-control error, skipping the next verification. Other actions reject; control signals are rethrown.' :
+    'runAction resolve means success. Action errors reject; control signals are rethrown.');
   if (has('parallel')) {
     const parallel = nodes.filter(node => node.type === 'parallel');
     const strategies = [];

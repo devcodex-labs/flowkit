@@ -69,7 +69,7 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     throw new TypeError('Only a JavaScript DSL source can be retained as source/workflow.dsl.js');
   }
   const entry = skillDocument(name, description,
-    '# Run this workflow\n\nAsk the Host to verify this Skill’s approved Artifact and required capabilities. ' +
+    '# Run this workflow\n\nAsk the Host to verify the approved artifact identity and provide the runtime bindings referenced by the workflow. ' +
     (executionMode === 'standard' ? 'Use the Host’s FlowKit `runArtifact` entry point with `workflow.js` and its approved SHA-256. ' :
       'Use the Host’s Interactive start/resume entry points with `workflow.js`, its approved Program identity and the original Run. ') +
     'Use `workflow.mmd` to view the static workflow.\n\n' +
