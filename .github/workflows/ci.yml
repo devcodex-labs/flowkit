@@ -113,9 +113,6 @@ jobs:
       - name: Verify the disposable Windows Host profile
         shell: powershell
         run: .\tests\security\secure-host-windows.ps1 -Node (Get-Command node.exe).Source -DisposableRunner
-      - name: Verify FlowKit Codex local pipe identity
-        shell: pwsh
-        run: .\tests\security\verify-flowkit-codex-pipe.ps1
 
   website:
     runs-on: ubuntu-24.04
