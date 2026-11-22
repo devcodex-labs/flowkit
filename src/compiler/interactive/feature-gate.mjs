@@ -4,11 +4,12 @@
  * authority for DSL syntax, graph, dataflow, and existing FK_C/FK_R codes.
  * Runtime binding checks (including checkStep) are enforced at start in M4.
  */
+import {isInteractiveStage} from '../../interactive/protocol.mjs';
+
 export const IMPLEMENTED_INTERACTIVE_STAGE = 'P0-A';
 const STAGES = Object.freeze(['P0-A', 'P0-B', 'P1', 'P2']);
 const ENABLED = new Set(['condition', 'terminal', 'agent']);
 export const supportsP0ANodeKind = kind => ENABLED.has(kind);
-export const isInteractiveStage = stage => stage === 'P0-A' || stage === 'P0-B';
 export const supportsInteractiveNodeKind = (stage, kind) => supportsP0ANodeKind(kind)
   || stage === 'P0-B' && (kind === 'action' || kind === 'verification');
 

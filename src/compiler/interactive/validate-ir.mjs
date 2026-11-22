@@ -2,7 +2,8 @@
  * P0-A resumable IR phase matrix. The lowerer and its validator share this
  * table; the Coordinator must NOT reconstruct graph routing from source DSL.
  */
-import { isInteractiveStage, supportsInteractiveNodeKind } from './feature-gate.mjs';
+import { supportsInteractiveNodeKind } from './feature-gate.mjs';
+import { isInteractiveStage, hasStepFrame } from '../../interactive/protocol.mjs';
 
 const externalPhases = Object.freeze(['enter', 'prepare', 'dispatch-ready', 'awaiting', 'validate']);
 export const INTERACTIVE_PHASES = Object.freeze({
@@ -46,7 +47,6 @@ const RULES = Object.freeze({
 });
 
 export const interactiveBlockId = (nodeId, phase) => nodeId + '::' + phase;
-export const hasStepFrame = kind => kind === 'agent' || kind === 'action' || kind === 'verification';
 
 // A static rule, not an actual persisted ControlFrame (dynamic values belong to M4).
 const AGENT_FRAME_FIELDS = Object.freeze(['kind', 'nodeId', 'activation', 'attempt', 'phase', 'reasons', 'overviewStep']);

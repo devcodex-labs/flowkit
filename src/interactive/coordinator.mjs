@@ -2,7 +2,8 @@ import {randomUUID} from 'node:crypto';
 import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
 import {checkpointPolicy} from './checkpoint.mjs';
-import {hasStepFrame,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {hasStepFrame} from './protocol.mjs';
 import {createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
 import {createDescriptionResources} from '../runtime/task-resources.mjs';
 

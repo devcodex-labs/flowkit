@@ -1,6 +1,7 @@
 import { gateInteractiveFeatures } from './feature-gate.mjs';
 import { hasTaskSpec } from '../../shared/task-spec.mjs';
-import { INTERACTIVE_PHASES, hasStepFrame, interactiveBlockId, phaseContract, expectedBlockTargets, stepFrameRule, validateInteractiveIR } from './validate-ir.mjs';
+import { INTERACTIVE_PHASES, interactiveBlockId, phaseContract, expectedBlockTargets, stepFrameRule, validateInteractiveIR } from './validate-ir.mjs';
+import { hasStepFrame } from '../../interactive/protocol.mjs';
 
 function copyData(value) {
   // Analyzer-owned DSL literals/when ASTs are JSON-safe. Preserve own __proto__

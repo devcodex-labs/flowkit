@@ -8,7 +8,7 @@ import {
 
 import {checkpointPolicy,decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 import {prepareOperationLedger} from './operation-ledger.mjs';
-import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
+import {isInteractiveStage} from './protocol.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);

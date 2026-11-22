@@ -1,8 +1,8 @@
 import {parse} from 'acorn';
 import {loadBoundedModule} from '../runtime/compilation-cache.mjs';
 import {sha256Bytes,assertSha256} from './identity.mjs';
-import {validateInteractiveIR,hasStepFrame,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
-import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
+import {validateInteractiveIR,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {isInteractiveStage,hasStepFrame} from './protocol.mjs';
 
 /** A verified program is trusted compiler output, NOT an untrusted JavaScript sandbox. */
 function ensureNoImports(ast) {

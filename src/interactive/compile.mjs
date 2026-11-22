@@ -7,7 +7,7 @@ import {normalizeOptions,resolveProjectRoot} from '../compiler/source.mjs';
 import {lowerInteractive} from '../compiler/interactive/lower.mjs';
 import {emitInteractive} from '../compiler/interactive/emit.mjs';
 import {checkMermaidIds, renderMermaid} from '../compiler/mermaid.mjs';
-import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
+import {isInteractiveStage} from './protocol.mjs';
 
 /** Internal M2 compile API; the exported SDK subpath is introduced in M4. */
 export async function compileInteractive(file, options) {

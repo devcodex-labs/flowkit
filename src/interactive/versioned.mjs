@@ -1,8 +1,7 @@
 import {buildCoordinator} from './coordinator.mjs';
 import {compileInteractive} from './compile.mjs';
 import {createSqliteCheckpointStore,sqliteAdminTerminate,sqliteOperationLedger} from './sqlite-store.mjs';
-import {hasStepFrame} from '../compiler/interactive/validate-ir.mjs';
-import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
+import {hasStepFrame,isInteractiveStage} from './protocol.mjs';
 import {assertSHA256,canonicalBytes,safeJSONSnapshot,sha256Bytes} from './canonical.mjs';
 
 import {decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';

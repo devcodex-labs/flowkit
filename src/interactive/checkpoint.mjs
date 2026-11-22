@@ -1,6 +1,5 @@
 import {MAX_CHECKPOINT_BYTES,assertSHA256,canonicalBytes,sha256Bytes} from './canonical.mjs';
-import { isInteractiveStage } from '../compiler/interactive/feature-gate.mjs';
-import { hasStepFrame } from '../compiler/interactive/validate-ir.mjs';
+import { isInteractiveStage, hasStepFrame } from './protocol.mjs';
 
 const finished=new Set(['succeeded','failed','errored','cancelled']);
 const phases=new Set(['enter','prepare','dispatch-ready','awaiting','validate','commit','route','finished']);
