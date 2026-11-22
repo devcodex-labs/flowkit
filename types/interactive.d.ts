@@ -15,11 +15,11 @@ export interface InteractiveProgramIdentity {
   semanticsVersion: 'interactive-state-machine-v1';
   checkpointSchemaVersion: 1;
   canonicalizationVersion: 'jcs-rfc8785-v1';
-  implementedStage: 'P0-A';
+  implementedStage: 'P0-A' | 'P0-B';
 }
 export interface InteractiveCompileOptions {
   output: 'memory' | 'file';
-  featureStage: 'P0-A';
+  featureStage: 'P0-A' | 'P0-B';
   outDir?: string;
   /** Uses the Standard analyzer's nearest package.json discovery by default. */
   projectRoot?: string;
@@ -286,6 +286,13 @@ export interface PublicInteractiveTerminalFrame {
   resultRef:InteractiveTerminalResultRef;
 }
 
+interface InteractiveContextError {
+  code:string;
+  message:string;
+  operationKey?:string;
+  sideEffectStatus?:'none'|'known'|'unknown';
+}
+
 export interface TrustedInteractiveTerminalResult {
   projectionVersion:1;
   namespace:string;
@@ -293,7 +300,7 @@ export interface TrustedInteractiveTerminalResult {
   status:PublicInteractiveTerminalFrame['status'];
   terminal?:PublicInteractiveTerminalFrame['terminal'];
   state:Record<string,unknown>;
-  contextError:null;
+  contextError:InteractiveContextError|null;
   causeCode?:string;
 }
 
@@ -371,11 +378,13 @@ export interface TransitionRecordV1 {
   committedAt:string;
 }
 
+type InteractiveStepKind = 'agent' | 'action' | 'verification';
+
 export interface ReceiptRecordV1 {
   namespace:string;
   runId:string;
   requestId:string;
-  kind:'agent';
+  kind:InteractiveStepKind;
   submissionDigest:string;
   acceptedRevision:number;
   outcome:'succeeded'|'failed'|'legacy';
@@ -399,14 +408,14 @@ export type RunCheckpointV1 = {
   policyIdentity:{id:string;version:string;policyHash:string;bindingManifestHash:string;skillManifestHash?:string};
   execution:{blockId:string;phase:'enter'|'prepare'|'dispatch-ready'|'awaiting'|'validate'|'commit'|'route'|'finished';
     activationSeq:number;agentStepCounter:number;controlStack:readonly Record<string,unknown>[];
-    contextError:{code:string;message:string;retryable?:boolean;origin?:'runtime'|'executor'|'validator'|'store'|'policy'}|null;
+    contextError:InteractiveContextError|null;
     taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
-  candidate:{kind:'agent';requestId:string;result:Record<string,unknown>}|null;
-  receivedSubmission:{kind:'agent';requestId:string;activation:number;attempt:number;canonicalDigest:string;
+  candidate:{kind:InteractiveStepKind;requestId:string;result:Record<string,unknown>}|null;
+  receivedSubmission:{kind:InteractiveStepKind;requestId:string;activation:number;attempt:number;canonicalDigest:string;
     acceptedRevision:number;payload:Record<string,unknown>;receivedAt:string}|null;
-  pending:Array<{requestId:string;nodeId:string;kind:'agent';activation:number;attempt:number;issuedRevision:number;
+  pending:Array<{requestId:string;nodeId:string;kind:InteractiveStepKind;activation:number;attempt:number;issuedRevision:number;
     intent:'execute';name:string;internalPayload:Record<string,unknown>;publicTask:Record<string,unknown>}>;
   inFlightOperations:Record<string,unknown>[];
   terminal:{nodeId:string;status:'succeeded'|'failed'}|null;
@@ -449,8 +458,22 @@ export declare function createSqliteInteractivePersistence(file:string,options:{
   readonly store:CheckpointStoreV1;
   readonly programRegistry:TrustedProgramRegistryV1;
   readonly adminController:InteractiveAdminControllerV1;
+  readonly operationController:InteractiveOperationController;
   close():void;
 };
+
+export interface InteractiveOperationRecord {
+  requestId:string;
+  inputHash:string;
+  settlement:{effect:'applied'|'no-effect';evidenceHash:string;result:unknown}|null;
+}
+export interface InteractiveOperationController {
+  claim(input:{runId:string;requestId:string;operationKey:string;inputHash:string},
+    auth:TrustedHostContextV1):Promise<InteractiveOperationRecord & {claimed:boolean}>;
+  load(input:{runId:string;operationKey:string},auth:TrustedHostContextV1):Promise<InteractiveOperationRecord|null>;
+  settle(input:{runId:string;operationKey:string;inputHash:string;effect:'applied'|'no-effect';evidenceHash:string;result:unknown},
+    auth:TrustedHostContextV1):Promise<InteractiveOperationRecord>;
+}
 
 declare const adminContextBrand:unique symbol;
 export interface TrustedAdminContextV1 {
@@ -476,14 +499,21 @@ export interface TrustedHostContextV1 {
     options:Omit<InteractiveOptionsV1,'auth'>):Promise<TrustedInteractiveTerminalResult>;
 }
 
-export interface PublicPendingV1 {
+export type PublicPendingV1 = {
   requestId:string;
   nodeId:string;
-  kind:'agent';
   attempt:number;
   activation:number;
   intent:'execute';
-  task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'|'preparedTask'>;
+} & (
+  | {kind:'agent';task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'|'preparedTask'>}
+  | {kind:'action';task:InteractiveStepTask & {action:string;writes:readonly string[];operationKey:string}}
+  | {kind:'verification';task:InteractiveStepTask & {verifier:string}}
+);
+interface InteractiveStepTask {
+  name:string;
+  input:Record<string,unknown>;
+  contextError:InteractiveContextError|null;
 }
 
 export interface InteractiveFrameV1 {
@@ -502,8 +532,9 @@ export interface InteractiveFrameV1 {
 export declare function createInteractiveHostContext(options:{
   namespace:string;
   subjectId:string;
-  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'result:read';
-    startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number}>):boolean|Promise<boolean>;
+  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|'operation:claim'|'operation:read'|'operation:settle';
+    startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
+    reasonCode?:string;operationKey?:string;inputHash?:string;effect?:'applied'|'no-effect';evidenceHash?:string}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
 }):TrustedHostContextV1;
@@ -523,7 +554,7 @@ export interface InteractivePolicyV1 {
   version:string;
   bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
   disclosePolicyId:string;
-  capabilityStage:'P0-A';
+  capabilityStage:'P0-A'|'P0-B';
   canonicalizationVersion:'jcs-rfc8785-v1';
   requiredSkillManifestHash?:string;
 }
@@ -537,15 +568,23 @@ export interface InteractiveOptionsV1 {
   signal?:AbortSignal;
 }
 
+type InteractiveFailedSubmission = {
+  runId:string;requestId:string;outcome:'failed';error:{code:string;message:string;retryable?:boolean;
+    sideEffectStatus?:'none'|'known'|'unknown';origin?:'runtime'|'executor'|'validator'|'store'|'policy'};
+};
 export type HostSubmissionV1 =
   | {kind:'agent';runId:string;requestId:string;outcome:'succeeded';result:Record<string,unknown>}
-  | {kind:'agent';runId:string;requestId:string;outcome:'failed';error:{code:string;message:string;retryable?:boolean;
-      sideEffectStatus?:'none'|'known'|'unknown';origin?:'runtime'|'executor'|'validator'|'store'|'policy'}};
+  | ({kind:'agent'|'verification'} & InteractiveFailedSubmission)
+  | ({kind:'action';operationKey:string} & InteractiveFailedSubmission)
+  | {kind:'action';runId:string;requestId:string;outcome:'succeeded';operationKey:string;
+      result:{set:Record<string,unknown>;remove?:readonly string[]}}
+  | {kind:'verification';runId:string;requestId:string;outcome:'succeeded';result:{passed:boolean}};
 
 export declare function start(source:string|TrustedProgramRefV1,runtime:InteractiveRuntimeV1,
   initialState:Record<string,unknown>,options:InteractiveOptionsV1&{startKey:string}):Promise<InteractiveFrameV1>;
 export declare function complete(submission:HostSubmissionV1,runtime:InteractiveRuntimeV1,
   options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
 export declare function resume(runId:string,runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
+export declare function cancelInteractiveRun(runId:string,reasonCode:string,options:InteractiveOptionsV1):Promise<PublicInteractiveTerminalFrame>;
 export declare function reserveInteractiveDispatch(input:{runId:string;requestId:string;operationId:string},
   runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs:number;dispatches:number}>;

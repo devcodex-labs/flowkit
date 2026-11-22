@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256Bytes, assertSHA256} from './canonical.mjs';
 import {loadInteractiveProgram} from './load.mjs';
 import {checkpointPolicy} from './checkpoint.mjs';
-import {agentFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {hasStepFrame,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
 import {createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
 import {createDescriptionResources} from '../runtime/task-resources.mjs';
 
@@ -69,20 +69,20 @@ function confirmCurrentBlock(cp, program) {
   }
   const record = program.programTable.nodes[block.nodeId];
   const frames = cp.controlStack;
-  if (!Array.isArray(frames) || frames.length > 1 || frames.some(x=>x.kind!=='agent')) {
-    throw failure('FK_I_INVALID_CHECKPOINT','illegal P0-A control stack');
+  if (!Array.isArray(frames) || frames.length > 1 || frames.some(x=>x.kind!==record.kind)) {
+    throw failure('FK_I_INVALID_CHECKPOINT','illegal step control stack');
   }
-  if (record.kind === 'agent' && cp.phase !== 'enter') {
+  if (hasStepFrame(record.kind) && cp.phase !== 'enter') {
     const frame = frames.at(-1);
     if (!frame || frame.nodeId !== block.nodeId || !Number.isSafeInteger(frame.activation)
       || frame.activation < 1 || !Number.isSafeInteger(frame.attempt)
-      || frame.attempt < 1 || frame.attempt > record.metadata.retries + 1
+      || frame.attempt < 1 || frame.attempt > (record.metadata.retries??0) + 1
       || !Array.isArray(frame.reasons)) {
       throw failure('FK_I_INVALID_CHECKPOINT','invalid current Agent frame');
     }
   }
   if (cp.status === 'waiting') {
-    if (cp.phase !== 'awaiting' || cp.pending?.requestId == null || cp.candidate != null) {
+    if (cp.phase !== 'awaiting' || cp.pending?.requestId == null || cp.pending.kind!==record.kind || cp.candidate != null) {
       throw failure('FK_I_INVALID_CHECKPOINT','waiting without certified pending request');
     }
     if (cp.pending.preparedTask && (!cp.taskContext?.active ||
@@ -139,12 +139,13 @@ export function validateProposalFields(rawProposal, block, record) {
   const stackKind=stackEffect?.kind;
   let expectedStack='none';
   if (proposal.kind==='retry-agent') expectedStack='update';
-  if (proposal.kind==='move' && record.kind==='agent') {
+  if (proposal.kind==='move' && hasStepFrame(record.kind)) {
     if (block.phase==='enter') expectedStack='push';
     if (block.phase==='route') expectedStack='pop';
   }
+  if (proposal.kind==='apply-external') expectedStack='pop';
   if (stackKind!==expectedStack || !hasFields(stackEffect,STACK_FIELDS[expectedStack])
-    || (stackKind==='push' && !hasFields(stackEffect.frame,agentFrameRule(block.nodeId).fields))) {
+    || (stackKind==='push' && !hasFields(stackEffect.frame,stepFrameRule(block.nodeId,record.kind).fields))) {
     throw failure('FK_I_INVALID_TRANSITION','invalid control stack effect');
   }
   const commits=proposal.kind==='commit-state';
@@ -164,8 +165,8 @@ function certifiedProposal(cp, program, event, rawProposal) {
   }
   if (proposal.stackEffect.kind==='push') {
     const {frame}=proposal.stackEffect;
-    if (frame.kind!=='agent' || frame.nodeId!==block.nodeId || frame.phase!=='prepare'
-      || frame.attempt!==agentFrameRule(block.nodeId).initialAttempt
+    if (frame.kind!==record.kind || frame.nodeId!==block.nodeId || frame.phase!=='prepare'
+      || frame.attempt!==stepFrameRule(block.nodeId,record.kind).initialAttempt
       || frame.activation!==event.activation || frame.overviewStep!==event.activation
       || !Array.isArray(frame.reasons) || frame.reasons.length) {
       throw failure('FK_I_INVALID_TRANSITION','invalid initial Agent frame');
@@ -177,7 +178,7 @@ function applyStack(cp, effect) {
   const frames = copy(cp.controlStack);
   if (effect.kind === 'none') return frames;
   if (effect.kind === 'push') {
-    if (frames.length || effect.frame?.kind !== 'agent'
+    if (frames.length || !hasStepFrame(effect.frame?.kind)
       || effect.frame.nodeId !== cp.blockId.split('::')[0]) {
       throw failure('FK_I_INVALID_TRANSITION','illegal Agent frame push');
     }
@@ -318,6 +319,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   async function loadPinned(cp) {
     if (cp.namespace !== store.namespace || cp.policyHash !== policyHash) {
       throw failure('FK_I_POLICY_MISMATCH','Run policy and namespace must match');
+    }
+    if (!versioned && cp.program.implementedStage!=='P0-A') {
+      throw failure('FK_I_UNSUPPORTED_GRAPH','This Program requires the authorized Interactive Host API');
     }
     assertSHA256(cp.artifactHash);
     const saved = versioned ? await store.getArtifact(cp.artifactHash) : store.getArtifact(cp.artifactHash);
@@ -467,6 +471,14 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (cp.candidate?.kind !== 'agent') throw failure('FK_I_INVALID_CHECKPOINT','no Agent candidate');
       next.candidate={...cp.candidate,validated:true};
     }
+    if (proposal.kind==='apply-external') {
+      if (extras.patch) {
+        next.state=copy({...cp.state,...extras.patch.set});
+        for (const key of extras.patch.remove??[]) delete next.state[key];
+      }
+      next.candidate=null;
+    }
+    if (Object.hasOwn(extras,'contextError')) next.contextError=extras.contextError;
     if (proposal.kind === 'prepare-pending') {
       if (!extras.prepared) throw failure('FK_I_INVALID_CHECKPOINT','prepared data missing');
       const {taskContext, ...pending} = extras.prepared;
@@ -493,8 +505,19 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     const block=program.programTable.blocks.find(b=>b.id===cp.blockId);
     const node=program.programTable.nodes[block.nodeId];
     const frame=cp.controlStack.at(-1);
-    if (node.kind!=='agent' || cp.phase!=='prepare' || !frame) {
-      throw failure('FK_I_INVALID_CHECKPOINT','not at Agent prepare phase');
+    if (!hasStepFrame(node.kind) || cp.phase!=='prepare' || !frame) {
+      throw failure('FK_I_INVALID_CHECKPOINT','not at a step prepare phase');
+    }
+    if (node.kind!=='agent') {
+      const {name,action,writes,verifier}=node.metadata;
+      const requestId='req:'+fingerprint([cp.namespace,cp.runId,cp.artifactHash,block.nodeId,
+        frame.activation,frame.attempt]).slice(7);
+      const task={name,input:cp.state,contextError:cp.contextError,
+        ...(node.kind==='action'?{action,writes,operationKey:fingerprint([
+          cp.namespace,cp.runId,cp.artifactHash,block.nodeId,frame.activation,
+        ])}:{verifier})};
+      return copy({kind:node.kind,runId:cp.runId,nodeId:block.nodeId,id:block.nodeId,name,
+        requestId,attempt:frame.attempt,task});
     }
     if (node.metadata.task) {
       const policy = {...policySnapshot.taskPolicy, fetch:execution.taskResourcePolicy?.fetch,
@@ -554,12 +577,39 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   }
 
   async function validateCandidate(cp,program) {
-    if (cp.phase!=='validate' || cp.candidate?.kind!=='agent'
+    if (cp.phase!=='validate' || !hasStepFrame(cp.candidate?.kind)
       || cp.candidate.requestId == null || cp.candidate.validated === true) {
       throw failure('FK_I_INVALID_CHECKPOINT','unvalidated candidate required');
     }
     const block=program.programTable.blocks.find(b=>b.id===cp.blockId);
-    const schema=copy(program.programTable.nodes[block.nodeId].metadata.output);
+    const {kind,metadata}=program.programTable.nodes[block.nodeId];
+    if (kind!=='agent') {
+      const {result,submissionKind,failure:executionFailure}=cp.candidate;
+      if (submissionKind===kind+'-call-failed') {
+        const operationKey=cp.receivedSubmission?.payload?.operationKey;
+        const contextError={code:executionFailure.code??'FK_I_STEP_FAILED',message:executionFailure.message,
+          ...(operationKey?{operationKey,sideEffectStatus:executionFailure.sideEffectStatus}:{})};
+        return kind==='action'
+          ? {kind:'external-rejected',contextError}
+          : {kind:'deterministic-failure',causeCode:contextError.code,contextError};
+      }
+      if (kind==='verification') {
+        return hasFields(result,['passed']) && typeof result.passed==='boolean'
+          ? {kind:result.passed?'external-passed':'external-rejected'}
+          : {kind:'deterministic-failure',causeCode:'FK_I_VERIFICATION_CONTRACT'};
+      }
+      const patch=result;
+      if (!hasFields(patch,['set'],['remove']) || !patch.set || typeof patch.set!=='object'
+        || Array.isArray(patch.set) || (Object.hasOwn(patch,'remove')&&!Array.isArray(patch.remove))) {
+        return {kind:'deterministic-failure',causeCode:'FK_I_ACTION_PATCH'};
+      }
+      const written=[...Object.keys(patch.set),...(patch.remove??[])];
+      if (new Set(written).size!==written.length || written.some(key=>!metadata.writes.includes(key))) {
+        return {kind:'deterministic-failure',causeCode:'FK_I_ACTION_PATCH'};
+      }
+      return {kind:'external-passed',patch,contextError:null};
+    }
+    const schema=copy(metadata.output);
     if (cp.candidate.submissionKind === 'agent-call-failed') {
       if (program.programTable.nodes[block.nodeId].metadata.task &&
         (cp.candidate.failure.retryable !== true || cp.candidate.failure.sideEffectStatus !== 'none')) {
@@ -640,10 +690,12 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           ? internalEvent(cp,'deterministic-failure',{error:{code:evaluation.causeCode}})
           : internalEvent(cp,evaluation.kind);
         if (evaluation.reasons?.length) extras.retryReasons=evaluation.reasons;
+        if (evaluation.patch) extras.patch=evaluation.patch;
+        if (Object.hasOwn(evaluation,'contextError')) extras.contextError=evaluation.contextError;
       } else {
         const kind=cp.phase==='dispatch-ready' ? 'pending-prepared' : 'internal-step';
         const extra=cp.phase==='enter' && block.nodeId in program.programTable.nodes
-          && program.programTable.nodes[block.nodeId].kind==='agent'
+          && hasStepFrame(program.programTable.nodes[block.nodeId].kind)
           ? {activation:cp.activationSeq+1} : {};
         event=internalEvent(cp,kind,extra);
       }
@@ -697,6 +749,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
     const intentSnapshot=copy(startIntent);
     const program=await loadInteractiveProgram(byteSnapshot,declared.artifactHash);
+    if (!versioned && declared.implementedStage!=='P0-A') {
+      throw failure('FK_I_UNSUPPORTED_GRAPH','This Program requires the authorized Interactive Host API');
+    }
     if (!canonicalBytes({...program.interactiveProgram.identity,artifactHash:declared.artifactHash})
       .equals(canonicalBytes(declared))) {
       throw failure('FK_I_PROGRAM_MISMATCH','identity and verified Program differ');
@@ -721,11 +776,13 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     submissionDigest,receivedPayload}={}) {
     nonempty(runId,'runId');nonempty(requestId,'requestId');nonempty(nodeId,'nodeId');
     if (!Number.isSafeInteger(attempt) || attempt < 1) throw new TypeError('Invalid Agent attempt');
-    if (!['agent-result','agent-call-failed'].includes(kind)) {
-      throw failure('FK_I_INVALID_RECEIPT','Unsupported P0-A receipt type');
+    const stepKind=typeof kind==='string'?kind.split('-')[0]:null;
+    const didSucceed=kind===stepKind+'-result';
+    if (!hasStepFrame(stepKind) || !didSucceed && kind!==stepKind+'-call-failed') {
+      throw failure('FK_I_INVALID_RECEIPT','Unsupported step receipt type');
     }
     let safeFailure;
-    if (kind === 'agent-call-failed') {
+    if (!didSucceed) {
       safeFailure=copy(callFailure);
       if (!safeFailure || typeof safeFailure !== 'object' || Array.isArray(safeFailure)
         || typeof safeFailure.message !== 'string' || !safeFailure.message.length
@@ -738,13 +795,13 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
     // Size-only rejection must not require serializing an enormous receipt
     // into the 2 MiB Checkpoint budget before we can mark a matched Run errored.
-    const rawSubmission=kind==='agent-result'
+    const rawSubmission=didSucceed
       ? {runId,requestId,nodeId,attempt,kind,result}
       : {runId,requestId,nodeId,attempt,kind,failure:safeFailure};
     // Both the value AND its actual receipt envelope must be serializable
     // under the protocol's 2 MiB bound. Otherwise snapshotting first would
     // throw a raw RangeError while leaving an authenticated Pending waiting.
-    const inlineTooLarge=kind==='agent-result'
+    const inlineTooLarge=didSucceed
       && (oversizedInline(result) || oversizedInline(rawSubmission));
     const submission=inlineTooLarge ? null : copy(rawSubmission);
     if (versioned) assertSHA256(submissionDigest);
@@ -771,7 +828,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const pending=cp.pending;
       const frame=cp.controlStack.at(-1);
       const block=program.programTable.blocks.find(b=>b.id===cp.blockId);
-      if (!pending || !frame || pending.kind!=='agent'
+      if (!pending || !frame || pending.kind!==stepKind
         || pending.requestId!==requestId || pending.nodeId!==nodeId
         || pending.attempt!==attempt || frame.nodeId!==nodeId
         || frame.attempt!==attempt || block.nodeId!==nodeId) {
@@ -794,20 +851,20 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const next={
         ...cp,revision:cp.revision+1,blockId:accept,phase:'validate',
         status:'running',pending:null,prepared:null,receiptCount:cp.receiptCount+1,
-        receivedSubmission:{kind:'agent',requestId,activation:frame.activation,attempt,
+        receivedSubmission:{kind:stepKind,requestId,activation:frame.activation,attempt,
           canonicalDigest:digest,acceptedRevision:cp.revision+1,payload:receivedPayload??submission,
           receivedAt:new Date().toISOString()},
-        candidate:{kind:'agent',requestId,nodeId,attempt,
+        candidate:{kind:stepKind,requestId,nodeId,attempt,
           submissionKind:kind,
-          ...(kind==='agent-result'?{result:submission.result}
+          ...(didSucceed?{result:submission.result}
             :{failure:submission.failure}),validated:false},
       };
       const persisted=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
         nextCheckpoint:next,
-        journalEntry:{kind:'receipt-accepted',nodeId,attempt,requestId,digest}},
+        journalEntry:{kind:'receipt-accepted',stepKind,nodeId,attempt,requestId,digest}},
         {kind:'receipt-accepted',requestId,nodeId,attempt,submissionDigest:digest},
         {kind:'accept-receipt',toBlockId:accept,submissionDigest:digest},
-        kind==='agent-result'?'succeeded':'failed');
+        didSucceed?'succeeded':'failed');
       if (!persisted.committed) continue;
       if (persisted.capacityExit) {
         throw failure('FK_I_CHECKPOINT_CAPACITY',

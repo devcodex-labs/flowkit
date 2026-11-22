@@ -2,13 +2,27 @@
  * P0-A resumable IR phase matrix. The lowerer and its validator share this
  * table; the Coordinator must NOT reconstruct graph routing from source DSL.
  */
-export const P0A_PHASES = Object.freeze({
+import { isInteractiveStage, supportsInteractiveNodeKind } from './feature-gate.mjs';
+
+const externalPhases = Object.freeze(['enter', 'prepare', 'dispatch-ready', 'awaiting', 'validate']);
+export const INTERACTIVE_PHASES = Object.freeze({
   condition: Object.freeze(['enter', 'route']),
   terminal: Object.freeze(['enter', 'route']),
   agent: Object.freeze(['enter', 'prepare', 'dispatch-ready', 'awaiting', 'validate', 'commit', 'route']),
+  action: externalPhases,
+  verification: externalPhases,
 });
 
+const externalRules = Object.freeze({
+  enter: [['internal-step', 'deterministic-failure'], ['move', 'raise-error']],
+  prepare: [['internal-step', 'deterministic-failure'], ['prepare-pending', 'raise-error']],
+  'dispatch-ready': [['pending-prepared', 'deterministic-failure'], ['publish-pending', 'raise-error']],
+  awaiting: [[], []],
+  validate: [['external-passed', 'external-rejected', 'deterministic-failure'], ['apply-external', 'raise-error']],
+});
 const RULES = Object.freeze({
+  action: externalRules,
+  verification: externalRules,
   condition: Object.freeze({
     enter: [['internal-step', 'deterministic-failure'], ['move', 'raise-error']],
     route: [['internal-step', 'deterministic-failure'], ['move', 'raise-error']],
@@ -32,12 +46,16 @@ const RULES = Object.freeze({
 });
 
 export const interactiveBlockId = (nodeId, phase) => nodeId + '::' + phase;
+export const hasStepFrame = kind => kind === 'agent' || kind === 'action' || kind === 'verification';
 
 // A static rule, not an actual persisted ControlFrame (dynamic values belong to M4).
 const AGENT_FRAME_FIELDS = Object.freeze(['kind', 'nodeId', 'activation', 'attempt', 'phase', 'reasons', 'overviewStep']);
 export function agentFrameRule(nodeId) {
-  return {kind: 'agent', nodeId, pushBlockId: interactiveBlockId(nodeId, 'enter'),
-    popBlockId: interactiveBlockId(nodeId, 'route'), initialAttempt: 1,
+  return stepFrameRule(nodeId,'agent');
+}
+export function stepFrameRule(nodeId,kind) {
+  return {kind, nodeId, pushBlockId: interactiveBlockId(nodeId, 'enter'),
+    popBlockId: interactiveBlockId(nodeId, kind==='agent'?'route':'validate'), initialAttempt: 1,
     fields: [...AGENT_FRAME_FIELDS]};
 }
 
@@ -53,12 +71,15 @@ export function expectedBlockTargets(ir, nodeId, phase) {
   if (!record) return null;
   const metadata = record.metadata;
   const target = (id, p) => interactiveBlockId(id, p);
-  if (phase === 'enter') return [target(nodeId, record.kind === 'agent' ? 'prepare' : 'route')];
-  if (record.kind === 'agent') {
+  if (phase === 'enter') return [target(nodeId, hasStepFrame(record.kind) ? 'prepare' : 'route')];
+  if (hasStepFrame(record.kind)) {
     if (phase === 'prepare') return [target(nodeId, 'dispatch-ready')];
     if (phase === 'dispatch-ready') return [target(nodeId, 'awaiting')];
     if (phase === 'awaiting') return [target(nodeId, 'validate')];
-    if (phase === 'validate') return [target(nodeId, 'prepare'), target(nodeId, 'commit')];
+    if (phase === 'validate') {
+      if (record.kind==='agent') return [target(nodeId, 'prepare'), target(nodeId, 'commit')];
+      return [...new Set([metadata.next,metadata.onFailure].filter(id=>typeof id==='string').map(id=>target(id,'enter')))];
+    }
     if (phase === 'commit') return [target(nodeId, 'route')];
     if (phase === 'route') return [target(metadata.next, 'enter')];
   }
@@ -84,7 +105,7 @@ export function validateInteractiveIR(ir) {
   const bad = message => errors.push(Object.freeze({
     code: 'FK_I_INVALID_TRANSITION', severity: 'error', message,
   }));
-  if (!ir || typeof ir !== 'object' || ir.schemaVersion !== 1 || ir.featureStage !== 'P0-A'
+  if (!ir || typeof ir !== 'object' || ir.schemaVersion !== 1 || !isInteractiveStage(ir.featureStage)
       || !Array.isArray(ir.blocks) || !ir.nodes || typeof ir.nodes !== 'object') {
     return { ok: false, diagnostics: Object.freeze([{ code: 'FK_I_INVALID_TRANSITION', severity: 'error', message: 'Invalid IR envelope' }]) };
   }
@@ -92,7 +113,7 @@ export function validateInteractiveIR(ir) {
   if (!ids.length || ids.length > 500 || ir.blocks.length > 3500) bad('Invalid P0-A IR size');
   if (ir.entryBlockId !== interactiveBlockId(ids[0], 'enter')) bad('Invalid entry block');
   if (!/^[a-f0-9]{64}$/.test(ir.sourceHash ?? '')) bad('Invalid source hash');
-  const expectedFrames = ids.filter(id => ir.nodes[id]?.kind === 'agent').map(agentFrameRule);
+  const expectedFrames = ids.filter(id => hasStepFrame(ir.nodes[id]?.kind)).map(id=>stepFrameRule(id,ir.nodes[id].kind));
   if (!Array.isArray(ir.frameRules) || ir.frameRules.length !== expectedFrames.length) {
     bad('Invalid control-frame rule count');
   } else {
@@ -114,10 +135,10 @@ export function validateInteractiveIR(ir) {
   let expectedCount = 0;
   for (const id of ids) {
     const record = ir.nodes[id];
-    if (!record || !Object.hasOwn(P0A_PHASES, record.kind)) {
+    if (!record || !supportsInteractiveNodeKind(ir.featureStage,record.kind)) {
       bad('Unsupported node kind: ' + id); continue;
     }
-    const phases = P0A_PHASES[record.kind];
+    const phases = INTERACTIVE_PHASES[record.kind];
     expectedCount += phases.length;
     const metadata = record.metadata;
     if (!metadata || typeof metadata !== 'object') { bad('Missing metadata: ' + id); continue; }
@@ -135,6 +156,11 @@ export function validateInteractiveIR(ir) {
     if (record.kind === 'terminal' && !['succeeded', 'failed'].includes(metadata.status)) {
       bad('Invalid terminal status: ' + id);
     }
+    if (record.kind==='action' && (typeof metadata.action!=='string' || typeof metadata.next!=='string'
+      || !Array.isArray(metadata.writes) || metadata.writes.some(key=>typeof key!=='string')
+      || (metadata.onFailure!==undefined && typeof metadata.onFailure!=='string'))) bad('Malformed Action metadata: '+id);
+    if (record.kind==='verification' && (typeof metadata.verifier!=='string' || typeof metadata.next!=='string'
+      || typeof metadata.onFailure!=='string')) bad('Malformed Verification metadata: '+id);
     for (const phase of phases) {
       const blockId = interactiveBlockId(id, phase);
       const block = table.get(blockId);

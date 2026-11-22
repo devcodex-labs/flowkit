@@ -1,4 +1,6 @@
 import {MAX_CHECKPOINT_BYTES,assertSHA256,canonicalBytes,sha256Bytes} from './canonical.mjs';
+import { isInteractiveStage } from '../compiler/interactive/feature-gate.mjs';
+import { hasStepFrame } from '../compiler/interactive/validate-ir.mjs';
 
 const finished=new Set(['succeeded','failed','errored','cancelled']);
 const phases=new Set(['enter','prepare','dispatch-ready','awaiting','validate','commit','route','finished']);
@@ -22,8 +24,10 @@ function pendingFromExecution(cp) {
   const task=cp.pending??cp.prepared;
   if (!task) return [];
   const {requestId,nodeId,kind,attempt,name,instruction,input,missing,resultSchema,reasons,overview,preparedTask}=task;
-  const publicTask={name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{}),
-    ...(preparedTask?{preparedTask}:{})};
+  const publicTask=kind==='agent'
+    ? {name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{}),
+      ...(preparedTask?{preparedTask}:{})}
+    : task.task;
   return [{requestId,nodeId,kind,attempt,name,activation:cp.controlStack.at(-1).activation,
     issuedRevision:task.issuedRevision??cp.revision,intent:'execute',internalPayload:{},publicTask}];
 }
@@ -33,8 +37,8 @@ export function encodeCheckpoint(cp) {
   const phase=finished.has(cp.status)?'finished':cp.phase;
   const {namespace,runId,startKey,startIntentHash,revision,status,program,policyIdentity,state}=cp;
   const receivedSubmission=phase==='validate' ? cp.receivedSubmission : null;
-  const candidate=cp.candidate?.submissionKind==='agent-result' && object(cp.candidate.result)
-    ? {kind:'agent',requestId:cp.candidate.requestId,result:cp.candidate.result} : null;
+  const candidate=cp.candidate?.submissionKind===cp.candidate?.kind+'-result' && object(cp.candidate?.result)
+    ? {kind:cp.candidate.kind,requestId:cp.candidate.requestId,result:cp.candidate.result} : null;
   const causeCode=cp.terminal?.causeCode ?? (
     cp.pauseReason==='skill-temporary'?'FK_I_TEMPORARY_SKILL':undefined);
   return {
@@ -63,7 +67,7 @@ export function decodeCheckpoint(cp) {
       'semanticsVersion','checkpointSchemaVersion','canonicalizationVersion','implementedStage'])
     || ![cp.program.workflowId,cp.program.workflowVersion,cp.program.compilerVersion].every(text)
     || cp.program.programAbiVersion!==1 || cp.program.checkpointSchemaVersion!==1
-    || cp.program.semanticsVersion!=='interactive-state-machine-v1' || cp.program.implementedStage!=='P0-A'
+    || cp.program.semanticsVersion!=='interactive-state-machine-v1' || !isInteractiveStage(cp.program.implementedStage)
     || cp.program.canonicalizationVersion!=='jcs-rfc8785-v1' || cp.programRef.namespace!==cp.namespace
     || cp.programRef.artifactHash!==cp.program.artifactHash || cp.programRef.programId!==cp.program.workflowId
     || !keys(cp.policyIdentity,['id','version','policyHash','bindingManifestHash'],['skillManifestHash'])
@@ -106,12 +110,14 @@ export function decodeCheckpoint(cp) {
   if (hasPending) {
     const task=cp.pending[0];
     if (!keys(task,['requestId','nodeId','kind','activation','attempt','issuedRevision','intent','name','internalPayload','publicTask'])
-      || ![task.requestId,task.nodeId,task.name].every(text) || task.kind!=='agent' || task.intent!=='execute'
+      || ![task.requestId,task.nodeId,task.name].every(text) || !hasStepFrame(task.kind) || task.intent!=='execute'
+      || task.kind!==controlStack.at(-1)?.kind
       || !count(task.issuedRevision) || task.issuedRevision>revision
       || task.activation!==controlStack.at(-1)?.activation || task.attempt!==controlStack.at(-1)?.attempt
       || task.nodeId!==controlStack.at(-1)?.nodeId || !object(task.internalPayload)
       || !object(task.publicTask) || task.publicTask.name!==task.name) throw invalid();
-    pending={...task.publicTask,kind:'agent',id:task.nodeId,nodeId:task.nodeId,runId,requestId:task.requestId,
+    pending={...(task.kind==='agent'?task.publicTask:{name:task.name,task:task.publicTask}),
+      kind:task.kind,id:task.nodeId,nodeId:task.nodeId,runId,requestId:task.requestId,
       attempt:task.attempt,issuedRevision:task.issuedRevision};
   }
   let candidate=null;
@@ -119,13 +125,15 @@ export function decodeCheckpoint(cp) {
     const accepted=receivedSubmission;
     const frame=controlStack.at(-1);
     if (!keys(accepted,['requestId','kind','activation','attempt','canonicalDigest','acceptedRevision','payload','receivedAt'])
-      || !text(accepted.requestId) || !text(accepted.receivedAt) || accepted.kind!=='agent'
+      || !text(accepted.requestId) || !text(accepted.receivedAt) || !hasStepFrame(accepted.kind) || accepted.kind!==frame?.kind
       || accepted.activation!==frame?.activation || accepted.attempt!==frame?.attempt
       || accepted.acceptedRevision!==revision || !object(accepted.payload)) throw invalid();
     assertSHA256(accepted.canonicalDigest);
     const payload=accepted.payload;
-    const succeeded=payload.kind==='agent-result' || (payload.kind==='agent' && payload.outcome==='succeeded');
-    const failed=payload.kind==='agent-call-failed' || (payload.kind==='agent' && payload.outcome==='failed');
+    const successKind=accepted.kind+'-result';
+    const failureKind=accepted.kind+'-call-failed';
+    const succeeded=payload.kind===successKind || (payload.kind===accepted.kind && payload.outcome==='succeeded');
+    const failed=payload.kind===failureKind || (payload.kind===accepted.kind && payload.outcome==='failed');
     if ((!succeeded && !failed) || hash(payload)!==accepted.canonicalDigest
       || payload.runId!==runId || payload.requestId!==accepted.requestId
       || (payload.nodeId!==undefined && payload.nodeId!==frame.nodeId)
@@ -133,11 +141,11 @@ export function decodeCheckpoint(cp) {
       || (succeeded && !Object.hasOwn(payload,'result'))
       || (failed && !text((payload.failure??payload.error)?.message))
       || (cp.candidate!==null)!==(succeeded && object(payload.result))
-      || (cp.candidate && (!keys(cp.candidate,['kind','requestId','result']) || cp.candidate.kind!=='agent'
+      || (cp.candidate && (!keys(cp.candidate,['kind','requestId','result']) || cp.candidate.kind!==accepted.kind
         || cp.candidate.requestId!==accepted.requestId
         || hash(cp.candidate.result)!==hash(payload.result)))) throw invalid();
-    candidate={kind:'agent',requestId:accepted.requestId,nodeId:frame.nodeId,attempt:accepted.attempt,
-      submissionKind:succeeded?'agent-result':'agent-call-failed',validated:false,
+    candidate={kind:accepted.kind,requestId:accepted.requestId,nodeId:frame.nodeId,attempt:accepted.attempt,
+      submissionKind:succeeded?successKind:failureKind,validated:false,
       ...(succeeded?{result:payload.result}:{failure:Object.fromEntries(['message','retryable','sideEffectStatus','code']
         .filter(key=>Object.hasOwn(payload.failure??payload.error,key)).map(key=>[key,(payload.failure??payload.error)[key]]))})};
   } else if (phase==='commit') {

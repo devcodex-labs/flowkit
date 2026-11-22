@@ -17,7 +17,7 @@
 | options字段 | 必需/默认 | 行为 |
 | --- | --- | --- |
 | output | 必需：memory或file | memory只返回；file另写`<stem>.interactive.mjs`并返回artifactPath |
-| featureStage | 必需：P0-A | 本版不可用配置启用P0-B/P1 |
+| featureStage | 必需：P0-A 或 P0-B | P0-B 的 Action、Verification 使用版本化 Host 接口 |
 | targetVersion | 可省略；若给必须interactive-state-machine-v1 | 指定语义目标，不是软件包版本 |
 | outDir | 源目录；相对cwd | file输出目录；不要套用Standard输出目录的所有限制 |
 | projectRoot | 最近package.json所在目录，找不到回退cwd | 显式值按cwd解析；影响Skill检查 |
@@ -128,7 +128,17 @@ readHistoricalAck接收namespace/runId/requestId/nodeId/attempt/receiptHash，�
 
 ### createSqliteInteractivePersistence {#createSqliteInteractivePersistence}
 
-`createSqliteInteractivePersistence(file,{namespace})`返回`{store,programRegistry,adminController,close}`。store的方法均为Promise，见CheckpointStoreV1：createIfAbsent、load、compareAndSwap、loadTransition、loadReceipt。注册表方法为putImmutable、resolveByHash、describe、retain、release；不能把同步Store直接传入版本化options。
+`createSqliteInteractivePersistence(file,{namespace})` 返回 `{store, programRegistry, adminController, operationController, close}`。Store 的方法均为 Promise，见 CheckpointStoreV1。注册表负责按产物摘要注册和读取。
+
+### 行为操作账本 {#operation-controller}
+
+版本化 Host 的 Action Pending 带 `task.operationKey`。Host 以当前 Pending 的 Run、请求 ID、操作键及 `task` 的规范 JSON SHA-256 调用 `operationController.claim(input,auth)`。只有 `claimed:true` 表示本次取得派发权。对旧记录按原操作键核对外部结果。
+
+`operationController.settle(input,auth)` 保存效果、证据摘要和结果，允许同内容重试。Action 的 `complete` 需要该账本的匹配结果。成功结果带 `set` 和可选 `remove`，字段须在该 Action 的 `writes` 中。Verification 成功回执结果为 `{passed:boolean}`，`false` 进入业务失败路径。
+
+### cancelInteractiveRun {#cancelInteractiveRun}
+
+`cancelInteractiveRun(runId,reasonCode,options)` 使用 `run:cancel` 权限封锁新派发。已派发操作可用独立的 `operation:read` 和 `operation:settle` 权限继续对账。
 
 putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有namespace、artifactHash和programId；保留/释放与Run持久引用一致，不能在Run仍引用时自行删产物。自定义实现必须保留R5封套全部字段以及原子创建/CAS、转换与回执对账契约；不要把公开frame当checkpoint存储。
 

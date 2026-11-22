@@ -7,12 +7,16 @@ import {
 } from './canonical.mjs';
 
 import {checkpointPolicy,decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
+import {prepareOperationLedger} from './operation-ledger.mjs';
+import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
 export const sqliteAdminTerminate=Symbol('SQLite admin terminate');
 export const sqliteHostTrust=Symbol('SQLite Host trust');
+export const sqliteOperationLedger=Symbol('SQLite workflow operation ledger');
 const digest=value=>sha256Bytes(canonicalBytes(value));
+const SQLITE_SCHEMA_VERSION = 4;
 function boundedCheckpointBytes(input) {
   try { return canonicalBytes(input); }
   catch (error) {
@@ -98,9 +102,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       throw failure('FK_I_STORE_UNSAFE', 'WAL, synchronous FULL and foreign keys are required');
     }
     const version=db.prepare('PRAGMA user_version').get().user_version;
-    if (version!==3) {
+    if (version!==SQLITE_SCHEMA_VERSION) {
       if (version!==0 || db.prepare("SELECT 1 FROM sqlite_schema WHERE name='fk_i_runs'").get()) {
-        throw failure('FK_I_STORE_SCHEMA','initialize a new R5 SQLite store');
+        throw failure('FK_I_STORE_SCHEMA','initialize a new Interactive SQLite store');
       }
       db.exec([
       'BEGIN IMMEDIATE;',
@@ -132,6 +136,16 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' PRIMARY KEY (namespace, run_id, revision), UNIQUE (namespace, run_id, transition_id),',
       ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id)',
       ') STRICT;',
+      'CREATE TABLE IF NOT EXISTS fk_i_operations (',
+      ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, operation_key TEXT NOT NULL,',
+      ' request_id TEXT NOT NULL, input_hash TEXT NOT NULL,',
+      " effect TEXT CHECK (effect IN ('applied', 'no-effect')),",
+      ' evidence_hash TEXT, result_json TEXT, result_hash TEXT,',
+      ' PRIMARY KEY (namespace, run_id, operation_key),',
+      ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id),',
+      ' CHECK ((effect IS NULL AND evidence_hash IS NULL AND result_json IS NULL AND result_hash IS NULL)',
+      ' OR (effect IS NOT NULL AND evidence_hash IS NOT NULL AND result_json IS NOT NULL AND result_hash IS NOT NULL))',
+      ') STRICT;',
       'CREATE TABLE IF NOT EXISTS fk_i_admin_events (',
       ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, transition_id TEXT NOT NULL,',
       ' admin_subject_id TEXT NOT NULL, reason_code TEXT NOT NULL, created_at TEXT NOT NULL,',
@@ -150,7 +164,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' namespace TEXT NOT NULL, policy_hash TEXT NOT NULL,',
       ' PRIMARY KEY (namespace, policy_hash)',
       ') STRICT;',
-      'PRAGMA user_version = 3; COMMIT;',
+      'PRAGMA user_version = ' + SQLITE_SCHEMA_VERSION + '; COMMIT;',
       ].join('\n'));
     }
   } catch (error) {
@@ -259,6 +273,23 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   return Object.freeze({
     namespace,
     close() { db.close(); },
+    [sqliteOperationLedger]: prepareOperationLedger(db,namespace,{
+      transaction,
+      assertDispatch(runId,requestId,inputHash,operationKey) {
+        identifier(runId,'runId');
+        identifier(requestId,'requestId');
+        const current=decodeRow(read.get(namespace,runId));
+        if (!current || current.status!=='waiting' || current.pending?.requestId!==requestId
+          || !['action','agent'].includes(current.pending.kind)) {
+          throw failure('FK_I_STALE_RECEIPT','Operation dispatch requires the current Pending');
+        }
+        assertActive(current.policyHash);
+        if (current.pending.kind==='action' && (digest(current.pending.task)!==inputHash
+          || current.pending.task.operationKey!==operationKey)) {
+          throw failure('FK_I_OPERATION_CONFLICT','operation input does not match the published Action');
+        }
+      },
+    }),
     [sqliteHostTrust]:Object.freeze({
       register(policyHash,keys,drainOnly) {
         transaction('write',()=>{
@@ -282,18 +313,24 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         return transaction('write',()=>revokeKey.run(namespace,keyHash,new Date().toISOString()).changes===1);
       },
     }),
-    [sqliteAdminTerminate](runId,reason,subjectId) {
+    [sqliteAdminTerminate](runId,reason,subjectId,policyHash) {
       identifier(runId,'runId');
       identifier(subjectId,'subjectId');
       return transaction('write',()=>{
         const current=decodeRow(read.get(namespace,runId));
         if (!current) throw failure('FK_I_HOST_DENIED','Run is not accessible');
+        const admin=policyHash===undefined;
+        if (!admin) {
+          if (current.policyHash!==policyHash) throw failure('FK_I_POLICY_MISMATCH','Run policy differs');
+          assertActive(policyHash);
+        }
         if (TERMINAL.has(current.status)) return current;
         if (current.revision>=Number.MAX_SAFE_INTEGER) throw failure('FK_I_REVISION_EXHAUSTED','revision range exceeded');
         const next={...current,status:'cancelled',revision:current.revision+1,
           pending:null,prepared:null,candidate:null,receivedSubmission:null,terminal:null,pauseReason:null};
-        const eventDigest=digest({kind:'admin-terminate',subjectId,reason});
-        const proposalDigest=digest({kind:'admin-tombstone',status:'cancelled'});
+        const kind=admin?'admin-terminate':'run-cancel';
+        const eventDigest=digest({kind,subjectId,reason});
+        const proposalDigest=digest({kind,status:'cancelled'});
         const transitionId=digest([namespace,runId,current.revision,current.blockId,eventDigest,current.artifactHash,proposalDigest]);
         const committedAt=new Date().toISOString();
         const transition={namespace,runId,transitionId,fromRevision:current.revision,toRevision:next.revision,
@@ -304,8 +341,8 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         if (updateRun.run(next.revision,bytes.toString('utf8'),checkpointHash,namespace,runId,current.revision).changes!==1) {
           throw failure('FK_I_CAS_CONFLICT','revision changed during admin transaction');
         }
-        appendJournal(runId,next.revision,transitionId,checkpointHash,previous.entry_hash,{kind:'admin-terminate',transition});
-        addAdminEvent.run(namespace,runId,transitionId,subjectId,reason,committedAt);
+        appendJournal(runId,next.revision,transitionId,checkpointHash,previous.entry_hash,{kind,transition});
+        if (admin) addAdminEvent.run(namespace,runId,transitionId,subjectId,reason,committedAt);
         return next;
       });
     },
@@ -322,7 +359,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       assertSHA256(identity.sourceHash);
       if (identity.programAbiVersion !== 1
         || identity.semanticsVersion !== 'interactive-state-machine-v1'
-        || identity.implementedStage !== 'P0-A') {
+        || !isInteractiveStage(identity.implementedStage)) {
         throw failure('FK_I_PROGRAM_MISMATCH', 'unsupported Program identity');
       }
       const copied = Buffer.from(bytes);

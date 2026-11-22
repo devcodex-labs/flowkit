@@ -1,11 +1,15 @@
 import {buildCoordinator} from './coordinator.mjs';
 import {compileInteractive} from './compile.mjs';
-import {createSqliteCheckpointStore,sqliteAdminTerminate} from './sqlite-store.mjs';
+import {createSqliteCheckpointStore,sqliteAdminTerminate,sqliteOperationLedger} from './sqlite-store.mjs';
+import {hasStepFrame} from '../compiler/interactive/validate-ir.mjs';
+import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
 import {assertSHA256,canonicalBytes,safeJSONSnapshot,sha256Bytes} from './canonical.mjs';
 
 import {decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 
 const authCallbacks=new WeakMap();
+const operationLedgers=new WeakMap();
+const cancellableStores=new WeakMap();
 const adminCallbacks=new WeakMap();
 const hash=value=>sha256Bytes(canonicalBytes(value));
 const fail=(code,message)=>Object.assign(new Error(code+': '+message),{code});
@@ -89,7 +93,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       }
       const journalEntry={kind:receipt?'receipt-accepted':'versioned-transition',transition};
       if (receipt) {
-        if (receipt.namespace!==namespace || receipt.runId!==runId || receipt.kind!=='agent'
+        if (receipt.namespace!==namespace || receipt.runId!==runId || receipt.kind!==next.receivedSubmission?.kind
           || next.candidate?.requestId!==receipt.requestId
           || (receipt.nodeId!==undefined && next.candidate?.nodeId!==receipt.nodeId)
           || (receipt.attempt!==undefined && next.candidate?.attempt!==receipt.attempt)
@@ -99,7 +103,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
           throw fail('FK_I_INVALID_RECEIPT','receipt identity mismatch');
         }
         Object.assign(journalEntry,{requestId:receipt.requestId,nodeId:next.candidate?.nodeId,
-          attempt:next.candidate?.attempt,digest:receipt.submissionDigest,receiptOutcome:receipt.outcome});
+          attempt:next.candidate?.attempt,digest:receipt.submissionDigest,receiptOutcome:receipt.outcome,stepKind:receipt.kind});
       } else if (current.status==='waiting' && next.phase==='validate') {
         throw fail('FK_I_INVALID_RECEIPT','accepting a Pending requires its atomic receipt');
       }
@@ -116,7 +120,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       const receipt=backend.getReceipt(runId,requestId);
       if (!receipt) return null;
       const saved=backend.readJournalRecord(runId,{revision:receipt.acceptedRevision});
-      return {namespace,runId,requestId,kind:'agent',submissionDigest:receipt.digest,
+      return {namespace,runId,requestId,kind:saved.entry.stepKind,submissionDigest:receipt.digest,
         acceptedRevision:receipt.acceptedRevision,outcome:saved.entry.receiptOutcome,
         transitionId:saved.transitionId,nodeId:receipt.nodeId,attempt:receipt.attempt};
     },
@@ -159,7 +163,30 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       return terminalFrame(cp.runId,cp.revision,cp.status,cp.terminal);
     },
   });
-  return Object.freeze({store,programRegistry,adminController,close:()=>backend.close()});
+  const ledger=backend[sqliteOperationLedger];
+  operationLedgers.set(store,ledger);
+  cancellableStores.set(store,backend[sqliteAdminTerminate]);
+  function operation(action, fields, readOrWrite) {
+    return async (input,auth) => {
+      const snapshot=safeJSONSnapshot(input);
+      if (!snapshot || typeof snapshot.runId!=='string' || !snapshot.runId || snapshot.runId.length>256
+        || !fields.every(key=>Object.hasOwn(snapshot,key)) || Object.keys(snapshot).length!==fields.length) {
+        throw fail('FK_I_INVALID_OPERATION','invalid operation input');
+      }
+      const {runId,operationKey,inputHash,requestId,evidenceHash,effect}=snapshot;
+      await checkAccess({store,programRegistry,auth},action,{
+        runId,operationKey,...(inputHash===undefined?{}:{inputHash}),...(requestId===undefined?{}:{requestId}),
+        ...(effect===undefined?{}:{effect,evidenceHash}),
+      });
+      return readOrWrite(snapshot);
+    };
+  }
+  const operationController=Object.freeze({
+    claim:operation('operation:claim',['runId','operationKey','requestId','inputHash'],ledger.claim),
+    load:operation('operation:read',['runId','operationKey'],ledger.load),
+    settle:operation('operation:settle',['runId','operationKey','inputHash','effect','evidenceHash','result'],ledger.settle),
+  });
+  return Object.freeze({store,programRegistry,adminController,operationController,close:()=>backend.close()});
 }
 
 function terminalFrame(runId,revision,status,terminal) {
@@ -215,7 +242,7 @@ function executionStore(store,registry) {
       const receipt=await store.loadReceipt(runId,requestId);
       if (!receipt) return null;
       if (receipt.namespace!==store.namespace || receipt.runId!==runId || receipt.requestId!==requestId
-        || receipt.kind!=='agent' || !Number.isSafeInteger(receipt.acceptedRevision) || receipt.acceptedRevision<1) {
+        || !hasStepFrame(receipt.kind) || !Number.isSafeInteger(receipt.acceptedRevision) || receipt.acceptedRevision<1) {
         throw uncertain();
       }
       return {...receipt,digest:receipt.submissionDigest};
@@ -228,9 +255,9 @@ function executionStore(store,registry) {
         eventDigest:hash(journalEntry ?? null),committedAt:new Date().toISOString(),
       };
       const receipt=journalEntry?.kind==='receipt-accepted' ? {
-        namespace:store.namespace,runId,requestId:journalEntry.requestId,kind:'agent',
+        namespace:store.namespace,runId,requestId:journalEntry.requestId,kind:nextCheckpoint.receivedSubmission.kind,
         submissionDigest:journalEntry.digest,acceptedRevision:nextCheckpoint.revision,
-        outcome:journalEntry.receiptOutcome ?? (nextCheckpoint.candidate.submissionKind==='agent-result'?'succeeded':'failed'),
+        outcome:journalEntry.receiptOutcome,
         transitionId,nodeId:journalEntry.nodeId,attempt:journalEntry.attempt,
       } : undefined;
       const next=encodeCheckpoint(nextCheckpoint);
@@ -296,7 +323,7 @@ async function readTerminalResult(resultRef,options) {
   }
   return safeJSONSnapshot({
     projectionVersion:1,namespace:cp.namespace,runId:cp.runId,status:cp.status,
-    state:cp.state,contextError:null,
+    state:cp.state,contextError:cp.execution.contextError,
     ...(cp.status==='succeeded'||cp.status==='failed' ? {terminal:{nodeId:cp.terminal.nodeId,status:cp.status}} : {}),
     ...(typeof cp.causeCode==='string' ? {causeCode:cp.causeCode} : {}),
   });
@@ -332,14 +359,14 @@ function operationOptions(options) {
 
 function bind(runtime,options) {
   const {store,programRegistry,policy,maxStagesPerCall,signal}=options;
-  if (!store || !programRegistry || !policy || policy.capabilityStage!=='P0-A'
+  if (!store || !programRegistry || !policy || !isInteractiveStage(policy.capabilityStage)
     || policy.canonicalizationVersion!=='jcs-rfc8785-v1' || typeof policy.id!=='string'
     || !policy.id || typeof policy.version!=='string' || !policy.version
     || typeof policy.disclosePolicyId!=='string' || !policy.disclosePolicyId
     || !policy.bindingManifest || !runtime
     || !['createIfAbsent','load','compareAndSwap','loadTransition','loadReceipt'].every(key=>typeof store[key]==='function')
     || !['putImmutable','describe','resolveByHash','retain','release'].every(key=>typeof programRegistry[key]==='function')) {
-    throw new TypeError('P0-A policy, Runtime and asynchronous persistence are required');
+    throw new TypeError('Interactive policy, Runtime and asynchronous persistence are required');
   }
   return buildCoordinator({store:executionStore(store,programRegistry),runtime:bindingRuntime(runtime,policy),
     policy,maxStagesPerCall,signal},true);
@@ -355,9 +382,8 @@ async function publicFrame(frame,options,callbacks) {
     const checkpoint=await options.store.load(runId);
     if (checkpoint?.namespace!==options.auth.namespace || checkpoint.revision!==revision
       || checkpoint.status!=='waiting' || checkpoint.pending[0]?.requestId!==frame.pending?.requestId) throw uncertain();
-    const {requestId,nodeId,attempt,name,instruction,input,missing,resultSchema,reasons,overview,preparedTask}=frame.pending;
-    const task=safeJSONSnapshot({name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{}),
-      ...(preparedTask?{preparedTask}:{})});
+    const {requestId,nodeId,attempt,kind,publicTask}=checkpoint.pending[0];
+    const task=safeJSONSnapshot(publicTask);
     let approved;
     try {
       approved=await callbacks.authorizeTask(Object.freeze({namespace:options.auth.namespace,
@@ -368,7 +394,7 @@ async function publicFrame(frame,options,callbacks) {
     if (current?.namespace!==options.auth.namespace || current.revision!==revision
       || current.status!=='waiting' || current.pending[0]?.requestId!==requestId) throw uncertain();
     output.pending.push({requestId,nodeId,attempt,activation:checkpoint.pending[0].activation,
-      kind:'agent',intent:'execute',task});
+      kind,intent:'execute',task});
   } else if (['succeeded','failed','errored','cancelled'].includes(status)) {
     Object.assign(output,terminalFrame(runId,revision,status,frame.terminal));
   } else if (status!=='paused') throw uncertain();
@@ -386,7 +412,7 @@ export async function start(source,runtime,initialState,options) {
     ...(typeof reference==='string'?{source:reference}:{artifactHash:reference?.artifactHash})});
   let bytes,identity;
   if (typeof reference==='string') {
-    const compiled=await compileInteractive(reference,{output:'memory',featureStage:'P0-A'});
+    const compiled=await compileInteractive(reference,{output:'memory',featureStage:options.policy.capabilityStage});
     if (!compiled.programIdentity) throw Object.assign(fail('FK_I_PROGRAM_MISMATCH','source compilation failed'),
       {diagnostics:compiled.diagnostics});
     bytes=Buffer.from(compiled.code);
@@ -399,6 +425,12 @@ export async function start(source,runtime,initialState,options) {
     }
     bytes=await options.programRegistry.resolveByHash(reference.artifactHash);
   }
+  if (identity.implementedStage!==options.policy.capabilityStage) {
+    throw fail('FK_I_POLICY_MISMATCH','Program stage and Host policy must match');
+  }
+  if (identity.implementedStage!=='P0-A' && !operationLedgers.has(options.store)) {
+    throw fail('FK_I_BINDING_MISSING','Stage requires a durable Host operation ledger');
+  }
   return publicFrame(await coordinator.start({programBytes:bytes,programIdentity:identity,startKey,state,
     authorizeExisting:runId=>checkAccess(options,'run:resume',{runId})}),options,callbacks);
 }
@@ -406,9 +438,10 @@ export async function start(source,runtime,initialState,options) {
 export async function complete(submission,runtime,options) {
   options=operationOptions(options);
   const input=safeJSONSnapshot(submission);
-  if (input?.kind!=='agent' || typeof input.runId!=='string' || typeof input.requestId!=='string'
+  if (!hasStepFrame(input?.kind) || typeof input.runId!=='string' || typeof input.requestId!=='string'
     || !['succeeded','failed'].includes(input.outcome)
-    || Object.keys(input).length!==5
+    || Object.keys(input).length!==(input.kind==='action'?6:5)
+    || (input.kind==='action')!==Object.hasOwn(input,'operationKey')
     || (input.outcome==='failed' && (typeof input.error?.message!=='string' || !input.error.message
       || typeof input.error.code!=='string' || !input.error.code
       || (input.error.retryable!==undefined && typeof input.error.retryable!=='boolean')
@@ -416,7 +449,7 @@ export async function complete(submission,runtime,options) {
       || (input.error.sideEffectStatus!==undefined && !['none','known','unknown'].includes(input.error.sideEffectStatus))
       || (input.error.origin!==undefined && !['runtime','executor','validator','store','policy'].includes(input.error.origin))))
     || (input.outcome==='succeeded' && (!input.result || typeof input.result!=='object' || Array.isArray(input.result)))) {
-    throw fail('FK_I_INVALID_RECEIPT','a bounded Agent submission is required');
+    throw fail('FK_I_INVALID_RECEIPT','a bounded step submission is required');
   }
   const coordinator=bind(runtime,options);
   const callbacks=await checkAccess(options,'run:complete',{runId:input.runId,requestId:input.requestId});
@@ -435,15 +468,26 @@ export async function complete(submission,runtime,options) {
       || !transition.toBlockId?.endsWith(suffix)) throw uncertain();
     task={...historical,nodeId:transition.toBlockId.slice(0,-suffix.length),attempt:1};
   }
-  if (!task || task.requestId!==input.requestId || (historical &&
+  if (!task || task.requestId!==input.requestId || task.kind!==input.kind || (historical &&
     (historical.runId!==input.runId || historical.namespace!==options.auth.namespace))) {
     throw fail('FK_I_STALE_RECEIPT','request is not current or accepted');
+  }
+  if (input.kind==='action') {
+    const operation=operationLedgers.get(options.store)?.load(input);
+    const expected=input.outcome==='succeeded'?input.result:input.error;
+    const settlement=operation?.settlement;
+    if (operation?.requestId!==input.requestId || !settlement
+      || (input.outcome==='succeeded' && settlement.effect!=='applied')
+      || (input.outcome==='failed' && input.error.sideEffectStatus!==(settlement.effect==='applied'?'known':'none'))
+      || hash(settlement.result)!==hash(expected)) {
+      throw fail('FK_I_INVALID_OPERATION','Action receipt requires its durable operation settlement');
+    }
   }
   const {runId,requestId,outcome}=input;
   const result=await coordinator.complete({runId,requestId,nodeId:task.nodeId,attempt:task.attempt,
     submissionDigest:hash(input),receivedPayload:input,
-    ...(outcome==='succeeded' ? {result:input.result}
-      : {kind:'agent-call-failed',failure:{message:input.error.message,
+    ...(outcome==='succeeded' ? {kind:input.kind+'-result',result:input.result}
+      : {kind:input.kind+'-call-failed',failure:{message:input.error.message,
         ...(input.error.retryable!==undefined?{retryable:input.error.retryable}:{}),
         ...(input.error.sideEffectStatus!==undefined?{sideEffectStatus:input.error.sideEffectStatus}:{}),code:input.error.code}})});
   const frame=await publicFrame(result,options,callbacks);
@@ -456,6 +500,20 @@ export async function resume(runId,runtime,options) {
   const coordinator=bind(runtime,options);
   const callbacks=await checkAccess(options,'run:resume',{runId});
   return publicFrame(await coordinator.resume({runId}),options,callbacks);
+}
+
+/** Cancel a Run under its current Host policy without using management privileges. */
+export async function cancelInteractiveRun(runId,reasonCode,options) {
+  options=operationOptions(options);
+  if (typeof runId!=='string' || !runId || typeof reasonCode!=='string'
+    || !/^[A-Z][A-Z0-9_.-]{0,63}$/.test(reasonCode)) {
+    throw fail('FK_I_INVALID_OPERATION','invalid cancellation request');
+  }
+  await checkAccess(options,'run:cancel',{runId,reasonCode});
+  const cancel=cancellableStores.get(options.store);
+  if (!cancel) throw fail('FK_I_BINDING_MISSING','Store does not support atomic cancellation');
+  const checkpoint=cancel(runId,reasonCode,options.auth.subjectId,hash(options.policy));
+  return terminalFrame(runId,checkpoint.revision,checkpoint.status,checkpoint.terminal);
 }
 
 /** Host execution budget operation; never expose this entry to a model. */

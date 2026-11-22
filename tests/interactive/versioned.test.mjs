@@ -4,9 +4,11 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
+import {spawnSync} from 'node:child_process';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {
-  compileInteractive,complete,createInteractiveAdminContext,createInteractiveHostContext,
+  compileInteractive,complete,cancelInteractiveRun,createInteractiveAdminContext,createInteractiveHostContext,
+  createInteractiveCoordinator,
   createSqliteCheckpointStore,createSqliteInteractivePersistence,resume,start,
 } from '../../src/interactive/index.mjs';
 
@@ -52,6 +54,148 @@ async function fixture(t) {
 }
 const submission=(frame,result={answer:'yes'})=>({
   runId:frame.runId,requestId:frame.pending[0].requestId,kind:'agent',outcome:'succeeded',result,
+});
+
+test('operation claims survive a reopened Store and settlement is separate from the workflow terminal',async t=>{
+  const f=await fixture(t);
+  const waiting=await start(f.program,runtime,{message:'hello'},f.options);
+  const claim={
+    runId:waiting.runId,requestId:waiting.pending[0].requestId,
+    operationKey:sha256Bytes(Buffer.from('logical external operation')),
+    inputHash:sha256Bytes(Buffer.from('normalized action arguments')),
+  };
+  const {operationController:first}=f.persistence;
+  const allowed=context({authorize:({action})=>action.startsWith('operation:')});
+  await assert.rejects(first.claim(claim,context({authorize:()=>false})),{code:'FK_I_HOST_DENIED'});
+  await assert.rejects(first.claim({...claim,requestId:'superseded'},allowed),{code:'FK_I_STALE_RECEIPT'});
+  assert.equal((await first.claim(claim,allowed)).claimed,true);
+
+  const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
+  try {
+    const second=reopened.operationController;
+    assert.deepEqual(await second.claim(claim,allowed),
+      {claimed:false,requestId:claim.requestId,inputHash:claim.inputHash,settlement:null});
+    await assert.rejects(second.claim({...claim,inputHash:claim.operationKey},allowed),{code:'FK_I_OPERATION_CONFLICT'});
+    await assert.rejects(second.load({runId:claim.runId,operationKey:claim.operationKey},
+      context({namespace:'other-tenant'})),{code:'FK_I_HOST_DENIED'});
+
+    const terminal=await complete(submission(waiting),runtime,f.options);
+    assert.equal(terminal.status,'succeeded');
+    await assert.rejects(second.claim(claim,allowed),{code:'FK_I_STALE_RECEIPT'});
+    const settlement={
+      runId:claim.runId,operationKey:claim.operationKey,inputHash:claim.inputHash,
+      effect:'applied',evidenceHash:sha256Bytes(Buffer.from('upstream receipt')),result:{externalId:'123'},
+    };
+    const saved=await second.settle(settlement,allowed);
+    assert.deepEqual(await first.settle(settlement,allowed),saved);
+    await assert.rejects(first.settle({...settlement,result:{externalId:'other'}},allowed),
+      {code:'FK_I_OPERATION_CONFLICT'});
+    assert.deepEqual(await second.load({runId:claim.runId,operationKey:claim.operationKey},allowed),saved);
+    const {acknowledgement,...terminalFrame}=terminal;
+    assert.deepEqual(await resume(claim.runId,runtime,f.options),terminalFrame);
+    assert.equal((await f.options.store.load(claim.runId)).revision,terminal.revision);
+  } finally {reopened.close();}
+});
+
+test('P0-B routes a durable Action settlement through a separate boolean Verification',async t=>{
+  const f=await fixture(t);
+  const script=path.join(f.dir,'steps.workflow.js');
+  await writeFile(script,`import {defineWorkflow,action,verification,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'durable-steps',name:'Durable steps',version:'1.0.0',nodes:[
+action('write',{name:'Write',action:'some-write',writes:['receipt'],next:'verify'}),
+verification('verify',{name:'Verify',verifier:'some-check',onSuccess:'done',onFailure:'rejected'}),
+terminal('done',{name:'Done',status:'succeeded'}), terminal('rejected',{name:'Rejected',status:'failed'}),
+]});`);
+  const auth=context({authorizeTask:()=>true});
+  const cfg={...f.options,auth,policy:{...policy,bindingManifest:{},capabilityStage:'P0-B'}};
+  const frame=await start(script,{}, {},cfg);
+  assert.equal(frame.status,'waiting');
+  const [pending]=frame.pending;
+  assert.equal(pending.kind,'action');
+  assert.equal(pending.task.action,'some-write');
+  const claim={runId:frame.runId,requestId:pending.requestId,
+    operationKey:pending.task.operationKey,
+    inputHash:sha256Bytes(canonicalBytes(pending.task))};
+  const result={set:{receipt:'upstream-42'}};
+  const submit={runId:frame.runId,requestId:pending.requestId,operationKey:claim.operationKey,
+    kind:'action',outcome:'succeeded',result};
+  await assert.rejects(complete(submit,{},cfg),{code:'FK_I_INVALID_OPERATION'});
+  const rawCoordinator=createInteractiveCoordinator({store:f.raw,runtime:{},policy:cfg.policy});
+  await assert.rejects(rawCoordinator.resume({runId:frame.runId}),{code:'FK_I_UNSUPPORTED_GRAPH'});
+  await assert.rejects(rawCoordinator.complete({runId:frame.runId,requestId:pending.requestId,
+    nodeId:pending.nodeId,attempt:pending.attempt,kind:'action-result',result}),{code:'FK_I_UNSUPPORTED_GRAPH'});
+  await assert.rejects(f.persistence.operationController.claim({...claim,
+    operationKey:sha256Bytes(Buffer.from('different operation key'))},auth),{code:'FK_I_OPERATION_CONFLICT'});
+  const upstream=path.join(f.dir,'upstream.sqlite');
+  const sdk=new URL('../../src/interactive/index.mjs',import.meta.url).href;
+  // Kill the worker after the actual external write and before it can settle.
+  const worker=spawnSync(process.execPath,['--input-type=module','-e',`
+    import {DatabaseSync} from 'node:sqlite';
+    const [sdk,file,namespace,serialized,upstream]=process.argv.slice(1);
+    const {createSqliteInteractivePersistence,createInteractiveHostContext}=await import(sdk);
+    const persistence=createSqliteInteractivePersistence(file,{namespace});
+    const auth=createInteractiveHostContext({namespace,subjectId:'writer',authorize:()=>true,authorizeTask:()=>true});
+    const claim=JSON.parse(serialized);
+    if (!(await persistence.operationController.claim(claim,auth)).claimed) throw Error('dispatch not granted');
+    const db=new DatabaseSync(upstream);
+    db.exec('CREATE TABLE writes (id TEXT PRIMARY KEY, receipt TEXT NOT NULL)');
+    db.prepare('INSERT INTO writes VALUES (?, ?)').run(claim.operationKey,'upstream-42');
+    process.kill(process.pid,'SIGKILL');`,sdk,f.file,ns,JSON.stringify(claim),upstream],
+  {encoding:'utf8',timeout:20000});
+  assert.notEqual(worker.status,0,worker.stderr);
+  assert.equal(worker.error,undefined);
+  const recovered=spawnSync(process.execPath,['--input-type=module','-e',`
+    import {DatabaseSync} from 'node:sqlite';
+    const [sdk,file,namespace,serialized,upstream]=process.argv.slice(1);
+    const {createSqliteInteractivePersistence,createInteractiveHostContext,complete}=await import(sdk);
+    const {claim,submit,policy,evidenceHash}=JSON.parse(serialized);
+    const persistence=createSqliteInteractivePersistence(file,{namespace});
+    const auth=createInteractiveHostContext({namespace,subjectId:'reconciler',authorize:()=>true,authorizeTask:()=>true});
+    try {
+      if ((await persistence.operationController.claim(claim,auth)).claimed) throw Error('repeated dispatch');
+      const db=new DatabaseSync(upstream,{readOnly:true});
+      const rows=db.prepare('SELECT receipt FROM writes WHERE id=?').all(claim.operationKey);
+      db.close();
+      if (rows.length!==1 || rows[0].receipt!==submit.result.set.receipt) throw Error('missing upstream receipt');
+      const {runId,operationKey,inputHash}=claim;
+      await persistence.operationController.settle({runId,operationKey,inputHash,
+        effect:'applied',evidenceHash,result:submit.result},auth);
+      process.stdout.write(JSON.stringify(await complete(submit,{},{...persistence,auth,policy})));
+    } finally {persistence.close();}
+    `,sdk,f.file,ns,JSON.stringify({claim,submit,policy:cfg.policy,
+    evidenceHash:sha256Bytes(Buffer.from('external evidence'))}),upstream],
+  {encoding:'utf8',timeout:20000});
+  assert.equal(recovered.status,0,recovered.stderr);
+  const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
+  try {
+    const options={...cfg,...reopened};
+    const checking=JSON.parse(recovered.stdout);
+    assert.equal(checking.pending[0].kind,'verification');
+    assert.equal(checking.pending[0].task.input.receipt,'upstream-42');
+    const terminal=await complete({runId:frame.runId,requestId:checking.pending[0].requestId,
+      kind:'verification',outcome:'succeeded',result:{passed:false}}, {},options);
+    assert.equal(terminal.status,'failed');
+    assert.deepEqual((await auth.readTerminalResult(terminal.resultRef,options)).state,{receipt:'upstream-42'});
+  } finally {reopened.close();}
+});
+
+test('Host cancellation fences new claims and leaves prior claims available for reconciliation',async t=>{
+  const f=await fixture(t);
+  const pending=await start(f.program,runtime,{message:'hello'},f.options);
+  const operationController=f.persistence.operationController;
+  const input={runId:pending.runId,requestId:pending.pending[0].requestId,
+    operationKey:sha256Bytes(Buffer.from('operation')),inputHash:sha256Bytes(Buffer.from('input'))};
+  assert.equal((await operationController.claim(input,f.options.auth)).claimed,true);
+  await assert.rejects(cancelInteractiveRun(pending.runId,'OPERATOR_CANCEL',
+    {...f.options,auth:context({authorize:()=>false})}),{code:'FK_I_HOST_DENIED'});
+  const cancelled=await cancelInteractiveRun(pending.runId,'OPERATOR_CANCEL',f.options);
+  assert.equal(cancelled.status,'cancelled');
+  assert.deepEqual(await cancelInteractiveRun(pending.runId,'OPERATOR_CANCEL',f.options),cancelled);
+  await assert.rejects(operationController.claim(input,f.options.auth),{code:'FK_I_STALE_RECEIPT'});
+  const result=await operationController.settle({runId:pending.runId,operationKey:input.operationKey,
+    inputHash:input.inputHash,effect:'applied',evidenceHash:input.inputHash,result:{upstream:'effect remains'}},f.options.auth);
+  assert.equal(result.settlement.effect,'applied');
+  assert.deepEqual(await resume(pending.runId,runtime,f.options),cancelled);
 });
 
 test('R5 uses the same persisted envelope in SQLite and the asynchronous Store',async t=>{
@@ -233,7 +377,7 @@ test('S12-A creates its audit table in a fresh R5 database and atomically termin
     const db=new DatabaseSync(f.file);
     const audit=()=>db.prepare('SELECT * FROM fk_i_admin_events').all();
     try {
-      assert.equal(db.prepare('PRAGMA user_version').get().user_version,3);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version,4);
       await assert.rejects(persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',{...admin}),
         {code:'FK_I_HOST_DENIED'});
       const other=createInteractiveAdminContext({namespace:'another',subjectId:'ops-1',authorize:()=>true});

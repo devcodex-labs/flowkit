@@ -7,6 +7,7 @@ import {normalizeOptions,resolveProjectRoot} from '../compiler/source.mjs';
 import {lowerInteractive} from '../compiler/interactive/lower.mjs';
 import {emitInteractive} from '../compiler/interactive/emit.mjs';
 import {checkMermaidIds, renderMermaid} from '../compiler/mermaid.mjs';
+import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
 
 /** Internal M2 compile API; the exported SDK subpath is introduced in M4. */
 export async function compileInteractive(file, options) {
@@ -35,7 +36,7 @@ export async function compileInteractiveDraft(file, options) {
       .map(key=>[key,snapshotOptions[key]])
   ));
   if (!['memory','file'].includes(snapshotOptions.output)) throw new TypeError('Invalid compile output');
-  if (snapshotOptions.featureStage !== 'P0-A') throw new TypeError('Only P0-A is implemented');
+  if (!isInteractiveStage(snapshotOptions.featureStage)) throw new TypeError('Unsupported Interactive feature stage');
   if (snapshotOptions.targetVersion !== undefined && snapshotOptions.targetVersion !== 'interactive-state-machine-v1') {
     throw new TypeError('Unsupported semantics version');
   }

@@ -5,9 +5,12 @@
  * Runtime binding checks (including checkStep) are enforced at start in M4.
  */
 export const IMPLEMENTED_INTERACTIVE_STAGE = 'P0-A';
-const STAGES = Object.freeze(['P0-A', 'P0-B', 'P1']);
+const STAGES = Object.freeze(['P0-A', 'P0-B', 'P1', 'P2']);
 const ENABLED = new Set(['condition', 'terminal', 'agent']);
 export const supportsP0ANodeKind = kind => ENABLED.has(kind);
+export const isInteractiveStage = stage => stage === 'P0-A' || stage === 'P0-B';
+export const supportsInteractiveNodeKind = (stage, kind) => supportsP0ANodeKind(kind)
+  || stage === 'P0-B' && (kind === 'action' || kind === 'verification');
 
 function interactiveDiagnostic(analysis, code, message, index, node) {
   const location = index === undefined ? { line: 1, column: 1 }
@@ -32,9 +35,9 @@ export function gateInteractiveFeatures(analysis, options = {}) {
   if (!STAGES.includes(featureStage)) {
     extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
       'Unknown Interactive feature stage: ' + String(featureStage)));
-  } else if (featureStage !== IMPLEMENTED_INTERACTIVE_STAGE) {
+  } else if (!isInteractiveStage(featureStage)) {
     extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
-      'This build implements only P0-A; caller cannot enable ' + featureStage));
+      'This build cannot enable ' + featureStage));
   }
 
   // Never lower partially validated DSL, and never replace Standard diagnostics.
@@ -42,9 +45,9 @@ export function gateInteractiveFeatures(analysis, options = {}) {
     && !analysis.diagnostics.some(item => item.severity === 'error');
   if (standardValid) {
     analysis.literal.definition.nodes.forEach((node, index) => {
-      if (!supportsP0ANodeKind(node.type)) {
+      if (!supportsInteractiveNodeKind(featureStage,node.type)) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
-          'P0-A does not support node type ' + String(node.type), index, node));
+          featureStage + ' does not support node type ' + String(node.type), index, node));
       } else if (node.type === 'agent' && node.verify != null) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A Agent verify requires P0-B; it must not be skipped', index, node));

@@ -1,6 +1,6 @@
 import { gateInteractiveFeatures } from './feature-gate.mjs';
 import { hasTaskSpec } from '../../shared/task-spec.mjs';
-import { P0A_PHASES, interactiveBlockId, phaseContract, expectedBlockTargets, agentFrameRule, validateInteractiveIR } from './validate-ir.mjs';
+import { INTERACTIVE_PHASES, hasStepFrame, interactiveBlockId, phaseContract, expectedBlockTargets, stepFrameRule, validateInteractiveIR } from './validate-ir.mjs';
 
 function copyData(value) {
   // Analyzer-owned DSL literals/when ASTs are JSON-safe. Preserve own __proto__
@@ -51,6 +51,12 @@ export function lowerInteractive(analysis, options = {}) {
         ...(hasTaskSpec(node) ? {task: Object.fromEntries(['description','descriptionRefs','requiredSkills']
           .filter(key => node[key] !== undefined).map(key => [key, node[key]]))} : {}),
       };
+    } else if (node.type==='action') {
+      const failure=analysis.graph.executionEdges.find(edge=>edge.from===node.id && edge.role==='action-failure');
+      metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next,
+        ...(failure?{onFailure:failure.to}:{})};
+    } else if (node.type==='verification') {
+      metadata={name:node.name,verifier:node.verifier,next:node.onSuccess,onFailure:node.onFailure};
     } else {
       metadata = { name: node.name, status: node.status };
     }
@@ -58,13 +64,13 @@ export function lowerInteractive(analysis, options = {}) {
   }
   const first = definitions[0].id;
   const ir = {
-    schemaVersion: 1, featureStage: 'P0-A',
+    schemaVersion: 1, featureStage: gate.featureStage,
     workflowId: analysis.literal.definition.id,
     workflowVersion: analysis.literal.definition.version,
     sourceHash: analysis.snapshot.sourceHash,
     entryBlockId: interactiveBlockId(first, 'enter'),
     nodes, blocks: [],
-    frameRules: definitions.filter(node => node.type === 'agent').map(node => agentFrameRule(node.id)),
+    frameRules: definitions.filter(node => hasStepFrame(node.type)).map(node => stepFrameRule(node.id,node.type)),
     // Preserve Standard dataflow as diagnostic evidence; it is not a second
     // source of routing and it is not used to prefill missing Agent inputs.
     dataflow: Object.fromEntries(definitions.map(node => [node.id, {
@@ -76,7 +82,7 @@ export function lowerInteractive(analysis, options = {}) {
     })),
   };
   for (const node of definitions) {
-    for (const phase of P0A_PHASES[node.type]) {
+    for (const phase of INTERACTIVE_PHASES[node.type]) {
       const contract = phaseContract(node.type, phase);
       const block = {
         id: interactiveBlockId(node.id, phase),

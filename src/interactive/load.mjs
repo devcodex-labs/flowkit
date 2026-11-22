@@ -1,7 +1,8 @@
 import {parse} from 'acorn';
 import {loadBoundedModule} from '../runtime/compilation-cache.mjs';
 import {sha256Bytes,assertSha256} from './identity.mjs';
-import {validateInteractiveIR,agentFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {validateInteractiveIR,hasStepFrame,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {isInteractiveStage} from '../compiler/interactive/feature-gate.mjs';
 
 /** A verified program is trusted compiler output, NOT an untrusted JavaScript sandbox. */
 function ensureNoImports(ast) {
@@ -77,7 +78,7 @@ export async function loadInteractiveProgram(bytes, expectedArtifactHash) {
   if (manifest.artifactFormat !== 'FlowkitInteractiveProgramV1'
     || manifest.identity.programAbiVersion !== 1
     || manifest.identity.semanticsVersion !== 'interactive-state-machine-v1'
-    || manifest.identity.implementedStage !== 'P0-A'
+    || !isInteractiveStage(manifest.identity.implementedStage)
     || table.schemaVersion !== 1 || !Array.isArray(table.blocks)
     || !table.blocks.length || !table.nodes || !Array.isArray(table.requiredBindings)) {
     throw new TypeError('Invalid Interactive Program ABI V1');
@@ -86,9 +87,9 @@ export async function loadInteractiveProgram(bytes, expectedArtifactHash) {
   // No source files or runtime lowering are consulted.
   if (!/^sha256:[0-9a-f]{64}$/.test(manifest.identity.sourceHash)) throw new TypeError('Invalid Program source identity');
   const staticIR = {
-    schemaVersion:1,featureStage:'P0-A',sourceHash:manifest.identity.sourceHash.slice(7),
+    schemaVersion:1,featureStage:manifest.identity.implementedStage,sourceHash:manifest.identity.sourceHash.slice(7),
     entryBlockId:table.entryBlockId,blocks:table.blocks,nodes:table.nodes,
-    frameRules:Object.keys(table.nodes).filter(id=>table.nodes[id].kind==='agent').map(id=>agentFrameRule(id)),
+    frameRules:Object.keys(table.nodes).filter(id=>hasStepFrame(table.nodes[id].kind)).map(id=>stepFrameRule(id,table.nodes[id].kind)),
   };
   const validated = validateInteractiveIR(staticIR);
   if (!validated.ok) throw new TypeError('FK_I_INVALID_TRANSITION: invalid ProgramTable');

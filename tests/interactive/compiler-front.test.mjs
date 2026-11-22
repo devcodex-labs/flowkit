@@ -67,13 +67,12 @@ test('P0-A explicitly rejects Agent verify; it must never silently skip the call
 test('featureStage is bounded by the built-in implemented stage, not caller options', async () => {
   const a = await analyze(workflow([done]));
   assert.equal(gateInteractiveFeatures(a).ok, true);
-  for (const stage of ['P0-B', 'P1']) {
+  assert.equal(lowerInteractive(a,{featureStage:'P0-B'}).ir.featureStage,'P0-B');
+  for (const stage of ['P1', 'P2']) {
     const result = lowerInteractive(a, { featureStage: stage });
     assert.equal(result.ir, null);
     assert.ok(result.diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH'));
   }
-  assert.equal(lowerInteractive(a, { featureStage: 'P2' }).diagnostics
-    .some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH'), true);
 });
 
 test('invalid Standard Graph is rejected before lowering; original FK_C diagnostics survive', async () => {
