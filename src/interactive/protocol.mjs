@@ -1,6 +1,12 @@
 // Shared by the compiler and the detached Host storage worker.
-export const isInteractiveStage = stage => stage === 'P0-A' || stage === 'P0-B';
+export const isInteractiveStage = stage => ['P0-A','P0-B','P1'].includes(stage);
 export const hasStepFrame = kind => kind === 'agent' || kind === 'action' || kind === 'verification' || kind==='human';
+
+export function publishedInteractivePending(checkpoint) {
+  if (checkpoint.status!=='waiting') return [];
+  if (checkpoint.parallel) return checkpoint.parallel.lanes.flatMap(lane=>lane.pending?[lane.pending]:[]);
+  return checkpoint.pending?[checkpoint.pending]:[];
+}
 
 export function isHumanProof(proof) {
   return !!proof && typeof proof==='object' && Object.keys(proof).length===3

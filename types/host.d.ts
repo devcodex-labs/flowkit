@@ -1,4 +1,5 @@
 import type { AgentTaskV2, PreparedAgentTask, AgentExecutionResult, HostPreparationContext, TaskJsonObject } from './index.js';
+import type { InteractiveOperationController, TrustedHostContextV1 } from './interactive.js';
 export { createWorkflowAuthorHost } from './author-host.js';
 export type { AuthorHostOptions, WorkflowAuthorHost, AuthorRequestContext, AuthorDraftView, AuthorTurnInput, AuthorCandidate, AuthorBudgetPolicy, AuthorReviewRejection } from './author-host.js';
 export interface CompilationCacheLimits {maxEntries:number;maxBytes:number;ttlMs:number;maxModuleIdentities:number;maxModuleBytes:number}
@@ -33,7 +34,9 @@ export interface ApiHostOptions {
     'maxArgumentBytes' | 'maxOutputTokens' | 'maxTotalTokens' | 'maxLedgerEntries' | 'timeoutMs', number>>;
 }
 export function createApiAgentAdapter(options: ApiHostOptions): {
-  runAgentTask(task: PreparedAgentTask, context?: HostPreparationContext): Promise<AgentExecutionResult>;
+  runAgentTask(task: PreparedAgentTask, context?: HostPreparationContext & {
+    interactiveOperations?: {controller:InteractiveOperationController;auth:TrustedHostContextV1};
+  }): Promise<AgentExecutionResult>;
 };
 export interface IndependentAgentBinding {
   artifactHash: string;

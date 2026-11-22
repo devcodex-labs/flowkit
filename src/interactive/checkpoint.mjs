@@ -19,16 +19,22 @@ export function checkpointPolicy(policy,policyHash) {
   };
 }
 
-function pendingFromExecution(cp) {
-  const task=cp.pending??cp.prepared;
-  if (!task) return [];
+function encodePending(task,activation,revision) {
   const {requestId,nodeId,kind,attempt,name,instruction,input,missing,resultSchema,reasons,overview,preparedTask}=task;
   const publicTask=kind==='agent'
     ? {name,instruction,input,missing,resultSchema,reasons,...(overview?{overview}:{}),
       ...(preparedTask?{preparedTask}:{})}
     : task.task;
-  return [{requestId,nodeId,kind,attempt,name,activation:cp.controlStack.at(-1).activation,
-    issuedRevision:task.issuedRevision??cp.revision,intent:'execute',internalPayload:{},publicTask}];
+  return {requestId,nodeId,kind,attempt,name,activation,
+    issuedRevision:task.issuedRevision??revision,intent:'execute',internalPayload:{},publicTask};
+}
+
+function pendingFromExecution(cp) {
+  if (cp.parallel) {
+    return cp.parallel.lanes.flatMap(lane=>lane.pending?[encodePending(lane.pending,lane.activation,cp.revision)]:[]);
+  }
+  const task=cp.pending??cp.prepared;
+  return task?[encodePending(task,cp.controlStack.at(-1).activation,cp.revision)]:[];
 }
 
 /** The Coordinator's execution view is transient. Stores serialize this R5 envelope. */
@@ -48,7 +54,8 @@ export function encodeCheckpoint(cp) {
       controlStack:phase==='finished'?[]:cp.controlStack,contextError:cp.contextError??null,
       ...(cp.taskContext?{taskContext:cp.taskContext}:{}),
       ...(cp.regionCounters?{regionCounters:cp.regionCounters}:{}),
-      ...(phase!=='finished'&&cp.skillSnapshot?{skillSnapshot:cp.skillSnapshot}:{})},
+      ...(phase!=='finished'&&cp.skillSnapshot?{skillSnapshot:cp.skillSnapshot}:{}),
+      ...(phase!=='finished'&&cp.parallel?{parallel:cp.parallel}:{})},
     state,candidate,receivedSubmission,pending:pendingFromExecution(cp),inFlightOperations:[],
     terminal:status==='succeeded'||status==='failed'?cp.terminal:null,
     lastTransitionId:cp.lastTransitionId??null,
@@ -74,7 +81,7 @@ export function decodeCheckpoint(cp) {
     || !keys(cp.policyIdentity,['id','version','policyHash','bindingManifestHash'],['skillManifestHash'])
     || ![cp.policyIdentity.id,cp.policyIdentity.version].every(text)
     || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'],
-      ['taskContext','regionCounters','skillSnapshot'])
+      ['taskContext','regionCounters','skillSnapshot','parallel'])
     || !text(cp.execution.blockId) || !phases.has(cp.execution.phase)
     || !count(cp.execution.activationSeq) || !count(cp.execution.agentStepCounter)
     || cp.execution.agentStepCounter>cp.execution.activationSeq
@@ -83,12 +90,28 @@ export function decodeCheckpoint(cp) {
     || !count(cp.limits.stageCount) || !count(cp.limits.receiptCount)
     || cp.limits.stageCount>cp.revision || cp.limits.receiptCount>cp.revision
     || cp.limits.bytes!==MAX_CHECKPOINT_BYTES
-    || !Array.isArray(cp.pending) || cp.pending.length>1
+    || !Array.isArray(cp.pending) || cp.pending.length>500
     || !Array.isArray(cp.inFlightOperations) || cp.inFlightOperations.length) throw invalid();
 
   const {namespace,runId,startKey,startIntentHash,revision,status,program,policyIdentity,execution,state,
     receivedSubmission,lastTransitionId}=cp;
   const {phase,blockId,controlStack,activationSeq,agentStepCounter,contextError}=execution;
+  const parallel=execution.parallel;
+  if (parallel!==undefined) {
+    if (phase!=='route' || !object(parallel) || !text(parallel.nodeId) || blockId!==parallel.nodeId+'::route'
+      || !Array.isArray(parallel.lanes) || parallel.lanes.length<2 || parallel.lanes.length>500
+      || new Set(parallel.lanes.map(lane=>lane?.nodeId)).size!==parallel.lanes.length
+      || controlStack.length!==0 || !['running','waiting','paused'].includes(status)
+      || parallel.lanes.some(lane=>!object(lane)||!text(lane.nodeId)||!count(lane.activation)||lane.activation<1
+        || lane.activation>activationSeq||!count(lane.attempt)||lane.attempt<1
+        || !['ready','pending','succeeded','failed','errored','cancelled'].includes(lane.status)
+        || (lane.status==='pending')!==object(lane.pending)
+        || lane.pending&&(lane.pending.nodeId!==lane.nodeId || lane.pending.attempt!==lane.attempt
+          || !text(lane.pending.requestId) || !count(lane.pending.issuedRevision)
+          || lane.pending.issuedRevision>revision || !hasStepFrame(lane.pending.kind)))
+      || (status==='waiting')!==(cp.pending.length>0)
+      || hash(pendingFromExecution({parallel,revision}))!==hash(cp.pending)) throw invalid();
+  }
   if (execution.regionCounters!==undefined && (!object(execution.regionCounters)
     || Object.keys(execution.regionCounters).length>500
     || Object.values(execution.regionCounters).some(value=>!count(value) || value===0))) throw invalid();
@@ -105,10 +128,10 @@ export function decodeCheckpoint(cp) {
       execution.taskContext.reservations.some(value=>!/^sha256:[0-9a-f]{64}$/.test(value))) ||
     execution.taskContext.active && (!text(execution.taskContext.active.activationId) ||
       execution.taskContext.active.prepared?.protocolVersion !== 2))) throw invalid();
-  const hasPending=status==='waiting'||phase==='dispatch-ready';
+  const hasPending=!parallel&&(status==='waiting'||phase==='dispatch-ready');
   if ((!finished.has(status) && !['waiting','paused','running'].includes(status))
-    || (phase==='finished')!==finished.has(status) || (phase==='awaiting')!==(status==='waiting')
-    || (cp.pending.length===1)!==hasPending || (phase==='validate')!==(receivedSubmission!==null)
+    || (phase==='finished')!==finished.has(status) || (!parallel&&(phase==='awaiting')!==(status==='waiting'))
+    || (!parallel&&cp.pending.length!==(hasPending?1:0)) || (phase==='validate')!==(receivedSubmission!==null)
     || (phase!=='finished' && !blockId.endsWith('::'+phase))
     || (cp.terminal!==null)!==['succeeded','failed'].includes(status)
     || (cp.terminal!==null && (!keys(cp.terminal,['status','nodeId']) || cp.terminal.status!==status
@@ -174,6 +197,7 @@ export function decodeCheckpoint(cp) {
     ...(execution.taskContext?{taskContext:execution.taskContext}:{}),
     ...(execution.regionCounters?{regionCounters:execution.regionCounters}:{}),
     ...(skillSnapshot?{skillSnapshot}:{}),
+    ...(parallel?{parallel}:{}),
     pending:phase==='awaiting'?pending:null,prepared:phase==='dispatch-ready'?pending:null,
     terminal:status==='errored'?{status,nodeId:blockId.slice(0,blockId.lastIndexOf('::')),causeCode:cp.causeCode}:cp.terminal,
     ...(status==='paused'?{pauseReason:cp.causeCode==='FK_I_TEMPORARY_SKILL'?'skill-temporary':'stage-budget'}:{})};

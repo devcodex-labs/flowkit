@@ -17,7 +17,7 @@
 | options字段 | 必需/默认 | 行为 |
 | --- | --- | --- |
 | output | 必需：memory或file | memory只返回；file另写`<stem>.interactive.mjs`并返回artifactPath |
-| featureStage | 必需：P0-A 或 P0-B | P0-B 顺序控制流使用版本化 Host 接口 |
+| featureStage | 必需：P0-A、P0-B 或 P1 | P1 支持 `all_succeeded` 下的并行请求 |
 | targetVersion | 可省略；若给必须interactive-state-machine-v1 | 指定语义目标，不是软件包版本 |
 | outDir | 源目录；相对cwd | file输出目录；不要套用Standard输出目录的所有限制 |
 | projectRoot | 最近package.json所在目录，找不到回退cwd | 显式值按cwd解析；影响Skill检查 |
@@ -147,6 +147,12 @@ Loop 尝试次数随 Run 保存。最后一次 Verification 返回 `false` 时�
 操作员 Host 通过独立的 `authorizeHuman` 提供人工证明 `{proofId,evidenceHash}`。Human 回执包含当前 `task.reviewDigest` 和 `result:{approved,comment?}`。接纳事务记录主体、证据和被审内容。原主体可在当前 Run 权限下重取一份已接纳回执的确认。退回后进入源工作流修订路径，再次审阅生成新摘要。
 
 P0-B 的版本化 Runtime 可绑定 `checkStep`（pure-local）和 `verifyAgentResult`（trusted-read）。`checkStep` 读取已提交状态，`verifyAgentResult` 读取未提交的候选状态。回调可根据 Run、请求和尝试标识重放同一读取，并接收取消信号。工作流声明 Agent `verify` 时，Host 必须绑定后者。Agent 首次解析的说明固定在本次激活，重试复用该说明。
+
+### P1 并行
+
+P1 的 `all_succeeded` 将同一 Run 的多个 Pending 同时公开。请求按自身 ID 和尝试接纳。其他分支的推进会改变 Run 修订，但不作废当前分支的请求。一条分支业务失败或技术错误后停止新派发。全部成功才一次性合并各分支补丁，实际字段写入有冲突时运行进入错误终态。
+
+并行写入须在操作声明中提供同一业务效果的稳定 `businessKey`。API Agent adapter 使用 Host 工具的 `operationKey` 生成该键，且要求传入 `interactiveOperations:{controller,auth}`。Host 确认未取得派发权的 Action 可用 `FK_I_ACTION_NOT_DISPATCHED`、`sideEffectStatus:'none'` 提交失败，Store 会在接纳事务中检查该请求没有已登记操作。
 
 putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有namespace、artifactHash和programId；保留/释放与Run持久引用一致，不能在Run仍引用时自行删产物。自定义实现必须保留R5封套全部字段以及原子创建/CAS、转换与回执对账契约；不要把公开frame当checkpoint存储。
 

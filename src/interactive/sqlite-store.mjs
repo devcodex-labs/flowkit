@@ -8,7 +8,7 @@ import {
 
 import {checkpointPolicy,decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 import {prepareOperationLedger} from './operation-ledger.mjs';
-import {isInteractiveStage} from './protocol.mjs';
+import {isInteractiveStage,publishedInteractivePending} from './protocol.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
@@ -16,7 +16,7 @@ export const sqliteAdminTerminate=Symbol('SQLite admin terminate');
 export const sqliteHostTrust=Symbol('SQLite Host trust');
 export const sqliteOperationLedger=Symbol('SQLite workflow operation ledger');
 const digest=value=>sha256Bytes(canonicalBytes(value));
-const SQLITE_SCHEMA_VERSION = 4;
+const SQLITE_SCHEMA_VERSION = 5;
 function boundedCheckpointBytes(input) {
   try { return canonicalBytes(input); }
   catch (error) {
@@ -138,10 +138,11 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ') STRICT;',
       'CREATE TABLE IF NOT EXISTS fk_i_operations (',
       ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, operation_key TEXT NOT NULL,',
-      ' request_id TEXT NOT NULL, input_hash TEXT NOT NULL,',
+      ' request_id TEXT NOT NULL, input_hash TEXT NOT NULL, business_key TEXT,',
       " effect TEXT CHECK (effect IN ('applied', 'no-effect')),",
       ' evidence_hash TEXT, result_json TEXT, result_hash TEXT,',
       ' PRIMARY KEY (namespace, run_id, operation_key),',
+      ' UNIQUE (namespace, run_id, business_key),',
       ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id),',
       ' CHECK ((effect IS NULL AND evidence_hash IS NULL AND result_json IS NULL AND result_hash IS NULL)',
       ' OR (effect IS NOT NULL AND evidence_hash IS NOT NULL AND result_json IS NOT NULL AND result_hash IS NOT NULL))',
@@ -185,6 +186,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const insertReceipt = db.prepare('INSERT OR IGNORE INTO fk_i_receipt_index(namespace, run_id, request_id, node_id, attempt, digest, accepted_revision, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const journalAtRevision = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND revision = ?');
   const journalById = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND transition_id = ?');
+  const pendingOperationEffects=db.prepare('SELECT effect FROM fk_i_operations WHERE namespace=? AND run_id=? AND request_id=?');
   const addAdminEvent=db.prepare(`INSERT INTO fk_i_admin_events
     (namespace,run_id,transition_id,admin_subject_id,reason_code,created_at) VALUES (?,?,?,?,?,?)`);
   const registerKey=db.prepare('INSERT OR IGNORE INTO fk_i_host_policy_keys VALUES (?,?,?)');
@@ -275,17 +277,20 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
     close() { db.close(); },
     [sqliteOperationLedger]: prepareOperationLedger(db,namespace,{
       transaction,
-      assertDispatch(runId,requestId,inputHash,operationKey) {
+      assertDispatch(runId,requestId,inputHash,operationKey,businessKey) {
         identifier(runId,'runId');
         identifier(requestId,'requestId');
         const current=decodeRow(read.get(namespace,runId));
-        if (!current || current.status!=='waiting' || current.pending?.requestId!==requestId
-          || !['action','agent'].includes(current.pending.kind)) {
+        const pending=current&&publishedInteractivePending(current).find(task=>task.requestId===requestId);
+        if (!pending || !['action','agent'].includes(pending.kind)) {
           throw failure('FK_I_STALE_RECEIPT','Operation dispatch requires the current Pending');
         }
         assertActive(current.policyHash);
-        if (current.pending.kind==='action' && (digest(current.pending.task)!==inputHash
-          || current.pending.task.operationKey!==operationKey)) {
+        if (current.parallel && !businessKey) {
+          throw failure('FK_I_INVALID_OPERATION','Parallel writes require a stable business key');
+        }
+        if (pending.kind==='action' && (digest(pending.task)!==inputHash
+          || pending.task.operationKey!==operationKey)) {
           throw failure('FK_I_OPERATION_CONFLICT','operation input does not match the published Action');
         }
       },
@@ -327,7 +332,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         if (TERMINAL.has(current.status)) return current;
         if (current.revision>=Number.MAX_SAFE_INTEGER) throw failure('FK_I_REVISION_EXHAUSTED','revision range exceeded');
         const next={...current,status:'cancelled',revision:current.revision+1,
-          pending:null,prepared:null,candidate:null,receivedSubmission:null,terminal:null,pauseReason:null};
+          pending:null,prepared:null,candidate:null,receivedSubmission:null,terminal:null,pauseReason:null,parallel:null};
         const kind=admin?'admin-terminate':'run-cancel';
         const eventDigest=digest({kind,subjectId,reason});
         const proposalDigest=digest({kind,status:'cancelled'});
@@ -514,15 +519,24 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         const entryHash = appendJournal(runId, next.revision, transitionId, checkpointHash,
           last.entry_hash, journal);
         if (journal?.kind === 'receipt-accepted') {
-          if (current.status !== 'waiting' || next.phase !== 'validate'
-            || next.candidate?.requestId !== journal.requestId
-            || next.candidate?.nodeId !== journal.nodeId
-            || next.candidate?.attempt !== journal.attempt
-            || next.receivedSubmission?.canonicalDigest!==journal.digest
-            || current.pending?.requestId!==journal.requestId
-            || current.pending.nodeId!==journal.nodeId || current.pending.attempt!==journal.attempt
+          const laneReceipt=next.parallel?.receipt;
+          const accepted=next.receivedSubmission??laneReceipt;
+          const candidate=next.candidate??laneReceipt;
+          const pending=publishedInteractivePending(current).find(task=>task.requestId===journal.requestId);
+          if (current.status!=='waiting' || (next.phase!=='validate'&&laneReceipt?.acceptedRevision!==next.revision)
+            || candidate?.requestId!==journal.requestId
+            || candidate?.nodeId!==journal.nodeId || candidate?.attempt!==journal.attempt
+            || accepted?.canonicalDigest!==journal.digest || accepted.kind!==pending?.kind
+            || pending?.nodeId!==journal.nodeId || pending.attempt!==journal.attempt
             || next.receiptCount!==current.receiptCount+1) {
             throw failure('FK_I_INVALID_RECEIPT', 'receipt transition does not match the Pending');
+          }
+          if (journal.operationSafety!==undefined) {
+            const effects=pendingOperationEffects.all(namespace,runId,pending.requestId);
+            const safe=journal.operationSafety==='unclaimed'?effects.length===0
+              :journal.operationSafety==='settled'?effects.every(item=>item.effect!==null)
+              :journal.operationSafety==='no-effect'&&effects.every(item=>item.effect==='no-effect');
+            if (!safe) throw failure('FK_I_OPERATION_CHANGED','Pending operations changed before receipt acceptance');
           }
           putReceiptIndex(runId, {
             requestId:journal.requestId,nodeId:journal.nodeId,attempt:journal.attempt,

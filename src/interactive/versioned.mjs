@@ -93,21 +93,27 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       }
       const journalEntry={kind:receipt?'receipt-accepted':'versioned-transition',transition};
       if (receipt) {
-        if (receipt.namespace!==namespace || receipt.runId!==runId || receipt.kind!==next.receivedSubmission?.kind
-          || next.candidate?.requestId!==receipt.requestId
-          || (receipt.nodeId!==undefined && next.candidate?.nodeId!==receipt.nodeId)
-          || (receipt.attempt!==undefined && next.candidate?.attempt!==receipt.attempt)
+        const accepted=next.receivedSubmission??next.parallel?.receipt;
+        const candidate=next.candidate??next.parallel?.receipt;
+        if (receipt.namespace!==namespace || receipt.runId!==runId || receipt.kind!==accepted?.kind
+          || candidate?.requestId!==receipt.requestId
+          || (receipt.nodeId!==undefined && candidate?.nodeId!==receipt.nodeId)
+          || (receipt.attempt!==undefined && candidate?.attempt!==receipt.attempt)
           || receipt.acceptedRevision!==next.revision || receipt.transitionId!==transition.transitionId
           || !['succeeded','failed'].includes(receipt.outcome)
-          || next.receivedSubmission?.canonicalDigest!==receipt.submissionDigest
+          || accepted?.canonicalDigest!==receipt.submissionDigest
           || (receipt.kind==='human' && (!isHumanProof(receipt.humanProof)
           || hash(receipt.humanProof)!==hash(next.receivedSubmission.humanProof)))) {
           throw fail('FK_I_INVALID_RECEIPT','receipt identity mismatch');
         }
-        Object.assign(journalEntry,{requestId:receipt.requestId,nodeId:next.candidate?.nodeId,
-          attempt:next.candidate?.attempt,digest:receipt.submissionDigest,receiptOutcome:receipt.outcome,stepKind:receipt.kind});
+        if (!current.parallel?.lanes.some(lane=>lane.pending?.requestId===receipt.requestId)
+          && current.pending?.requestId!==receipt.requestId) throw fail('FK_I_STALE_RECEIPT','receipt is not pending');
+        Object.assign(journalEntry,{requestId:receipt.requestId,nodeId:candidate?.nodeId,
+          attempt:candidate?.attempt,digest:receipt.submissionDigest,receiptOutcome:receipt.outcome,stepKind:receipt.kind});
         if (receipt.kind==='human') journalEntry.humanProof=receipt.humanProof;
-      } else if (current.status==='waiting' && next.phase==='validate') {
+        if (receipt.operationSafety!==undefined) journalEntry.operationSafety=receipt.operationSafety;
+      } else if (current.status==='waiting' && (next.phase==='validate'
+        || next.parallel?.receipt?.acceptedRevision===next.revision)) {
         throw fail('FK_I_INVALID_RECEIPT','accepting a Pending requires its atomic receipt');
       }
       const result=backend.compareAndSwap({runId,expectedRevision,nextCheckpoint:next,
@@ -170,23 +176,25 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
   const ledger=backend[sqliteOperationLedger];
   operationLedgers.set(store,ledger);
   cancellableStores.set(store,backend[sqliteAdminTerminate]);
-  function operation(action, fields, readOrWrite) {
+  function operation(action, fields, readOrWrite, optional=[]) {
     return async (input,auth) => {
       const snapshot=safeJSONSnapshot(input);
       if (!snapshot || typeof snapshot.runId!=='string' || !snapshot.runId || snapshot.runId.length>256
-        || !fields.every(key=>Object.hasOwn(snapshot,key)) || Object.keys(snapshot).length!==fields.length) {
+        || !fields.every(key=>Object.hasOwn(snapshot,key))
+        || Object.keys(snapshot).some(key=>!fields.includes(key)&&!optional.includes(key))) {
         throw fail('FK_I_INVALID_OPERATION','invalid operation input');
       }
-      const {runId,operationKey,inputHash,requestId,evidenceHash,effect}=snapshot;
+      const {runId,operationKey,inputHash,requestId,evidenceHash,effect,businessKey}=snapshot;
       await checkAccess({store,programRegistry,auth},action,{
         runId,operationKey,...(inputHash===undefined?{}:{inputHash}),...(requestId===undefined?{}:{requestId}),
         ...(effect===undefined?{}:{effect,evidenceHash}),
+        ...(businessKey===undefined?{}:{businessKey}),
       });
       return readOrWrite(snapshot);
     };
   }
   const operationController=Object.freeze({
-    claim:operation('operation:claim',['runId','operationKey','requestId','inputHash'],ledger.claim),
+    claim:operation('operation:claim',['runId','operationKey','requestId','inputHash'],ledger.claim,['businessKey']),
     load:operation('operation:read',['runId','operationKey'],ledger.load),
     settle:operation('operation:settle',['runId','operationKey','inputHash','effect','evidenceHash','result'],ledger.settle),
   });
@@ -251,6 +259,12 @@ function executionStore(store,registry) {
       }
       return {...receipt,digest:receipt.submissionDigest};
     },
+    async parallelEffects(runId,requestIds) {
+      const ledger=operationLedgers.get(store);
+      if (!ledger) throw fail('FK_I_BINDING_MISSING','Parallel effects require durable storage');
+      const requested=new Set(requestIds);
+      return ledger.list({runId}).filter(operation=>requested.has(operation.requestId));
+    },
     async compareAndSwap({runId,expectedRevision,nextCheckpoint,transitionId,journalEntry,fromBlockId}) {
       const transition=journalEntry?.transition ?? {
         namespace:store.namespace,runId,transitionId,fromRevision:expectedRevision,toRevision:expectedRevision+1,
@@ -258,12 +272,14 @@ function executionStore(store,registry) {
         toBlockId:nextCheckpoint.blockId,programHash:nextCheckpoint.artifactHash,
         eventDigest:hash(journalEntry ?? null),committedAt:new Date().toISOString(),
       };
+      const accepted=nextCheckpoint.receivedSubmission??nextCheckpoint.parallel?.receipt;
       const receipt=journalEntry?.kind==='receipt-accepted' ? {
-        namespace:store.namespace,runId,requestId:journalEntry.requestId,kind:nextCheckpoint.receivedSubmission.kind,
+        namespace:store.namespace,runId,requestId:journalEntry.requestId,kind:accepted.kind,
         submissionDigest:journalEntry.digest,acceptedRevision:nextCheckpoint.revision,
         outcome:journalEntry.receiptOutcome,
         transitionId,nodeId:journalEntry.nodeId,attempt:journalEntry.attempt,
-        ...(nextCheckpoint.receivedSubmission.humanProof?{humanProof:nextCheckpoint.receivedSubmission.humanProof}:{}),
+        ...(accepted.humanProof?{humanProof:accepted.humanProof}:{}),
+        ...(journalEntry.operationSafety?{operationSafety:journalEntry.operationSafety}:{}),
       } : undefined;
       const next=encodeCheckpoint(nextCheckpoint);
       let result;
@@ -271,7 +287,8 @@ function executionStore(store,registry) {
         result=await store.compareAndSwap(runId,expectedRevision,{next,transition,receipt});
       } catch (error) {
         if (['FK_I_CHECKPOINT_CAPACITY','FK_I_INVALID_TRANSITION','FK_I_INVALID_RECEIPT',
-          'FK_I_TERMINAL_IMMUTABLE','FK_I_REVISION_EXHAUSTED','FK_I_RUN_NOT_FOUND','FK_I_HOST_DENIED'].includes(error?.code)) throw error;
+          'FK_I_TERMINAL_IMMUTABLE','FK_I_REVISION_EXHAUSTED','FK_I_RUN_NOT_FOUND','FK_I_HOST_DENIED',
+          'FK_I_OPERATION_CHANGED'].includes(error?.code)) throw error;
         let saved,latest;
         try {
           saved=await store.loadTransition(runId,transitionId);
@@ -389,20 +406,20 @@ async function publicFrame(frame,options,callbacks) {
   if (status==='waiting') {
     const checkpoint=await options.store.load(runId);
     if (checkpoint?.namespace!==options.auth.namespace || checkpoint.revision!==revision
-      || checkpoint.status!=='waiting' || checkpoint.pending[0]?.requestId!==frame.pending?.requestId) throw uncertain();
-    const {requestId,nodeId,attempt,kind,publicTask}=checkpoint.pending[0];
-    const task=safeJSONSnapshot(publicTask);
-    let approved;
-    try {
-      approved=await callbacks.authorizeTask(Object.freeze({namespace:options.auth.namespace,
-        subjectId:options.auth.subjectId,runId,requestId,revision,task:safeJSONSnapshot(task)}));
-    } catch {}
-    if (approved!==true) throw fail('FK_I_HOST_DENIED','Host task disclosure denied');
+      || checkpoint.status!=='waiting' || !checkpoint.pending.length) throw uncertain();
+    for (const {requestId,nodeId,attempt,kind,publicTask,activation} of checkpoint.pending) {
+      const task=safeJSONSnapshot(publicTask);
+      let approved;
+      try {
+        approved=await callbacks.authorizeTask(Object.freeze({namespace:options.auth.namespace,
+          subjectId:options.auth.subjectId,runId,requestId,revision,task:safeJSONSnapshot(task)}));
+      } catch {}
+      if (approved!==true) throw fail('FK_I_HOST_DENIED','Host task disclosure denied');
+      output.pending.push({requestId,nodeId,attempt,activation,kind,intent:'execute',task});
+    }
     const current=await options.store.load(runId);
     if (current?.namespace!==options.auth.namespace || current.revision!==revision
-      || current.status!=='waiting' || current.pending[0]?.requestId!==requestId) throw uncertain();
-    output.pending.push({requestId,nodeId,attempt,activation:checkpoint.pending[0].activation,
-      kind,intent:'execute',task});
+      || current.status!=='waiting' || hash(current.pending)!==hash(checkpoint.pending)) throw uncertain();
   } else if (['succeeded','failed','errored','cancelled'].includes(status)) {
     Object.assign(output,terminalFrame(runId,revision,status,frame.terminal));
   } else if (status!=='paused') throw uncertain();
@@ -468,7 +485,7 @@ export async function complete(submission,runtime,options) {
   }
   if (cp.status==='cancelled') throw fail('FK_I_STALE_RECEIPT','Run has been terminated');
   const historical=await options.store.loadReceipt(input.runId,input.requestId);
-  let task=historical ?? cp.pending[0];
+  let task=historical ?? cp.pending.find(pending=>pending.requestId===input.requestId);
   if (historical && (typeof historical.nodeId!=='string'||!Number.isSafeInteger(historical.attempt))) {
     const transition=await options.store.loadTransition(input.runId,historical.transitionId);
     const suffix='::validate';
@@ -481,11 +498,17 @@ export async function complete(submission,runtime,options) {
     (historical.runId!==input.runId || historical.namespace!==options.auth.namespace))) {
     throw fail('FK_I_STALE_RECEIPT','request is not current or accepted');
   }
+  let operationSafety;
   if (input.kind==='action') {
     const operation=operationLedgers.get(options.store)?.load(input);
     const expected=input.outcome==='succeeded'?input.result:input.error;
     const settlement=operation?.settlement;
-    if (operation?.requestId!==input.requestId || !settlement
+    const notDispatched=input.outcome==='failed' && input.error.code==='FK_I_ACTION_NOT_DISPATCHED'
+      && input.error.sideEffectStatus==='none' && !operation
+      && (historical || task.publicTask.operationKey===input.operationKey);
+    if (notDispatched) {
+      operationSafety='unclaimed';
+    } else if (operation?.requestId!==input.requestId || !settlement
       || (input.outcome==='succeeded' && settlement.effect!=='applied')
       || (input.outcome==='failed' && input.error.sideEffectStatus!==(settlement.effect==='applied'?'known':'none'))
       || hash(settlement.result)!==hash(expected)) {
@@ -518,6 +541,7 @@ export async function complete(submission,runtime,options) {
   const {runId,requestId,outcome}=input;
   const result=await coordinator.complete({runId,requestId,nodeId:task.nodeId,attempt:task.attempt,
     submissionDigest:hash(input),receivedPayload:input,
+    ...(operationSafety?{operationSafety}:{}),
     ...(humanProof?{humanProof}:{}),
     ...(outcome==='succeeded' ? {kind:input.kind+'-result',result:input.result}
       : {kind:input.kind+'-call-failed',failure:{message:input.error.message,

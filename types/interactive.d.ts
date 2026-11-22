@@ -15,11 +15,11 @@ export interface InteractiveProgramIdentity {
   semanticsVersion: 'interactive-state-machine-v1';
   checkpointSchemaVersion: 1;
   canonicalizationVersion: 'jcs-rfc8785-v1';
-  implementedStage: 'P0-A' | 'P0-B';
+  implementedStage: 'P0-A' | 'P0-B' | 'P1';
 }
 export interface InteractiveCompileOptions {
   output: 'memory' | 'file';
-  featureStage: 'P0-A' | 'P0-B';
+  featureStage: 'P0-A' | 'P0-B' | 'P1';
   outDir?: string;
   /** Uses the Standard analyzer's nearest package.json discovery by default. */
   projectRoot?: string;
@@ -387,6 +387,7 @@ export interface ReceiptRecordV1 {
   requestId:string;
   kind:InteractiveStepKind;
   humanProof?:InteractiveHumanProof;
+  operationSafety?:'unclaimed'|'settled'|'no-effect';
   submissionDigest:string;
   acceptedRevision:number;
   outcome:'succeeded'|'failed'|'legacy';
@@ -413,6 +414,7 @@ export type RunCheckpointV1 = {
     contextError:InteractiveContextError|null;
     regionCounters?:Record<string,number>;
     skillSnapshot?:{activation:number;nodeId:string;instruction:string};
+    parallel?:{nodeId:string;lanes:readonly Record<string,unknown>[];decision?:Record<string,unknown>;receipt?:Record<string,unknown>};
     taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
@@ -469,10 +471,11 @@ export declare function createSqliteInteractivePersistence(file:string,options:{
 export interface InteractiveOperationRecord {
   requestId:string;
   inputHash:string;
+  businessKey?:string;
   settlement:{effect:'applied'|'no-effect';evidenceHash:string;result:unknown}|null;
 }
 export interface InteractiveOperationController {
-  claim(input:{runId:string;requestId:string;operationKey:string;inputHash:string},
+  claim(input:{runId:string;requestId:string;operationKey:string;inputHash:string;businessKey?:string},
     auth:TrustedHostContextV1):Promise<InteractiveOperationRecord & {claimed:boolean}>;
   load(input:{runId:string;operationKey:string},auth:TrustedHostContextV1):Promise<InteractiveOperationRecord|null>;
   settle(input:{runId:string;operationKey:string;inputHash:string;effect:'applied'|'no-effect';evidenceHash:string;result:unknown},
@@ -539,7 +542,7 @@ export declare function createInteractiveHostContext(options:{
   subjectId:string;
   authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|'operation:claim'|'operation:read'|'operation:settle';
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
-    reasonCode?:string;operationKey?:string;inputHash?:string;effect?:'applied'|'no-effect';evidenceHash?:string}>):boolean|Promise<boolean>;
+    reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';evidenceHash?:string}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
   authorizeHuman?(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;reviewDigest:string;
@@ -570,7 +573,7 @@ export interface InteractivePolicyV1 {
   version:string;
   bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
   disclosePolicyId:string;
-  capabilityStage:'P0-A'|'P0-B';
+  capabilityStage:'P0-A'|'P0-B'|'P1';
   canonicalizationVersion:'jcs-rfc8785-v1';
   requiredSkillManifestHash?:string;
 }

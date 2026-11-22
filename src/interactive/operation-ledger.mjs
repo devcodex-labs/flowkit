@@ -11,8 +11,14 @@ export function prepareOperationLedger(db, namespace, { transaction, assertDispa
     SELECT * FROM fk_i_operations WHERE namespace = ? AND run_id = ? AND operation_key = ?
   `);
   const insert = db.prepare(`
-    INSERT INTO fk_i_operations (namespace, run_id, operation_key, request_id, input_hash)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO fk_i_operations (namespace, run_id, operation_key, request_id, input_hash, business_key)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const businessOperation=db.prepare(`
+    SELECT operation_key FROM fk_i_operations WHERE namespace=? AND run_id=? AND business_key=?
+  `);
+  const operationsByRun=db.prepare(`
+    SELECT * FROM fk_i_operations WHERE namespace=? AND run_id=? ORDER BY request_id,operation_key
   `);
   const update = db.prepare(`
     UPDATE fk_i_operations SET effect = ?, evidence_hash = ?, result_json = ?, result_hash = ?
@@ -23,6 +29,7 @@ export function prepareOperationLedger(db, namespace, { transaction, assertDispa
     if (!row) return null;
     return {
       requestId:row.request_id, inputHash:row.input_hash,
+      ...(row.business_key?{businessKey:row.business_key}:{}),
       settlement:row.effect === null ? null : {
         effect:row.effect, evidenceHash:row.evidence_hash,
         result:decodeCanonical(row.result_json,row.result_hash),
@@ -31,24 +38,33 @@ export function prepareOperationLedger(db, namespace, { transaction, assertDispa
   }
 
   return Object.freeze({
-    claim({ runId, requestId, operationKey, inputHash }) {
+    claim({ runId, requestId, operationKey, inputHash, businessKey }) {
       assertSHA256(operationKey);
       assertSHA256(inputHash);
+      if (businessKey!==undefined) assertSHA256(businessKey);
       return transaction('write', () => {
-        assertDispatch(runId,requestId,inputHash,operationKey);
+        assertDispatch(runId,requestId,inputHash,operationKey,businessKey);
         const existing = record(select.get(namespace,runId,operationKey));
         if (existing) {
-          if (existing.inputHash !== inputHash) throw conflict('operation key is bound to different input');
+          if (existing.inputHash !== inputHash || existing.businessKey!==businessKey) {
+            throw conflict('operation key is bound to different input or effect');
+          }
           if (existing.requestId !== requestId) throw conflict('operation key belongs to a different Pending');
           return {claimed:false, ...existing};
         }
-        insert.run(namespace,runId,operationKey,requestId,inputHash);
-        return {claimed:true,requestId,inputHash,settlement:null};
+        if (businessKey && businessOperation.get(namespace,runId,businessKey)) {
+          throw conflict('business effect has already been reserved by a different operation');
+        }
+        insert.run(namespace,runId,operationKey,requestId,inputHash,businessKey??null);
+        return {claimed:true, ...record(select.get(namespace,runId,operationKey))};
       });
     },
     load({ runId, operationKey }) {
       assertSHA256(operationKey);
       return record(select.get(namespace,runId,operationKey));
+    },
+    list({runId}) {
+      return operationsByRun.all(namespace,runId).map(row=>({operationKey:row.operation_key,...record(row)}));
     },
     settle({ runId, operationKey, inputHash, effect, evidenceHash, result }) {
       assertSHA256(operationKey);

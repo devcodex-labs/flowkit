@@ -27,8 +27,8 @@ const start: Promise<InteractiveRunFrame>=coordinator.start({
 const finish=coordinator.complete({runId:'r',requestId:'request',nodeId:'n',attempt:1,result:{answer:'ok'}});
 const resume: Promise<InteractiveRunFrame>=coordinator.resume({runId:'r'});
 void [compiled,loader,start,finish,resume];
-// @ts-expect-error P1 is not implemented yet
-compileInteractive('x',{output:'memory',featureStage:'P1'});
+// @ts-expect-error P2 is not implemented yet
+compileInteractive('x',{output:'memory',featureStage:'P2'});
 // @ts-expect-error validators remain synchronous
 const asyncValidator: NonNullable<InteractiveRuntime['validateResult']>=async()=>[];
 // A shared Standard Host's checkStep is a valid declaration; the Interactive

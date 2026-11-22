@@ -104,7 +104,7 @@ function advance(view, event) {
 function advanceExtended(view,event) {
   const block=programTable.blocks.find(item=>item.id===view?.blockId);
   const record=block && programTable.nodes[block.nodeId];
-  if (!record || !['action','verification','human','loop'].includes(record.kind)) {
+  if (!record || !['action','verification','human','loop','parallel'].includes(record.kind)) {
     const core=advanceCore(view,event);
     if (core.stackEffect.kind==='push') core.stackEffect.frame.overviewStep=event.overviewStep;
     return core;
@@ -120,6 +120,11 @@ function advanceExtended(view,event) {
     ({kind,fromBlockId,nodeId,toBlockId,stackEffect,mergeIntent:none});
   if (event.kind==='deterministic-failure') return fail(event.error?.code??'FK_R002');
   const {kind}=record;
+  if (kind==='parallel') {
+    if (phase==='enter') return proposal('begin-parallel',nodeId+'::route');
+    if (event.kind==='parallel-passed') return proposal('finish-parallel',record.metadata.next+'::enter');
+    return {kind:'terminal',fromBlockId,nodeId,terminal:{status:'failed',nodeId},stackEffect:none,mergeIntent:none};
+  }
   if (kind==='loop') return proposal('move',phase==='enter'?nodeId+'::route':record.metadata.body+'::enter');
   if (phase==='enter') {
     if (!Number.isSafeInteger(event.activation) || event.activation<1) throw new TypeError('Missing certified activation');

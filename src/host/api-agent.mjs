@@ -138,6 +138,32 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
             replayedCalls.set(call.call_id, fingerprint);
             const operationId = tool.sideEffect === 'write' ? await during(signal, () => tool.operationKey(args, task)) : `${task.execution.requestId}:${call.call_id}`;
             if (typeof operationId !== 'string' || !operationId) fail('invalid-operation-key', 'Host tool operation key is missing', sideEffects);
+            if (tool.sideEffect==='write' && ['P1','P2'].includes(task.workflow.implementedStage)) {
+              const {controller,auth}=context.interactiveOperations??{};
+              if (!controller || !auth) fail('durable-operation-required','Parallel tool write requires the Interactive operation controller',sideEffects);
+              const {runId}=task.run;
+              const {requestId}=task.execution;
+              const businessKey=artifactDigest(canonicalBytes(operationId));
+              const operationKey=artifactDigest(canonicalBytes([requestId,businessKey]));
+              const claim=await controller.claim({runId,requestId,operationKey,inputHash:fingerprint,businessKey},auth);
+              let output;
+              if (claim.claimed) {
+                sideEffects='unknown';
+                const value=await during(signal,()=>tool.execute(args,{signal,operationId,task}));
+                output=sized(value,budget.maxToolResultBytes,'Tool result');
+                await controller.settle({runId,operationKey,inputHash:fingerprint,effect:'applied',
+                  evidenceHash:artifactDigest(canonicalBytes([operationKey,output])),result:output},auth);
+              } else if (claim.settlement?.effect==='applied' && typeof claim.settlement.result==='string') {
+                output=claim.settlement.result;
+                if (Buffer.byteLength(output)>budget.maxToolResultBytes) fail('size-limit','Stored tool output exceeds budget','known');
+              } else {
+                fail('tool-outcome-unknown','Reconcile the earlier operation before retrying it','unknown');
+              }
+              sideEffects='known';
+              events.push({type:'tool-result',name:tool.name,callId:call.call_id,operationId,replayed:!claim.claimed});
+              outputs.push({type:'function_call_output',call_id:call.call_id,output});
+              continue;
+            }
             const key = JSON.stringify([scope, task.run.runId, task.node.id, tool.name, operationId]);
             let entry = ledger.get(key);
             if (entry && entry.fingerprint !== fingerprint) fail('tool-operation-conflict', 'An operation key was reused for different arguments', sideEffects);

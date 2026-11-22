@@ -31,6 +31,8 @@ export function lowerInteractive(analysis, options = {}) {
       throw new Error('Validated graph is missing node ' + node.id);
     }
     let metadata;
+    const parallelOwner=analysis.graph.parallelOwners.get(node.id);
+    const parallelNext=parallelOwner && analysis.graph.byId.get(parallelOwner).join.next;
     if (node.type === 'condition') {
       metadata = {
         name: node.name,
@@ -43,7 +45,7 @@ export function lowerInteractive(analysis, options = {}) {
       };
     } else if (node.type === 'agent') {
       metadata = {
-        name: node.name, next: node.next,
+        name: node.name, next: node.next??parallelNext,
         ...(node.agent === undefined ? {} : { agent: node.agent }),
         ...(node.skill === undefined ? {} : { skill: node.skill }),
         ...(node.integrity === undefined ? {} : { integrity: node.integrity }),
@@ -55,13 +57,16 @@ export function lowerInteractive(analysis, options = {}) {
       };
     } else if (node.type==='action') {
       const failure=analysis.graph.executionEdges.find(edge=>edge.from===node.id && edge.role==='action-failure');
-      metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next,
+      metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next??parallelNext,
         ...(failure?{onFailure:failure.to}:{})};
     } else if (node.type==='verification') {
       const region=analysis.graph.regions.get(analysis.graph.owners.get(node.id));
       const loop=region?.kind==='loop' && region.body===node.id ? analysis.graph.byId.get(region.id) : null;
-      metadata={name:node.name,verifier:node.verifier,next:loop?.onSuccess??node.onSuccess,onFailure:node.onFailure,
+      metadata={name:node.name,verifier:node.verifier,next:loop?.onSuccess??node.onSuccess??parallelNext,
+        onFailure:node.onFailure??parallelNext,
         ...(loop?{loop:{id:loop.id,maxIterations:loop.maxIterations,onMaxExceeded:loop.onMaxExceeded}}:{})};
+    } else if (node.type==='parallel') {
+      metadata={name:node.name,next:node.join.next,strategy:node.join.strategy,branches:node.branches};
     } else if (node.type==='loop') {
       metadata={name:node.name,body:node.body,next:node.onSuccess,onMaxExceeded:node.onMaxExceeded,maxIterations:node.maxIterations};
     } else if (node.type==='human') {
@@ -70,6 +75,7 @@ export function lowerInteractive(analysis, options = {}) {
     } else {
       metadata = { name: node.name, status: node.status };
     }
+    if (parallelOwner) metadata.parallelOwner=parallelOwner;
     nodes[node.id] = { kind: node.type, metadata: copyData(metadata) };
   }
   const first = definitions[0].id;

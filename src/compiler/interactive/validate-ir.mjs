@@ -14,6 +14,7 @@ export const INTERACTIVE_PHASES = Object.freeze({
   verification: externalPhases,
   human: externalPhases,
   loop: Object.freeze(['enter','route']),
+  parallel: Object.freeze(['enter','route']),
 });
 
 const externalRules = Object.freeze({
@@ -30,6 +31,10 @@ const RULES = Object.freeze({
   loop: Object.freeze({
     enter:[['internal-step','deterministic-failure'],['move','raise-error']],
     route:[['internal-step','deterministic-failure'],['move','raise-error']],
+  }),
+  parallel:Object.freeze({
+    enter:[['internal-step','deterministic-failure'],['begin-parallel','raise-error']],
+    route:[['parallel-passed','parallel-rejected','deterministic-failure'],['finish-parallel','terminal','raise-error']],
   }),
   condition: Object.freeze({
     enter: [['internal-step', 'deterministic-failure'], ['move', 'raise-error']],
@@ -97,6 +102,9 @@ export function expectedBlockTargets(ir, nodeId, phase) {
   }
   if (record.kind === 'terminal' && phase === 'route') return [];
   if (record.kind === 'loop' && phase === 'route') return [target(metadata.body,'enter')];
+  if (record.kind === 'parallel' && phase === 'route') {
+    return Array.isArray(metadata.branches)?[...metadata.branches,metadata.next].map(id=>target(id,'enter')):null;
+  }
   return null;
 }
 
@@ -184,6 +192,15 @@ export function validateInteractiveIR(ir) {
     if (record.kind==='human' && (typeof metadata.next!=='string' || typeof metadata.onFailure!=='string'
       || (metadata.maxRevisions!==undefined && (!Number.isInteger(metadata.maxRevisions)
       || metadata.maxRevisions<0 || metadata.maxRevisions>100)))) bad('Malformed Human metadata: '+id);
+    if (record.kind==='parallel' && (metadata.strategy!=='all_succeeded'
+      || typeof metadata.next!=='string' || !Array.isArray(metadata.branches) || metadata.branches.length<2
+      || new Set(metadata.branches).size!==metadata.branches.length || metadata.branches.some(branch=>
+        !['agent','action','verification'].includes(ir.nodes[branch]?.kind) || ir.nodes[branch].metadata?.parallelOwner!==id))) {
+      bad('Malformed Parallel metadata: '+id);
+    }
+    if (metadata.parallelOwner!==undefined && !ir.nodes[metadata.parallelOwner]?.metadata?.branches?.includes(id)) {
+      bad('Malformed Parallel member metadata: '+id);
+    }
     for (const phase of phases) {
       const blockId = interactiveBlockId(id, phase);
       const block = table.get(blockId);
