@@ -17,7 +17,7 @@
 | options字段 | 必需/默认 | 行为 |
 | --- | --- | --- |
 | output | 必需：memory或file | memory只返回；file另写`<stem>.interactive.mjs`并返回artifactPath |
-| featureStage | 必需：P0-A 或 P0-B | P0-B 的 Action、Verification 使用版本化 Host 接口 |
+| featureStage | 必需：P0-A 或 P0-B | P0-B 顺序控制流使用版本化 Host 接口 |
 | targetVersion | 可省略；若给必须interactive-state-machine-v1 | 指定语义目标，不是软件包版本 |
 | outDir | 源目录；相对cwd | file输出目录；不要套用Standard输出目录的所有限制 |
 | projectRoot | 最近package.json所在目录，找不到回退cwd | 显式值按cwd解析；影响Skill检查 |
@@ -139,6 +139,14 @@ readHistoricalAck接收namespace/runId/requestId/nodeId/attempt/receiptHash，�
 ### cancelInteractiveRun {#cancelInteractiveRun}
 
 `cancelInteractiveRun(runId,reasonCode,options)` 使用 `run:cancel` 权限封锁新派发。已派发操作可用独立的 `operation:read` 和 `operation:settle` 权限继续对账。
+
+### P0-B 的 Loop、Human 和 Agent 校验
+
+Loop 尝试次数随 Run 保存。最后一次 Verification 返回 `false` 时直接走耗尽路径。
+
+操作员 Host 通过独立的 `authorizeHuman` 提供人工证明 `{proofId,evidenceHash}`。Human 回执包含当前 `task.reviewDigest` 和 `result:{approved,comment?}`。接纳事务记录主体、证据和被审内容。原主体可在当前 Run 权限下重取一份已接纳回执的确认。退回后进入源工作流修订路径，再次审阅生成新摘要。
+
+P0-B 的版本化 Runtime 可绑定 `checkStep`（pure-local）和 `verifyAgentResult`（trusted-read）。`checkStep` 读取已提交状态，`verifyAgentResult` 读取未提交的候选状态。回调可根据 Run、请求和尝试标识重放同一读取，并接收取消信号。工作流声明 Agent `verify` 时，Host 必须绑定后者。Agent 首次解析的说明固定在本次激活，重试复用该说明。
 
 putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有namespace、artifactHash和programId；保留/释放与Run持久引用一致，不能在Run仍引用时自行删产物。自定义实现必须保留R5封套全部字段以及原子创建/CAS、转换与回执对账契约；不要把公开frame当checkpoint存储。
 

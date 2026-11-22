@@ -104,7 +104,11 @@ function advance(view, event) {
 function advanceExtended(view,event) {
   const block=programTable.blocks.find(item=>item.id===view?.blockId);
   const record=block && programTable.nodes[block.nodeId];
-  if (!record || (record.kind!=='action' && record.kind!=='verification')) return advanceCore(view,event);
+  if (!record || !['action','verification','human','loop'].includes(record.kind)) {
+    const core=advanceCore(view,event);
+    if (core.stackEffect.kind==='push') core.stackEffect.frame.overviewStep=event.overviewStep;
+    return core;
+  }
   const {id:fromBlockId,nodeId,phase}=block;
   if (!event || event.schemaVersion!==1 || event.forBlockId!==fromBlockId
     || view.phase!==phase || !block.eventKinds.includes(event.kind)) {
@@ -116,6 +120,7 @@ function advanceExtended(view,event) {
     ({kind,fromBlockId,nodeId,toBlockId,stackEffect,mergeIntent:none});
   if (event.kind==='deterministic-failure') return fail(event.error?.code??'FK_R002');
   const {kind}=record;
+  if (kind==='loop') return proposal('move',phase==='enter'?nodeId+'::route':record.metadata.body+'::enter');
   if (phase==='enter') {
     if (!Number.isSafeInteger(event.activation) || event.activation<1) throw new TypeError('Missing certified activation');
     return proposal('move',nodeId+'::prepare',{kind:'push',frame:{
@@ -127,7 +132,8 @@ function advanceExtended(view,event) {
   if (phase==='prepare') return proposal('prepare-pending',nodeId+'::dispatch-ready');
   if (phase==='dispatch-ready') return proposal('publish-pending',nodeId+'::awaiting');
   if (phase==='validate') {
-    const next=event.kind==='external-passed'?record.metadata.next:record.metadata.onFailure;
+    const next=event.kind==='external-passed'?record.metadata.next
+      :event.kind==='loop-exhausted'?record.metadata.loop?.onMaxExceeded:record.metadata.onFailure;
     return next
       ? proposal('apply-external',next+'::enter',{kind:'pop',expectedKind:kind,expectedNodeId:nodeId})
       : fail('FK_I_ACTION_FAILED');
@@ -167,6 +173,8 @@ export function emitInteractive(ir, options = {}) {
     {id:'runtime.validateResult',version:'1',mode:'pure-local',kind:'agent-validation'},
     ...(legacyAgents ? [{id:'runtime.skillResolver',version:'1',mode:'trusted-read',kind:'skill'}] : []),
     ...(taskAgents ? [{id:'runtime.authorizeAgentTask',version:'1',mode:'trusted-read',kind:'task-authorization'}] : []),
+    ...(Object.values(ir.nodes).some(node=>node.kind==='agent' && node.metadata.verify)
+      ? [{id:'runtime.verifyAgentResult',version:'1',mode:'trusted-read',kind:'agent-verification'}] : []),
   ] : [];
   const table = {
     schemaVersion:1, entryBlockId:ir.entryBlockId, blocks:ir.blocks,

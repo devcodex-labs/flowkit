@@ -12,6 +12,8 @@ export const INTERACTIVE_PHASES = Object.freeze({
   agent: Object.freeze(['enter', 'prepare', 'dispatch-ready', 'awaiting', 'validate', 'commit', 'route']),
   action: externalPhases,
   verification: externalPhases,
+  human: externalPhases,
+  loop: Object.freeze(['enter','route']),
 });
 
 const externalRules = Object.freeze({
@@ -19,11 +21,16 @@ const externalRules = Object.freeze({
   prepare: [['internal-step', 'deterministic-failure'], ['prepare-pending', 'raise-error']],
   'dispatch-ready': [['pending-prepared', 'deterministic-failure'], ['publish-pending', 'raise-error']],
   awaiting: [[], []],
-  validate: [['external-passed', 'external-rejected', 'deterministic-failure'], ['apply-external', 'raise-error']],
+  validate: [['external-passed', 'external-rejected', 'loop-exhausted', 'deterministic-failure'], ['apply-external', 'raise-error']],
 });
 const RULES = Object.freeze({
   action: externalRules,
   verification: externalRules,
+  human: externalRules,
+  loop: Object.freeze({
+    enter:[['internal-step','deterministic-failure'],['move','raise-error']],
+    route:[['internal-step','deterministic-failure'],['move','raise-error']],
+  }),
   condition: Object.freeze({
     enter: [['internal-step', 'deterministic-failure'], ['move', 'raise-error']],
     route: [['internal-step', 'deterministic-failure'], ['move', 'raise-error']],
@@ -78,7 +85,8 @@ export function expectedBlockTargets(ir, nodeId, phase) {
     if (phase === 'awaiting') return [target(nodeId, 'validate')];
     if (phase === 'validate') {
       if (record.kind==='agent') return [target(nodeId, 'prepare'), target(nodeId, 'commit')];
-      return [...new Set([metadata.next,metadata.onFailure].filter(id=>typeof id==='string').map(id=>target(id,'enter')))];
+      return [...new Set([metadata.next,metadata.onFailure,metadata.loop?.onMaxExceeded]
+        .filter(id=>typeof id==='string').map(id=>target(id,'enter')))];
     }
     if (phase === 'commit') return [target(nodeId, 'route')];
     if (phase === 'route') return [target(metadata.next, 'enter')];
@@ -88,6 +96,7 @@ export function expectedBlockTargets(ir, nodeId, phase) {
     return [...new Set(metadata.branches.map(branch => target(branch?.next, 'enter')))];
   }
   if (record.kind === 'terminal' && phase === 'route') return [];
+  if (record.kind === 'loop' && phase === 'route') return [target(metadata.body,'enter')];
   return null;
 }
 
@@ -150,7 +159,8 @@ export function validateInteractiveIR(ir) {
       }
     }
     if (record.kind === 'agent' && (!Array.isArray(metadata.inputs) || !metadata.output
-      || !Number.isInteger(metadata.retries) || metadata.retries < 0 || metadata.retries > 10)) {
+      || !Number.isInteger(metadata.retries) || metadata.retries < 0 || metadata.retries > 10
+      || (metadata.verify!==undefined && (ir.featureStage==='P0-A'||typeof metadata.verify!=='string')))) {
       bad('Malformed Agent metadata: ' + id);
     }
     if (record.kind === 'terminal' && !['succeeded', 'failed'].includes(metadata.status)) {
@@ -161,6 +171,19 @@ export function validateInteractiveIR(ir) {
       || (metadata.onFailure!==undefined && typeof metadata.onFailure!=='string'))) bad('Malformed Action metadata: '+id);
     if (record.kind==='verification' && (typeof metadata.verifier!=='string' || typeof metadata.next!=='string'
       || typeof metadata.onFailure!=='string')) bad('Malformed Verification metadata: '+id);
+    if (record.kind==='verification' && metadata.loop) {
+      const loop=ir.nodes[metadata.loop.id];
+      if (loop?.kind!=='loop' || loop.metadata?.body!==id || loop.metadata?.next!==metadata.next
+        || loop.metadata.maxIterations!==metadata.loop.maxIterations
+        || loop.metadata.onMaxExceeded!==metadata.loop.onMaxExceeded) bad('Verification loop contract mismatch: '+id);
+    }
+    if (record.kind==='loop' && (ir.nodes[metadata.body]?.kind!=='verification'
+      || ir.nodes[metadata.body].metadata?.loop?.id!==id || typeof metadata.next!=='string'
+      || typeof metadata.onMaxExceeded!=='string' || !Number.isInteger(metadata.maxIterations)
+      || metadata.maxIterations<1 || metadata.maxIterations>100)) bad('Malformed Loop metadata: '+id);
+    if (record.kind==='human' && (typeof metadata.next!=='string' || typeof metadata.onFailure!=='string'
+      || (metadata.maxRevisions!==undefined && (!Number.isInteger(metadata.maxRevisions)
+      || metadata.maxRevisions<0 || metadata.maxRevisions>100)))) bad('Malformed Human metadata: '+id);
     for (const phase of phases) {
       const blockId = interactiveBlockId(id, phase);
       const block = table.get(blockId);

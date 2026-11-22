@@ -1,7 +1,7 @@
 import {buildCoordinator} from './coordinator.mjs';
 import {compileInteractive} from './compile.mjs';
 import {createSqliteCheckpointStore,sqliteAdminTerminate,sqliteOperationLedger} from './sqlite-store.mjs';
-import {hasStepFrame,isInteractiveStage} from './protocol.mjs';
+import {hasStepFrame,isInteractiveStage,isHumanProof} from './protocol.mjs';
 import {assertSHA256,canonicalBytes,safeJSONSnapshot,sha256Bytes} from './canonical.mjs';
 
 import {decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
@@ -14,13 +14,14 @@ const hash=value=>sha256Bytes(canonicalBytes(value));
 const fail=(code,message)=>Object.assign(new Error(code+': '+message),{code});
 const uncertain=()=>fail('FK_I_STORE_UNCERTAIN','cannot establish a durable transition outcome');
 
-export function createInteractiveHostContext({namespace,subjectId,authorize,authorizeTask}={}) {
+export function createInteractiveHostContext({namespace,subjectId,authorize,authorizeTask,authorizeHuman}={}) {
   if (typeof namespace!=='string'||!namespace || typeof subjectId!=='string'||!subjectId
-    || typeof authorize!=='function' || typeof authorizeTask!=='function') throw new TypeError('Trusted Host authorizers are required');
+    || typeof authorize!=='function' || typeof authorizeTask!=='function'
+    || (authorizeHuman!==undefined && typeof authorizeHuman!=='function')) throw new TypeError('Trusted Host authorizers are required');
   const auth=Object.freeze({namespace,subjectId,
     readTerminalResult:(resultRef,options)=>readTerminalResult(resultRef,{...options,auth}),
   });
-  authCallbacks.set(auth,{authorize,authorizeTask});
+  authCallbacks.set(auth,{authorize,authorizeTask,authorizeHuman});
   return auth;
 }
 
@@ -98,11 +99,14 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
           || (receipt.attempt!==undefined && next.candidate?.attempt!==receipt.attempt)
           || receipt.acceptedRevision!==next.revision || receipt.transitionId!==transition.transitionId
           || !['succeeded','failed'].includes(receipt.outcome)
-          || next.receivedSubmission?.canonicalDigest!==receipt.submissionDigest) {
+          || next.receivedSubmission?.canonicalDigest!==receipt.submissionDigest
+          || (receipt.kind==='human' && (!isHumanProof(receipt.humanProof)
+          || hash(receipt.humanProof)!==hash(next.receivedSubmission.humanProof)))) {
           throw fail('FK_I_INVALID_RECEIPT','receipt identity mismatch');
         }
         Object.assign(journalEntry,{requestId:receipt.requestId,nodeId:next.candidate?.nodeId,
           attempt:next.candidate?.attempt,digest:receipt.submissionDigest,receiptOutcome:receipt.outcome,stepKind:receipt.kind});
+        if (receipt.kind==='human') journalEntry.humanProof=receipt.humanProof;
       } else if (current.status==='waiting' && next.phase==='validate') {
         throw fail('FK_I_INVALID_RECEIPT','accepting a Pending requires its atomic receipt');
       }
@@ -121,7 +125,8 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       const saved=backend.readJournalRecord(runId,{revision:receipt.acceptedRevision});
       return {namespace,runId,requestId,kind:saved.entry.stepKind,submissionDigest:receipt.digest,
         acceptedRevision:receipt.acceptedRevision,outcome:saved.entry.receiptOutcome,
-        transitionId:saved.transitionId,nodeId:receipt.nodeId,attempt:receipt.attempt};
+        transitionId:saved.transitionId,nodeId:receipt.nodeId,attempt:receipt.attempt,
+        ...(saved.entry.humanProof?{humanProof:saved.entry.humanProof}:{})};
     },
   });
   const programRegistry=Object.freeze({
@@ -258,6 +263,7 @@ function executionStore(store,registry) {
         submissionDigest:journalEntry.digest,acceptedRevision:nextCheckpoint.revision,
         outcome:journalEntry.receiptOutcome,
         transitionId,nodeId:journalEntry.nodeId,attempt:journalEntry.attempt,
+        ...(nextCheckpoint.receivedSubmission.humanProof?{humanProof:nextCheckpoint.receivedSubmission.humanProof}:{}),
       } : undefined;
       const next=encodeCheckpoint(nextCheckpoint);
       let result;
@@ -331,10 +337,14 @@ async function readTerminalResult(resultRef,options) {
 function bindingRuntime(runtime,policy) {
   const bound={};
   for (const [key,mode] of [['validateResult','pure-local'],['skillResolver','trusted-read'],
-    ['prepareAgentTask','trusted-read'],['authorizeAgentTask','trusted-read']]) {
+    ['prepareAgentTask','trusted-read'],['authorizeAgentTask','trusted-read'],
+    ['checkStep','pure-local'],['verifyAgentResult','trusted-read']]) {
     const value=runtime[key];
-    if (!value) continue;
     const approved=policy.bindingManifest?.[key];
+    if (!value) {
+      if (approved && key==='checkStep') throw fail('FK_I_BINDING_MISSING','Policy-bound checkStep is required');
+      continue;
+    }
     if (!approved || typeof value.id!=='string' || typeof value.version!=='string'
       || value.mode!==mode || approved.id!==value.id || approved.version!==value.version
       || approved.mode!==value.mode || typeof value.implementation!=='function') {
@@ -346,7 +356,6 @@ function bindingRuntime(runtime,policy) {
       return implementation(reference,descriptor);
     } : implementation;
   }
-  if (runtime.checkStep) bound.checkStep=runtime.checkStep;
   if (runtime.taskResourcePolicy) bound.taskResourcePolicy=runtime.taskResourcePolicy;
   return bound;
 }
@@ -439,8 +448,9 @@ export async function complete(submission,runtime,options) {
   const input=safeJSONSnapshot(submission);
   if (!hasStepFrame(input?.kind) || typeof input.runId!=='string' || typeof input.requestId!=='string'
     || !['succeeded','failed'].includes(input.outcome)
-    || Object.keys(input).length!==(input.kind==='action'?6:5)
+    || Object.keys(input).length!==(['action','human'].includes(input.kind)?6:5)
     || (input.kind==='action')!==Object.hasOwn(input,'operationKey')
+    || (input.kind==='human' && (input.outcome!=='succeeded' || !/^sha256:[0-9a-f]{64}$/.test(input.reviewDigest)))
     || (input.outcome==='failed' && (typeof input.error?.message!=='string' || !input.error.message
       || typeof input.error.code!=='string' || !input.error.code
       || (input.error.retryable!==undefined && typeof input.error.retryable!=='boolean')
@@ -482,9 +492,33 @@ export async function complete(submission,runtime,options) {
       throw fail('FK_I_INVALID_OPERATION','Action receipt requires its durable operation settlement');
     }
   }
+  let humanProof;
+  if (input.kind==='human' && historical) {
+    if (historical.submissionDigest!==hash(input)) throw fail('FK_I_RECEIPT_CONFLICT','Human decision differs from the accepted receipt');
+    humanProof=historical.humanProof;
+    if (!isHumanProof(humanProof) || humanProof.subjectId!==options.auth.subjectId) {
+      throw fail('FK_I_HOST_DENIED','Human receipt acknowledgment requires the original authorized subject');
+    }
+  } else if (input.kind==='human') {
+    if (task.publicTask.reviewDigest!==input.reviewDigest) {
+      throw fail('FK_I_STALE_RECEIPT','Human decision does not match the reviewed content');
+    }
+    try {
+      const evidence=await callbacks.authorizeHuman?.(Object.freeze({
+        namespace:options.auth.namespace,subjectId:options.auth.subjectId,runId:input.runId,
+        requestId:input.requestId,reviewDigest:input.reviewDigest,result:safeJSONSnapshot(input.result),
+      }));
+      if (evidence) {
+        const {proofId,evidenceHash}=safeJSONSnapshot(evidence,2048);
+        humanProof={subjectId:options.auth.subjectId,proofId,evidenceHash};
+      }
+    } catch {}
+    if (!isHumanProof(humanProof)) throw fail('FK_I_HOST_DENIED','independent Human decision evidence is required');
+  }
   const {runId,requestId,outcome}=input;
   const result=await coordinator.complete({runId,requestId,nodeId:task.nodeId,attempt:task.attempt,
     submissionDigest:hash(input),receivedPayload:input,
+    ...(humanProof?{humanProof}:{}),
     ...(outcome==='succeeded' ? {kind:input.kind+'-result',result:input.result}
       : {kind:input.kind+'-call-failed',failure:{message:input.error.message,
         ...(input.error.retryable!==undefined?{retryable:input.error.retryable}:{}),

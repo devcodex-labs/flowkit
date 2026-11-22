@@ -1,5 +1,5 @@
 import {MAX_CHECKPOINT_BYTES,assertSHA256,canonicalBytes,sha256Bytes} from './canonical.mjs';
-import { isInteractiveStage, hasStepFrame } from './protocol.mjs';
+import { isInteractiveStage, hasStepFrame, isHumanProof } from './protocol.mjs';
 
 const finished=new Set(['succeeded','failed','errored','cancelled']);
 const phases=new Set(['enter','prepare','dispatch-ready','awaiting','validate','commit','route','finished']);
@@ -44,9 +44,11 @@ export function encodeCheckpoint(cp) {
     schemaVersion:1,protocolVersion:1,namespace,runId,startKey,startIntentHash,revision,status,program,
     programRef:{namespace,artifactHash:program.artifactHash,programId:program.workflowId},
     policyIdentity,
-    execution:{blockId:cp.blockId,phase,activationSeq:cp.activationSeq,agentStepCounter:cp.activationSeq,
+    execution:{blockId:cp.blockId,phase,activationSeq:cp.activationSeq,agentStepCounter:cp.agentStepCounter??cp.activationSeq,
       controlStack:phase==='finished'?[]:cp.controlStack,contextError:cp.contextError??null,
-      ...(cp.taskContext?{taskContext:cp.taskContext}:{})},
+      ...(cp.taskContext?{taskContext:cp.taskContext}:{}),
+      ...(cp.regionCounters?{regionCounters:cp.regionCounters}:{}),
+      ...(phase!=='finished'&&cp.skillSnapshot?{skillSnapshot:cp.skillSnapshot}:{})},
     state,candidate,receivedSubmission,pending:pendingFromExecution(cp),inFlightOperations:[],
     terminal:status==='succeeded'||status==='failed'?cp.terminal:null,
     lastTransitionId:cp.lastTransitionId??null,
@@ -71,9 +73,11 @@ export function decodeCheckpoint(cp) {
     || cp.programRef.artifactHash!==cp.program.artifactHash || cp.programRef.programId!==cp.program.workflowId
     || !keys(cp.policyIdentity,['id','version','policyHash','bindingManifestHash'],['skillManifestHash'])
     || ![cp.policyIdentity.id,cp.policyIdentity.version].every(text)
-    || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'],['taskContext'])
+    || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'],
+      ['taskContext','regionCounters','skillSnapshot'])
     || !text(cp.execution.blockId) || !phases.has(cp.execution.phase)
-    || !count(cp.execution.activationSeq) || cp.execution.agentStepCounter!==cp.execution.activationSeq
+    || !count(cp.execution.activationSeq) || !count(cp.execution.agentStepCounter)
+    || cp.execution.agentStepCounter>cp.execution.activationSeq
     || !Array.isArray(cp.execution.controlStack)
     || !keys(cp.limits,['stageCount','receiptCount','bytes'])
     || !count(cp.limits.stageCount) || !count(cp.limits.receiptCount)
@@ -84,7 +88,15 @@ export function decodeCheckpoint(cp) {
 
   const {namespace,runId,startKey,startIntentHash,revision,status,program,policyIdentity,execution,state,
     receivedSubmission,lastTransitionId}=cp;
-  const {phase,blockId,controlStack,activationSeq,contextError}=execution;
+  const {phase,blockId,controlStack,activationSeq,agentStepCounter,contextError}=execution;
+  if (execution.regionCounters!==undefined && (!object(execution.regionCounters)
+    || Object.keys(execution.regionCounters).length>500
+    || Object.values(execution.regionCounters).some(value=>!count(value) || value===0))) throw invalid();
+  const skillSnapshot=execution.skillSnapshot;
+  if (skillSnapshot!==undefined && (!keys(skillSnapshot,['activation','nodeId','instruction'])
+    || controlStack.at(-1)?.kind!=='agent' || skillSnapshot.activation!==controlStack.at(-1).activation
+    || skillSnapshot.nodeId!==controlStack.at(-1).nodeId || !text(skillSnapshot.instruction)
+    || skillSnapshot.instruction.length>128*1024)) throw invalid();
   if (execution.taskContext && (!object(execution.taskContext) || !count(execution.taskContext.dispatches) ||
     !Number.isSafeInteger(execution.taskContext.deadlineMs) || execution.taskContext.deadlineMs < 1 ||
     execution.taskContext.reservations && (!Array.isArray(execution.taskContext.reservations) ||
@@ -123,10 +135,11 @@ export function decodeCheckpoint(cp) {
   if (phase==='validate') {
     const accepted=receivedSubmission;
     const frame=controlStack.at(-1);
-    if (!keys(accepted,['requestId','kind','activation','attempt','canonicalDigest','acceptedRevision','payload','receivedAt'])
+    if (!keys(accepted,['requestId','kind','activation','attempt','canonicalDigest','acceptedRevision','payload','receivedAt'],['humanProof'])
       || !text(accepted.requestId) || !text(accepted.receivedAt) || !hasStepFrame(accepted.kind) || accepted.kind!==frame?.kind
       || accepted.activation!==frame?.activation || accepted.attempt!==frame?.attempt
-      || accepted.acceptedRevision!==revision || !object(accepted.payload)) throw invalid();
+      || accepted.acceptedRevision!==revision || !object(accepted.payload)
+      || (accepted.kind==='human' ? !isHumanProof(accepted.humanProof) : accepted.humanProof!==undefined)) throw invalid();
     assertSHA256(accepted.canonicalDigest);
     const payload=accepted.payload;
     const successKind=accepted.kind+'-result';
@@ -156,9 +169,11 @@ export function decodeCheckpoint(cp) {
 
   return {schemaVersion:1,namespace,runId,startKey,startIntentHash,revision,status,state,program,policyIdentity,
     artifactHash:program.artifactHash,policyHash:policyIdentity.policyHash,blockId,
-    phase:phase==='finished'?blockId.slice(blockId.lastIndexOf('::')+2):phase,controlStack,activationSeq,contextError,
+    phase:phase==='finished'?blockId.slice(blockId.lastIndexOf('::')+2):phase,controlStack,activationSeq,agentStepCounter,contextError,
     candidate,receivedSubmission,lastTransitionId,stageCount:cp.limits.stageCount,receiptCount:cp.limits.receiptCount,
     ...(execution.taskContext?{taskContext:execution.taskContext}:{}),
+    ...(execution.regionCounters?{regionCounters:execution.regionCounters}:{}),
+    ...(skillSnapshot?{skillSnapshot}:{}),
     pending:phase==='awaiting'?pending:null,prepared:phase==='dispatch-ready'?pending:null,
     terminal:status==='errored'?{status,nodeId:blockId.slice(0,blockId.lastIndexOf('::')),causeCode:cp.causeCode}:cp.terminal,
     ...(status==='paused'?{pauseReason:cp.causeCode==='FK_I_TEMPORARY_SKILL'?'skill-temporary':'stage-budget'}:{})};

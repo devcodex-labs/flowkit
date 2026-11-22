@@ -3,7 +3,7 @@ import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256B
 import {loadInteractiveProgram} from './load.mjs';
 import {checkpointPolicy} from './checkpoint.mjs';
 import {stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
-import {hasStepFrame} from './protocol.mjs';
+import {hasStepFrame,isHumanProof} from './protocol.mjs';
 import {createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
 import {createDescriptionResources} from '../runtime/task-resources.mjs';
 
@@ -168,7 +168,7 @@ function certifiedProposal(cp, program, event, rawProposal) {
     const {frame}=proposal.stackEffect;
     if (frame.kind!==record.kind || frame.nodeId!==block.nodeId || frame.phase!=='prepare'
       || frame.attempt!==stepFrameRule(block.nodeId,record.kind).initialAttempt
-      || frame.activation!==event.activation || frame.overviewStep!==event.activation
+      || frame.activation!==event.activation || frame.overviewStep!==(event.overviewStep??event.activation)
       || !Array.isArray(frame.reasons) || frame.reasons.length) {
       throw failure('FK_I_INVALID_TRANSITION','invalid initial Agent frame');
     }
@@ -240,15 +240,16 @@ function assertRuntime(program,runtime) {
   // A Host may expose shared Standard runtime callbacks. Ignore an unused
   // checkStep only when the verified Program has no Agent/validation bindings.
   // Agent P0-A still fails closed: we must not silently skip its checkStep.
-  if (runtime.checkStep !== undefined
+  if (program.interactiveProgram.identity.implementedStage==='P0-A' && runtime.checkStep !== undefined
     && program.programTable.requiredBindings.length > 0) {
     throw failure('FK_I_UNSUPPORTED_GRAPH','P0-A cannot silently skip Agent checkStep');
   }
   for (const binding of program.programTable.requiredBindings) {
     if (binding.id === 'runtime.validateResult' && typeof runtime.validateResult !== 'function'
       || binding.id === 'runtime.skillResolver' && typeof runtime.skillResolver !== 'function'
-      || binding.id === 'runtime.authorizeAgentTask' && typeof runtime.authorizeAgentTask !== 'function') {
-      throw failure('FK_I_BINDING_MISSING','Required P0-A binding ' + binding.id);
+      || binding.id === 'runtime.authorizeAgentTask' && typeof runtime.authorizeAgentTask !== 'function'
+      || binding.id === 'runtime.verifyAgentResult' && typeof runtime.verifyAgentResult !== 'function') {
+      throw failure('FK_I_BINDING_MISSING','Required Interactive binding ' + binding.id);
     }
   }
 }
@@ -267,7 +268,7 @@ function initialCheckpoint(namespace, runId, program, policyIdentity, state) {
     policyHash:policyIdentity.policyHash,policyIdentity,status:'running',
     blockId:program.programTable.entryBlockId,
     phase:'enter',state:snapshot,
-    controlStack:[],activationSeq:0,stageCount:0,receiptCount:0,lastTransitionId:null,
+    controlStack:[],activationSeq:0,agentStepCounter:0,stageCount:0,receiptCount:0,lastTransitionId:null,
     pending:null,prepared:null,candidate:null,terminal:null,
     contextError:null,receivedSubmission:null,
   };
@@ -301,6 +302,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     validateResult:runtime.validateResult,
     skillResolver:runtime.skillResolver,
     checkStep:runtime.checkStep,
+    verifyAgentResult:runtime.verifyAgentResult,
     prepareAgentTask:runtime.prepareAgentTask,
     authorizeAgentTask:runtime.authorizeAgentTask,
     taskResourcePolicy:runtime.taskResourcePolicy,
@@ -472,23 +474,29 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (cp.candidate?.kind !== 'agent') throw failure('FK_I_INVALID_CHECKPOINT','no Agent candidate');
       next.candidate={...cp.candidate,validated:true};
     }
-    if (proposal.kind==='apply-external') {
-      if (extras.patch) {
-        next.state=copy({...cp.state,...extras.patch.set});
-        for (const key of extras.patch.remove??[]) delete next.state[key];
-      }
-      next.candidate=null;
+    if (extras.patch) {
+      next.state=copy({...cp.state,...extras.patch.set});
+      for (const key of extras.patch.remove??[]) delete next.state[key];
     }
+    if (extras.counter) {
+      const {id,count}=extras.counter;
+      next.regionCounters={...cp.regionCounters,[id]:count};
+      if (count===0) delete next.regionCounters[id];
+    }
+    if (proposal.kind==='apply-external') next.candidate=null;
     if (Object.hasOwn(extras,'contextError')) next.contextError=extras.contextError;
     if (proposal.kind === 'prepare-pending') {
       if (!extras.prepared) throw failure('FK_I_INVALID_CHECKPOINT','prepared data missing');
-      const {taskContext, ...pending} = extras.prepared;
+      const {taskContext,skillSnapshot,...pending} = extras.prepared;
       next.prepared=copy(pending);
       if (taskContext) next.taskContext=copy(taskContext);
+      if (skillSnapshot) next.skillSnapshot=skillSnapshot;
     }
+    if (proposal.stackEffect?.kind==='pop' && proposal.stackEffect.expectedKind==='agent') delete next.skillSnapshot;
     if (proposal.kind === 'move' && cp.phase === 'enter' && cp.blockId !== next.blockId
       && proposal.stackEffect.kind === 'push') {
       next.activationSeq=cp.activationSeq+1;
+      if (proposal.stackEffect.frame.kind==='agent') next.agentStepCounter=cp.agentStepCounter+1;
     }
     const write=casOrCapacityExit(cp,{
       runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
@@ -516,7 +524,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const task={name,input:cp.state,contextError:cp.contextError,
         ...(node.kind==='action'?{action,writes,operationKey:fingerprint([
           cp.namespace,cp.runId,cp.artifactHash,block.nodeId,frame.activation,
-        ])}:{verifier})};
+        ])}:node.kind==='verification'?{verifier}:{reviewDigest:fingerprint([requestId,name,cp.state,cp.contextError])})};
       return copy({kind:node.kind,runId:cp.runId,nodeId:block.nodeId,id:block.nodeId,name,
         requestId,attempt:frame.attempt,task});
     }
@@ -556,7 +564,8 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         resultSchema:node.metadata.output,reasons:frame.reasons,preparedTask:prepared,
         taskContext:{...cp.taskContext,...budget.snapshot(),active:{activationId,input,missing,prepared}}});
     }
-    const instruction = await execution.skillResolver(Object.freeze(copy({
+    const pin=program.interactiveProgram.identity.implementedStage!=='P0-A';
+    const instruction = cp.skillSnapshot?.instruction ?? await execution.skillResolver(Object.freeze(copy({
       runId:cp.runId,nodeId:block.nodeId,name:node.metadata.name,
       agent:node.metadata.agent ?? null,skill:node.metadata.skill ?? null,
       integrity:node.metadata.integrity ?? null,
@@ -573,6 +582,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       name:node.metadata.name,requestId,attempt:frame.attempt,
       instruction,input,missing,resultSchema:node.metadata.output,
       reasons:frame.reasons,
+      ...(pin?{skillSnapshot:{activation:frame.activation,nodeId:block.nodeId,instruction}}:{}),
       ...(node.metadata.overview ? {overview:{step:frame.overviewStep}} : {}),
     });
   }
@@ -595,9 +605,28 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           : {kind:'deterministic-failure',causeCode:contextError.code,contextError};
       }
       if (kind==='verification') {
-        return hasFields(result,['passed']) && typeof result.passed==='boolean'
-          ? {kind:result.passed?'external-passed':'external-rejected'}
-          : {kind:'deterministic-failure',causeCode:'FK_I_VERIFICATION_CONTRACT'};
+        if (!hasFields(result,['passed']) || typeof result.passed!=='boolean') {
+          return {kind:'deterministic-failure',causeCode:'FK_I_VERIFICATION_CONTRACT'};
+        }
+        const {loop}=metadata;
+        if (!loop) return {kind:result.passed?'external-passed':'external-rejected'};
+        const attempt=(Object.hasOwn(cp.regionCounters??{},loop.id)?cp.regionCounters[loop.id]:0)+1;
+        const exhausted=attempt>=loop.maxIterations;
+        return {kind:result.passed?'external-passed':exhausted?'loop-exhausted':'external-rejected',
+          counter:{id:loop.id,count:result.passed||exhausted?0:attempt}};
+      }
+      if (kind==='human') {
+        if (!hasFields(result,['approved'],['comment']) || typeof result.approved!=='boolean'
+          || (result.comment!=null && typeof result.comment!=='string')) {
+          return {kind:'deterministic-failure',causeCode:'FK_I_HUMAN_CONTRACT'};
+        }
+        const id=block.nodeId;
+        const used=Object.hasOwn(cp.regionCounters??{},id)?cp.regionCounters[id]:0;
+        const exhausted=!result.approved && metadata.maxRevisions!==undefined && used>=metadata.maxRevisions;
+        return {kind:result.approved?'external-passed':exhausted?'deterministic-failure':'external-rejected',
+          ...(exhausted?{causeCode:'FK_R004'}:{}),
+          patch:{set:{[id]:{approved:result.approved,comment:result.comment??null}}},
+          counter:{id,count:result.approved||exhausted?0:used+1}};
       }
       const patch=result;
       if (!hasFields(patch,['set'],['remove']) || !patch.set || typeof patch.set!=='object'
@@ -632,7 +661,29 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         throw failure('FK_I_VALIDATOR_CONTRACT','validateResult must be synchronous and pure');
       }
       reasons=reasonsFromValidation(reasons);
-    } catch {
+      const evaluationIdentity={runId:cp.runId,requestId:cp.candidate.requestId,attempt:cp.candidate.attempt};
+      const validationContext=()=> {
+        const budget=createBudget(policySnapshot.taskPolicy??{},signal,cp.taskContext);
+        const timeout=AbortSignal.timeout(Math.max(1,Math.min(2147483647,budget.deadlineMs-Date.now())));
+        return Object.freeze({signal:signal?AbortSignal.any([signal,timeout]):timeout});
+      };
+      if (!reasons.length && execution.checkStep) {
+        const context=validationContext();
+        const reason=await during(context.signal,()=>execution.checkStep(freezeDeep(copy({...evaluationIdentity,
+          id:block.nodeId,name:metadata.name,result:cp.candidate.result,state:cp.state,contextError:cp.contextError})),context));
+        if (typeof reason==='string') reasons=reasonsFromValidation([reason]);
+        else if (reason!=null) throw failure('FK_I_VALIDATOR_CONTRACT','checkStep requires text or null');
+      }
+      if (!reasons.length && metadata.verify) {
+        const context=validationContext();
+        const approved=await during(context.signal,()=>execution.verifyAgentResult(freezeDeep(copy({...evaluationIdentity,
+          id:block.nodeId,name:metadata.name,verifier:metadata.verify,state:{...cp.state,...cp.candidate.result},
+          contextError:cp.contextError})),context));
+        if (typeof approved!=='boolean') throw failure('FK_I_VALIDATOR_CONTRACT','Agent verification requires a boolean');
+        if (!approved) reasons=reasonsFromValidation(['verify '+metadata.verify+' failed']);
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error;
       return {kind:'deterministic-failure',causeCode:'FK_I_VALIDATOR_CONTRACT'};
     }
     return reasons.length
@@ -692,12 +743,15 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           : internalEvent(cp,evaluation.kind);
         if (evaluation.reasons?.length) extras.retryReasons=evaluation.reasons;
         if (evaluation.patch) extras.patch=evaluation.patch;
+        if (evaluation.counter) extras.counter=evaluation.counter;
         if (Object.hasOwn(evaluation,'contextError')) extras.contextError=evaluation.contextError;
       } else {
         const kind=cp.phase==='dispatch-ready' ? 'pending-prepared' : 'internal-step';
         const extra=cp.phase==='enter' && block.nodeId in program.programTable.nodes
           && hasStepFrame(program.programTable.nodes[block.nodeId].kind)
-          ? {activation:cp.activationSeq+1} : {};
+          ? {activation:cp.activationSeq+1,
+            ...(program.programTable.nodes[block.nodeId].kind==='agent'&&cp.program.implementedStage!=='P0-A'
+              ? {overviewStep:cp.agentStepCounter+1}:{})} : {};
         event=internalEvent(cp,kind,extra);
       }
       const certified=advanceSafely(cp,program,event);
@@ -774,7 +828,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
 
   /** Only a trusted Host may call complete; M5 will bind provenance/transport. */
   async function complete({runId,requestId,nodeId,attempt,kind='agent-result',result,failure:callFailure,
-    submissionDigest,receivedPayload}={}) {
+    submissionDigest,receivedPayload,humanProof}={}) {
     nonempty(runId,'runId');nonempty(requestId,'requestId');nonempty(nodeId,'nodeId');
     if (!Number.isSafeInteger(attempt) || attempt < 1) throw new TypeError('Invalid Agent attempt');
     const stepKind=typeof kind==='string'?kind.split('-')[0]:null;
@@ -782,6 +836,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     if (!hasStepFrame(stepKind) || !didSucceed && kind!==stepKind+'-call-failed') {
       throw failure('FK_I_INVALID_RECEIPT','Unsupported step receipt type');
     }
+    if (stepKind==='human' && !isHumanProof(humanProof)) throw failure('FK_I_HOST_DENIED','Human proof is required');
     let safeFailure;
     if (!didSucceed) {
       safeFailure=copy(callFailure);
@@ -820,6 +875,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           || (already.attempt!==undefined && already.attempt!==attempt)) {
           throw failure('FK_I_RECEIPT_CONFLICT','Different receipt with accepted requestId');
         }
+        if (stepKind==='human' && already.humanProof?.subjectId!==humanProof.subjectId) {
+          throw failure('FK_I_HOST_DENIED','Human receipt belongs to a different authorized subject');
+        }
         const current=await drive(runId);
         return {acceptedRevision:already.acceptedRevision,...current,duplicate:true};
       }
@@ -854,7 +912,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         status:'running',pending:null,prepared:null,receiptCount:cp.receiptCount+1,
         receivedSubmission:{kind:stepKind,requestId,activation:frame.activation,attempt,
           canonicalDigest:digest,acceptedRevision:cp.revision+1,payload:receivedPayload??submission,
-          receivedAt:new Date().toISOString()},
+          receivedAt:new Date().toISOString(),...(stepKind==='human'?{humanProof}:{})},
         candidate:{kind:stepKind,requestId,nodeId,attempt,
           submissionKind:kind,
           ...(didSucceed?{result:submission.result}
@@ -863,7 +921,8 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const persisted=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
         nextCheckpoint:next,
         journalEntry:{kind:'receipt-accepted',stepKind,nodeId,attempt,requestId,digest}},
-        {kind:'receipt-accepted',requestId,nodeId,attempt,submissionDigest:digest},
+        {kind:'receipt-accepted',requestId,nodeId,attempt,submissionDigest:digest,
+          ...(stepKind==='human'?{humanProof}:{})},
         {kind:'accept-receipt',toBlockId:accept,submissionDigest:digest},
         didSucceed?'succeeded':'failed');
       if (!persisted.committed) continue;

@@ -179,6 +179,95 @@ terminal('done',{name:'Done',status:'succeeded'}), terminal('rejected',{name:'Re
   } finally {reopened.close();}
 });
 
+test('P0-B persists Loop limits and binds Human decisions to the current review',async t=>{
+  const f=await fixture(t);
+  const script=path.join(f.dir,'review.workflow.js');
+  await writeFile(script,`import {defineWorkflow,node,verification,loop,human,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'human-loop',name:'Human and loop',version:'1.0.0',nodes:[
+loop('attempts',{name:'Attempts',body:'quality',onSuccess:'review',onMaxExceeded:'rejected',maxIterations:2}),
+verification('quality',{name:'Quality',verifier:'quality',onSuccess:'attempts',onFailure:'revise'}),
+node('revise',{name:'Revise',agent:'writer',output:{type:'object'},retries:0,next:'quality'}),
+human('review',{name:'Review',onApprove:'done',onReject:'rewrite',maxRevisions:1}),
+node('rewrite',{name:'Rewrite',agent:'writer',output:{type:'object'},retries:0,next:'review'}),
+terminal('done',{name:'Done',status:'succeeded'}), terminal('rejected',{name:'Rejected',status:'failed'}),
+]});`);
+  const modelAuth=context({authorizeTask:()=>true});
+  let proofCalls=0;
+  const operator=context({subjectId:'operator',authorizeTask:()=>true,
+    authorizeHuman:({subjectId,reviewDigest})=>subjectId==='operator'
+      ? {proofId:'operator-confirmation-'+(++proofCalls),evidenceHash:reviewDigest}:null});
+  const cfg={...f.options,auth:modelAuth,policy:{...policy,capabilityStage:'P0-B'}};
+  const compiled=await compileInteractive(script,{output:'memory',featureStage:'P0-B',skillCheck:false});
+  assert.ok(compiled.code,JSON.stringify(compiled.diagnostics));
+  const program=await cfg.programRegistry.putImmutable(Buffer.from(compiled.code),compiled.programIdentity);
+  const settle=(frame,kind,result,options=cfg,other={})=>complete({
+    runId:frame.runId,requestId:frame.pending[0].requestId,kind,outcome:'succeeded',result,...other,
+  },runtime,options);
+  const modelOutput={answer:'fixed'};
+
+  const initial=await start(program,runtime,{},cfg);
+  const repair=await settle(initial,'verification',{passed:false});
+  const verifiedAgain=await settle(repair,'agent',modelOutput);
+  const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
+  try {
+    const reopenedOptions={...cfg,...reopened};
+    const exhausted=await settle(verifiedAgain,'verification',{passed:false},reopenedOptions);
+    assert.equal(exhausted.terminal.nodeId,'rejected');
+
+    const second=await start(program,runtime,{}, {...reopenedOptions,startKey:'human'});
+    const review=await settle(second,'verification',{passed:true},reopenedOptions);
+    const reviewDigest=review.pending[0].task.reviewDigest;
+    await assert.rejects(settle(review,'human',{approved:true},reopenedOptions,{reviewDigest}),{code:'FK_I_HOST_DENIED'});
+    const authorized={...reopenedOptions,auth:operator};
+    const rewrite=await settle(review,'human',{approved:false,comment:'revise it'},authorized,{reviewDigest});
+    const afterRewrite=await settle(rewrite,'agent',modelOutput,reopenedOptions);
+    assert.notEqual(afterRewrite.pending[0].task.reviewDigest,reviewDigest);
+    await assert.rejects(settle(afterRewrite,'human',{approved:true},authorized,{reviewDigest}),
+      {code:'FK_I_STALE_RECEIPT'});
+    const done=await settle(afterRewrite,'human',{approved:true},authorized,
+      {reviewDigest:afterRewrite.pending[0].task.reviewDigest});
+    assert.equal(done.status,'succeeded');
+    const proof=await reopened.store.loadReceipt(done.runId,afterRewrite.pending[0].requestId);
+    assert.deepEqual(proof.humanProof,{subjectId:'operator',proofId:'operator-confirmation-2',
+      evidenceHash:afterRewrite.pending[0].task.reviewDigest});
+    const reack=await settle(afterRewrite,'human',{approved:true},
+      {...authorized,auth:context({subjectId:'operator',authorizeTask:()=>true})},
+      {reviewDigest:afterRewrite.pending[0].task.reviewDigest});
+    assert.equal(reack.acknowledgement.repeated,true);
+    assert.equal(proofCalls,2);
+    assert.deepEqual((await operator.readTerminalResult(done.resultRef,authorized)).state.review,{approved:true,comment:null});
+  } finally {reopened.close();}
+});
+
+test('P0-B checks an Agent against the committed state, then verifies its uncommitted candidate',async t=>{
+  const f=await fixture(t);
+  const script=path.join(f.dir,'agent-verify.workflow.js');
+  await writeFile(script,source.replace("retries:0,next:'done'", "retries:1,verify:'quality',next:'done'"));
+  const checkStep={id:'check',version:'1',mode:'pure-local'};
+  const verifyAgentResult={id:'verify',version:'1',mode:'trusted-read'};
+  const cfg={...f.options,policy:{...policy,capabilityStage:'P0-B',
+    bindingManifest:{...policy.bindingManifest,checkStep,verifyAgentResult}}};
+  let resolveCount=0;
+  const callbacks={...runtime,
+    skillResolver:{...runtime.skillResolver,implementation:async()=>`instruction-${++resolveCount}`},
+    checkStep:{...checkStep,implementation:({state})=>{assert.equal(state.answer,'old');return null;}},
+    verifyAgentResult:{...verifyAgentResult,implementation:({state})=>state.answer==='accepted'}};
+  const compiled=await compileInteractive(script,{output:'memory',featureStage:'P0-B',skillCheck:false});
+  assert.ok(compiled.code,JSON.stringify(compiled.diagnostics));
+  const program=await cfg.programRegistry.putImmutable(Buffer.from(compiled.code),compiled.programIdentity);
+  const waiting=await start(program,callbacks,{message:'hi',answer:'old'},cfg);
+  await assert.rejects(complete(submission(waiting,{answer:'first'}),{...callbacks,checkStep:undefined},cfg),
+    {code:'FK_I_BINDING_MISSING'});
+  const retry=await complete(submission(waiting,{answer:'first'}),callbacks,cfg);
+  assert.equal(retry.status,'waiting');
+  assert.equal(retry.pending[0].attempt,2);
+  assert.equal(retry.pending[0].task.instruction,waiting.pending[0].task.instruction);
+  assert.equal(resolveCount,1);
+  const done=await complete(submission(retry,{answer:'accepted'}),callbacks,cfg);
+  assert.equal(done.status,'succeeded');
+  assert.equal((await cfg.auth.readTerminalResult(done.resultRef,cfg)).state.answer,'accepted');
+});
+
 test('Host cancellation fences new claims and leaves prior claims available for reconciliation',async t=>{
   const f=await fixture(t);
   const pending=await start(f.program,runtime,{message:'hello'},f.options);

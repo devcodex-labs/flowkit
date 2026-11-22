@@ -47,6 +47,7 @@ export function lowerInteractive(analysis, options = {}) {
         ...(node.agent === undefined ? {} : { agent: node.agent }),
         ...(node.skill === undefined ? {} : { skill: node.skill }),
         ...(node.integrity === undefined ? {} : { integrity: node.integrity }),
+        ...(node.verify === undefined ? {} : { verify: node.verify }),
         inputs: node.inputs ?? [], output: node.output,
         retries: node.retries ?? 2, overview: node.overview === true,
         ...(hasTaskSpec(node) ? {task: Object.fromEntries(['description','descriptionRefs','requiredSkills']
@@ -57,7 +58,15 @@ export function lowerInteractive(analysis, options = {}) {
       metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next,
         ...(failure?{onFailure:failure.to}:{})};
     } else if (node.type==='verification') {
-      metadata={name:node.name,verifier:node.verifier,next:node.onSuccess,onFailure:node.onFailure};
+      const region=analysis.graph.regions.get(analysis.graph.owners.get(node.id));
+      const loop=region?.kind==='loop' && region.body===node.id ? analysis.graph.byId.get(region.id) : null;
+      metadata={name:node.name,verifier:node.verifier,next:loop?.onSuccess??node.onSuccess,onFailure:node.onFailure,
+        ...(loop?{loop:{id:loop.id,maxIterations:loop.maxIterations,onMaxExceeded:loop.onMaxExceeded}}:{})};
+    } else if (node.type==='loop') {
+      metadata={name:node.name,body:node.body,next:node.onSuccess,onMaxExceeded:node.onMaxExceeded,maxIterations:node.maxIterations};
+    } else if (node.type==='human') {
+      metadata={name:node.name,next:node.onApprove,onFailure:node.onReject,
+        ...(node.maxRevisions===undefined?{}:{maxRevisions:node.maxRevisions})};
     } else {
       metadata = { name: node.name, status: node.status };
     }

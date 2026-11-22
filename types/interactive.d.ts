@@ -378,13 +378,15 @@ export interface TransitionRecordV1 {
   committedAt:string;
 }
 
-type InteractiveStepKind = 'agent' | 'action' | 'verification';
+type InteractiveStepKind = 'agent' | 'action' | 'verification' | 'human';
+interface InteractiveHumanProof {subjectId:string;proofId:string;evidenceHash:string}
 
 export interface ReceiptRecordV1 {
   namespace:string;
   runId:string;
   requestId:string;
   kind:InteractiveStepKind;
+  humanProof?:InteractiveHumanProof;
   submissionDigest:string;
   acceptedRevision:number;
   outcome:'succeeded'|'failed'|'legacy';
@@ -409,12 +411,14 @@ export type RunCheckpointV1 = {
   execution:{blockId:string;phase:'enter'|'prepare'|'dispatch-ready'|'awaiting'|'validate'|'commit'|'route'|'finished';
     activationSeq:number;agentStepCounter:number;controlStack:readonly Record<string,unknown>[];
     contextError:InteractiveContextError|null;
+    regionCounters?:Record<string,number>;
+    skillSnapshot?:{activation:number;nodeId:string;instruction:string};
     taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
   candidate:{kind:InteractiveStepKind;requestId:string;result:Record<string,unknown>}|null;
   receivedSubmission:{kind:InteractiveStepKind;requestId:string;activation:number;attempt:number;canonicalDigest:string;
-    acceptedRevision:number;payload:Record<string,unknown>;receivedAt:string}|null;
+    acceptedRevision:number;payload:Record<string,unknown>;receivedAt:string;humanProof?:InteractiveHumanProof}|null;
   pending:Array<{requestId:string;nodeId:string;kind:InteractiveStepKind;activation:number;attempt:number;issuedRevision:number;
     intent:'execute';name:string;internalPayload:Record<string,unknown>;publicTask:Record<string,unknown>}>;
   inFlightOperations:Record<string,unknown>[];
@@ -509,6 +513,7 @@ export type PublicPendingV1 = {
   | {kind:'agent';task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'|'preparedTask'>}
   | {kind:'action';task:InteractiveStepTask & {action:string;writes:readonly string[];operationKey:string}}
   | {kind:'verification';task:InteractiveStepTask & {verifier:string}}
+  | {kind:'human';task:InteractiveStepTask & {reviewDigest:string}}
 );
 interface InteractiveStepTask {
   name:string;
@@ -537,6 +542,9 @@ export declare function createInteractiveHostContext(options:{
     reasonCode?:string;operationKey?:string;inputHash?:string;effect?:'applied'|'no-effect';evidenceHash?:string}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
+  authorizeHuman?(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;reviewDigest:string;
+    result:{approved:boolean;comment?:string|null}}>):{proofId:string;evidenceHash:string}|null
+      |Promise<{proofId:string;evidenceHash:string}|null>;
 }):TrustedHostContextV1;
 
 type BindingV1<Mode extends string,F> = {id:string;version:string;mode:Mode;implementation:F};
@@ -546,6 +554,14 @@ export interface InteractiveRuntimeV1 {
   taskResourcePolicy?:InteractiveRuntime['taskResourcePolicy'];
   validateResult?:BindingV1<'pure-local',NonNullable<InteractiveRuntime['validateResult']>>;
   skillResolver?:BindingV1<'trusted-read',(reference:string,meta?:InteractiveSkillDescriptor)=>string|Promise<string>>;
+  checkStep?:BindingV1<'pure-local',(input:Readonly<{
+    id:string;name:string;runId:string;requestId:string;attempt:number;result:Record<string,unknown>;state:Record<string,unknown>;
+    contextError:InteractiveContextError|null;
+  }>,context:Readonly<{signal:AbortSignal}>)=>string|null|void|Promise<string|null|void>>;
+  verifyAgentResult?:BindingV1<'trusted-read',(input:Readonly<{
+    id:string;name:string;runId:string;requestId:string;attempt:number;verifier:string;state:Record<string,unknown>;
+    contextError:InteractiveContextError|null;
+  }>,context:Readonly<{signal:AbortSignal}>)=>boolean|Promise<boolean>>;
 }
 
 export interface InteractivePolicyV1 {
@@ -578,7 +594,9 @@ export type HostSubmissionV1 =
   | ({kind:'action';operationKey:string} & InteractiveFailedSubmission)
   | {kind:'action';runId:string;requestId:string;outcome:'succeeded';operationKey:string;
       result:{set:Record<string,unknown>;remove?:readonly string[]}}
-  | {kind:'verification';runId:string;requestId:string;outcome:'succeeded';result:{passed:boolean}};
+  | {kind:'verification';runId:string;requestId:string;outcome:'succeeded';result:{passed:boolean}}
+  | {kind:'human';runId:string;requestId:string;outcome:'succeeded';reviewDigest:string;
+      result:{approved:boolean;comment?:string|null}};
 
 export declare function start(source:string|TrustedProgramRefV1,runtime:InteractiveRuntimeV1,
   initialState:Record<string,unknown>,options:InteractiveOptionsV1&{startKey:string}):Promise<InteractiveFrameV1>;

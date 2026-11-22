@@ -11,7 +11,7 @@ const STAGES = Object.freeze(['P0-A', 'P0-B', 'P1', 'P2']);
 const ENABLED = new Set(['condition', 'terminal', 'agent']);
 export const supportsP0ANodeKind = kind => ENABLED.has(kind);
 export const supportsInteractiveNodeKind = (stage, kind) => supportsP0ANodeKind(kind)
-  || stage === 'P0-B' && (kind === 'action' || kind === 'verification');
+  || stage === 'P0-B' && ['action','verification','human','loop'].includes(kind);
 
 function interactiveDiagnostic(analysis, code, message, index, node) {
   const location = index === undefined ? { line: 1, column: 1 }
@@ -49,7 +49,7 @@ export function gateInteractiveFeatures(analysis, options = {}) {
       if (!supportsInteractiveNodeKind(featureStage,node.type)) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           featureStage + ' does not support node type ' + String(node.type), index, node));
-      } else if (node.type === 'agent' && node.verify != null) {
+      } else if (featureStage==='P0-A' && node.type === 'agent' && node.verify != null) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A Agent verify requires P0-B; it must not be skipped', index, node));
       }
