@@ -1,5 +1,5 @@
 // Shared by the compiler and the detached Host storage worker.
-export const isInteractiveStage = stage => ['P0-A','P0-B','P1'].includes(stage);
+export const isInteractiveStage = stage => ['P0-A','P0-B','P1','P2'].includes(stage);
 export const hasStepFrame = kind => kind === 'agent' || kind === 'action' || kind === 'verification' || kind==='human';
 
 export function publishedInteractivePending(checkpoint) {

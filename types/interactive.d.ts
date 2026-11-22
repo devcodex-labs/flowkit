@@ -15,11 +15,11 @@ export interface InteractiveProgramIdentity {
   semanticsVersion: 'interactive-state-machine-v1';
   checkpointSchemaVersion: 1;
   canonicalizationVersion: 'jcs-rfc8785-v1';
-  implementedStage: 'P0-A' | 'P0-B' | 'P1';
+  implementedStage: 'P0-A' | 'P0-B' | 'P1' | 'P2';
 }
 export interface InteractiveCompileOptions {
   output: 'memory' | 'file';
-  featureStage: 'P0-A' | 'P0-B' | 'P1';
+  featureStage: 'P0-A' | 'P0-B' | 'P1' | 'P2';
   outDir?: string;
   /** Uses the Standard analyzer's nearest package.json discovery by default. */
   projectRoot?: string;
@@ -281,6 +281,7 @@ export interface PublicInteractiveTerminalFrame {
   revision:number;
   status:'succeeded'|'failed'|'errored'|'cancelled';
   pending:readonly [];
+  cancelledRequests?:readonly string[];
   checkpointRef:{runId:string;revision:number};
   terminal?:{nodeId:string;status:'succeeded'|'failed'};
   resultRef:InteractiveTerminalResultRef;
@@ -414,7 +415,10 @@ export type RunCheckpointV1 = {
     contextError:InteractiveContextError|null;
     regionCounters?:Record<string,number>;
     skillSnapshot?:{activation:number;nodeId:string;instruction:string};
-    parallel?:{nodeId:string;lanes:readonly Record<string,unknown>[];decision?:Record<string,unknown>;receipt?:Record<string,unknown>};
+    cancelledRequests?:readonly string[];
+    unavailableParallelKeys?:readonly string[];
+    parallel?:{nodeId:string;strategy:'all_succeeded'|'any';effectMode?:'retain'|'compensate';
+      lanes:readonly Record<string,unknown>[];decision?:Record<string,unknown>;receipt?:Record<string,unknown>};
     taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
@@ -472,13 +476,21 @@ export interface InteractiveOperationRecord {
   requestId:string;
   inputHash:string;
   businessKey?:string;
+  compensationPlan?:{capabilityId:string;inputHash:string};
+  compensation?:{key:string;evidenceHash:string|null};
   settlement:{effect:'applied'|'no-effect';evidenceHash:string;result:unknown}|null;
 }
 export interface InteractiveOperationController {
-  claim(input:{runId:string;requestId:string;operationKey:string;inputHash:string;businessKey?:string},
+  claim(input:{runId:string;requestId:string;operationKey:string;inputHash:string;businessKey?:string;
+      compensationPlan?:{capabilityId:string;inputHash:string}},
     auth:TrustedHostContextV1):Promise<InteractiveOperationRecord & {claimed:boolean}>;
   load(input:{runId:string;operationKey:string},auth:TrustedHostContextV1):Promise<InteractiveOperationRecord|null>;
   settle(input:{runId:string;operationKey:string;inputHash:string;effect:'applied'|'no-effect';evidenceHash:string;result:unknown},
+    auth:TrustedHostContextV1):Promise<InteractiveOperationRecord>;
+  list(input:{runId:string},auth:TrustedHostContextV1):Promise<Array<InteractiveOperationRecord & {operationKey:string}>>;
+  claimCompensation(input:{runId:string;operationKey:string},
+    auth:TrustedHostContextV1):Promise<InteractiveOperationRecord & {claimed:boolean}>;
+  settleCompensation(input:{runId:string;operationKey:string;compensationKey:string;evidenceHash:string},
     auth:TrustedHostContextV1):Promise<InteractiveOperationRecord>;
 }
 
@@ -534,15 +546,19 @@ export interface InteractiveFrameV1 {
   terminal?:{nodeId:string;status:'succeeded'|'failed'};
   resultRef?:InteractiveTerminalResultRef;
   acknowledgement?:{requestId:string;acceptedRevision:number;repeated:boolean};
+  pauseReason?:'reconciliation';
+  cancelledRequests?:readonly string[];
   diagnostics?:readonly InteractiveDiagnostic[];
 }
 
 export declare function createInteractiveHostContext(options:{
   namespace:string;
   subjectId:string;
-  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|'operation:claim'|'operation:read'|'operation:settle';
+  authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|
+    'operation:claim'|'operation:read'|'operation:settle'|'operation:list'|'operation:compensate'|'operation:settle-compensation';
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
-    reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';evidenceHash?:string}>):boolean|Promise<boolean>;
+    reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';
+    evidenceHash?:string;compensationKey?:string;compensationPlan?:Readonly<{capabilityId:string;inputHash:string}>}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
   authorizeHuman?(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;reviewDigest:string;
@@ -573,7 +589,9 @@ export interface InteractivePolicyV1 {
   version:string;
   bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
   disclosePolicyId:string;
-  capabilityStage:'P0-A'|'P0-B'|'P1';
+  capabilityStage:'P0-A'|'P0-B'|'P1'|'P2';
+  /** Retain known losing external effects, or require verified compensation before the join. */
+  parallelEffectMode?:'retain'|'compensate';
   canonicalizationVersion:'jcs-rfc8785-v1';
   requiredSkillManifestHash?:string;
 }

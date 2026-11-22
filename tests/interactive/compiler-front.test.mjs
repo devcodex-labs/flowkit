@@ -69,7 +69,8 @@ test('featureStage is bounded by the built-in implemented stage, not caller opti
   assert.equal(gateInteractiveFeatures(a).ok, true);
   assert.equal(lowerInteractive(a,{featureStage:'P0-B'}).ir.featureStage,'P0-B');
   assert.equal(lowerInteractive(a,{featureStage:'P1'}).ir.featureStage,'P1');
-  for (const stage of ['P2']) {
+  assert.equal(lowerInteractive(a,{featureStage:'P2'}).ir.featureStage,'P2');
+  for (const stage of ['P3']) {
     const result = lowerInteractive(a, { featureStage: stage });
     assert.equal(result.ir, null);
     assert.ok(result.diagnostics.some(d => d.code === 'FK_I_UNSUPPORTED_GRAPH'));

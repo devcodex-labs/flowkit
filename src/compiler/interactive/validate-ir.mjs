@@ -192,7 +192,8 @@ export function validateInteractiveIR(ir) {
     if (record.kind==='human' && (typeof metadata.next!=='string' || typeof metadata.onFailure!=='string'
       || (metadata.maxRevisions!==undefined && (!Number.isInteger(metadata.maxRevisions)
       || metadata.maxRevisions<0 || metadata.maxRevisions>100)))) bad('Malformed Human metadata: '+id);
-    if (record.kind==='parallel' && (metadata.strategy!=='all_succeeded'
+    if (record.kind==='parallel' && ((!['all_succeeded','any'].includes(metadata.strategy)
+      || metadata.strategy==='any'&&ir.featureStage!=='P2')
       || typeof metadata.next!=='string' || !Array.isArray(metadata.branches) || metadata.branches.length<2
       || new Set(metadata.branches).size!==metadata.branches.length || metadata.branches.some(branch=>
         !['agent','action','verification'].includes(ir.nodes[branch]?.kind) || ir.nodes[branch].metadata?.parallelOwner!==id))) {

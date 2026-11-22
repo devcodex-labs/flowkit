@@ -1,14 +1,16 @@
-# Interactive P0-A 接入
+# Interactive 接入
 
 <a id="flowkit-doc-interactive"></a>
 
 实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/interactive/index.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/interactive.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/interactive/versioned.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/interactive)
 
-适用 FlowKit 1.0.0 中已实现的 Interactive P0-A 子集。按 [Interactive API](/reference/interactive)提供受信 Host 与 Store，对不支持的节点按编译诊断处理。
+按 [Interactive API](/reference/interactive)提供受信 Host 与 Store。本文的初次接入示例使用 P0-A。版本化 Host 接口也支持 P0-B、P1 和 P2。
 
 Interactive 是 Host 持有状态和执行权限的独立接口。P0-A 支持 **Agent、Condition、Terminal**。版本化 Host API 的 P0-B 目标增加 **Action、Verification、Human、Loop**、Agent 验证及运行时取消。Action 通过 [操作账本](/reference/interactive#operation-controller) 派发和提交。Human 回执需要 Host 的人工证明。
 
 P1 支持持久并行的 `all_succeeded`。每条分支有独立的请求 ID，Host 可并发执行并任意顺序回报。全部分支成功后才合并状态。业务校验返回 `false` 会封锁后续派发，已在途的操作可以按原操作键对账。
+
+P2 支持持久并行的 `any`。首个经可信校验并完成状态提交的分支获胜。Host 从 `cancelledRequests` 读回需要停止的工作，已派发的写入进入对账。如果工作流要求补偿败者的写入，出具补偿证据后才开放后继。
 
 从`@devcodex-labs/flowkit/interactive`导入。它不自动提供模型、Codex登录、OS身份源、受信启动器或业务Schema校验器。先取得授权包与Node环境，再读[完整示例](/examples/interactive)、[分层API](/reference/interactive)和[Host/Store责任](/guide/interactive-host-store)。
 

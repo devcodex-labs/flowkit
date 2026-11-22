@@ -128,7 +128,7 @@ test('public-facing compiler can emit memory/file without importing DSL source, 
  assert.equal(await readFile(disk.artifactPath,'utf8'),memory.code);
  const loaded=await loadInteractiveProgram(Buffer.from(disk.code),disk.programIdentity.artifactHash);
  assert.equal(loaded.advance(cv('done::route'),ev('done::route')).terminal.status,'succeeded');
- await assert.rejects(compileInteractive(file,{output:'memory',featureStage:'P2'}),/Unsupported Interactive feature stage/);
+ await assert.rejects(compileInteractive(file,{output:'memory',featureStage:'P3'}),/Unsupported Interactive feature stage/);
  await assert.rejects(compileInteractive(file,{output:'memory',featureStage:'P0-A',surprise:true}),/Unknown Interactive/);
  await assert.rejects(compileInteractive(file,{output:'file',featureStage:'P0-A',outDir:1}),/outDir must/);
 });

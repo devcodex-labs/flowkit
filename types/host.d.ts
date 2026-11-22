@@ -19,6 +19,8 @@ export interface ApiHostTool {
   validate(args: unknown): string[];
   execute(args: unknown, context: { signal: AbortSignal; operationId: string; task: AgentTaskV2 }): Promise<unknown>;
   operationKey?(args: unknown, task: AgentTaskV2): string | Promise<string>;
+  compensationPlan?(args:unknown,task:AgentTaskV2):
+    {capabilityId:string;inputHash:string}|Promise<{capabilityId:string;inputHash:string}>;
 }
 export interface ApiHostOptions {
   scope: string;

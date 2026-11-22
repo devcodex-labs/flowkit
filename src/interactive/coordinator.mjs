@@ -70,6 +70,7 @@ function confirmCurrentBlock(cp, program) {
   }
   const record = program.programTable.nodes[block.nodeId];
   if (cp.parallel && (record.kind!=='parallel' || cp.parallel.nodeId!==block.nodeId
+    || cp.parallel.strategy!==record.metadata.strategy
     || cp.parallel.lanes.length!==record.metadata.branches.length
     || cp.parallel.lanes.some((lane,index)=>lane.nodeId!==record.metadata.branches[index]))) {
     throw failure('FK_I_INVALID_CHECKPOINT','Parallel lanes differ from the immutable Program');
@@ -218,6 +219,7 @@ function asPublicFrame(cp) {
     namespace:cp.namespace,runId:cp.runId,status:cp.status,revision:cp.revision,
     ...(FINISHED.has(cp.status) ? {state:cp.state} : {}),
     ...(cp.status === 'waiting' && !cp.parallel ? {pending:publicPending} : {}),
+    ...(cp.cancelledRequests?.length?{cancelledRequests:cp.cancelledRequests}:{}),
     ...(cp.status === 'paused' ? {pauseReason:cp.pauseReason ?? 'stage-budget'} : {}),
     ...(FINISHED.has(cp.status) ? {terminal:cp.terminal ?? null} : {}),
   });
@@ -365,19 +367,22 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
     }
     assertRuntime(program,execution);
-    if (!FINISHED.has(cp.status) && cp.taskContext) {
+    const activeTasks=cp.parallel
+      ? publishedInteractivePending(cp).flatMap(task=>task.preparedTask?[task.preparedTask]:[])
+      : cp.taskContext?.active?[cp.taskContext.active.prepared]:[];
+    const p2WithoutDispatch=cp.program.implementedStage==='P2' && !activeTasks.length
+      && (!cp.parallel || cp.parallel.decision);
+    const mustCloseExpiredParallel=cp.parallel && (cp.parallel.decision?.deadline
+      || !cp.parallel.decision && cp.taskContext?.deadlineMs<=Date.now());
+    if (!FINISHED.has(cp.status) && cp.taskContext && !p2WithoutDispatch && !mustCloseExpiredParallel) {
       const budget = createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext);
       budget.check();
       const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647,budget.deadlineMs-Date.now())));
       const currentSignal = signal ? AbortSignal.any([signal,expires]) : expires;
-      if (cp.taskContext.active && await during(currentSignal,()=>execution.authorizeAgentTask(freezeDeep(copy(cp.taskContext.active.prepared)),
-        {runId:cp.runId, signal:currentSignal, deadlineMs:budget.deadlineMs})) !== true) {
-        throw failure('FK_I_HOST_DENIED','Current Host authorization or pinned task resources are unavailable');
-      }
-      for (const task of publishedInteractivePending(cp)) {
-        if (cp.parallel && task.preparedTask && await during(currentSignal,()=>execution.authorizeAgentTask(
-          freezeDeep(copy(task.preparedTask)),{runId:cp.runId,signal:currentSignal,deadlineMs:budget.deadlineMs}))!==true) {
-          throw failure('FK_I_HOST_DENIED','Parallel task resources are no longer authorized');
+      for (const task of activeTasks) {
+        if (await during(currentSignal,()=>execution.authorizeAgentTask(
+          freezeDeep(copy(task)),{runId:cp.runId,signal:currentSignal,deadlineMs:budget.deadlineMs}))!==true) {
+          throw failure('FK_I_HOST_DENIED','Pinned task resources are no longer authorized');
         }
       }
       budget.check();
@@ -450,7 +455,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   }
 
   function stepCAS(cp, proposal, event, legacyEventKind, extras={}) {
-    const next = {...cp,revision:cp.revision+1,stageCount:cp.stageCount+1,receivedSubmission:null};
+    const next = {...cp,revision:cp.revision+1,stageCount:cp.stageCount+1,receivedSubmission:null,pauseReason:null};
     if (proposal.kind === 'raise-error') {
       next.status='errored';
       next.terminal={status:'errored',nodeId:proposal.nodeId,causeCode:proposal.causeCode};
@@ -492,6 +497,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     if (extras.patch) {
       next.state=copy({...cp.state,...extras.patch.set});
       for (const key of extras.patch.remove??[]) delete next.state[key];
+    }
+    if (cp.unavailableParallelKeys?.length || extras.unavailableParallelKeys?.length) {
+      next.unavailableParallelKeys=[...new Set([...(cp.unavailableParallelKeys??[]),...(extras.unavailableParallelKeys??[])])]
+        .filter(key=>!Object.hasOwn(next.state,key)).sort();
     }
     if (extras.counter) {
       const {id,count}=extras.counter;
@@ -552,6 +561,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         ])}:node.kind==='verification'?{verifier}:{reviewDigest:fingerprint([requestId,name,cp.state,cp.contextError])})};
       return copy({kind:node.kind,runId:cp.runId,nodeId:block.nodeId,id:block.nodeId,name,
         requestId,attempt:frame.attempt,task});
+    }
+    if (node.metadata.inputs.some(key=>cp.unavailableParallelKeys?.includes(key)&&!Object.hasOwn(cp.state,key))) {
+      throw failure('FK_I_PARALLEL_INPUT','Agent input was available only from a losing branch');
     }
     if (node.metadata.task) {
       const policy = {...policySnapshot.taskPolicy, fetch:execution.taskResourcePolicy?.fetch,
@@ -722,7 +734,8 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       nodeId,activation:++activationSeq,attempt:1,reasons:[],status:'ready',
       overviewStep:program.programTable.nodes[nodeId].kind==='agent'?++agentStepCounter:activationSeq,
     }));
-    return {parallel:{nodeId:block.nodeId,lanes},activationSeq,agentStepCounter};
+    return {parallel:{nodeId:block.nodeId,strategy:record.metadata.strategy,lanes,
+      ...(policySnapshot.parallelEffectMode?{effectMode:policySnapshot.parallelEffectMode}:{})},activationSeq,agentStepCounter};
   }
 
   async function prepareLane(cp,program,lane,revision) {
@@ -735,6 +748,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     },program);
     const {active,...budget}=preparedBudget??{};
     return {lane:{...lane,status:'pending',pending:{...pending,issuedRevision:revision},
+      requestIds:[...(lane.requestIds??[]),pending.requestId],
       ...(skillSnapshot?{skillSnapshot}:{}),...(active?{resources:active}:{})},
     ...(preparedBudget?{taskContext:budget}:{})};
   }
@@ -776,14 +790,67 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         journalEntry:{kind:'parallel-dispatch',nodeId:cp.parallel.nodeId}},
       {kind:'parallel-dispatch'},{kind:'parallel-dispatch'});
     }
-    const patch=decision.outcome==='succeeded'?mergeParallel(cp.parallel.lanes):null;
+    const joined=decision.winner
+      ? cp.parallel.lanes.filter(lane=>lane.nodeId===decision.winner) : cp.parallel.lanes;
+    if (cp.parallel.strategy==='any') {
+      const losingIds=cp.parallel.lanes.filter(lane=>lane.nodeId!==decision.winner)
+        .flatMap(lane=>lane.requestIds??[]);
+      const unsettled=await store.parallelEffects(cp.runId,losingIds);
+      const blocked=unsettled.some(operation=>!operation.settlement
+        || keyRequiresCompensation(operation));
+      if (blocked) {
+        if (cp.pauseReason==='reconciliation') return {committed:false,waitingForSettlement:true,checkpoint:cp};
+        const next={...cp,status:'paused',pauseReason:'reconciliation',revision:cp.revision+1};
+        return casOrCapacityExit(cp,{runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
+          journalEntry:{kind:'parallel-await-reconciliation',nodeId:cp.parallel.nodeId}},
+        {kind:'parallel-await-reconciliation'},{kind:'parallel-await-reconciliation'});
+      }
+    }
+    const patch=decision.outcome==='succeeded'?mergeParallel(joined):null;
+    const unavailableParallelKeys=decision.winner&&patch
+      ? losingOutputKeys(cp,program,patch) : [];
     const causeCode=decision.outcome==='errored'?decision.code
       :decision.outcome==='succeeded'&&!patch?'FK_I_PARALLEL_CONFLICT':null;
     const event=internalEvent(cp,causeCode?'deterministic-failure'
       :patch?'parallel-passed':'parallel-rejected',causeCode?{error:{code:causeCode}}:{});
     const certified=advanceSafely(cp,program,event);
     return stepCAS(cp,certified.proposal,certified.event,event.kind,
-      patch?{patch}:decision.error?{contextError:decision.error}:{});
+      patch&&!causeCode?{patch,unavailableParallelKeys}:decision.error?{contextError:decision.error}:{});
+  }
+
+  function keyRequiresCompensation(operation) {
+    return policySnapshot.parallelEffectMode==='compensate'
+      && operation.settlement.effect==='applied' && !operation.compensation?.evidenceHash;
+  }
+
+  function losingOutputKeys(cp,program,patch) {
+    const after={...cp.state,...patch.set};
+    for (const key of patch.remove??[]) delete after[key];
+    return parallelOutputKeys(program,cp.parallel.lanes.map(lane=>lane.nodeId)).filter(key=>!Object.hasOwn(after,key));
+  }
+
+  function parallelOutputKeys(program,branchIds) {
+    return [...new Set(branchIds.flatMap(id=>{
+      const {kind,metadata}=program.programTable.nodes[id];
+      return kind==='verification'?[id]
+        :kind==='action'?metadata.writes:Object.keys(metadata.output.properties??{});
+    }))];
+  }
+
+  function missingMandatoryParallelInput(cp,program,record) {
+    let successor=record.metadata.next;
+    const visited=new Set();
+    while (!visited.has(successor)) {
+      const node=program.programTable.nodes[successor];
+      if (node.kind==='agent') {
+        const writes=parallelOutputKeys(program,record.metadata.branches);
+        return node.metadata.inputs.some(key=>writes.includes(key)&&!Object.hasOwn(cp.state,key));
+      }
+      if (node.kind!=='condition' || new Set(node.metadata.branches.map(branch=>branch.next)).size!==1) break;
+      visited.add(successor);
+      successor=node.metadata.branches[0].next;
+    }
+    return false;
   }
 
   async function acceptParallel(cp,program,submission,digest,operationSafety) {
@@ -814,11 +881,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     delete lane.pending;
     function rejectLane(code,error) {
       lane.status=code?'errored':'failed';
-      parallel.decision={outcome:lane.status,...(code?{code}:{}),...(error?{error}:{})};
-      for (const loser of parallel.lanes) {
-        if (loser.status!=='pending' || loser===lane) continue;
-        loser.status='cancelled';
-        delete loser.pending;
+      lane.failure={outcome:lane.status,...(code?{code}:{}),...(error?{error}:{})};
+      if (parallel.strategy==='all_succeeded') parallel.decision=lane.failure;
+      else if (!parallel.lanes.some(item=>item.status==='pending')) {
+        parallel.decision=parallel.lanes.find(item=>item.status==='errored')?.failure??{outcome:'failed'};
       }
     }
     const retry=['validation-rejected','agent-call-failed'].includes(evaluation.kind);
@@ -834,15 +900,26 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         operationSafety='no-effect';
       } catch (error) {
         if (signal?.aborted) throw error;
-        rejectLane('FK_I_PARALLEL_PREPARE');
+        rejectLane(error.code==='FK_I_PARALLEL_INPUT'?error.code:'FK_I_PARALLEL_PREPARE');
       }
     } else if (evaluation.kind==='validation-passed'||evaluation.kind==='external-passed') {
       lane.status='succeeded';
       lane.patch=evaluation.patch??{set:stepKind==='verification'?{[nodeId]:true}:submission.result};
-      if (parallel.lanes.every(item=>item.status==='succeeded')) parallel.decision={outcome:'succeeded'};
+      if (parallel.strategy==='any') parallel.decision={outcome:'succeeded',winner:nodeId};
+      else if (parallel.lanes.every(item=>item.status==='succeeded')) parallel.decision={outcome:'succeeded'};
     } else {
       const code=evaluation.causeCode??evaluation.contextError?.code??(retry?'FK_R004':null);
       rejectLane(code,evaluation.contextError);
+    }
+    if (parallel.decision) {
+      const cancelled=[];
+      for (const loser of parallel.lanes) {
+        if (loser.status!=='pending') continue;
+        cancelled.push(loser.pending.requestId);
+        loser.status='cancelled';
+        delete loser.pending;
+      }
+      if (cancelled.length) next.cancelledRequests=[...(next.cancelledRequests??[]),...cancelled];
     }
     parallel.receipt={requestId,nodeId,attempt,kind:stepKind,canonicalDigest:digest,acceptedRevision:next.revision};
     next.status=parallel.decision?'running':'waiting';
@@ -853,6 +930,34 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     {kind:'parallel-receipt',decision:parallel.decision??null},didSucceed?'succeeded':'failed');
   }
 
+  async function expireParallelAgents(cp) {
+    if (cp.status!=='waiting' || !cp.parallel || !cp.taskContext || cp.taskContext.deadlineMs>Date.now()) return null;
+    const expired=cp.parallel.lanes.filter(lane=>lane.pending?.preparedTask);
+    if (!expired.length) return null;
+    const next=copy(cp);
+    next.revision++;
+    const group=next.parallel;
+    const failure={outcome:'errored',code:'FK_R004',deadline:true};
+    const expiredIds=new Set(expired.map(lane=>lane.nodeId));
+    if (group.strategy==='all_succeeded') group.decision=failure;
+    const cancelled=[];
+    for (const lane of group.lanes) {
+      if (!lane.pending || (!group.decision && !expiredIds.has(lane.nodeId))) continue;
+      cancelled.push(lane.pending.requestId);
+      delete lane.pending;
+      lane.status=expiredIds.has(lane.nodeId)?'errored':'cancelled';
+      if (lane.status==='errored') lane.failure=failure;
+    }
+    if (!group.decision && !group.lanes.some(lane=>lane.status==='pending')) {
+      group.decision=group.lanes.find(lane=>lane.status==='errored')?.failure??failure;
+    }
+    next.status=group.decision?'running':'waiting';
+    next.cancelledRequests=[...(next.cancelledRequests??[]),...cancelled];
+    return casOrCapacityExit(cp,{runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
+      journalEntry:{kind:'parallel-agent-deadline',cancelled}},
+    {kind:'parallel-agent-deadline',cancelled},{kind:'parallel-agent-deadline'});
+  }
+
   async function drive(runId) {
     for (let count=0; count < stageBudget; ) {
       checkSignal();
@@ -860,8 +965,14 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible in this namespace');
       if (cp.status==='cancelled' && cp.namespace===store.namespace && cp.policyHash===policyHash) return asPublicFrame(cp);
       const program=await loadPinned(cp);
-      if (FINISHED.has(cp.status) || cp.status==='waiting') return asPublicFrame(cp);
-      if (cp.status === 'paused') {
+      if (FINISHED.has(cp.status)) return asPublicFrame(cp);
+      if (cp.status==='waiting') {
+        const expired=await expireParallelAgents(cp);
+        if (!expired) return asPublicFrame(cp);
+        if (expired.committed) count++;
+        continue;
+      }
+      if (cp.status === 'paused' && cp.pauseReason!=='reconciliation') {
         if (!['stage-budget','skill-temporary'].includes(cp.pauseReason)) return asPublicFrame(cp);
         const unpause={...cp,status:'running',revision:cp.revision+1,pauseReason:null};
         const committed=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
@@ -873,6 +984,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
       if (cp.parallel) {
         const advanced=await driveParallel(cp,program);
+        if (advanced.waitingForSettlement || advanced.committed&&advanced.checkpoint.pauseReason==='reconciliation') {
+          return asPublicFrame(advanced.checkpoint);
+        }
         if (advanced.committed) count++;
         if (advanced.committed && (advanced.checkpoint.status==='waiting'||FINISHED.has(advanced.checkpoint.status))) {
           return asPublicFrame(advanced.checkpoint);
@@ -898,7 +1012,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
             if (!result.committed) continue;
             return asPublicFrame(result.checkpoint);
           }
-          const causeCode=error?.code==='FK_R010' || error?.code==='FK_R011'
+          const causeCode=['FK_R010','FK_R011','FK_I_PARALLEL_INPUT'].includes(error?.code)
             ? error.code : 'FK_I_SKILL_CONTRACT';
           event=internalEvent(cp,'deterministic-failure',{error:{code:causeCode}});
         }
@@ -922,7 +1036,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           ? {activation:cp.activationSeq+1,
             ...(program.programTable.nodes[block.nodeId].kind==='agent'&&cp.program.implementedStage!=='P0-A'
               ? {overviewStep:cp.agentStepCounter+1}:{})} : {};
-        event=internalEvent(cp,kind,extra);
+        event=cp.phase==='enter' && record.kind==='parallel' && record.metadata.strategy==='any'
+          && missingMandatoryParallelInput(cp,program,record)
+          ? internalEvent(cp,'deterministic-failure',{error:{code:'FK_I_PARALLEL_INPUT'}})
+          : internalEvent(cp,kind,extra);
       }
       const certified=advanceSafely(cp,program,event);
       if (certified.proposal.kind==='begin-parallel') extras=createParallel(cp,program,block,record);
@@ -983,6 +1100,11 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       throw failure('FK_I_PROGRAM_MISMATCH','identity and verified Program differ');
     }
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
+    if (!policySnapshot.parallelEffectMode && Object.values(program.programTable.nodes).some(node=>
+      node.kind==='parallel'&&node.metadata.strategy==='any'&&node.metadata.branches.some(id=>
+        program.programTable.nodes[id].kind==='action'))) {
+      throw failure('FK_I_INVALID_OPERATION','Parallel any Actions require an explicit effect policy');
+    }
     const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
     if (Object.values(program.programTable.nodes).some(node=>node.metadata.task)) {
       initial.taskContext=createBudget(policySnapshot.taskPolicy ?? {},signal).snapshot();
@@ -1054,6 +1176,8 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
       if (cp.parallel) {
         if (inlineTooLarge) throw failure('FK_I_CHECKPOINT_CAPACITY','Parallel receipt is too large');
+        const expired=await expireParallelAgents(cp);
+        if (expired) continue;
         let persisted;
         try {persisted=await acceptParallel(cp,program,submission,digest,operationSafety);}
         catch (error) {
@@ -1130,6 +1254,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (!publishedInteractivePending(cp).some(task=>task.requestId===requestId&&task.preparedTask) || !cp.taskContext) {
         throw failure('FK_I_STALE_RECEIPT','Dispatch reservation requires the current Task V2 Pending');
       }
+      if (cp.taskContext.deadlineMs<=Date.now()) throw failure('FK_R004','Task dispatch deadline expired');
       const key=fingerprint([requestId,operationId]);
       const reservations=cp.taskContext.reservations ?? [];
       if (reservations.includes(key)) return {deadlineMs:cp.taskContext.deadlineMs,dispatches:cp.taskContext.dispatches};

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -387,7 +387,7 @@ terminal('done',{name:'Done',status:'succeeded'})
   assert.equal((await cfg.store.loadReceipt(another.runId,alternate.requestId)).outcome,'failed');
 });
 
-test('P1 settles retry budget exhaustion and routes API Agent writes through the durable controller',async t=>{
+test('Parallel SDK settles retry-budget exhaustion and routes P2 API Agent writes through the durable controller',async t=>{
   const f=await fixture(t);
   const file=path.join(f.dir,'parallel-task.workflow.js');
   await writeFile(file,`import {defineWorkflow,parallel,node,terminal} from '@devcodex-labs/flowkit/dsl';
@@ -413,7 +413,11 @@ terminal('done',{name:'Done',status:'succeeded'})
   assert.equal(exhausted.status,'errored');
   assert.ok(await cfg.store.loadReceipt(first.runId,first.pending[0].requestId));
 
-  const second=await start(file,callbacks,{}, {...cfg,startKey:'api-tool'});
+  const anyFile=path.join(f.dir,'parallel-agent-any.workflow.js');
+  const code=await readFile(file,'utf8');
+  await writeFile(anyFile,code.replace("strategy:'all_succeeded'","strategy:'any'"));
+  const toolsCfg={...cfg,startKey:'api-tool',policy:{...cfg.policy,capabilityStage:'P2',parallelEffectMode:'retain'}};
+  const second=await start(anyFile,callbacks,{},toolsCfg);
   const [left,right]=second.pending;
   let writes=0;
   const adapter=createApiAgentAdapter({scope:'fixture',model:'fixture',
@@ -426,10 +430,14 @@ terminal('done',{name:'Done',status:'succeeded'})
   const unbound=await adapter.runAgentTask(left.task.preparedTask);
   assert.equal(unbound.failure?.code,'durable-operation-required');
   assert.equal(writes,0);
-  assert.equal((await adapter.runAgentTask(left.task.preparedTask,attached)).status,'succeeded');
+  const written=await adapter.runAgentTask(left.task.preparedTask,attached);
+  assert.equal(written.status,'succeeded');
   assert.equal((await adapter.runAgentTask(left.task.preparedTask,attached)).status,'succeeded');
   assert.equal((await adapter.runAgentTask(right.task.preparedTask,attached)).failure?.code,'FK_I_OPERATION_CONFLICT');
   assert.equal(writes,1);
+  const winner=await complete(submission(second,written.result),callbacks,toolsCfg);
+  assert.equal(winner.status,'succeeded');
+  assert.deepEqual(winner.cancelledRequests,[right.requestId]);
 
   let enteredRetry, releaseRetry;
   const entered=new Promise(resolve=>{enteredRetry=resolve;});
@@ -449,6 +457,171 @@ terminal('done',{name:'Done',status:'succeeded'})
   } finally {releaseRetry();}
   await assert.rejects(completing,{code:'FK_I_RECONCILIATION_PENDING'});
   assert.deepEqual((await cfg.store.load(racing.runId)).pending.map(task=>task.attempt),[1,1]);
+
+  const mixedFile=path.join(f.dir,'parallel-deadline.workflow.js');
+  await writeFile(mixedFile,`import {defineWorkflow,parallel,node,verification,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'parallel-expiry',name:'Parallel expiry',version:'1.0.0',nodes:[
+parallel('group',{name:'Group',branches:['worker','check'],join:{strategy:'any',next:'done'}}),
+node('worker',{name:'Worker',description:'Return a candidate',output:{type:'object',properties:{answer:{type:'string'}}}}),
+verification('check',{name:'Check',verifier:'plain-read'}),
+terminal('done',{name:'Done',status:'succeeded'})
+]});`);
+  const deadline=Date.now()+60_000;
+  const expiring={...toolsCfg,startKey:'expired-agent',policy:{...toolsCfg.policy,
+    taskPolicy:{...toolsCfg.policy.taskPolicy,deadlineMs:deadline}}};
+  const mixed=await start(mixedFile,callbacks,{},expiring);
+  const [lateAgent,plainCheck]=mixed.pending;
+  const fakeTime=t.mock.method(Date,'now',()=>deadline+100);
+  try {
+    const key=sha256Bytes(Buffer.from('expired-effect'));
+    await assert.rejects(expiring.operationController.claim({runId:mixed.runId,requestId:lateAgent.requestId,
+      operationKey:key,inputHash:key,businessKey:key},expiring.auth),{code:'FK_I_STALE_RECEIPT'});
+    const finished=await complete({kind:'verification',runId:mixed.runId,requestId:plainCheck.requestId,
+      outcome:'succeeded',result:{passed:true}},callbacks,expiring);
+    assert.equal(finished.status,'succeeded');
+    assert.deepEqual(finished.cancelledRequests,[lateAgent.requestId]);
+  } finally {fakeTime.mock.restore();}
+});
+
+test('P2 selects the first qualified Verification, preserves inputs, and never merges the loser',async t=>{
+  const f=await fixture(t);
+  const file=path.join(f.dir,'parallel-any.workflow.js');
+  await writeFile(file,`import {defineWorkflow,parallel,verification,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'parallel-any',name:'Parallel any',version:'1.0.0',nodes:[
+parallel('checks',{name:'Checks',branches:['left','right'],join:{strategy:'any',next:'done'}}),
+verification('left',{name:'Left',verifier:'left-check'}),
+verification('right',{name:'Right',verifier:'right-check'}),
+terminal('done',{name:'Done',status:'succeeded'})
+]});`);
+  const cfg={...f.options,auth:context({authorizeTask:()=>true}),
+    policy:{...policy,capabilityStage:'P2',bindingManifest:{}}};
+  const check=(frame,task,passed)=>({kind:'verification',runId:frame.runId,requestId:task.requestId,
+    outcome:'succeeded',result:{passed}});
+  const frame=await start(file,{}, {base:1},cfg);
+  const [left,right]=frame.pending;
+  assert.equal((await complete(check(frame,left,false),{},cfg)).status,'waiting');
+  const done=await complete(check(frame,right,true),{},cfg);
+  assert.equal(done.status,'succeeded');
+  assert.deepEqual((await cfg.auth.readTerminalResult(done.resultRef,cfg)).state,{base:1,right:true});
+
+  const racing=await start(file,{}, {},{...cfg,startKey:'p2-race'});
+  const other=createSqliteInteractivePersistence(f.file,{namespace:ns});
+  try {
+    const races=await Promise.allSettled([
+      complete(check(racing,racing.pending[0],true),{},cfg),
+      complete(check(racing,racing.pending[1],true),{},{...cfg,...other}),
+    ]);
+    assert.equal(races.filter(item=>item.status==='fulfilled').length,1);
+    assert.equal(races.find(item=>item.status==='rejected').reason.code,'FK_I_STALE_RECEIPT');
+    const terminal=await resume(racing.runId,{},{...cfg,...other});
+    const state=(await cfg.auth.readTerminalResult(terminal.resultRef,cfg)).state;
+    assert.equal(Object.keys(state).length,1);
+    assert.equal(Object.values(state)[0],true);
+  } finally {other.close();}
+
+  const invalid=await start(file,{}, {},{...cfg,startKey:'p2-error'});
+  const [bad,rejected]=invalid.pending;
+  await complete(check(invalid,bad,'malformed'),{},cfg);
+  const failure=await complete(check(invalid,rejected,false),{},cfg);
+  assert.equal(failure.status,'errored');
+  assert.equal((await cfg.auth.readTerminalResult(failure.resultRef,cfg)).causeCode,'FK_I_VERIFICATION_CONTRACT');
+
+  const consumes=path.join(f.dir,'parallel-consumer.workflow.js');
+  const original=await readFile(file,'utf8');
+  await writeFile(consumes,original.replace('parallel,verification,terminal','parallel,verification,condition,node,terminal')
+    .replace("strategy:'any',next:'done'","strategy:'any',next:'route'")
+    .replace("terminal('done'",`condition('route',{name:'Route',branches:[{when:'true',next:'consumer'}]}),
+node('consumer',{name:'Consumer',agent:'writer',inputs:['left'],output:{type:'object'},next:'done'}),
+terminal('done'`));
+  const checked=await compileInteractive(consumes,{output:'memory',featureStage:'P2',skillCheck:false});
+  assert.ok(checked.code,JSON.stringify(checked.diagnostics));
+  const ref=await cfg.programRegistry.putImmutable(Buffer.from(checked.code),checked.programIdentity);
+  const inputsCfg={...cfg,startKey:'p2-required-input',policy:{...policy,capabilityStage:'P2'}};
+  const invalidInputs=await start(ref,runtime,{},inputsCfg);
+  assert.equal(invalidInputs.status,'errored');
+  assert.deepEqual(invalidInputs.pending,[]);
+  assert.equal((await inputsCfg.auth.readTerminalResult(invalidInputs.resultRef,inputsCfg)).causeCode,'FK_I_PARALLEL_INPUT');
+});
+
+test('P2 seals the winner across process death and gates the next step on loser reconciliation and compensation',async t=>{
+  const f=await fixture(t);
+  const file=path.join(f.dir,'parallel-writes.workflow.js');
+  await writeFile(file,`import {defineWorkflow,parallel,action,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'parallel-writes',name:'Parallel writes',version:'1.0.0',nodes:[
+parallel('race',{name:'Race',branches:['winner-write','loser-write'],join:{strategy:'any',next:'done'}}),
+action('winner-write',{name:'Primary',action:'primary-write',writes:['winner']}),
+action('loser-write',{name:'Alternate',action:'alternate-write',writes:['loser']}),
+terminal('done',{name:'Done',status:'succeeded'})
+]});`);
+  const cfg={...f.options,auth:context({authorizeTask:()=>true}),
+    policy:{...policy,capabilityStage:'P2',parallelEffectMode:'compensate',bindingManifest:{}}};
+  await assert.rejects(start(file,{}, {},{...cfg,policy:{...cfg.policy,parallelEffectMode:'retain-not-specified'}}),
+    /Interactive policy/);
+  const missingPolicy={...cfg.policy};
+  delete missingPolicy.parallelEffectMode;
+  await assert.rejects(start(file,{}, {},{...cfg,policy:missingPolicy}),{code:'FK_I_INVALID_OPERATION'});
+  const frame=await start(file,{}, {baseline:true},cfg);
+  const [winner,loser]=frame.pending;
+  const claim=(task,logical)=>({runId:frame.runId,requestId:task.requestId,operationKey:task.task.operationKey,
+    inputHash:sha256Bytes(canonicalBytes(task.task)),businessKey:sha256Bytes(Buffer.from(logical)),
+    compensationPlan:{capabilityId:'release-reservation',inputHash:sha256Bytes(Buffer.from(logical))}});
+  const main=claim(winner,'selected-reservation'),alt=claim(loser,'alternate-reservation');
+  const operations=cfg.operationController;
+  const {compensationPlan:_missing,...withoutCompensation}=main;
+  await assert.rejects(operations.claim(withoutCompensation,cfg.auth),{code:'FK_I_INVALID_OPERATION'});
+  assert.equal((await operations.claim(main,cfg.auth)).claimed,true);
+  assert.equal((await operations.claim(alt,cfg.auth)).claimed,true);
+  const external=new DatabaseSync(path.join(f.dir,'effects.sqlite'));
+  try {
+    external.exec('CREATE TABLE effects (key TEXT PRIMARY KEY, value TEXT)');
+    const write=external.prepare('INSERT INTO effects VALUES (?,?)');
+    write.run(main.operationKey,'selected');
+    write.run(alt.operationKey,'alternate');
+    const record=(operation,result)=>({runId:frame.runId,operationKey:operation.operationKey,
+      inputHash:operation.inputHash,effect:'applied',evidenceHash:sha256Bytes(canonicalBytes(result)),result});
+    const result={set:{winner:'selected'}};
+    await operations.settle(record(main,result),cfg.auth);
+    const sdk=new URL('../../src/interactive/index.mjs',import.meta.url).href;
+    const worker=spawnSync(process.execPath,['--input-type=module','-e',`
+      const [sdk,file,namespace,data]=process.argv.slice(1);
+      const {policy,receipt}=JSON.parse(data);
+      const {createSqliteInteractivePersistence,createInteractiveHostContext,complete}=await import(sdk);
+      const persistence=createSqliteInteractivePersistence(file,{namespace});
+      const auth=createInteractiveHostContext({namespace,subjectId:'worker',authorize:()=>true,authorizeTask:()=>true});
+      const paused=await complete(receipt,{},{...persistence,policy,auth});
+      if (paused.status!=='paused'||paused.pauseReason!=='reconciliation') throw Error('missing reconciliation gate');
+      process.kill(process.pid,'SIGKILL');`,sdk,f.file,ns,JSON.stringify({policy:cfg.policy,receipt:{
+      kind:'action',runId:frame.runId,requestId:winner.requestId,operationKey:main.operationKey,outcome:'succeeded',result,
+    }})],{encoding:'utf8',timeout:20000});
+    assert.notEqual(worker.status,0,worker.stderr);
+    assert.equal(worker.error,undefined);
+    const recovered=await resume(frame.runId,{},cfg);
+    assert.equal(recovered.pauseReason,'reconciliation');
+    assert.deepEqual(recovered.cancelledRequests,[loser.requestId]);
+    assert.equal((await cfg.store.load(frame.runId)).execution.parallel.decision.winner,winner.nodeId);
+    assert.deepEqual((await cfg.store.load(frame.runId)).state,{baseline:true});
+    assert.equal((await operations.list({runId:frame.runId},cfg.auth)).filter(op=>!op.settlement).length,1);
+    await assert.rejects(operations.claim(alt,cfg.auth),{code:'FK_I_STALE_RECEIPT'});
+    await assert.rejects(operations.claimCompensation({runId:frame.runId,operationKey:main.operationKey},cfg.auth),
+      {code:'FK_I_OPERATION_CONFLICT'});
+    const losingResult={set:{loser:'alternate'}};
+    await operations.settle(record(alt,losingResult),cfg.auth);
+    await assert.rejects(complete({kind:'action',runId:frame.runId,requestId:loser.requestId,
+      operationKey:alt.operationKey,outcome:'succeeded',result:losingResult},{},cfg),{code:'FK_I_STALE_RECEIPT'});
+    assert.equal((await resume(frame.runId,{},cfg)).pauseReason,'reconciliation');
+    const compensation={runId:frame.runId,operationKey:alt.operationKey};
+    const grant=await operations.claimCompensation(compensation,cfg.auth);
+    assert.equal(grant.claimed,true);
+    assert.equal((await operations.claimCompensation(compensation,cfg.auth)).claimed,false);
+    assert.equal(external.prepare('DELETE FROM effects WHERE key=?').run(alt.operationKey).changes,1);
+    await operations.settleCompensation({...compensation,compensationKey:grant.compensation.key,
+      evidenceHash:sha256Bytes(Buffer.from('released alternate reservation'))},cfg.auth);
+    const terminal=await resume(frame.runId,{},cfg);
+    assert.equal(terminal.status,'succeeded');
+    assert.deepEqual(terminal.cancelledRequests,[loser.requestId]);
+    assert.deepEqual((await cfg.auth.readTerminalResult(terminal.resultRef,cfg)).state,{baseline:true,winner:'selected'});
+    assert.deepEqual(external.prepare('SELECT value FROM effects').all().map(row=>row.value),['selected']);
+  } finally {external.close();}
 });
 
 test('R5 uses the same persisted envelope in SQLite and the asynchronous Store',async t=>{
@@ -630,7 +803,7 @@ test('S12-A creates its audit table in a fresh R5 database and atomically termin
     const db=new DatabaseSync(f.file);
     const audit=()=>db.prepare('SELECT * FROM fk_i_admin_events').all();
     try {
-      assert.equal(db.prepare('PRAGMA user_version').get().user_version,5);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version,6);
       await assert.rejects(persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',{...admin}),
         {code:'FK_I_HOST_DENIED'});
       const other=createInteractiveAdminContext({namespace:'another',subjectId:'ops-1',authorize:()=>true});

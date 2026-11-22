@@ -4,9 +4,9 @@
 
 实现与验证 [源码](https://github.com/devcodex-labs/flowkit/blob/main/src/interactive/index.mjs) · [类型](https://github.com/devcodex-labs/flowkit/blob/main/types/interactive.d.ts) · [测试](https://github.com/devcodex-labs/flowkit/blob/main/tests/interactive/versioned.test.mjs) · [示例](https://github.com/devcodex-labs/flowkit/tree/main/examples/docs/interactive)
 
-本参考对应 FlowKit 1.0.0 的 Interactive P0-A。Store、回执和程序身份需要满足现有契约；旧数据处置依[兼容范围](/community/compatibility)和具体迁移决策。
+本参考对应 FlowKit 1.0.0 的 Interactive P0-A、P0-B、P1 和 P2。创建、恢复和回执使用同一版本的 Program 与 SQLite Store。
 
-本页对应FlowKit 1.0.0的`@devcodex-labs/flowkit/interactive`。这些导出描述当前P0-A Host能力；发行/生产门禁和平台证据分别判断。先读[接口层选择](/guide/interactive)，可运行文件见[完整示例](/examples/interactive)。不要从dist私有路径导入实现。
+本页对应 FlowKit 1.0.0 的 `@devcodex-labs/flowkit/interactive`。接入要求见 [Interactive 指南](/guide/interactive)，可运行文件见 [P0-A 示例](/examples/interactive)。
 
 ## 编译与加载
 
@@ -17,7 +17,7 @@
 | options字段 | 必需/默认 | 行为 |
 | --- | --- | --- |
 | output | 必需：memory或file | memory只返回；file另写`<stem>.interactive.mjs`并返回artifactPath |
-| featureStage | 必需：P0-A、P0-B 或 P1 | P1 支持 `all_succeeded` 下的并行请求 |
+| featureStage | 必需：P0-A、P0-B、P1 或 P2 | P1 支持 `all_succeeded`，P2 增加 `any` |
 | targetVersion | 可省略；若给必须interactive-state-machine-v1 | 指定语义目标，不是软件包版本 |
 | outDir | 源目录；相对cwd | file输出目录；不要套用Standard输出目录的所有限制 |
 | projectRoot | 最近package.json所在目录，找不到回退cwd | 显式值按cwd解析；影响Skill检查 |
@@ -154,6 +154,16 @@ P1 的 `all_succeeded` 将同一 Run 的多个 Pending 同时公开。请求按�
 
 并行写入须在操作声明中提供同一业务效果的稳定 `businessKey`。API Agent adapter 使用 Host 工具的 `operationKey` 生成该键，且要求传入 `interactiveOperations:{controller,auth}`。Host 确认未取得派发权的 Action 可用 `FK_I_ACTION_NOT_DISPATCHED`、`sideEffectStatus:'none'` 提交失败，Store 会在接纳事务中检查该请求没有已登记操作。
 
+### P2 选胜与外部效果
+
+P2 `any` 在同一状态事务提交唯一胜者和败者派发封锁。Host 对 `cancelledRequests` 中的已派发请求发出取消信号，并使用操作账本审查真实外部结果。败者的新回执只可进入已授权的对账。
+
+带外部写入的 `any` 要求显式声明 Host 策略 `parallelEffectMode`。选择 `retain` 时允许保留已确认的败者外部结果。选择 `compensate` 时，外部效果经确认并补偿后才执行后继节点。未知效果下 Run 暂停，返回 `pauseReason:'reconciliation'`。Host 可通过 `operationController.list` 查找本 Run 的操作记录。
+
+在 `compensate` 模式下，写入申请须同时提交 `compensationPlan:{capabilityId,inputHash}`。Host 在授予写入前核验补偿能力和参数摘要。API Agent 工具可用 `compensationPlan(args,task)` 提供同一信息。
+
+`claimCompensation` 为已确认写入的封锁败者返回稳定的 `compensation.key` 和已固定的计划。取得派发权后执行该补偿操作。已派发而未收到证据时，用原键向目标对账。`settleCompensation` 保存真实结果证据，随后使用 `resume` 继续原 Run。`retain` 模式在 Run 活跃期间保留已确认的败者结果。
+
 putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有namespace、artifactHash和programId；保留/释放与Run持久引用一致，不能在Run仍引用时自行删产物。自定义实现必须保留R5封套全部字段以及原子创建/CAS、转换与回执对账契约；不要把公开frame当checkpoint存储。
 
 ### createInteractiveHostContext {#createInteractiveHostContext}
@@ -164,7 +174,7 @@ putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有na
 
 `await start(sourceOrRef, runtime, initialState, {...options,startKey})`。source字符串是Host已授权的**文件路径**，不是DSL文本；也可给受信注册表的Program引用。options含同namespace的store/programRegistry、policy和auth；startKey必需。同key/意图重试与意图冲突分开，已有Run恢复也需要授权。
 
-RuntimeV1的skillResolver/validateResult为`{id,version,mode,implementation}`描述符，须与policy.bindingManifest一致。mode分别是trusted-read/pure-local；skillResolver收到reference和可选descriptor，校验器同步返回string[]；文本/reasons上限及paused/errored分流同上文绑定约束。policy还含id/version、disclosePolicyId、capabilityStage:P0-A、canonicalizationVersion:jcs-rfc8785-v1和可选requiredSkillManifestHash。不能把同步Runtime裸函数直接传进来。
+RuntimeV1 的 skillResolver 和 validateResult 是 `{id,version,mode,implementation}` 描述符，须与 policy.bindingManifest 一致。mode 分别为 trusted-read 和 pure-local。skillResolver 收到 reference 和可选 descriptor，校验器同步返回 string[]。policy 的 capabilityStage 必须与 Program 目标一致。规范化版本为 jcs-rfc8785-v1。
 
 maxStagesPerCall默认128，signal可选并需宿主协作。JSON状态和策略须能规范化，不能放函数、undefined、非有限数字或登录凭据。
 

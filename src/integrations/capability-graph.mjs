@@ -23,7 +23,7 @@ export const flowkitProvider = Object.freeze({
       id: 'define-workflow', name: 'Define workflow',
       description: 'Declare a workflow using the static FlowKit DSL.',
       whenToUse: 'A host needs a statically analyzable workflow definition.',
-      usage: { instructions: 'Use literal JS/TS DSL. Author Hosts use /host.createWorkflowAuthorHost with guarded execution, exact review and user approval. Check the eight Standard node kinds or supported Interactive P0-A subset before choosing a mode; Graph only discovers and documents capabilities.' },
+      usage: { instructions: 'Use literal JS/TS DSL. Author Hosts use /host.createWorkflowAuthorHost with guarded execution, exact review and user approval. Author targets Standard or Interactive P0-A. The versioned Interactive SDK also supports P0-B sequential control, P1 all_succeeded and P2 any. Graph discovers and documents capabilities.' },
       documents: [
         document('flowkit-doc-dsl', 'dsl/index'),
         document('flowkit-doc-authoring', 'guide/workflow-authoring'),
@@ -35,7 +35,7 @@ export const flowkitProvider = Object.freeze({
       id: 'compile-workflow', name: 'Compile workflow',
       description: 'Statically validate a workflow and emit executable JavaScript and optional Mermaid.',
       whenToUse: 'An application needs a verified compiled workflow.',
-      usage: { instructions: 'Inspect diagnostics before using artifacts. Use compileArtifact for an approved Standard workflow.js; compileInteractive emits a P0-A Program, matching Mermaid and exact Program identity. Keep the mode and ABI explicit.' },
+      usage: { instructions: 'Inspect diagnostics before using artifacts. Use compileArtifact for an approved Standard workflow.js. compileInteractive emits a Program, matching Mermaid and exact identity for an explicit P0-A, P0-B, P1 or P2 target.' },
       relations: { requires: ['define-workflow'] },
       documents: [
         document('flowkit-doc-compile', 'guide/compile-artifacts'),

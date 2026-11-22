@@ -145,7 +145,10 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
               const {requestId}=task.execution;
               const businessKey=artifactDigest(canonicalBytes(operationId));
               const operationKey=artifactDigest(canonicalBytes([requestId,businessKey]));
-              const claim=await controller.claim({runId,requestId,operationKey,inputHash:fingerprint,businessKey},auth);
+              const compensationPlan=tool.compensationPlan
+                ? await during(signal,()=>tool.compensationPlan(args,task)) : undefined;
+              const claim=await controller.claim({runId,requestId,operationKey,inputHash:fingerprint,businessKey,
+                ...(compensationPlan?{compensationPlan}:{})},auth);
               let output;
               if (claim.claimed) {
                 sideEffects='unknown';

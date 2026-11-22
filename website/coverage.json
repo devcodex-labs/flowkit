@@ -502,7 +502,7 @@
   {
     "id": "P51",
     "route": "/guide/interactive",
-    "title": "Interactive P0-A 接入",
+    "title": "Interactive 接入",
     "file": "guide/interactive.mdx",
     "group": "使用指南",
     "status": "drafted",

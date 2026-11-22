@@ -45,7 +45,8 @@ export function encodeCheckpoint(cp) {
   const candidate=cp.candidate?.submissionKind===cp.candidate?.kind+'-result' && object(cp.candidate?.result)
     ? {kind:cp.candidate.kind,requestId:cp.candidate.requestId,result:cp.candidate.result} : null;
   const causeCode=cp.terminal?.causeCode ?? (
-    cp.pauseReason==='skill-temporary'?'FK_I_TEMPORARY_SKILL':undefined);
+    cp.pauseReason==='skill-temporary'?'FK_I_TEMPORARY_SKILL':
+      cp.pauseReason==='reconciliation'?'FK_I_RECONCILIATION_PENDING':undefined);
   return {
     schemaVersion:1,protocolVersion:1,namespace,runId,startKey,startIntentHash,revision,status,program,
     programRef:{namespace,artifactHash:program.artifactHash,programId:program.workflowId},
@@ -55,7 +56,9 @@ export function encodeCheckpoint(cp) {
       ...(cp.taskContext?{taskContext:cp.taskContext}:{}),
       ...(cp.regionCounters?{regionCounters:cp.regionCounters}:{}),
       ...(phase!=='finished'&&cp.skillSnapshot?{skillSnapshot:cp.skillSnapshot}:{}),
-      ...(phase!=='finished'&&cp.parallel?{parallel:cp.parallel}:{})},
+      ...(phase!=='finished'&&cp.parallel?{parallel:cp.parallel}:{}),
+      ...(cp.cancelledRequests?.length?{cancelledRequests:cp.cancelledRequests}:{}),
+      ...(cp.unavailableParallelKeys?.length?{unavailableParallelKeys:cp.unavailableParallelKeys}:{})},
     state,candidate,receivedSubmission,pending:pendingFromExecution(cp),inFlightOperations:[],
     terminal:status==='succeeded'||status==='failed'?cp.terminal:null,
     lastTransitionId:cp.lastTransitionId??null,
@@ -81,7 +84,7 @@ export function decodeCheckpoint(cp) {
     || !keys(cp.policyIdentity,['id','version','policyHash','bindingManifestHash'],['skillManifestHash'])
     || ![cp.policyIdentity.id,cp.policyIdentity.version].every(text)
     || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'],
-      ['taskContext','regionCounters','skillSnapshot','parallel'])
+      ['taskContext','regionCounters','skillSnapshot','parallel','cancelledRequests','unavailableParallelKeys'])
     || !text(cp.execution.blockId) || !phases.has(cp.execution.phase)
     || !count(cp.execution.activationSeq) || !count(cp.execution.agentStepCounter)
     || cp.execution.agentStepCounter>cp.execution.activationSeq
@@ -97,6 +100,13 @@ export function decodeCheckpoint(cp) {
     receivedSubmission,lastTransitionId}=cp;
   const {phase,blockId,controlStack,activationSeq,agentStepCounter,contextError}=execution;
   const parallel=execution.parallel;
+  if (execution.unavailableParallelKeys!==undefined && (!Array.isArray(execution.unavailableParallelKeys)
+    || execution.unavailableParallelKeys.some(key=>!text(key))
+    || new Set(execution.unavailableParallelKeys).size!==execution.unavailableParallelKeys.length)) throw invalid();
+  if (execution.cancelledRequests!==undefined && (!Array.isArray(execution.cancelledRequests)
+    || execution.cancelledRequests.some(id=>!text(id)) || new Set(execution.cancelledRequests).size!==execution.cancelledRequests.length)) {
+    throw invalid();
+  }
   if (parallel!==undefined) {
     if (phase!=='route' || !object(parallel) || !text(parallel.nodeId) || blockId!==parallel.nodeId+'::route'
       || !Array.isArray(parallel.lanes) || parallel.lanes.length<2 || parallel.lanes.length>500
@@ -198,7 +208,10 @@ export function decodeCheckpoint(cp) {
     ...(execution.regionCounters?{regionCounters:execution.regionCounters}:{}),
     ...(skillSnapshot?{skillSnapshot}:{}),
     ...(parallel?{parallel}:{}),
+    ...(execution.cancelledRequests?{cancelledRequests:execution.cancelledRequests}:{}),
+    ...(execution.unavailableParallelKeys?{unavailableParallelKeys:execution.unavailableParallelKeys}:{}),
     pending:phase==='awaiting'?pending:null,prepared:phase==='dispatch-ready'?pending:null,
     terminal:status==='errored'?{status,nodeId:blockId.slice(0,blockId.lastIndexOf('::')),causeCode:cp.causeCode}:cp.terminal,
-    ...(status==='paused'?{pauseReason:cp.causeCode==='FK_I_TEMPORARY_SKILL'?'skill-temporary':'stage-budget'}:{})};
+    ...(status==='paused'?{pauseReason:cp.causeCode==='FK_I_TEMPORARY_SKILL'?'skill-temporary':
+      cp.causeCode==='FK_I_RECONCILIATION_PENDING'?'reconciliation':'stage-budget'}:{})};
 }

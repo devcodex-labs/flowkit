@@ -170,7 +170,9 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
         subjectId:auth.subjectId}));} catch {}
       if (allowed!==true) throw fail('FK_I_HOST_DENIED','management authorization denied');
       const cp=backend[sqliteAdminTerminate](runId,reason,auth.subjectId);
-      return terminalFrame(cp.runId,cp.revision,cp.status,cp.terminal);
+      const frame=terminalFrame(cp.runId,cp.revision,cp.status,cp.terminal);
+      if (cp.cancelledRequests?.length) frame.cancelledRequests=[...cp.cancelledRequests];
+      return frame;
     },
   });
   const ledger=backend[sqliteOperationLedger];
@@ -184,19 +186,26 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
         || Object.keys(snapshot).some(key=>!fields.includes(key)&&!optional.includes(key))) {
         throw fail('FK_I_INVALID_OPERATION','invalid operation input');
       }
-      const {runId,operationKey,inputHash,requestId,evidenceHash,effect,businessKey}=snapshot;
+      const {runId,operationKey,inputHash,requestId,evidenceHash,effect,businessKey,compensationKey,compensationPlan}=snapshot;
       await checkAccess({store,programRegistry,auth},action,{
-        runId,operationKey,...(inputHash===undefined?{}:{inputHash}),...(requestId===undefined?{}:{requestId}),
+        runId,...(operationKey===undefined?{}:{operationKey}),
+        ...(inputHash===undefined?{}:{inputHash}),...(requestId===undefined?{}:{requestId}),
         ...(effect===undefined?{}:{effect,evidenceHash}),
         ...(businessKey===undefined?{}:{businessKey}),
+        ...(compensationKey===undefined?{}:{compensationKey,evidenceHash}),
+        ...(compensationPlan===undefined?{}:{compensationPlan:Object.freeze(compensationPlan)}),
       });
       return readOrWrite(snapshot);
     };
   }
   const operationController=Object.freeze({
-    claim:operation('operation:claim',['runId','operationKey','requestId','inputHash'],ledger.claim,['businessKey']),
+    claim:operation('operation:claim',['runId','operationKey','requestId','inputHash'],ledger.claim,['businessKey','compensationPlan']),
     load:operation('operation:read',['runId','operationKey'],ledger.load),
     settle:operation('operation:settle',['runId','operationKey','inputHash','effect','evidenceHash','result'],ledger.settle),
+    list:operation('operation:list',['runId'],ledger.list),
+    claimCompensation:operation('operation:compensate',['runId','operationKey'],ledger.claimCompensation),
+    settleCompensation:operation('operation:settle-compensation',['runId','operationKey','compensationKey','evidenceHash'],
+      ledger.settleCompensation),
   });
   return Object.freeze({store,programRegistry,adminController,operationController,close:()=>backend.close()});
 }
@@ -385,6 +394,7 @@ function operationOptions(options) {
 function bind(runtime,options) {
   const {store,programRegistry,policy,maxStagesPerCall,signal}=options;
   if (!store || !programRegistry || !policy || !isInteractiveStage(policy.capabilityStage)
+    || (policy.parallelEffectMode!==undefined&&!['retain','compensate'].includes(policy.parallelEffectMode))
     || policy.canonicalizationVersion!=='jcs-rfc8785-v1' || typeof policy.id!=='string'
     || !policy.id || typeof policy.version!=='string' || !policy.version
     || typeof policy.disclosePolicyId!=='string' || !policy.disclosePolicyId
@@ -400,6 +410,7 @@ function bind(runtime,options) {
 async function publicFrame(frame,options,callbacks) {
   const {runId,revision,status}=frame;
   const output={protocolVersion:1,runId,revision,status,pending:[],checkpointRef:{runId,revision}};
+  if (frame.cancelledRequests?.length) output.cancelledRequests=[...frame.cancelledRequests];
   if (frame.acceptedRevision!==undefined) {
     output.acknowledgement={acceptedRevision:frame.acceptedRevision,repeated:frame.duplicate};
   }
@@ -420,6 +431,8 @@ async function publicFrame(frame,options,callbacks) {
     const current=await options.store.load(runId);
     if (current?.namespace!==options.auth.namespace || current.revision!==revision
       || current.status!=='waiting' || hash(current.pending)!==hash(checkpoint.pending)) throw uncertain();
+  } else if (status==='paused' && frame.pauseReason==='reconciliation') {
+    output.pauseReason='reconciliation';
   } else if (['succeeded','failed','errored','cancelled'].includes(status)) {
     Object.assign(output,terminalFrame(runId,revision,status,frame.terminal));
   } else if (status!=='paused') throw uncertain();
@@ -570,7 +583,9 @@ export async function cancelInteractiveRun(runId,reasonCode,options) {
   const cancel=cancellableStores.get(options.store);
   if (!cancel) throw fail('FK_I_BINDING_MISSING','Store does not support atomic cancellation');
   const checkpoint=cancel(runId,reasonCode,options.auth.subjectId,hash(options.policy));
-  return terminalFrame(runId,checkpoint.revision,checkpoint.status,checkpoint.terminal);
+  const frame=terminalFrame(runId,checkpoint.revision,checkpoint.status,checkpoint.terminal);
+  if (checkpoint.cancelledRequests?.length) frame.cancelledRequests=[...checkpoint.cancelledRequests];
+  return frame;
 }
 
 /** Host execution budget operation; never expose this entry to a model. */

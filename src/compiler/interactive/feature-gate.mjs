@@ -12,7 +12,7 @@ const ENABLED = new Set(['condition', 'terminal', 'agent']);
 export const supportsP0ANodeKind = kind => ENABLED.has(kind);
 export const supportsInteractiveNodeKind = (stage, kind) => supportsP0ANodeKind(kind)
   || stage!=='P0-A' && ['action','verification','human','loop'].includes(kind)
-  || stage==='P1' && kind==='parallel';
+  || ['P1','P2'].includes(stage) && kind==='parallel';
 
 function interactiveDiagnostic(analysis, code, message, index, node) {
   const location = index === undefined ? { line: 1, column: 1 }
@@ -53,7 +53,7 @@ export function gateInteractiveFeatures(analysis, options = {}) {
       } else if (featureStage==='P0-A' && node.type === 'agent' && node.verify != null) {
         extras.push(interactiveDiagnostic(analysis, 'FK_I_UNSUPPORTED_GRAPH',
           'P0-A Agent verify requires P0-B; it must not be skipped', index, node));
-      } else if (node.type==='parallel' && node.join.strategy==='any') {
+      } else if (featureStage!=='P2' && node.type==='parallel' && node.join.strategy==='any') {
         extras.push(interactiveDiagnostic(analysis,'FK_I_UNSUPPORTED_GRAPH','Parallel any requires P2',index,node));
       }
     });

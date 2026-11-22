@@ -479,7 +479,7 @@
       "id": "flowkit-doc-interactive",
       "path": "website/content/guide/interactive.mdx",
       "route": "/guide/interactive",
-      "title": "Interactive P0-A 接入",
+      "title": "Interactive 接入",
       "scope": "模式/入口/所选stdio及完整回合/失败责任",
       "topic": "interactive",
       "status": "host-conditional",

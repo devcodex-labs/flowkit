@@ -36,7 +36,8 @@ export interface TaskJsonObject { readonly [key: string]: TaskJsonValue }
 export interface AgentTaskV2 {
   readonly protocolVersion: 2;
   readonly workflow: { readonly id: string; readonly version: string; readonly artifactHash: string;
-    readonly programAbiVersion: number; readonly semanticsVersion: string; readonly compilerVersion: string };
+    readonly programAbiVersion: number; readonly semanticsVersion: string; readonly compilerVersion: string;
+    readonly implementedStage?: 'P0-A'|'P0-B'|'P1'|'P2' };
   readonly run: { readonly runId: string };
   readonly node: { readonly id: string; readonly name: string };
   readonly task: { readonly description?: string | readonly string[]; readonly descriptionRefs?: readonly DescriptionRef[];
