@@ -1028,7 +1028,17 @@ html,body,button,input,textarea,.node,.stage,.tooltip,.inspector,.reader-dialog,
 .edge-group:focus-visible .edge-visible {stroke:#245ec9;stroke-width:3}
 .edge-group.supplemental:not(.active,:hover,:focus-visible) .edge-visible {opacity:.24}
 .edge-group.supplemental.dimmed:not(.active,:hover,:focus-visible) .edge-visible {opacity:.08}
-.ambient-dot.supplemental {filter:opacity(.55)}
+.ambient-dot {stroke:#fff;stroke-width:1;vector-effect:non-scaling-stroke}
+.ambient-dot.supplemental {filter:opacity(.75)}
+.meta-list .v {font-weight:400}
+.role-card .capability-name {font:400 13px/1.65 var(--cn-font);color:#394a62;overflow-wrap:anywhere}
+.region-details {display:grid;gap:12px}
+.region-details .meta-list {padding:10px 12px;border:1px solid #e0e8f4;border-radius:8px;background:#f7f9fc}
+.region-details .relation-row {font:400 13px/1.55 var(--cn-font);overflow-wrap:anywhere}
+.region-details .relation-row small {font-family:inherit}
+.region-targets {display:grid;gap:6px;min-width:0}
+.region-targets-title {font:400 13px/1.55 var(--cn-font);color:#647289}
+@media(prefers-reduced-motion:reduce){.motion-comet-halo{display:none}.motion-layer .motion-trail{opacity:.65}}
 .edge-end {font:inherit;text-align:left;color:inherit;cursor:pointer}
 .artifact-center[hidden],#inspectorNav[hidden] {display:none!important}
 .reader-overlay:not([open]) {display:none}
@@ -1466,14 +1476,16 @@ function setTransform(){
  world.classList.toggle('overview-scale',scale<.62);
  $('zoomReadout').textContent=Math.round(scale*100)+'%';
  updateMiniViewport();
- updateMotionSizes();
- updateAmbientSizes();
+ updateDirectionSizes();
 }
 function setCameraAnimated(){
  if(!reducedMotion.matches)world.classList.add('camera-animate');
  setTransform();
  clearTimeout(cameraTimer);
- cameraTimer=setTimeout(()=>world.classList.remove('camera-animate'),520);
+ cameraTimer=setTimeout(()=>{
+  world.classList.remove('camera-animate');
+  updateDirectionSizes();
+ },520);
 }
 /* V3.1: restore the mouse-anchored zoom handler lost during Smart Focus refactor. */
 function zoomAt(factor,clientX,clientY){
@@ -1519,12 +1531,13 @@ function focusOriginalStage(id){
  viewportUserNavigated=false;setCameraAnimated();
  $('canvasHintText').textContent='已定位 '+phase.title+' · 点击节点查看完整详情';
 }
-function fit(){
+function fit(animate=true){
  const a=availableCanvas(),pad=Math.min(52,Math.max(14,a.width*.08));
  scale=Math.min(Math.max(.04,(a.width-pad*2)/WORLD_W),Math.max(.04,(a.height-pad*2)/WORLD_H),1);
  tx=a.centerX-WORLD_W*scale/2;ty=a.centerY-WORLD_H*scale/2;
  viewportUserNavigated=false;
- setCameraAnimated();
+ if(animate)setCameraAnimated();
+ else setTransform();
 }
 function focusNodeNeighborhood(id){
  const n=nodes.get(id);if(!n)return;
@@ -1561,11 +1574,12 @@ function updateFocusControls(){
  $('globalViewBtn').style.display=active?'inline-flex':'none';
  if(!active)$('canvasHintText').textContent='点击节点聚焦、上游高亮；点击连线查看条件与方向动画';
 }
-function resetToGlobalView(closePanel=false){
+function resetToGlobalView(closePanel=false,animate=true){
  selectedNode=null;selectedEdge=null;hoverItem=null;hideTooltip();
  if(closePanel)inspector.classList.add('closed');
  updateSelection();updateFocusControls();renderOverview();
- requestAnimationFrame(()=>fit());
+ if(animate)requestAnimationFrame(()=>fit());
+ else fit(false);
 }
 function updateMiniViewport(){
  const r=viewport.getBoundingClientRect();
@@ -1666,14 +1680,24 @@ function updateSelection(){
 
 const ambientShapes=[];
 let ambientRaf=null,ambientPrevious=0,ambientElapsed=0;
+const directionRate=()=>reducedMotion.matches ? 0.55 : 1;
+function renderedScale(){
+ if(!world.classList.contains('camera-animate'))return scale;
+ return new DOMMatrixReadOnly(getComputedStyle(world).transform).a;
+}
+function updateDirectionSizes(){
+ const currentScale=renderedScale();
+ updateMotionSizes(currentScale);
+ updateAmbientSizes(currentScale);
+}
 function initAmbientMotion(){
  const ns='http://www.w3.org/2000/svg';
  const layer=document.createElementNS(ns,'g');layer.classList.add('ambient-motion-layer');
- // One faint marker on each defined edge; failures remain very faint until explicitly selected.
+ // Direction markers keep a readable screen size on the fitted overview.
  edges.forEach((e,i)=>{
   const path=edgeElements.get(e.id)?.querySelector('.edge-visible');if(!path)return;
   const dot=document.createElementNS(ns,'circle');dot.classList.add('ambient-dot');if(e.supplemental)dot.classList.add('supplemental');
-  dot.setAttribute('fill',colors[e.kind]||'#8390a3');
+  dot.setAttribute('fill',e.kind==='normal'?'#456ca7':colors[e.kind]||'#456ca7');
   dot.dataset.edgeId=e.id;dot.dataset.kind=e.kind;
   layer.appendChild(dot);
   let length=120;try{length=path.getTotalLength()}catch{}
@@ -1683,8 +1707,8 @@ function initAmbientMotion(){
  updateAmbientSizes();
  return layer;
 }
-function updateAmbientSizes(){
- const r=(2.5/Math.max(.025,scale)).toFixed(2);
+function updateAmbientSizes(currentScale=renderedScale()){
+ const r=(2.8/Math.max(.025,currentScale)).toFixed(2);
  ambientShapes.forEach(m=>m.dot.setAttribute('r',r));
 }
 function animateAmbient(now){
@@ -1692,15 +1716,16 @@ function animateAmbient(now){
  const delta=now-ambientPrevious;
  // ~30 fps is enough for unobtrusive background flow; selected paths remain smoother.
  if(delta<32){ambientRaf=requestAnimationFrame(animateAmbient);return;}
- if(!motionPaused)ambientElapsed+=Math.min(95,delta);
+ if(!motionPaused)ambientElapsed+=Math.min(95,delta)*directionRate();
  ambientPrevious=now;
  if(!motionPaused){
+  if(world.classList.contains('camera-animate'))updateDirectionSizes();
   ambientShapes.forEach(m=>{
    const phase=((ambientElapsed+m.delay)%m.duration)/m.duration;
    const point=m.path.getPointAtLength(phase*m.length);
    m.dot.setAttribute('cx',point.x.toFixed(1));m.dot.setAttribute('cy',point.y.toFixed(1));
    const selected=selectedEdge===m.edge.id||!!selectedNode&&(m.edge.source===selectedNode||m.edge.target===selectedNode);
-   m.dot.style.opacity=selected?'0.04':m.edge.kind==='error'||m.edge.kind==='control'?'0.17':'0.49';
+   m.dot.style.opacity=selected?'0.12':m.edge.kind==='error'||m.edge.kind==='control'?'0.36':'0.82';
   });
  }
  ambientRaf=requestAnimationFrame(animateAmbient);
@@ -1713,7 +1738,7 @@ function stopMotion(){
 }
 function animateMotionFrame(now){
  if(motionPrevious===null)motionPrevious=now;
- const delta=Math.min(80,Math.max(0,now-motionPrevious));motionPrevious=now;
+ const delta=Math.min(80,Math.max(0,now-motionPrevious))*directionRate();motionPrevious=now;
  if(!motionPaused){
   motionShapes.forEach(m=>{
    m.elapsed+=delta;
@@ -1735,8 +1760,8 @@ function motionChoicesForSelection(){
  const selectedOutbound=n.helper==='parallel-start'?outbound.slice(0,4):outbound.slice(0,1);
  return [...inbound,...selectedOutbound];
 }
-function updateMotionSizes(){
- const inv=1/Math.max(.12,scale);
+function updateMotionSizes(currentScale=renderedScale()){
+ const inv=1/Math.max(.12,currentScale);
  motionShapes.forEach(m=>{
   m.core.setAttribute('r',(4.4*inv).toFixed(2));
   m.core.style.strokeWidth=(1.4*inv)+'px';
@@ -1961,6 +1986,23 @@ function renderOverview() {
     ]))+section('流程阶段',wrapRows(DATA.phases.map(p=>`<button type="button" class="relation-row" data-stage-focus="${esc(p.id)}"><span>${esc(p.title)}</span><small>${p.count} 个节点</small></button>`)))+
     (DATA.runView?section('只读运行状态',facts(runSummary())):section('预览模式',note(modeNote))));
 }
+const joinRuleLabels={all_succeeded:'全部分支成功',any:'任一分支成功'};
+function regionTargets(title,targets) {
+  if(!targets.length)return '';
+  const rows=targets.map(([id,caption])=>{
+    const card=cardsByNode.get(id);
+    return card?relationButton(card.id,caption):note(caption?`${id} · ${caption}`:id);
+  });
+  return `<div class="region-targets"><div class="region-targets-title">${title}</div>${rows.join('')}</div>`;
+}
+function regionDetails(region) {
+  const lanes=region.lanes??[];
+  return '<div class="region-details">'+facts([
+    ['结构',types[region.kind]??region.kind],['成员',`${region.memberIds.length} 个`],
+    ['汇合条件',joinRuleLabels[region.joinStrategy]??'见节点出口'],
+  ])+regionTargets('分支入口',lanes.map(lane=>[lane.entry,`${lane.memberIds.length} 个成员`]))+
+    regionTargets('正常出口',region.normalExits.map(id=>[id]))+'</div>';
+}
 function renderNodePanel(node) {
   const spec = node.spec;
   setPanelHeader('NODE DETAILS', node.label, node.slug);
@@ -1989,14 +2031,9 @@ function renderNodePanel(node) {
     badges(pill(spec?readableTypes(spec):'结构说明','blue'),pill(phaseTitle(node.phase)),...(node.shape?[pill(node.shape)]:[])),
     readingSection('description',`<div class="rich-text"><p>${esc(node.description)}</p></div>`),
     ...(spec?[section('节点身份',facts([['所属阶段',phaseTitle(node.phase)],...attributes]))]:[]),
-    ...(spec?.capabilityId?[section('执行能力',`<div class="role-card"><strong>${esc(spec.capabilityId)}</strong><small>${esc(readableTypes(spec))} · 由宿主绑定</small></div>`)]:[]),
+    ...(spec?.capabilityId?[section('执行能力',`<div class="role-card"><span class="capability-name">${esc(spec.capabilityId)}</span><small>${esc(readableTypes(spec))} · 由宿主绑定</small></div>`)]:[]),
     ...(parentRegions.length ? [section('所属结构',list(parentRegions))] : []),
-    ...(region ? [section('分支与汇合', facts([
-      ['结构',types[region.kind]??region.kind],
-      ['成员',region.memberIds.length],
-      ['汇合条件',region.joinStrategy??'见节点出口'],
-      ['正常出口',region.normalExits.join('、')],
-    ])+list((region.lanes??[]).map(lane => (actualNodes.get(lane.entry)?.name??lane.entry) + ' · '+lane.memberIds.length+' 个成员')))] : []),
+    ...(region ? [section('分支与汇合',regionDetails(region),'branches')] : []),
     readingSection('inputs',contractCards(spec?.inputs??[],'input'),!spec?.inputs.length),
     readingSection('outputs',contractCards(spec?.outputs??[],'output'),!spec?.outputs.length),
     section('节点产物',`<div class="v42-artifact-note node-artifact-empty"><span>${DATA.runView?'在产物中心查看此节点的授权版本。':offlineArtifact}</span><button type="button" class="panel-btn" data-open-artifact-center="${esc(node.id)}">查看产物中心</button></div>`,'artifacts'),
@@ -2283,7 +2320,7 @@ window.addEventListener('resize',() => {
 });
 let ambientLayer;
 function syncMotionPlayback() {
-  motionPaused=document.hidden||reducedMotion.matches;
+  motionPaused=document.hidden;
   if (!motionPaused) {
     ambientLayer??=initAmbientMotion();
     ambientLayer.style.display='';
@@ -2324,8 +2361,7 @@ renderMinimap();
 for(const node of DATA.nodes) accessible(nodeElements.get(node.id),node.label+' · '+node.slug);
 for(const edge of DATA.edges) accessible(edgeElements.get(edge.id),nodes.get(edge.source).label+' → '+nodes.get(edge.target).label);
 initSheetResize();
-renderOverview();
-resetToGlobalView(true);
+resetToGlobalView(true,false);
 syncMotionPlayback();
 const confirmationButton = document.querySelector('#flowkit-host-controls button[type="submit"]');
 if (confirmationButton) confirmationButton.disabled = false;
