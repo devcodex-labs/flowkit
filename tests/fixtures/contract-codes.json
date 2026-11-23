@@ -31,6 +31,10 @@
       "message": "非字面量 DSL / 不可擦除 TS"
     },
     {
+      "code": "FK_C008",
+      "message": "工作流输入输出契约不合法"
+    },
+    {
       "code": "FK_C010",
       "message": "node id 格式非法"
     },
@@ -225,6 +229,14 @@
     {
       "code": "FK_R004",
       "message": "agent 重试耗尽，含 reasons、条件性 cause"
+    },
+    {
+      "code": "FK_R008",
+      "message": "工作流输入契约校验失败"
+    },
+    {
+      "code": "FK_R009",
+      "message": "工作流输出契约校验失败"
     },
     {
       "code": "FK_R010",

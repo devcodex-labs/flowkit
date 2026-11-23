@@ -60,6 +60,7 @@ export function encodeCheckpoint(cp) {
       ...(cp.cancelledRequests?.length?{cancelledRequests:cp.cancelledRequests}:{}),
       ...(cp.unavailableParallelKeys?.length?{unavailableParallelKeys:cp.unavailableParallelKeys}:{})},
     state,candidate,receivedSubmission,pending:pendingFromExecution(cp),inFlightOperations:[],
+    ...(cp.publicOutput===undefined?{}:{publicOutput:cp.publicOutput,outputContractDigest:cp.outputContractDigest}),
     terminal:status==='succeeded'||status==='failed'?cp.terminal:null,
     lastTransitionId:cp.lastTransitionId??null,
     limits:{stageCount:cp.stageCount??0,receiptCount:cp.receiptCount??0,bytes:MAX_CHECKPOINT_BYTES},
@@ -91,11 +92,12 @@ function validSubflows(group,revision,depth=0) {
 export function decodeCheckpoint(cp) {
   if (!keys(cp,['schemaVersion','protocolVersion','namespace','runId','startKey','startIntentHash',
     'revision','status','program','programRef','policyIdentity','execution','state','candidate',
-    'receivedSubmission','pending','inFlightOperations','terminal','lastTransitionId','limits'],['causeCode'])
+    'receivedSubmission','pending','inFlightOperations','terminal','lastTransitionId','limits'],
+    ['causeCode','publicOutput','outputContractDigest'])
     || cp.schemaVersion!==1 || cp.protocolVersion!==1
     || ![cp.namespace,cp.runId,cp.startKey].every(text) || !count(cp.revision) || !object(cp.state)
     || !keys(cp.programRef,['namespace','artifactHash','programId'])
-    || !keys(cp.program,['artifactHash','sourceHash','workflowId','workflowVersion','compilerVersion','programAbiVersion',
+    || !keys(cp.program,['artifactHash','sourceHash','graphStructureHash','workflowId','workflowVersion','compilerVersion','programAbiVersion',
       'semanticsVersion','checkpointSchemaVersion','canonicalizationVersion','implementedStage'])
     || ![cp.program.workflowId,cp.program.workflowVersion,cp.program.compilerVersion].every(text)
     || cp.program.programAbiVersion!==1 || cp.program.checkpointSchemaVersion!==1
@@ -161,6 +163,9 @@ export function decodeCheckpoint(cp) {
     execution.taskContext.active && (!text(execution.taskContext.active.activationId) ||
       execution.taskContext.active.prepared?.protocolVersion !== 2))) throw invalid();
   const hasPending=!parallel&&(status==='waiting'||phase==='dispatch-ready');
+  if (Object.hasOwn(cp,'publicOutput')!==Object.hasOwn(cp,'outputContractDigest')
+    || (Object.hasOwn(cp,'publicOutput') && (status!=='succeeded' || !object(cp.publicOutput)
+      || !/^sha256:[0-9a-f]{64}$/.test(cp.outputContractDigest)))) throw invalid();
   if ((!finished.has(status) && !['waiting','paused','running'].includes(status))
     || (phase==='finished')!==finished.has(status) || (!parallel&&(phase==='awaiting')!==(status==='waiting'))
     || (!parallel&&cp.pending.length!==(hasPending?1:0)) || (phase==='validate')!==(receivedSubmission!==null)
@@ -169,7 +174,7 @@ export function decodeCheckpoint(cp) {
     || (cp.terminal!==null && (!keys(cp.terminal,['status','nodeId']) || cp.terminal.status!==status
       || !text(cp.terminal.nodeId)))) throw invalid();
 
-  for (const digest of [startIntentHash,program.sourceHash,program.artifactHash,policyIdentity.policyHash,
+  for (const digest of [startIntentHash,program.sourceHash,program.graphStructureHash,program.artifactHash,policyIdentity.policyHash,
     policyIdentity.bindingManifestHash,...(policyIdentity.skillManifestHash?[policyIdentity.skillManifestHash]:[]),
     ...(lastTransitionId===null?[]:[lastTransitionId])]) assertSHA256(digest);
   let pending=null;
@@ -223,6 +228,7 @@ export function decodeCheckpoint(cp) {
   } else if (cp.candidate!==null) throw invalid();
 
   return {schemaVersion:1,namespace,runId,startKey,startIntentHash,revision,status,state,program,policyIdentity,
+    ...(Object.hasOwn(cp,'publicOutput')?{publicOutput:cp.publicOutput,outputContractDigest:cp.outputContractDigest}:{}),
     artifactHash:program.artifactHash,policyHash:policyIdentity.policyHash,blockId,
     phase:phase==='finished'?blockId.slice(blockId.lastIndexOf('::')+2):phase,controlStack,activationSeq,agentStepCounter,contextError,
     candidate,receivedSubmission,lastTransitionId,stageCount:cp.limits.stageCount,receiptCount:cp.limits.receiptCount,

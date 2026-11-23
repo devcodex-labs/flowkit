@@ -1,4 +1,5 @@
-import type {Runtime, PreparedAgentTask, TaskPolicy} from './index.js';
+import type {Runtime, PreparedAgentTask, TaskPolicy, GraphSnapshotV1, InteractiveHumanDecision} from './index.js';
+import type {WorkflowContract} from './dsl.js';
 
 /**
  * P0-A / Interactive-state-machine-v1.
@@ -8,6 +9,7 @@ import type {Runtime, PreparedAgentTask, TaskPolicy} from './index.js';
 export interface InteractiveProgramIdentity {
   artifactHash: string;
   sourceHash: string;
+  graphStructureHash: string;
   workflowId: string;
   workflowVersion: string;
   compilerVersion: string;
@@ -42,6 +44,7 @@ export interface InteractiveCompileResult {
   mermaid?: string;
   diagnostics: InteractiveDiagnostic[];
   programIdentity?: InteractiveProgramIdentity;
+  graphSnapshot?: GraphSnapshotV1;
   artifactPath?: string;
 }
 export declare function compileInteractive(
@@ -59,6 +62,7 @@ export interface LoadedInteractiveProgram {
     blocks: readonly Record<string,unknown>[];
     nodes: Record<string,unknown>;
     requiredBindings: readonly Record<string,unknown>[];
+    contract?:WorkflowContract & {readonly validator:string;readonly digest:string};
   };
   advance(view: unknown, event: unknown): unknown;
 }
@@ -301,6 +305,8 @@ export interface TrustedInteractiveTerminalResult {
   status:PublicInteractiveTerminalFrame['status'];
   terminal?:PublicInteractiveTerminalFrame['terminal'];
   state:Record<string,unknown>;
+  /** Formal result, present only on success after output validation. */
+  publicOutput?:Record<string,unknown>;
   contextError:InteractiveContextError|null;
   causeCode?:string;
 }
@@ -380,7 +386,8 @@ export interface TransitionRecordV1 {
 }
 
 type InteractiveStepKind = 'agent' | 'action' | 'verification' | 'human';
-interface InteractiveHumanProof {subjectId:string;proofId:string;evidenceHash:string}
+interface InteractiveHumanProof {subjectId:string;proofId:string;evidenceHash:string;
+  bundleHash?:string;decision?:'approve'|'revise'|'decline'}
 
 export interface ReceiptRecordV1 {
   namespace:string;
@@ -423,6 +430,8 @@ export type RunCheckpointV1 = {
     taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
+  publicOutput?:Record<string,unknown>;
+  outputContractDigest?:string;
   candidate:{kind:InteractiveStepKind;requestId:string;result:Record<string,unknown>}|null;
   receivedSubmission:{kind:InteractiveStepKind;requestId:string;activation:number;attempt:number;canonicalDigest:string;
     acceptedRevision:number;payload:Record<string,unknown>;receivedAt:string;humanProof?:InteractiveHumanProof}|null;
@@ -448,6 +457,8 @@ export interface CheckpointStoreV1 {
   compareAndSwap(runId:string,expectedRevision:number,tx:{next:RunCheckpointV1;transition:TransitionRecordV1;receipt?:ReceiptRecordV1}):Promise<CASResultV1>;
   loadTransition(runId:string,transitionId:string):Promise<TransitionRecordV1|null>;
   loadReceipt(runId:string,requestId:string):Promise<ReceiptRecordV1|null>;
+  loadJournalPage?(runId:string,page:{afterRevision:number;limit:number}):Promise<{headRevision:number;
+    records:Array<{revision:number;transitionId:string;entry:Record<string,unknown>}>}|null>;
 }
 
 export interface TrustedProgramRefV1 {
@@ -470,6 +481,7 @@ export declare function createSqliteInteractivePersistence(file:string,options:{
   readonly programRegistry:TrustedProgramRegistryV1;
   readonly adminController:InteractiveAdminControllerV1;
   readonly operationController:InteractiveOperationController;
+  readonly artifactController:InteractiveArtifactController;
   close():void;
 };
 
@@ -520,6 +532,40 @@ export interface TrustedHostContextV1 {
   readonly subjectId:string;
   readTerminalResult(resultRef:InteractiveTerminalResultRef,
     options:Omit<InteractiveOptionsV1,'auth'>):Promise<TrustedInteractiveTerminalResult>;
+  readRunView(ref:RunViewerRef,options:RunViewerOptions):Promise<RunViewerSnapshot>;
+  listRunViewEvents(input:{ref:RunViewerRef;afterRevision?:number;limit?:number},options:RunViewerOptions):Promise<RunViewerEvents>;
+  readRunArtifacts(input:{ref:RunViewerRef;after?:number},options:RunViewerOptions):Promise<RunArtifactIndex>;
+}
+
+interface ArtifactMetadata {artifactId:string;contentHash:string;mimeType:string;sizeBytes:number}
+interface ArtifactVersion extends ArtifactMetadata {versionId:string;nodeId:string;requestId:string}
+export interface ReviewBundle {runId:string;requestId:string;reviewDigest:string;expiresAt:number;bundleHash:string;
+  versions:Array<Pick<ArtifactVersion,'artifactId'|'versionId'|'contentHash'>>}
+export interface InteractiveArtifactController {
+  registerVersion(input:ArtifactMetadata & {runId:string;requestId:string;storageRef:string},auth:TrustedHostContextV1):
+    Promise<ArtifactVersion & {storageRef:string}>;
+  freezeBundle(input:{runId:string;requestId:string;reviewDigest:string;versionIds:string[];expiresAt:number;
+    expectedBundleHash?:string},auth:TrustedHostContextV1):Promise<ReviewBundle>;
+}
+export interface RunArtifactIndex {schemaVersion:1;namespace:string;runId:string;artifactHash:string;graphDigest:string;
+  items:Array<ArtifactVersion & {latestVersionId:string;effectiveVersionId:string|null}>;next:number|null}
+
+export type RunViewerRef = {namespace:string;runId:string;artifactHash:string;graphDigest:string} & (
+  {collectionId:string;candidateHash:string;approvalRef:string} |
+  {collectionId?:never;candidateHash?:never;approvalRef?:never}
+);
+export type RunViewerOptions=Omit<InteractiveOptionsV1,'auth'> & {graphSnapshot:GraphSnapshotV1};
+export interface RunViewerSnapshot {
+  schemaVersion:1;namespace:string;runId:string;artifactHash:string;graphDigest:string;revision:number;
+  status:InteractiveRunStatus;pauseReason?:string;publicOutput?:Record<string,unknown>;
+  pending:Array<{nodeId:string;kind:InteractiveStepKind;activation:number;attempt:number;requestId:string;
+    scope:Array<{groupId:string;laneId:string}>}>;
+}
+export interface RunViewerEvents {
+  schemaVersion:1;namespace:string;runId:string;artifactHash:string;graphDigest:string;headRevision:number;cursor:number;
+  events:Array<{eventId:string;revision:number;kind:'run.started'|'run.finished'|'receipt.accepted'|'transition.committed';
+    occurredAt:string;nodeId?:string;requestId?:string;attempt?:number;activation?:number;
+    scope?:Array<{groupId:string;laneId:string}>;receiptOutcome?:'succeeded'|'failed'}>;
 }
 
 export type PublicPendingV1 = {
@@ -560,15 +606,17 @@ export declare function createInteractiveHostContext(options:{
   namespace:string;
   subjectId:string;
   authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|
+    'viewer:read'|'viewer:events'|'viewer:output'|'viewer:artifacts'|'artifact:register'|'artifact:freeze'|
     'operation:claim'|'operation:read'|'operation:settle'|'operation:list'|'operation:compensate'|
     'operation:recover-compensation'|'operation:settle-compensation';
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
+    graphDigest?:string;collectionId?:string;candidateHash?:string;approvalRef?:string;
     reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';
     evidenceHash?:string;compensationKey?:string;compensationPlan?:Readonly<{capabilityId:string;inputHash:string}>}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;nodeId:string;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
   authorizeHuman?(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;reviewDigest:string;
-    result:{approved:boolean;comment?:string|null}}>):{proofId:string;evidenceHash:string}|null
+    result:InteractiveHumanDecision;bundle?:ReviewBundle}>):{proofId:string;evidenceHash:string}|null
       |Promise<{proofId:string;evidenceHash:string}|null>;
 }):TrustedHostContextV1;
 
@@ -590,6 +638,7 @@ export interface InteractiveRuntimeV1 {
 }
 
 export interface InteractivePolicyV1 {
+  requiredBundleReviews?:readonly string[];
   taskPolicy?: Omit<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'> & {remoteSkillHosts?:string[]};
   id:string;
   version:string;
@@ -622,8 +671,8 @@ export type HostSubmissionV1 =
   | {kind:'action';runId:string;requestId:string;outcome:'succeeded';operationKey:string;
       result:{set:Record<string,unknown>;remove?:readonly string[]}}
   | {kind:'verification';runId:string;requestId:string;outcome:'succeeded';result:{passed:boolean}}
-  | {kind:'human';runId:string;requestId:string;outcome:'succeeded';reviewDigest:string;
-      result:{approved:boolean;comment?:string|null}};
+  | {kind:'human';runId:string;requestId:string;outcome:'succeeded';reviewDigest:string;bundleHash?:string;
+      result:InteractiveHumanDecision};
 
 export declare function start(source:string|TrustedProgramRefV1,runtime:InteractiveRuntimeV1,
   initialState:Record<string,unknown>,options:InteractiveOptionsV1&{startKey:string}):Promise<InteractiveFrameV1>;

@@ -57,7 +57,7 @@ function validate(schema,output){
 }
 const originalRequest='建立 FlowKit Interactive P0-A 的 C01–C12 复杂验收矩阵，验证多 Agent 顺序、条件路由、Schema 重试、SQLite 恢复、签名、安全与长链；不得越界实现 Context 或通用产物存储。';
 
-test('C01/C03 recorded ChatGPT responses bind to exact Pending and replay through Program/Host',async()=>{
+test('C01/C03 replays captured ChatGPT responses with fresh receipts for the current Program',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'fk-c01-live-'));
   const file=path.join(root,'run.sqlite');
   let store;
@@ -139,8 +139,8 @@ test('C01/C03 recorded ChatGPT responses bind to exact Pending and replay throug
       }
       assert.equal(recorded.index,index);
       assert.equal(recorded.nodeId,task.nodeId);
-      assert.equal(recorded.requestId,task.requestId);
-      assert.equal(recorded.taskDigest,taskDigest);
+      // Verify the original task body without altering the recorded model evidence.
+      assert.equal(sha256Bytes(canonicalBytes({...task,requestId:recorded.requestId})),recorded.taskDigest);
       assert.ok(recorded.result&&typeof recorded.result==='object');
       const receipt={
         runId,requestId:task.requestId,nodeId:task.nodeId,attempt:task.attempt,
@@ -162,7 +162,9 @@ test('C01/C03 recorded ChatGPT responses bind to exact Pending and replay throug
       host=hostFor(store);
       const recovered=await host.load({runId});
       assert.equal(recovered.status,'waiting');
-      assert.equal((await host.getPublicAgentTask({runId})).requestId,task.requestId);
+      const recoveredTask=await host.getPublicAgentTask({runId});
+      assert.equal(recoveredTask.requestId,task.requestId);
+      assert.equal(sha256Bytes(canonicalBytes(recoveredTask)),taskDigest);
       const accepted=await host.accept({receipt,attestation});
       assert.equal(accepted.duplicate,false);
       assert.equal(store.getReceipt(runId,task.requestId).acceptedRevision,
@@ -198,7 +200,7 @@ test('C01/C03 recorded ChatGPT responses bind to exact Pending and replay throug
     const last=replies.at(-1);
     const lastTask=await host.load({runId});
     assert.equal(lastTask.status,'succeeded');
-    const old=store.getReceipt(runId,replies[0].requestId);
+    const old=store.getReceipt(runId,requestIds[0]);
     assert.ok(old&&old.acceptedRevision>0);
     console.log('C01_CHATGPT_RECORDED_RESPONSES_ACCEPTED '+JSON.stringify({
       scenarioIds:['C01','C03'],execution:'CHATGPT_AUTHORED_FIXTURE_REPLAY',
@@ -210,7 +212,7 @@ test('C01/C03 recorded ChatGPT responses bind to exact Pending and replay throug
       journalRevisions:journal.length,restartedSQLiteWithinEachCI:true,
       retriesObserved:rejectedReviewAttempts,
       outputLength:last.result.reviewNotes.length,
-      note:'Five ChatGPT-authored responses replayed against exact Pending identities; GitHub tool identity is not native session attestation and each CI run recreates its DB',
+      note:'Five historical responses replayed with new Host receipts bound to the current Program Pending identities; each run recreates its DB',
     }));
   }finally{
     try{store?.close()}finally{await rm(root,{recursive:true,force:true})}

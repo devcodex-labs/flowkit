@@ -4,6 +4,7 @@
  */
 import { supportsInteractiveNodeKind } from './feature-gate.mjs';
 import { isInteractiveStage, hasStepFrame } from '../../interactive/protocol.mjs';
+import {verifyWorkflowContract} from '../../shared/workflow-contract.mjs';
 
 const externalPhases = Object.freeze(['enter', 'prepare', 'dispatch-ready', 'awaiting', 'validate']);
 export const INTERACTIVE_PHASES = Object.freeze({
@@ -27,7 +28,9 @@ const externalRules = Object.freeze({
 const RULES = Object.freeze({
   action: externalRules,
   verification: externalRules,
-  human: externalRules,
+  human: Object.freeze({...externalRules,validate:[
+    [...externalRules.validate[0],'human-declined','human-revisions-exhausted'],externalRules.validate[1],
+  ]}),
   loop: Object.freeze({
     enter:[['internal-step','deterministic-failure'],['move','raise-error']],
     route:[['internal-step','deterministic-failure'],['move','raise-error']],
@@ -90,7 +93,7 @@ export function expectedBlockTargets(ir, nodeId, phase) {
     if (phase === 'awaiting') return [target(nodeId, 'validate')];
     if (phase === 'validate') {
       if (record.kind==='agent') return [target(nodeId, 'prepare'), target(nodeId, 'commit')];
-      return [...new Set([metadata.next,metadata.onFailure,metadata.loop?.onMaxExceeded]
+      return [...new Set([metadata.next,metadata.onFailure,metadata.onError,metadata.loop?.onMaxExceeded,metadata.onDecline]
         .filter(id=>typeof id==='string').map(id=>target(id,'enter')))];
     }
     if (phase === 'commit') return [target(nodeId, 'route')];
@@ -127,9 +130,11 @@ export function validateInteractiveIR(ir) {
     return { ok: false, diagnostics: Object.freeze([{ code: 'FK_I_INVALID_TRANSITION', severity: 'error', message: 'Invalid IR envelope' }]) };
   }
   const ids = Object.keys(ir.nodes);
+  try {verifyWorkflowContract(ir.contract);} catch {bad('Invalid workflow contract or validator identity');}
   if (!ids.length || ids.length > 500 || ir.blocks.length > 3500) bad('Invalid P0-A IR size');
   if (ir.entryBlockId !== interactiveBlockId(ids[0], 'enter')) bad('Invalid entry block');
   if (!/^[a-f0-9]{64}$/.test(ir.sourceHash ?? '')) bad('Invalid source hash');
+  if (!/^sha256:[a-f0-9]{64}$/.test(ir.graphStructureHash ?? '')) bad('Invalid graph structure hash');
   const expectedFrames = ids.filter(id => hasStepFrame(ir.nodes[id]?.kind)).map(id=>stepFrameRule(id,ir.nodes[id].kind));
   if (!Array.isArray(ir.frameRules) || ir.frameRules.length !== expectedFrames.length) {
     bad('Invalid control-frame rule count');
@@ -178,6 +183,8 @@ export function validateInteractiveIR(ir) {
       || !Array.isArray(metadata.writes) || metadata.writes.some(key=>typeof key!=='string')
       || metadata.reads!==undefined && (!Array.isArray(metadata.reads) || metadata.reads.some(key=>typeof key!=='string'))
       || metadata.effect!==undefined && !['read-only','write'].includes(metadata.effect)
+      || metadata.onError!==undefined && (typeof metadata.onError!=='string' || metadata.onError===metadata.next
+        || metadata.onFailure!==undefined || metadata.parallelOwner!==undefined)
       || (metadata.onFailure!==undefined && typeof metadata.onFailure!=='string'))) bad('Malformed Action metadata: '+id);
     if (record.kind==='verification' && (typeof metadata.verifier!=='string' || typeof metadata.next!=='string'
       || typeof metadata.onFailure!=='string')) bad('Malformed Verification metadata: '+id);
@@ -193,7 +200,11 @@ export function validateInteractiveIR(ir) {
       || metadata.maxIterations<1 || metadata.maxIterations>100)) bad('Malformed Loop metadata: '+id);
     if (record.kind==='human' && (typeof metadata.next!=='string' || typeof metadata.onFailure!=='string'
       || (metadata.maxRevisions!==undefined && (!Number.isInteger(metadata.maxRevisions)
-      || metadata.maxRevisions<0 || metadata.maxRevisions>100)))) bad('Malformed Human metadata: '+id);
+      || metadata.maxRevisions<0 || metadata.maxRevisions>100))
+      || (metadata.onDecline!==undefined && (!Number.isInteger(metadata.maxRevisions)
+      || ir.nodes[metadata.onDecline]?.kind!=='terminal'||ir.nodes[metadata.onDecline]?.metadata?.status!=='failed')))) {
+      bad('Malformed Human metadata: '+id);
+    }
     if (record.kind==='parallel' && ((!['all_succeeded','any'].includes(metadata.strategy)
       || metadata.strategy==='any'&&ir.featureStage!=='P2')
       || typeof metadata.next!=='string' || !Array.isArray(metadata.branches) || metadata.branches.length<2

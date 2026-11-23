@@ -1,17 +1,30 @@
 import {loadBoundedModule} from './compilation-cache.mjs';
+import {WORKFLOW_CONTRACT_MARKER,verifyWorkflowContract} from '../shared/workflow-contract.mjs';
 
-export function workflowFunctionText(code) {
+const contracts = new WeakMap();
+export const contractForWorkflow = workflow => contracts.get(workflow);
+
+function splitBody(code) {
   if (typeof code !== 'string') throw new TypeError('code must be a string');
-  const body = code.split('\n').slice(10).join('\n');
+  let body = code.split('\n').slice(10).join('\n');
+  let contract;
+  if (body.startsWith(WORKFLOW_CONTRACT_MARKER)) {
+    const end = body.indexOf('\n');
+    contract = verifyWorkflowContract(JSON.parse(body.slice(WORKFLOW_CONTRACT_MARKER.length,end)));
+    body=body.slice(end+1);
+  }
   if (!body.startsWith('export async function workflow(ctx) {')) throw new Error('Invalid generated workflow text');
-  return body.slice('export '.length, body.endsWith('\n') ? -1 : undefined);
+  return {contract,text:body.slice('export '.length, body.endsWith('\n') ? -1 : undefined)};
 }
 
+export const workflowFunctionText = code => splitBody(code).text;
+
 export function verifyWorkflowFunction(module, code) {
-  const expected = workflowFunctionText(code);
-  if (typeof module.workflow !== 'function' || Function.prototype.toString.call(module.workflow) !== expected) {
+  const {contract,text}=splitBody(code);
+  if (typeof module.workflow !== 'function' || Function.prototype.toString.call(module.workflow) !== text) {
     throw new Error('Loaded workflow function differs from the compiled text');
   }
+  if (contract) contracts.set(module.workflow,contract);
   return module.workflow;
 }
 

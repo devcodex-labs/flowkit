@@ -240,6 +240,7 @@ export function createTrustedInteractiveHost({
     return safeJSONSnapshot({
       projectionVersion:1,namespace:checkpoint.namespace,runId:checkpoint.runId,
       status:checkpoint.status,state:checkpoint.state,contextError:null,
+      ...(Object.hasOwn(checkpoint,'publicOutput')?{publicOutput:checkpoint.publicOutput}:{}),
       ...(terminal ? {terminal} : {}),
       ...(typeof causeCode==='string' ? {causeCode} : {}),
     },MAX_CHECKPOINT_BYTES);

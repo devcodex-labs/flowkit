@@ -8,6 +8,7 @@ import { emitWorkflow, agentSkillMetadata } from './emit.mjs';
 import { checkMermaidIds, renderMermaid } from './mermaid.mjs';
 import { commentText } from './values.mjs';
 import { hasTaskSpec } from '../shared/task-spec.mjs';
+import {WORKFLOW_CONTRACT_MARKER,workflowContract} from '../shared/workflow-contract.mjs';
 
 const compilerVersion = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
@@ -23,7 +24,9 @@ function header(analysis, paths, bodyHash) {
       (remoteSkills.length ? ` Remote Skills: ${remoteSkills.join('; ')}.` : ''));
   }
   const interaction = [];
-  if (has('human')) interaction.push('runHuman accepts boolean or approved/comment; comment defaults to null.');
+  if (has('human')) interaction.push(nodes.some(node=>node.type==='human'&&node.onDecline)
+    ? 'Human with onDecline requires an approve/revise/decline decision; the declared revision limit bounds review.'
+    : 'runHuman accepts boolean or approved/comment; comment defaults to null.');
   if (has('verification') || nodes.some(node => node.verify != null)) interaction.push('runVerification is strictly boolean (FK_R002).');
   if (interaction.length) conventions.push(interaction.join(' '));
   if (has('action')) conventions.push(analysis.graph.executionEdges.some(edge => edge.role === 'action-failure') ?
@@ -56,7 +59,10 @@ export async function compileToText(snapshot, suppliedOptions = {}) {
   sortDiagnostics(diagnostics);
   if (diagnostics.some(d => d.severity === 'error')) return { code: '', mermaid: '', diagnostics, analysis, plan: null, paths };
   const plan = createEmitPlan(analysis);
-  const body = emitWorkflow(analysis, plan);
+  const contract = workflowContract(analysis.literal.definition.contract);
+  const contractLine = contract===undefined ? '' : WORKFLOW_CONTRACT_MARKER +
+    JSON.stringify(contract).replaceAll('\u2028','\\u2028').replaceAll('\u2029','\\u2029') + '\n';
+  const body = contractLine + emitWorkflow(analysis, plan);
   const bodyHash = createHash('sha256').update(body.slice(0, -1), 'utf8').digest('hex');
   return { code: header(analysis, paths, bodyHash) + body, mermaid: options.mermaid === false ? '' : renderMermaid(analysis),
     diagnostics, analysis, plan, paths };

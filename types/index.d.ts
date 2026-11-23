@@ -23,8 +23,43 @@ export interface Diagnostic {
   severity: 'error' | 'warning';
 }
 export interface WorkflowResult { status: 'succeeded' | 'failed'; terminal: string }
-export interface RunResult extends WorkflowResult { state: Record<string, unknown>; error?: unknown }
+export interface RunResult extends WorkflowResult {
+  /** Internal state for trusted SDK consumers. */
+  state: Record<string, unknown>;
+  /** Present only on a successful run with a validated output contract. */
+  publicOutput?: Record<string, unknown>;
+  error?: unknown;
+}
 export interface CompileResult { code: string; mermaid: string; diagnostics: Diagnostic[] }
+export interface GraphSnapshotV1 {
+  schemaVersion:1;
+  compilerVersion:string;
+  mode:string;
+  workflowId:string;
+  workflowVersion:string;
+  name:string;
+  entryNodeId:string;
+  sourceHash:string;
+  artifactHash:string;
+  definitionDigest:string;
+  graphDigest:string;
+  nodes:ReadonlyArray<{id:string;type:string;name:string;sourcePath:string;line:number;column:number;
+    ownerIds:readonly string[];inputs:ReadonlyArray<{key:string;source:'declared'|'inferred'|'conditional'|'unknown'}>;
+    outputs:readonly string[];capabilityId?:string;effect?:string;status?:string;maxIterations?:number;
+    maxRevisions?:number;retries?:number}>;
+  referenceEdges:readonly GraphSnapshotEdge[];
+  executionEdges:readonly GraphSnapshotEdge[];
+  regions:ReadonlyArray<{ownerId:string;kind:string;entry:string;memberIds:readonly string[];
+    normalExits:readonly string[];branchMode?:'leaf'|'subflow';joinStrategy?:'any'|'all_succeeded';
+    lanes?:ReadonlyArray<{entry:string;memberIds:readonly string[]}>}>;
+  helpers:ReadonlyArray<{kind:'parallel-start'|'parallel-join';ownerId:string}>;
+  contract?:{validator:string;digest:string;input?:Readonly<Record<string,unknown>>;
+    output?:Readonly<Record<string,unknown>>;outputKeys?:readonly string[]};
+}
+export interface GraphSnapshotEdge {
+  edgeId:string;from:string;to:string;role:string;sourcePath:string;origin:'declared'|'derived';
+  condition?:string;priority?:number;
+}
 export interface Ctx { runtime: Runtime; state: Record<string, unknown>; signal?: AbortSignal; runId?: string; error?: unknown }
 export interface AgentStep {
   id: string; name: string; instruction: string;
@@ -124,7 +159,7 @@ export interface Runtime {
   recordAgentResult?(task: AgentTaskV2, result: AgentExecutionResult): void;
   validateResult?(schema: ObjectSchema, result: Record<string, unknown>): string[];
   checkStep?(step: { id: string; name: string; attempt: number }, result: Record<string, unknown>, ctx: Ctx): Promise<string | null | undefined>;
-  runHuman?(name: string, ctx: Ctx): Promise<boolean | { approved: boolean; comment?: string | null }>;
+  runHuman?(name: string, ctx: Ctx): Promise<boolean | InteractiveHumanDecision>;
   runVerification?(verifier: string, name: string, ctx: Ctx): Promise<boolean>;
   runAction?(action: string, name: string, ctx: Ctx): Promise<void>;
   loadSkill?(path: string, options?: { integrity?: string }): Promise<string>;
@@ -133,11 +168,13 @@ export interface Runtime {
   isControlSignal(err: unknown): boolean;
   trace?: { start(nodeId: string, name: string): void; end(nodeId: string, name: string, outcome: 'ok' | 'error' | 'control'): void };
 }
+export type InteractiveHumanDecision={decision:'approve'|'revise'|'decline';comment?:string|null}
+  | {approved:boolean;comment?:string|null};
 export declare function run(file: string, runtime: Runtime, state?: Record<string, unknown>, options?: FlowkitOptions): Promise<RunResult>;
 export declare function runArtifact(file: string, expectedHash: string, runtime: Runtime, state?: Record<string, unknown>, options?: FlowkitOptions): Promise<RunResult>;
 export declare function compile(file: string, options?: FlowkitOptions): Promise<CompileResult>;
 export declare function compileSource(text: string, options: FlowkitOptions & { filename: string }): Promise<CompileResult>;
-export declare function compileArtifact(file: string, options?: FlowkitOptions): Promise<CompileResult & { artifactHash: string | null }>;
+export declare function compileArtifact(file: string, options?: FlowkitOptions): Promise<CompileResult & { artifactHash: string | null; graphSnapshot?:GraphSnapshotV1 }>;
 export declare function check(file: string, options?: FlowkitOptions): Promise<Diagnostic[]>;
 export declare function evalWhen(ctx: Ctx, when: string): boolean;
 export declare function isControlSignal(err: unknown): boolean;

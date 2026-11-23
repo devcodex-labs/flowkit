@@ -6,11 +6,21 @@
 |---|---|---|
 | `name` | 必需string | 交给审批界面显示的名称 |
 | `onApprove` | 必需节点id | 批准后的后继 |
-| `onReject` | 必需节点id | 拒绝修订链入口，最终必须回到本human |
+| `onReject` | 必需节点 id | 修订链入口。通过修订检查后返回本 Human。 |
+| `onDecline` | 节点 id，选填 | 启用三结果决策。拒绝终止或用尽修订次数时进入失败终点。 |
+| `maxRevisions` | 0–100 的整数 | 三结果决策必填。限制实际启动的修订次数。 |
 
 `id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
 
 ## 返回形状
+
+声明 `onDecline` 时，Host 返回 `{ decision: 'approve' | 'revise' | 'decline', comment?: string | null }`。`approve` 继续，`revise` 进入修订并申请新的审核，`decline` 结束业务。进入同一 Human 的新审核有新的 `reviewDigest`。Interactive Host 需要校验审核摘要和审核主体。Standard 由提供 `runHuman` 的受信 Host 完成人员授权。
+
+三结果修订区允许 Agent、Action、Verification 和 Condition。首次准备可以从同一个 `onReject` 入口进入，且不消耗修订次数。区内 Verification 的 `onFailure` 和 Interactive Action 的 `onError` 可以直接指向 Human 的 `onDecline` 失败终点，此时不发出新的审批请求。其余路径须返回同一个 Human，区外只能从 `onReject` 进入修订区。
+
+修订超限进入失败终点并保留 `FK_R004`，显式拒绝直接走失败终点。通过普通回调提供布尔值会触发契约错误。
+
+未声明 `onDecline` 的 Human 使用下面的批准与修订形式。
 
 runHuman(name, ctx)异步返回boolean，或 `{ approved: boolean, comment?: string | null }`。无comment时归一为null。FlowKit在state[human节点id]保存这份决策，修订节点可读取comment。再次审批会覆盖该键，所以需要完整历史时由宿主另外存储。
 
@@ -31,9 +41,9 @@ return { approved: false, comment: '请补充说明' };
 
 Standard 节点可设置 `maxRevisions` 为 0 到 100。计数针对实际启动的拒绝修订，达到上限时停止并抛出 `FK_R004`。
 
-拒绝链只能包含Agent/action，必须最终回到同一个human。不能跳到另一个human、terminal、condition或loop后永久离开；这种结构分别可能得到[FK_C060](/troubleshooting/compiler#FK_C060)、[FK_C061](/troubleshooting/compiler#FK_C061)。需要结束审批的业务，可在宿主用取消/错误机制明确处理，或者重新设计流程边界，不能偷偷把拒绝当批准。
+未声明 `onDecline` 时，修订链只能包含 Agent 和 Action，且必须回到同一个 Human。非法入口或修订节点可能触发 [FK_C060](/troubleshooting/compiler#FK_C060) 或 [FK_C061](/troubleshooting/compiler#FK_C061)。
 
-FlowKit没有为human内建持久化等待、审批权限、通知或跨进程恢复。runHuman的Promise等待多久由宿主决定；服务重启后的恢复也要由宿主设计。它不自动限制拒绝次数，宿主应定义业务时限、取消和响应关联。
+Standard 的 `runHuman` 由宿主管理等待时限、取消和响应关联。Interactive 通过持久化检查点恢复待办，并在提交人工决定时校验权限和审核摘要。
 
 ## 验证和恢复
 

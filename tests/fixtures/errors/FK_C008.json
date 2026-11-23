@@ -1,0 +1,10 @@
+{
+  "code": "FK_C008",
+  "kind": "compile",
+  "invalid": {
+    "source": "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl'; export default defineWorkflow({id:'root',name:'Root',version:'1.0.0',contract:{output:{type:'object',properties:{},required:['undeclared']}},nodes:[terminal('done',{name:'Done',status:'succeeded'})]});"
+  },
+  "valid": {
+    "source": "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl'; export default defineWorkflow({id:'root',name:'Root',version:'1.0.0',contract:{output:{type:'object',properties:{},required:[]}},nodes:[terminal('done',{name:'Done',status:'succeeded'})]});"
+  }
+}

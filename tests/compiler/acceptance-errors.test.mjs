@@ -19,9 +19,8 @@ function materialize(spec) {
 const host = () => ({ isControlSignal, evalWhen, runAction: async () => {}, runHuman: async () => true,
   runVerification: async () => true, runAgent: async () => ({}), validateResult: () => [] });
 
-test('independent diagnostic fixture denominator is exactly the confirmed 61 codes', () => {
+test('independent diagnostic fixtures cover the complete contract catalog', () => {
   assert.deepEqual(files.map(file => file.replace('.json', '')), catalog.codes.map(item => item.code).sort());
-  assert.equal(files.length, 61);
 });
 
 for (const file of files) {

@@ -2,14 +2,14 @@
 export const PUBLIC_FUNCTIONS = Object.freeze(['run', 'runArtifact', 'compile', 'compileSource', 'compileArtifact', 'check', 'evalWhen', 'isControlSignal']);
 export const OPTION_KEYS = Object.freeze(['projectRoot', 'outDir', 'skillsRoot', 'skillCheck', 'remoteSkillHosts', 'trace', 'mermaid', 'fetch', 'signal', 'runId', 'dump']);
 export const DSL_FIELDS = Object.freeze(Object.fromEntries(Object.entries({
-  defineWorkflow: ['id', 'version', 'name', 'nodes'],
+  defineWorkflow: ['id', 'version', 'name', 'nodes', 'contract'],
   node: ['name', 'agent', 'skill', 'description', 'descriptionRefs', 'requiredSkills', 'output', 'inputs', 'retries', 'verify', 'overview', 'integrity', 'next'],
-  action: ['name', 'action', 'reads', 'writes', 'effect', 'next'],
+  action: ['name', 'action', 'reads', 'writes', 'effect', 'next', 'onError'],
   verification: ['name', 'verifier', 'onSuccess', 'onFailure'],
   parallel: ['name', 'branches', 'join', 'branchMode'],
   condition: ['name', 'branches'],
   loop: ['name', 'maxIterations', 'body', 'onSuccess', 'onMaxExceeded'],
-  human: ['name', 'onApprove', 'onReject', 'maxRevisions'],
+  human: ['name', 'onApprove', 'onReject', 'onDecline', 'maxRevisions'],
   terminal: ['name', 'status'],
 }).map(([key, fields]) => [key, Object.freeze(fields)])));
 export const NODE_TYPES = Object.freeze({ node: 'agent', action: 'action', verification: 'verification', parallel: 'parallel', condition: 'condition', loop: 'loop', human: 'human', terminal: 'terminal' });
@@ -31,6 +31,7 @@ export const ERROR_CATALOG = Object.freeze({
   FK_C005: Object.freeze({ severity: 'error', reserved: false, message: "nodes 超过 500" }),
   FK_C006: Object.freeze({ severity: 'error', reserved: false, message: "workflow 未知字段" }),
   FK_C007: Object.freeze({ severity: 'error', reserved: false, message: "非字面量 DSL / 不可擦除 TS" }),
+  FK_C008: Object.freeze({ severity: 'error', reserved: false, message: "工作流输入输出契约不合法" }),
   FK_C010: Object.freeze({ severity: 'error', reserved: false, message: "node id 格式非法" }),
   FK_C011: Object.freeze({ severity: 'error', reserved: false, message: "node id 重复" }),
   FK_C012: Object.freeze({ severity: 'error', reserved: false, message: "node name 非法" }),
@@ -80,6 +81,8 @@ export const ERROR_CATALOG = Object.freeze({
   FK_R002: Object.freeze({ severity: 'error', reserved: false, message: "when 类型 / 布尔违约、human / verification 返回非法、comment 非法、checkStep 非法返回" }),
   FK_R003: Object.freeze({ severity: 'error', reserved: true, message: "预留，v1 不抛" }),
   FK_R004: Object.freeze({ severity: 'error', reserved: false, message: "agent 重试耗尽，含 reasons、条件性 cause" }),
+  FK_R008: Object.freeze({ severity: 'error', reserved: false, message: "工作流输入契约校验失败" }),
+  FK_R009: Object.freeze({ severity: 'error', reserved: false, message: "工作流输出契约校验失败" }),
   FK_R010: Object.freeze({ severity: 'error', reserved: false, message: "本地 Skill 缺失；不承诺稳定的 cause 形状" }),
   FK_R011: Object.freeze({ severity: 'error', reserved: false, message: "Skill 越界、URL 非法、本地使用 integrity 或运行时 integrity 格式非法" }),
   FK_R012: Object.freeze({ severity: 'error', reserved: false, message: "非 HTTPS、主机未放行、跨源重定向" }),

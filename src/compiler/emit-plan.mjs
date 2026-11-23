@@ -6,6 +6,7 @@ export function branchTargets(node) {
   if (node.type === 'condition') return node.branches.map(branch => branch.next);
   if (node.type === 'verification') return [node.onSuccess, node.onFailure];
   if (node.type === 'loop') return [node.onSuccess, node.onMaxExceeded];
+  if (node.type === 'human' && node.onDecline) return [node.onApprove,node.onDecline];
   return [];
 }
 
@@ -86,6 +87,14 @@ export function createEmitPlan(analysis) {
     const ids = analysis.literal.definition.nodes.filter(node => region.members.has(node.id) && node.id !== region.body).map(node => node.id);
     context(region.id, region.forward, ids, graph.byId.get(region.body).onFailure,
       id => id === region.body || !region.members.has(id) ? EXIT : id);
+  }
+  for (const region of graph.regions.values()) {
+    const node=graph.byId.get(region.id);
+    if (node.type!=='human'||!node.onDecline) continue;
+    const ids=analysis.literal.definition.nodes.filter(item=>region.members.has(item.id)).map(item=>item.id);
+    const edges=region.forward.edges.filter(edge=>edge.role!=='action-failure');
+    const forward=forwardAnalysis([region.id,...ids],edges,region.id);
+    context(node.id,forward,ids,node.onReject,id=>region.members.has(id)?id:EXIT);
   }
   return { root, contexts, layouts: [...contexts.values()].map(({ key, mode }) => ({ key, mode })) };
 }

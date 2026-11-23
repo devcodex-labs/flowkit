@@ -70,6 +70,8 @@ export function renderMermaid(analysis) {
     if (item.role === 'verification-failure') text = '失败';
     if (item.role === 'human-approve') text = '批准';
     if (item.role === 'human-reject') text = '拒绝';
+    if (item.role === 'human-reject' && node.onDecline) text = '请求修改';
+    if (item.role === 'human-decline') text = '拒绝或用尽修改次数';
     if (item.role === 'loop-pass') text = '成功';
     if (item.role === 'loop-repair') { const owner = graph.byId.get(graph.owners.get(item.from));
       if (owner.maxIterations === 1) continue;
@@ -77,7 +79,7 @@ export function renderMermaid(analysis) {
     if (item.role === 'loop-exhausted') {
       text = `超过次数（第${graph.byId.get(graph.owners.get(item.from)).maxIterations}次失败不再修复）`; dashed = true;
     }
-    if (item.role === 'action-failure') { text = '出错'; dashed = true; }
+    if (item.role === 'action-failure' || item.role === 'action-error') { text = '出错'; dashed = true; }
     const enclosing=subflows.find(({id,members})=>members.has(item.from)&&graph.byId.get(id).join.next===item.to);
     edge(from,enclosing?join(enclosing.id):endpoint(item.to),text,dashed);
   }

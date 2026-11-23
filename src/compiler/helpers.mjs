@@ -91,6 +91,21 @@ function humanTemplate() {
   };
 }
 
+function humanDecisionTemplate() {
+  const reviewHuman=async (id,name) => {
+    const value=await runHuman(name,ctx);
+    const decision=value&&Object.getOwnPropertyDescriptor(value,'decision');
+    const comment=value&&Object.getOwnPropertyDescriptor(value,'comment');
+    if (typeof value!=='object' || !['approve','revise','decline'].includes(decision?.value)
+      || Reflect.ownKeys(value).some(key=>!['decision','comment'].includes(key))
+      || comment && (!Object.hasOwn(comment,'value') || comment.value!=null && typeof comment.value!=='string')) {
+      throw Object.assign(new TypeError('FK_R002 Invalid Human decision'),{code:'FK_R002'});
+    }
+    writeOwn(ctx.state,id,{decision:decision.value,comment:comment?.value??null});
+    return decision.value;
+  };
+}
+
 function body(fn) {
   const source = fn.toString().replaceAll('\r\n', '\n');
   return source.slice(source.indexOf('{') + 1, source.lastIndexOf('}')).trim().split('\n')
@@ -134,6 +149,7 @@ export function emitHelpers(nodes, trace, actionCatches) {
   if (human) {
     lines.push(body(humanTemplate));
     lines.push(`const askHuman = async (id, name) => { const result = await ${tracing ? 'traced(id, name, () => humanResult(name))' : 'humanResult(name)'}; writeOwn(ctx.state, id, result); return result.approved; };`);
+    if (nodes.some(node=>node.type==='human'&&node.onDecline)) lines.push(body(humanDecisionTemplate));
   }
   return { code: lines.join('\n'), tracing };
 }

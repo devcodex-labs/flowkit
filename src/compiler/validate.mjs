@@ -2,6 +2,7 @@ import { DSL_FIELDS, isWorkflowId, isWorkflowNodeName } from '../shared/contract
 import { DESCRIPTION_MAX_BYTES, hasTaskSpec, isSemVer, localTextResource, remoteTextResource, taskIntegrity } from '../shared/task-spec.mjs';
 import { allowedSkillHost } from '../shared/skill-ref.mjs';
 import { diagnostic, pointerChild } from './source.mjs';
+import { workflowContract } from '../shared/workflow-contract.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonempty = value => typeof value === 'string' && value.length > 0;
@@ -25,6 +26,11 @@ export function validateFields(literal, context) {
     }
   }
   unknown(definition, DSL_FIELDS.defineWorkflow, '', 'FK_C006');
+  if (Object.hasOwn(definition,'contract')) {
+    try {
+      if (!workflowContract(definition.contract)) throw new TypeError('Expected a literal workflow contract');
+    } catch (error) { report('FK_C008',error.path??'/contract',error.message); }
+  }
   if (!isWorkflowId(definition.id)) report('FK_C001', '/id', 'Workflow id must be kebab-case with at most 64 characters');
   if (!isSemVer(definition.version)) report('FK_C002', '/version', 'Version must follow SemVer 2.0');
   if (!nonempty(definition.name) || definition.name.length > 80 || lineBreak.test(definition.name) || definition.name.includes('*/')) {
@@ -169,6 +175,14 @@ export function validateFields(literal, context) {
       requiredString('action');
       stringArray('reads');
       stringArray('writes');
+      if (present('onError')) {
+        if (!context.interactiveStage) emit('FK_C007', 'onError', 'Action onError requires Interactive execution');
+        else if (members.has(node.id)) emit('FK_C021', 'onError', 'Parallel leaf members cannot have onError');
+        else {
+          successor('onError');
+          if (node.onError === node.next) emit('FK_C007', 'onError', 'Action onError must differ from next');
+        }
+      }
       if (!context.interactiveStage && (present('reads') || present('effect'))) {
         emit('FK_C007',present('reads')?'reads':'effect','Action reads and effect require Interactive execution');
       }
@@ -218,6 +232,12 @@ export function validateFields(literal, context) {
       for (const key of ['body', 'onSuccess', 'onMaxExceeded']) successor(key);
     } else if (kind === 'human') {
       successor('onApprove'); successor('onReject');
+      if (present('onDecline')) {
+        successor('onDecline');
+        if (!present('maxRevisions') || [node.onApprove,node.onReject].includes(node.onDecline)) {
+          emit('FK_C060','onDecline','A decline route must be distinct and requires maxRevisions');
+        }
+      }
       if (present('maxRevisions') && (!Number.isInteger(node.maxRevisions) || node.maxRevisions < 0 || node.maxRevisions > 100)) {
         emit('FK_C007', 'maxRevisions', 'Max revisions must be an integer from 0 to 100');
       }

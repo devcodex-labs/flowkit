@@ -8,6 +8,7 @@ import {
 
 import {checkpointPolicy,decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 import {prepareOperationLedger} from './operation-ledger.mjs';
+import {artifactTables,prepareArtifactLedger} from './artifact-ledger.mjs';
 import {isInteractiveStage,publishedInteractivePending,runDeadlineExpired,parallelPendingEntries,groupOwnsCompensation} from './protocol.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
@@ -15,8 +16,9 @@ const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
 export const sqliteAdminTerminate=Symbol('SQLite admin terminate');
 export const sqliteHostTrust=Symbol('SQLite Host trust');
 export const sqliteOperationLedger=Symbol('SQLite workflow operation ledger');
+export const sqliteArtifactLedger=Symbol('SQLite workflow artifact ledger');
 const digest=value=>sha256Bytes(canonicalBytes(value));
-const SQLITE_SCHEMA_VERSION = 7;
+const SQLITE_SCHEMA_VERSION = 8;
 function boundedCheckpointBytes(input) {
   try { return canonicalBytes(input); }
   catch (error) {
@@ -175,6 +177,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' namespace TEXT NOT NULL, policy_hash TEXT NOT NULL,',
       ' PRIMARY KEY (namespace, policy_hash)',
       ') STRICT;',
+      ...artifactTables,
       'PRAGMA user_version = ' + SQLITE_SCHEMA_VERSION + '; COMMIT;',
       ].join('\n'));
     }
@@ -210,6 +213,8 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   function assertActive(policyHash) {
     if (revokedPolicy.get(namespace,policyHash)) throw failure('FK_I_HOST_DENIED','Host policy has been revoked');
   }
+  const businessArtifacts=prepareArtifactLedger(db,{namespace,transaction,assertActive,
+    load:runId=>decodeRow(read.get(namespace,runId)),receipt:(runId,requestId)=>readReceipt.get(namespace,runId,requestId)});
   function assertStartAllowed(policyHash) {
     assertActive(policyHash);
     if (isDraining.get(namespace,policyHash)) throw failure('FK_I_HOST_DENIED','Host policy only drains existing Runs');
@@ -353,6 +358,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         return transaction('write',()=>revokeKey.run(namespace,keyHash,new Date().toISOString()).changes===1);
       },
     }),
+    [sqliteArtifactLedger]:businessArtifacts,
     [sqliteAdminTerminate](runId,reason,subjectId,policyHash) {
       identifier(runId,'runId');
       identifier(subjectId,'subjectId');
@@ -398,6 +404,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       const identity = safeJSONSnapshot(programIdentity);
       assertSHA256(identity.artifactHash);
       assertSHA256(identity.sourceHash);
+      assertSHA256(identity.graphStructureHash);
       if (identity.programAbiVersion !== 1
         || identity.semanticsVersion !== 'interactive-state-machine-v1'
         || !isInteractiveStage(identity.implementedStage)) {
@@ -575,6 +582,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
               :journal.operationSafety==='no-effect'&&effects.every(item=>item.effect==='no-effect');
             if (!safe) throw failure('FK_I_OPERATION_CHANGED','Pending operations changed before receipt acceptance');
           }
+          if(journal.stepKind==='human'&&journal.humanProof) {
+            businessArtifacts.commitReview(runId,journal.requestId,journal.humanProof,next.revision);
+          }
           putReceiptIndex(runId, {
             requestId:journal.requestId,nodeId:journal.nodeId,attempt:journal.attempt,
             digest:journal.digest,acceptedRevision:next.revision,
@@ -625,6 +635,35 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         if (journalDigest(namespace,runId,row.revision,row.transition_id,row.previous_hash,row.checkpoint_hash,entry)
           !==row.entry_hash) throw failure('FK_I_STORE_CORRUPT','invalid journal record');
         return {revision:row.revision,transitionId:row.transition_id,entry};
+      });
+    },
+
+    listJournalPage(runId,{afterRevision,limit}) {
+      identifier(runId,'runId');
+      if (!Number.isSafeInteger(afterRevision)||afterRevision< -1 || !Number.isSafeInteger(limit)||limit<1||limit>100) {
+        throw failure('FK_I_INVALID_TRANSITION','invalid journal page');
+      }
+      return transaction('read',()=>{
+        const head=read.get(namespace,runId);
+        if (!head) return null;
+        decodeRow(head);
+        if (afterRevision>head.revision) throw failure('FK_I_INVALID_TRANSITION','cursor exceeds Run revision');
+        const records=[];
+        const anchor=afterRevision<0?null:journalAtRevision.get(namespace,runId,afterRevision);
+        if (afterRevision>=0&&!anchor) throw failure('FK_I_STORE_CORRUPT','missing journal cursor');
+        let previousHash=anchor?.entry_hash??null;
+        for (let revision=afterRevision+1;revision<=Math.min(head.revision,afterRevision+limit);revision++) {
+          const row=journalAtRevision.get(namespace,runId,revision);
+          if (!row) throw failure('FK_I_STORE_CORRUPT','missing journal revision');
+          const entry=JSON.parse(row.entry_json);
+          if (row.previous_hash!==previousHash || row.entry_hash!==journalDigest(namespace,runId,revision,
+            row.transition_id,row.previous_hash,row.checkpoint_hash,entry) || revision===head.revision&&row.checkpoint_hash!==head.checkpoint_hash) {
+            throw failure('FK_I_STORE_CORRUPT','invalid journal page');
+          }
+          records.push({revision,transitionId:row.transition_id,entry});
+          previousHash=row.entry_hash;
+        }
+        return {records,headRevision:head.revision};
       });
     },
 

@@ -1,7 +1,9 @@
 import { gateInteractiveFeatures } from './feature-gate.mjs';
 import { hasTaskSpec } from '../../shared/task-spec.mjs';
 import { INTERACTIVE_PHASES, interactiveBlockId, phaseContract, expectedBlockTargets, stepFrameRule, validateInteractiveIR } from './validate-ir.mjs';
-import { hasStepFrame } from '../../interactive/protocol.mjs';
+import { hasStepFrame, interactiveModeForStage } from '../../interactive/protocol.mjs';
+import {workflowContract} from '../../shared/workflow-contract.mjs';
+import {graphContentHash,projectGraph} from '../graph-snapshot.mjs';
 
 function copyData(value) {
   // Analyzer-owned DSL literals/when ASTs are JSON-safe. Preserve own __proto__
@@ -60,6 +62,7 @@ export function lowerInteractive(analysis, options = {}) {
       metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next??parallelNext,
         ...(node.reads!==undefined?{reads:node.reads}:{}),
         ...(node.effect!==undefined?{effect:node.effect}:{}),
+        ...(node.onError!==undefined?{onError:node.onError}:{}),
         ...(failure?{onFailure:failure.to}:{})};
     } else if (node.type==='verification') {
       const region=analysis.graph.regions.get(analysis.graph.owners.get(node.id));
@@ -75,6 +78,7 @@ export function lowerInteractive(analysis, options = {}) {
       metadata={name:node.name,body:node.body,next:node.onSuccess,onMaxExceeded:node.onMaxExceeded,maxIterations:node.maxIterations};
     } else if (node.type==='human') {
       metadata={name:node.name,next:node.onApprove,onFailure:node.onReject,
+        ...(node.onDecline?{onDecline:node.onDecline}:{}),
         ...(node.maxRevisions===undefined?{}:{maxRevisions:node.maxRevisions})};
     } else {
       metadata = { name: node.name, status: node.status };
@@ -83,13 +87,17 @@ export function lowerInteractive(analysis, options = {}) {
     nodes[node.id] = { kind: node.type, metadata: copyData(metadata) };
   }
   const first = definitions[0].id;
+  const contract=workflowContract(analysis.literal.definition.contract);
+  const graphStructure=projectGraph(analysis,interactiveModeForStage(gate.featureStage));
   const ir = {
     schemaVersion: 1, featureStage: gate.featureStage,
     workflowId: analysis.literal.definition.id,
     workflowVersion: analysis.literal.definition.version,
     sourceHash: analysis.snapshot.sourceHash,
+    graphStructureHash: graphContentHash(graphStructure),
     entryBlockId: interactiveBlockId(first, 'enter'),
     nodes, blocks: [],
+    ...(contract?{contract}:{}),
     frameRules: definitions.filter(node => hasStepFrame(node.type)).map(node => stepFrameRule(node.id,node.type)),
     // Preserve Standard dataflow as diagnostic evidence; it is not a second
     // source of routing and it is not used to prefill missing Agent inputs.
@@ -119,5 +127,5 @@ export function lowerInteractive(analysis, options = {}) {
   if (!checked.ok) {
     return Object.freeze({ ir: null, diagnostics: Object.freeze([...gate.diagnostics, ...checked.diagnostics]) });
   }
-  return Object.freeze({ ir: deepFreeze(ir), diagnostics: gate.diagnostics });
+  return Object.freeze({ ir: deepFreeze(ir), graphStructure: deepFreeze(graphStructure), diagnostics: gate.diagnostics });
 }

@@ -1,0 +1,10 @@
+{
+  "code": "FK_R008",
+  "kind": "runtime",
+  "invalid": {
+    "source": "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl'; export default defineWorkflow({id:'root',name:'Root',version:'1.0.0',contract:{input:{type:'object',properties:{task:{type:'string'}},required:['task']}},nodes:[terminal('done',{name:'Done',status:'succeeded'})]});"
+  },
+  "valid": {
+    "source": "import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl'; export default defineWorkflow({id:'root',name:'Root',version:'1.0.0',contract:{input:{type:'object',properties:{task:{type:'string'}}}},nodes:[terminal('done',{name:'Done',status:'succeeded'})]});"
+  }
+}

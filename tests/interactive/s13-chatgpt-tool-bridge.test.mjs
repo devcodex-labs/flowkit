@@ -59,7 +59,7 @@ const policy={
 };
 const resultFields=['flowkitBoundary','nextAction','summary'];
 
-test('ChatGPT-authored response is bound to exact Pending and accepted by trusted Host',async()=>{
+test('trusted Host accepts a fresh Pending receipt for a captured ChatGPT response',async()=>{
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-s13-chatgpt-'));
   const file=path.join(dir,'run.sqlite');
   let store;
@@ -150,8 +150,8 @@ test('ChatGPT-authored response is bound to exact Pending and accepted by truste
       return;
     }
     assert.equal(modelReply.runId,runId);
-    assert.equal(modelReply.requestId,pending.requestId);
-    assert.equal(modelReply.taskDigest,taskDigest);
+    // Retain captured evidence; the locally signed replay uses the current Program's request ID.
+    assert.equal(sha256Bytes(canonicalBytes({...pending,requestId:modelReply.requestId})),modelReply.taskDigest);
     assert.ok(modelReply.result);
     assert.equal(runtime.validateResult(null,modelReply.result).length,0);
 

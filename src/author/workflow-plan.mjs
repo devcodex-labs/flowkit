@@ -3,6 +3,7 @@ import { isWorkflowId, isWorkflowNodeName, WORKFLOW_ID_MAX_LENGTH, WORKFLOW_NODE
 import { analyzeSource } from '../compiler/analyze.mjs';
 import { supportsInteractiveNodeKind } from '../compiler/interactive/feature-gate.mjs';
 import { interactiveStageForMode } from '../interactive/protocol.mjs';
+import { workflowContract } from '../shared/workflow-contract.mjs';
 
 const NODE_KINDS = new Set(['agent', 'action', 'verification', 'condition', 'parallel', 'loop', 'human', 'terminal']);
 const EDGE_KINDS = new Set(['control', 'data', 'capability', 'resource']);
@@ -27,8 +28,9 @@ export async function materializePlan(draft, proposal, compilerOptions) {
     steps.push(`  ${builder}(${JSON.stringify(node.id)},${JSON.stringify({ name: node.name, ...node.options })})`);
   }
   const id = JSON.stringify(draft.target.name);
+  const contract=proposal.contract===undefined?'':`contract:${JSON.stringify(proposal.contract)},`;
   const source = `import { ${[...builders].join(', ')} } from '@devcodex-labs/flowkit/dsl';\n` +
-    `export default defineWorkflow({id:${id},name:${id},version:${JSON.stringify(draft.target.version)},nodes:[\n${steps.join(',\n')}\n]});\n`;
+    `export default defineWorkflow({id:${id},name:${id},version:${JSON.stringify(draft.target.version)},${contract}nodes:[\n${steps.join(',\n')}\n]});\n`;
   const stage=interactiveStageForMode(draft.choices?.executionMode);
   const analysis = await analyzeSource(source, { ...compilerOptions, skillCheck: false },
     {interactiveStage:stage});
@@ -58,10 +60,11 @@ export function assertReadyStandardPlan(plan, mode = 'standard') {
 
 /** Validate the Author's planning proposal against the effective intent and the selected mode. */
 export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash) {
-  const { nodes, edges, entryNodeId, assumptions = [], nonGoals = [], unresolvedIssues = [], coverage: suppliedCoverage,
+  const { nodes, edges, entryNodeId, contract, assumptions = [], nonGoals = [], unresolvedIssues = [], coverage: suppliedCoverage,
     capabilityRequirements = [], resourceRequirements = [], hostProfileRef } = structuredClone(proposal);
   const constraintIds = new Set(intent.constraints.map(item => item.id));
   const requirementIds = new Set([...intent.goals.map(item => item.id), ...constraintIds]);
+  const declaredContract=workflowContract(contract);
   if (!suppliedCoverage || typeof suppliedCoverage !== 'object') {
     throw new TypeError('Plan coverage must map authorized requirement IDs to the enforcing node IDs');
   }
@@ -183,6 +186,7 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
   const view = { schemaVersion: 1, planId: draft.id, intentRef: intent.intentRef, target,
     goal: draft.goal, constraints: intent.constraints, nonGoals, assumptions, unresolvedIssues: issues,
     entryNodeId, nodes, edges, capabilityRequirements, resourceRequirements, coverage,
+    ...(declaredContract?{contract,contractDigest:declaredContract.digest}:{}),
     ...(sourceHash === undefined ? {} : { sourceHash }) };
   const planHash = artifactDigest(JSON.stringify(view));
   if (previous?.planHash === planHash) return previous;

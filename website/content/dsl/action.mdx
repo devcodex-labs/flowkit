@@ -10,6 +10,7 @@
 | `writes` | 可选string[]，默认[] | 声明可能写入的state顶层键，条目非空且唯一 |
 | `effect` | Interactive 可选 `'write'` 或 `'read-only'` | 默认写入。只读任务使用无外部效果结算 |
 | `next` | 节点id | 普通节点和子流程节点必需，单节点并行成员省略 |
+| `onError` | Interactive 可选节点 ID | 已对账的执行器技术失败后继。须区别于 `next`，单节点并行成员省略。 |
 
 `id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
 
@@ -25,11 +26,13 @@
 
 按[安装](/guide/installation)准备后运行 compile/check 和 node host.mjs，预期 done/succeeded，state.message 为问候。把宿主赋值删掉会失去message，编译器不能通过writes推断真实函数已正确执行。
 
-## 错误的两种传播
+## 错误传播
 
 一般 action 的普通异常会沿 Promise 向外拒绝。若图结构中 action 直接连接合适的普通 verification，编译器可为该动作生成异常捕获：保存 ctx.error，跳过正常校验并走该 verification 的 onFailure。控制信号始终继续抛出，不当成普通业务失败。
 
 这不是所有 action 都有的隐式重试或统一失败路由；检查实际图结构与生成代码，并运行成功和异常路径。action 不使用 Agent 的 retries，想要有界修复应显式使用 loop。
+
+Interactive 的 `onError` 由受信 Host 提交的失败回执触发。操作先在账本中认领，再以 `applied` 或 `no-effect` 固定效果和证据，失败回执须与结算内容一致，并标记 `origin: 'executor'`。业务失败继续使用 Verification 的结果或 Condition 选路。未派发、未对账、控制信号和 `FK_` 保留错误码不会触发该后继。没有显式后继时，Interactive 的派生异常边同样要求符合上述技术失败条件。异常后继使用独立的派发授权，回滚资格和恢复写入由各自的节点负责。
 
 ## 非法例与恢复
 

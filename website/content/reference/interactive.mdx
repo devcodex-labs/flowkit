@@ -24,7 +24,17 @@
 | skillsRoot / skillCheck | skills / true | 静态Skill根/存在性检查；不创建运行时Skill服务 |
 | remoteSkillHosts | 空数组 | 编译允许的HTTPS主机；运行读取仍由Host负责 |
 
-未知/Symbol字段、accessor及不合法类型不静默忽略。成功返回code、diagnostics、programIdentity；失败可返回空code且无identity。programIdentity包含artifact/source/workflow/compiler/ABI/semantics/checkpoint/canonicalization/stage身份，含义见本页完整类型。此接口不返回Mermaid；Standard编译图与Interactive执行产物不可互换。
+未知字段、Symbol、accessor 或非法类型会报错。成功时返回 `code`、`diagnostics`、`programIdentity`、`mermaid` 和 `graphSnapshot`。程序、图和 Mermaid 来自同一次静态分析。`programIdentity` 包含产物、源、工作流、编译器、ABI、语义、检查点和目标阶段身份。`graphStructureHash` 固定 Program 编译时的图结构。编译结果的 `graphSnapshot` 只读，其 `graphDigest` 同时覆盖图结构和 Program 字节哈希。失败时可返回空 `code` 且无身份。Standard 和 Interactive 的产物各自绑定自己的图身份。
+
+### 只读运行视图
+
+版本化 Host 可通过授权对象的 `readRunView(ref, options)` 和 `listRunViewEvents(input, options)` 查询视图。`ref` 固定命名空间、运行、程序哈希和图摘要。接收方来源需要同时提供集合、候选哈希和批准引用，并由 Host 核验这三个标识。`options.graphSnapshot` 必须与持久化 Program 一致。
+
+Host 分别判定 `viewer:read`、`viewer:events` 和 `viewer:output` 权限。投影可显示待处理任务的节点及 lane 身份、已提交事件和经过脱敏的正式输出。历史按 `afterRevision` 翻页，每页最多 100 条。查询视图不推进工作流，也不提交任何回执。
+
+已授权的 Host 可以在生产任务的回执提交后调用 `artifactController.registerVersion`，登记实际内容的 SHA256、版本和存储引用。`artifactController.freezeBundle` 固定待审 Human、审核摘要及具体产物版本。对配置在 `requiredBundleReviews` 中的 Human，回执必须带当前 `bundleHash`。三结果中的 `approve` 会在 Human 回执同一次 SQLite 事务内设置生效版本。版本发生变化后，Host 可用 `expectedBundleHash` 显式重新绑定材料。
+
+`readRunArtifacts({ref, after}, options)` 受 `viewer:artifacts` 授权约束。它返回最新与生效版本指针及已登记的摘要，内部存储引用留在 Host。
 
 静态诊断复用Standard分析器，编译器不下载远程Skill。skillCheck:false只跳过本地存在性检查，不放宽HTTPS白名单或integrity要求。flowkit.config.mjs由CLI读取，SDK不会隐式执行它。
 

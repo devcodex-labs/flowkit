@@ -47,7 +47,9 @@ export function groupOwnsCompensation(group,requestId) {
 }
 
 export function isHumanProof(proof) {
-  return !!proof && typeof proof==='object' && Object.keys(proof).length===3
+  return !!proof && typeof proof==='object' && (Object.keys(proof).length===3
+    || Object.keys(proof).length===5 && /^sha256:[a-f0-9]{64}$/.test(proof.bundleHash)
+    && ['approve','revise','decline'].includes(proof.decision))
     && [proof.subjectId,proof.proofId].every(value=>typeof value==='string' && value.length>0 && value.length<=256)
     && typeof proof.evidenceHash==='string' && /^sha256:[a-f0-9]{64}$/.test(proof.evidenceHash);
 }

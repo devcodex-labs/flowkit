@@ -8,6 +8,7 @@ import {lowerInteractive} from '../compiler/interactive/lower.mjs';
 import {emitInteractive} from '../compiler/interactive/emit.mjs';
 import {checkMermaidIds, renderMermaid} from '../compiler/mermaid.mjs';
 import {isInteractiveStage} from './protocol.mjs';
+import {sealGraphSnapshot} from '../compiler/graph-snapshot.mjs';
 
 /** Internal M2 compile API; the exported SDK subpath is introduced in M4. */
 export async function compileInteractive(file, options) {
@@ -58,6 +59,7 @@ export async function compileInteractiveDraft(file, options) {
     return {code:'',diagnostics:[...lowered.diagnostics,...emitted.diagnostics]};
   }
   const result = {code:emitted.code,mermaid:renderMermaid(analysis),diagnostics:[...lowered.diagnostics,...mermaidDiagnostics],
+    graphSnapshot:sealGraphSnapshot(lowered.graphStructure,emitted.programIdentity.artifactHash),
     programIdentity:emitted.programIdentity,snapshot:analysis.snapshot,definition:analysis.literal.definition,graph:analysis.graph};
   if (snapshotOptions.output === 'file') {
     const stem = path.basename(filename).replace(/\.workflow\.(js|ts)$/,'');

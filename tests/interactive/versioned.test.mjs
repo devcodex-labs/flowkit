@@ -45,13 +45,18 @@ async function fixture(t) {
   const file=path.join(dir,'cp.sqlite');
   const persistence=createSqliteInteractivePersistence(file,{namespace:ns});
   const raw=createSqliteCheckpointStore(file,{namespace:ns});
-  t.after(async()=>{persistence.close();raw.close();await rm(dir,{recursive:true,force:true});});
+  let closed=false;
+  function closePersistence() {
+    if (!closed) persistence.close();
+    closed=true;
+  }
+  t.after(async()=>{closePersistence();raw.close();await rm(dir,{recursive:true,force:true});});
   const script=path.join(dir,'agent.workflow.js');
   await writeFile(script,source);
   const compiled=await compileInteractive(script,{output:'memory',featureStage:'P0-A',skillCheck:false});
   assert.ok(compiled.code,JSON.stringify(compiled.diagnostics));
   const program=await persistence.programRegistry.putImmutable(Buffer.from(compiled.code),compiled.programIdentity);
-  return {dir,file,raw,persistence,compiled,program,options:{...persistence,policy,auth:context(),startKey:'new'}};
+  return {dir,file,raw,persistence,closePersistence,compiled,program,options:{...persistence,policy,auth:context(),startKey:'new'}};
 }
 const submission=(frame,result={answer:'yes'})=>({
   runId:frame.runId,requestId:frame.pending[0].requestId,kind:'agent',outcome:'succeeded',result,
@@ -344,7 +349,7 @@ terminal('done',{name:'Done',status:'succeeded'})
   } finally {reopened.close();}
 });
 
-test('P1 business failure atomically fences other branches and retains their operation evidence',async t=>{
+test('P1 business failure fences other branches and awaits their operation evidence',async t=>{
   const f=await fixture(t);
   const file=path.join(f.dir,'parallel-failure.workflow.js');
   await writeFile(file,`import {defineWorkflow,parallel,verification,action,terminal} from '@devcodex-labs/flowkit/dsl';
@@ -365,9 +370,11 @@ terminal('done',{name:'Done',status:'succeeded'})
   await assert.rejects(cfg.operationController.claim({...claim,requestId:competing.requestId,
     operationKey:competing.task.operationKey,inputHash:sha256Bytes(canonicalBytes(competing.task))},cfg.auth),
   {code:'FK_I_OPERATION_CONFLICT'});
-  const failed=await complete({kind:'verification',runId:waiting.runId,requestId:verifier.requestId,
+  const paused=await complete({kind:'verification',runId:waiting.runId,requestId:verifier.requestId,
     outcome:'succeeded',result:{passed:false}},{},cfg);
-  assert.equal(failed.status,'failed');
+  assert.equal(paused.status,'paused');
+  assert.equal(paused.pauseReason,'reconciliation');
+  assert.deepEqual(paused.pending,[]);
   await assert.rejects(cfg.operationController.claim(claim,cfg.auth),{code:'FK_I_STALE_RECEIPT'});
   const {runId,operationKey,inputHash}=claim;
   const result={set:{external:'confirmed'}};
@@ -375,6 +382,8 @@ terminal('done',{name:'Done',status:'succeeded'})
     effect:'applied',evidenceHash:inputHash,result},cfg.auth);
   await assert.rejects(complete({kind:'action',runId,requestId:writer.requestId,operationKey,
     outcome:'succeeded',result},{},cfg),{code:'FK_I_STALE_RECEIPT'});
+  const failed=await resume(runId,{},cfg);
+  assert.equal(failed.status,'failed');
   assert.equal((await cfg.store.load(runId)).revision,failed.revision);
   assert.deepEqual((await cfg.auth.readTerminalResult(failed.resultRef,cfg)).state,{});
   const another=await start(file,{}, {},{...cfg,startKey:'undispatched'});
@@ -385,6 +394,53 @@ terminal('done',{name:'Done',status:'succeeded'})
     }},{},cfg);
   assert.equal(denied.status,'errored');
   assert.equal((await cfg.store.loadReceipt(another.runId,alternate.requestId)).outcome,'failed');
+});
+
+test('P2 all-succeeded failure preserves a nested sibling claim across restart',async t=>{
+  const f=await fixture(t);
+  const file=path.join(f.dir,'scoped-failure.workflow.js');
+  await writeFile(file,`import {defineWorkflow,parallel,verification,action,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'scoped-failure',name:'Scoped failure',version:'1.0.0',nodes:[
+parallel('outer',{name:'Outer',branchMode:'subflow',branches:['gate','inner'],join:{strategy:'all_succeeded',next:'done'}}),
+verification('gate',{name:'Gate',verifier:'gate-check',onSuccess:'done',onFailure:'rejected'}),
+parallel('inner',{name:'Inner',branchMode:'subflow',branches:['read','write'],join:{strategy:'all_succeeded',next:'done'}}),
+verification('read',{name:'Read',verifier:'read-check',onSuccess:'done',onFailure:'inner-rejected'}),
+action('write',{name:'Write',action:'external-write',effect:'write',reads:[],writes:['receipt'],next:'done'}),
+terminal('done',{name:'Done',status:'succeeded'}),
+terminal('inner-rejected',{name:'Inner rejected',status:'failed'}),
+terminal('rejected',{name:'Rejected',status:'failed'})
+]});`);
+  const cfg={...f.options,auth:context({authorizeTask:()=>true}),policy:{...policy,capabilityStage:'P2',bindingManifest:{}}};
+  const {runId,pending}=await start(file,{}, {},cfg);
+  const writer=pending.find(task=>task.nodeId==='write');
+  const verifier=pending.find(task=>task.nodeId==='gate');
+  const {operationKey}=writer.task;
+  const inputHash=sha256Bytes(canonicalBytes(writer.task));
+  const claim={runId,requestId:writer.requestId,operationKey,inputHash,businessKey:inputHash};
+  assert.equal((await cfg.operationController.claim(claim,cfg.auth)).claimed,true);
+  const rejection={kind:'verification',runId,requestId:verifier.requestId,outcome:'succeeded',result:{passed:false}};
+  const paused=await complete(rejection,{},cfg);
+  assert.equal(paused.status,'paused');
+  assert.equal(paused.pauseReason,'reconciliation');
+  assert.equal(paused.resultRef,undefined);
+  assert.deepEqual(paused.pending,[]);
+  assert.ok(paused.cancelledRequests.includes(writer.requestId));
+  f.closePersistence();
+  const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
+  try {
+    const options={...cfg,...reopened};
+    const recovered=await resume(runId,{},options);
+    assert.equal(recovered.pauseReason,'reconciliation');
+    assert.equal(recovered.revision,paused.revision);
+    assert.equal((await complete(rejection,{},options)).acknowledgement.repeated,true);
+    assert.equal((await options.operationController.load({runId,operationKey},cfg.auth)).settlement,null);
+    await assert.rejects(options.operationController.claim(claim,cfg.auth),{code:'FK_I_STALE_RECEIPT'});
+    await options.operationController.settle({runId,operationKey,inputHash,effect:'no-effect',
+      evidenceHash:inputHash,result:{set:{}}},cfg.auth);
+    const failed=await resume(runId,{},options);
+    assert.equal(failed.status,'failed');
+    assert.deepEqual((await cfg.auth.readTerminalResult(failed.resultRef,options)).state,{});
+  } finally {reopened.close();}
 });
 
 test('Parallel SDK settles retry-budget exhaustion and routes P2 API Agent writes through the durable controller',async t=>{
@@ -635,11 +691,17 @@ terminal('done',{name:'Done',status:'succeeded'})
     kind:'verification',outcome:'succeeded',result:{passed}},{},options);
   const race=await verify(checked,'validate',false,cfg);
   assert.deepEqual(race.pending.map(item=>item.nodeId),['a','b','side']);
+  const {graphSnapshot}=await compileInteractive(file,{featureStage:'P2',output:'memory'});
+  const viewerRef={namespace:ns,runId:frame.runId,artifactHash:graphSnapshot.artifactHash,graphDigest:graphSnapshot.graphDigest};
   const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
   try {
     const options={...cfg,...reopened};
     const resumeFrame=await resume(frame.runId,{},options);
     assert.deepEqual(resumeFrame.pending,race.pending);
+    const viewOptions={...options,graphSnapshot};
+    const raceView=await auth.readRunView(viewerRef,viewOptions);
+    const repairView=raceView.pending.find(item=>item.nodeId==='a');
+    assert.deepEqual(repairView.scope,[{groupId:'outer',laneId:'review'},{groupId:'repair',laneId:'a'}]);
     const read=async (current,id,set,selected=options)=>{
       const task=lookup(current,id);
       const operationKey=task.task.operationKey;
@@ -653,6 +715,13 @@ terminal('done',{name:'Done',status:'succeeded'})
     const repaired=await read(resumeFrame,'a',{repaired:true});
     assert.ok(repaired.cancelledRequests.includes(lookup(race,'b').requestId));
     assert.equal(lookup(repaired,'side').requestId,lookup(frame,'side').requestId);
+    const replay=await auth.listRunViewEvents({ref:viewerRef,afterRevision:resumeFrame.revision,limit:100},viewOptions);
+    const receipt=replay.events.find(event=>event.requestId===repairView.requestId);
+    assert.equal(receipt.kind,'receipt.accepted');
+    assert.deepEqual(receipt.scope,repairView.scope);
+    assert.equal(receipt.activation,repairView.activation);
+    assert.equal(receipt.attempt,repairView.attempt);
+    assert.equal(receipt.receiptOutcome,'succeeded');
     const rechecked=await verify(repaired,'validate',true,options);
     const result=await read(rechecked,'side',{side:1});
     assert.equal(result.status,'succeeded');
@@ -1057,7 +1126,7 @@ test('S12-A creates its audit table in a fresh R5 database and atomically termin
     const db=new DatabaseSync(f.file);
     const audit=()=>db.prepare('SELECT * FROM fk_i_admin_events').all();
     try {
-      assert.equal(db.prepare('PRAGMA user_version').get().user_version,7);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version,8);
       await assert.rejects(persisted.adminController.adminTerminate(waiting.runId,'OPERATOR',{...admin}),
         {code:'FK_I_HOST_DENIED'});
       const other=createInteractiveAdminContext({namespace:'another',subjectId:'ops-1',authorize:()=>true});

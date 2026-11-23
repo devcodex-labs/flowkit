@@ -10,8 +10,34 @@
 | `version` | string，必需 | SemVer 2.0，例如1.0.0；表示业务工作流版本 |
 | `name` | string，必需 | 1–80字符，不能包含换行或注释终止符 |
 | `nodes` | 节点数组，必需 | 1–500项，第一项为入口；每项由受支持构造器创建 |
+| `contract` | 对象，选填 | 至少声明 `input` 或 `output` 之一。每个值是 `type: 'object'` 的 JSON Schema 字面量。 |
 
 工作流 version 与安装的 FlowKit 包版本分开管理。文档中的包版本是1.0.0；你自己的业务工作流可以按其变更历史独立递增。
+
+## 工作流输入与输出
+
+```js
+contract: {
+  input: {
+    type: 'object',
+    properties: { sourceRef: { type: 'string', minLength: 1 } },
+    required: ['sourceRef'],
+    additionalProperties: false
+  },
+  output: {
+    type: 'object',
+    properties: { receiptRef: { type: 'string', minLength: 1 } },
+    required: ['receiptRef'],
+    additionalProperties: false
+  }
+}
+```
+
+Standard 和 Interactive 使用同一个确定性校验器。启动前校验全部初始输入。成功前从已提交的状态选取 `output.properties` 声明的字段，校验后作为 `publicOutput` 返回。Interactive 把结果与成功终态一同写入检查点。未声明输出契约的运行没有 `publicOutput`。SDK 的 `state` 面向受信 Host。
+
+支持 `object`、`array`、`string`、`integer`、`number`、`boolean`、`null`。对象支持 `properties`、`required`、布尔型 `additionalProperties` 和属性数上下限。数组要求显式 `items`，支持长度上下限。字符串支持长度上下限，数字支持包含和不包含端点的边界。各类型支持标量 `enum`、`const` 及文本 `title`、`description`。输出对象的嵌套层要求 `additionalProperties: false`。契约最多 64 KiB，Schema 深度最多 16，正式输出最多 64 KiB。大文件应返回 Host 管理的引用。
+
+超出支持范围的 Schema 会触发 `FK_C008`。输入不合格触发 `FK_R008`。成功输出不合格触发 `FK_R009`。根契约不改变 Agent 节点自己的 `output` 约束。
 
 ## 完整例子
 

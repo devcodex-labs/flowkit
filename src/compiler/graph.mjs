@@ -28,7 +28,10 @@ export function analyzeGraph(literal, context) {
     if (!byId.has(target)) report('FK_C015', node.id, path, `Unknown referenced node: ${target}`);
   };
   for (const node of nodes) {
-    if (['agent', 'action'].includes(node.type)) add(node, node.next, 'next', '/next');
+    if (['agent', 'action'].includes(node.type)) {
+      add(node, node.next, 'next', '/next');
+      if (node.type === 'action') add(node, node.onError, 'action-error', '/onError');
+    }
     else if (node.type === 'verification') {
       add(node, node.onSuccess, 'verification-success', '/onSuccess'); add(node, node.onFailure, 'verification-failure', '/onFailure');
     } else if (node.type === 'condition') node.branches.forEach((branch, index) => add(node, branch.next, 'condition-branch', `/branches/${index}/next`));
@@ -39,9 +42,16 @@ export function analyzeGraph(literal, context) {
       add(node, node.body, 'loop-body', '/body'); add(node, node.onSuccess, 'loop-success', '/onSuccess'); add(node, node.onMaxExceeded, 'loop-exhausted', '/onMaxExceeded');
     } else if (node.type === 'human') {
       add(node, node.onApprove, 'human-approve', '/onApprove'); add(node, node.onReject, 'human-reject', '/onReject');
+      add(node, node.onDecline, 'human-decline', '/onDecline');
     }
   }
   if (diagnostics.length) return { graph: null, diagnostics };
+  for (const node of nodes) if (node.type==='human'&&node.onDecline) {
+    const decline=byId.get(node.onDecline);
+    if (decline.type!=='terminal' || decline.status!=='failed') {
+      report('FK_C060',node.id,'/onDecline','Decline must route to a failed terminal');
+    }
+  }
   const reached = reachableFrom(ids[0], adjacency(ids, edges));
   for (const id of ids) if (!reached.has(id)) report('FK_C017', id, '/id', 'Node is unreachable from the first declaration');
   function own(region, id, code) {
@@ -105,6 +115,9 @@ export function analyzeGraph(literal, context) {
   function repairRegion(node, kind, start, stop) {
     const region = { id: node.id, kind, members: new Set(), backEdges: new Set(), body: kind === 'loop' ? stop : undefined };
     regions.set(node.id, region);
+    const isFailureExit = edge => kind === 'human' && edge.to === node.onDecline
+      && ['verification-failure','action-error'].includes(edge.role);
+    region.hasFailureExit = false;
     if (kind === 'loop') own(region, stop, 'FK_C042');
     const stack = [edges.find(edge => edge.from === (kind === 'loop' ? stop : node.id) &&
       edge.role === (kind === 'loop' ? 'verification-failure' : 'human-reject'))];
@@ -112,10 +125,12 @@ export function analyzeGraph(literal, context) {
     while (stack.length) {
       const item = stack.pop();
       if (item.to === stop) { region.backEdges.add(edgeKey(item)); continue; }
+      if (isFailureExit(item)) { region.hasFailureExit = true; continue; }
       if (repair.has(item.to)) continue;
       const current = byId.get(item.to);
       if (kind === 'loop' && item.to === node.id) { report('FK_C047', item.from, '', 'Repair must return to the body, not the loop container'); continue; }
-      const allowed = kind === 'loop' ? ['agent', 'action', 'condition'] : ['agent', 'action'];
+      const allowed = kind === 'loop' ? ['agent', 'action', 'condition']
+        : node.onDecline ? ['agent','action','condition','verification'] : ['agent', 'action'];
       if (!allowed.includes(current.type) && !(context.subflows && kind==='loop' && current.type==='parallel')) {
         const code = kind === 'human' ? 'FK_C061' : current.type === 'parallel' ? 'FK_C043'
           : current.type === 'loop' ? 'FK_C045' : current.type === 'human' ? 'FK_C046' : 'FK_C042';
@@ -124,18 +139,22 @@ export function analyzeGraph(literal, context) {
       repair.add(current.id); own(region, current.id, kind === 'loop' ? 'FK_C042' : 'FK_C060');
       for (const edge of repairEdges(current.id)) stack.push(edge);
     }
-    // Every repair path must terminate at the agreed return, including condition alternatives.
+    // A repair must be able to return. Failure exits must share the Human's failed terminal.
     const returning = new Set([stop]);
     let changed = true;
     while (changed) {
       changed = false;
       for (const id of repair) if (!returning.has(id)) {
         const successors = repairEdges(id);
-        if (successors.length && successors.every(edge => returning.has(edge.to))) { returning.add(id); changed = true; }
+        if (successors.length && successors.every(edge => returning.has(edge.to) || isFailureExit(edge))) {
+          returning.add(id); changed = true;
+        }
       }
     }
-    if (!returning.has(start) || [...repair].some(id => !returning.has(id))) report(kind === 'loop' ? 'FK_C042' : 'FK_C060', node.id,
-      kind === 'loop' ? '/body' : '/onReject', 'Every repair path must return to its owner');
+    if (!region.backEdges.size || !returning.has(start) || [...repair].some(id => !returning.has(id))) {
+      report(kind === 'loop' ? 'FK_C042' : 'FK_C060', node.id, kind === 'loop' ? '/body' : '/onReject',
+        'Repair paths must return to their owner or use the declared failure exit');
+    }
     return region;
   }
   for (const node of loops.values()) {
@@ -159,6 +178,10 @@ export function analyzeGraph(literal, context) {
         && [...branches.values()].some(members=>members.has(edge.from)))) {
         report(code, edge.from, edge.path, 'Reference enters the interior of another region');
       }
+      const review = byId.get(owner);
+      if (region.kind === 'human' && review.onDecline && edge.to !== review.onReject) {
+        report('FK_C060',edge.from,edge.path,'A bounded repair can only be entered at onReject');
+      }
     }
     if (loops.has(edge.to)) {
       const target = regions.get(edge.to);
@@ -166,13 +189,18 @@ export function analyzeGraph(literal, context) {
       if (!pass && owners.has(edge.from)) report('FK_C047', edge.from, edge.path, 'Illegal loop container reference from a region');
     }
   }
-  if (owners.has(ids[0]) && regions.get(owners.get(ids[0])).kind !== 'human') {
-    report(regions.get(owners.get(ids[0])).kind === 'parallel' ? 'FK_C024' : 'FK_C042', ids[0], '/id', 'Workflow entry cannot be an interior region member');
+  if (owners.has(ids[0])) {
+    const owner=regions.get(owners.get(ids[0]));
+    const review = byId.get(owner.id);
+    if (owner.kind !== 'human' || review.onDecline && ids[0] !== review.onReject) {
+      report(owner.kind==='parallel'?'FK_C024':owner.kind==='human'?'FK_C060':'FK_C042',
+        ids[0],'/id','Workflow entry cannot be an interior region member');
+    }
   }
   // A repair return may be shared, but normal approval/success/exhaustion cannot use it to loop.
   for (const region of regions.values()) {
     const node = byId.get(region.id);
-    const exits = region.kind === 'human' ? ['onApprove'] : region.kind === 'loop' ? ['onSuccess', 'onMaxExceeded'] : [];
+    const exits = region.kind === 'human' ? ['onApprove','onDecline'] : region.kind === 'loop' ? ['onSuccess', 'onMaxExceeded'] : [];
     for (const field of exits) if (node[field] === region.id || region.members.has(node[field])) {
       report('FK_C080', region.id, `/${field}`, 'Region exit cannot re-enter its own body or repair chain');
     }
@@ -216,7 +244,7 @@ export function analyzeGraph(literal, context) {
   }
   for (const [id, owner] of parallelOwners) executionEdges.push({ from: id, to: byId.get(owner).join.next,
     role:repairJoin(owner)?'repair-return':'parallel-return',path:'' });
-  for (const node of nodes.filter(node => node.type === 'action' && node.next && !loopBodies.has(node.next))) {
+  for (const node of nodes.filter(node => node.type === 'action' && node.next && !node.onError && !loopBodies.has(node.next))) {
     const next = byId.get(node.next);
     if (next.type === 'verification' && !parallelOwners.has(next.id)) executionEdges.push({ from: node.id, to: next.onFailure, role: 'action-failure', path: '/next' });
   }

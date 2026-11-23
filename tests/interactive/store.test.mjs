@@ -13,6 +13,7 @@ const hash = bytes => sha256Bytes(Buffer.from(bytes));
 const artifactBytes = Buffer.from('// verified compiler bytes fixture\nexport const v = 1;\n');
 const identity = {
   artifactHash:hash(artifactBytes), sourceHash:'sha256:' + 'a'.repeat(64),
+  graphStructureHash:hash('fixture graph structure'),
   programAbiVersion:1, semanticsVersion:'interactive-state-machine-v1',
   implementedStage:'P0-A',workflowId:'store-fixture',workflowVersion:'1.0.0',compilerVersion:'1.0.0',
   checkpointSchemaVersion:1,canonicalizationVersion:'jcs-rfc8785-v1',

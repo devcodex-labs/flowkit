@@ -88,7 +88,9 @@ export async function loadInteractiveProgram(bytes, expectedArtifactHash) {
   if (!/^sha256:[0-9a-f]{64}$/.test(manifest.identity.sourceHash)) throw new TypeError('Invalid Program source identity');
   const staticIR = {
     schemaVersion:1,featureStage:manifest.identity.implementedStage,sourceHash:manifest.identity.sourceHash.slice(7),
+    graphStructureHash:manifest.identity.graphStructureHash,
     entryBlockId:table.entryBlockId,blocks:table.blocks,nodes:table.nodes,
+    ...(Object.hasOwn(table,'contract')?{contract:table.contract}:{}),
     frameRules:Object.keys(table.nodes).filter(id=>hasStepFrame(table.nodes[id].kind)).map(id=>stepFrameRule(id,table.nodes[id].kind)),
   };
   const validated = validateInteractiveIR(staticIR);

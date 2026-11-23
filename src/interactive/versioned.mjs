@@ -1,18 +1,26 @@
 import {buildCoordinator} from './coordinator.mjs';
 import {compileInteractive} from './compile.mjs';
-import {createSqliteCheckpointStore,sqliteAdminTerminate,sqliteOperationLedger} from './sqlite-store.mjs';
-import {hasStepFrame,isInteractiveStage,isHumanProof,publishedInteractivePending} from './protocol.mjs';
+import {createSqliteCheckpointStore,sqliteAdminTerminate,sqliteOperationLedger,sqliteArtifactLedger} from './sqlite-store.mjs';
+import {hasStepFrame,isInteractiveStage,isHumanProof,publishedInteractivePending,parallelPendingEntries,laneRequestIds} from './protocol.mjs';
 import {assertSHA256,canonicalBytes,safeJSONSnapshot,sha256Bytes} from './canonical.mjs';
+import {verifyGraphSnapshot} from '../compiler/graph-snapshot.mjs';
+import {loadInteractiveProgram} from './load.mjs';
 
 import {decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 
 const authCallbacks=new WeakMap();
 const operationLedgers=new WeakMap();
+const artifactLedgers=new WeakMap();
 const cancellableStores=new WeakMap();
 const adminCallbacks=new WeakMap();
 const hash=value=>sha256Bytes(canonicalBytes(value));
 const fail=(code,message)=>Object.assign(new Error(code+': '+message),{code});
 const uncertain=()=>fail('FK_I_STORE_UNCERTAIN','cannot establish a durable transition outcome');
+
+function pendingScope({groups,pending}) {
+  return groups.map(group=>({groupId:group.nodeId,
+    laneId:group.lanes.find(lane=>laneRequestIds(lane).includes(pending.requestId)).nodeId}));
+}
 
 export function createInteractiveHostContext({namespace,subjectId,authorize,authorizeTask,authorizeHuman}={}) {
   if (typeof namespace!=='string'||!namespace || typeof subjectId!=='string'||!subjectId
@@ -20,6 +28,9 @@ export function createInteractiveHostContext({namespace,subjectId,authorize,auth
     || (authorizeHuman!==undefined && typeof authorizeHuman!=='function')) throw new TypeError('Trusted Host authorizers are required');
   const auth=Object.freeze({namespace,subjectId,
     readTerminalResult:(resultRef,options)=>readTerminalResult(resultRef,{...options,auth}),
+    readRunView:(ref,options)=>readRunView(ref,{...options,auth}),
+    listRunViewEvents:(input,options)=>listRunViewEvents(input,{...options,auth}),
+    readRunArtifacts:(input,options)=>readRunArtifacts(input,{...options,auth}),
   });
   authCallbacks.set(auth,{authorize,authorizeTask,authorizeHuman});
   return auth;
@@ -109,8 +120,11 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
         if (!publishedInteractivePending(current).some(task=>task.requestId===receipt.requestId)) {
           throw fail('FK_I_STALE_RECEIPT','receipt is not pending');
         }
+        const scoped=current.parallel && parallelPendingEntries(current.parallel)
+          .find(entry=>entry.pending.requestId===receipt.requestId);
         Object.assign(journalEntry,{requestId:receipt.requestId,nodeId:candidate?.nodeId,
-          attempt:candidate?.attempt,digest:receipt.submissionDigest,receiptOutcome:receipt.outcome,stepKind:receipt.kind});
+          attempt:candidate?.attempt,activation:scoped?.activation??current.controlStack.at(-1)?.activation,
+          scope:scoped?pendingScope(scoped):[],digest:receipt.submissionDigest,receiptOutcome:receipt.outcome,stepKind:receipt.kind});
         if (receipt.kind==='human') journalEntry.humanProof=receipt.humanProof;
         if (receipt.subjectId!==undefined) {
           if (typeof receipt.subjectId!=='string'||!receipt.subjectId||receipt.subjectId.length>256) {
@@ -132,6 +146,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
       const entry=backend.readJournalRecord(runId,{transitionId});
       return entry?.entry?.transition ?? null;
     },
+    async loadJournalPage(runId,page) { return backend.listJournalPage(runId,page); },
     async loadReceipt(runId,requestId) {
       const receipt=backend.getReceipt(runId,requestId);
       if (!receipt) return null;
@@ -185,6 +200,8 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
   });
   const ledger=backend[sqliteOperationLedger];
   operationLedgers.set(store,ledger);
+  const artifacts=backend[sqliteArtifactLedger];
+  artifactLedgers.set(store,artifacts);
   cancellableStores.set(store,backend[sqliteAdminTerminate]);
   function operation(action, fields, readOrWrite, optional=[]) {
     return async (input,auth) => {
@@ -224,7 +241,19 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
     settleCompensation:operation('operation:settle-compensation',['runId','operationKey','compensationKey','evidenceHash'],
       ledger.settleCompensation),
   });
-  return Object.freeze({store,programRegistry,adminController,operationController,close:()=>backend.close()});
+  function artifactAccess(action,write) {
+    return async (input,auth)=>{
+      const value=safeJSONSnapshot(input,64*1024);
+      if(typeof value?.runId!=='string'||!value.runId||value.runId.length>256) throw fail('FK_I_INVALID_OPERATION','Invalid artifact Run');
+      await checkAccess({store,programRegistry,auth},action,value);
+      return write(value);
+    };
+  }
+  const artifactController=Object.freeze({
+    registerVersion:artifactAccess('artifact:register',artifacts.register),
+    freezeBundle:artifactAccess('artifact:freeze',artifacts.freeze),
+  });
+  return Object.freeze({store,programRegistry,adminController,operationController,artifactController,close:()=>backend.close()});
 }
 
 function terminalFrame(runId,revision,status,terminal) {
@@ -316,6 +345,7 @@ function executionStore(store,registry) {
         if (['FK_I_CHECKPOINT_CAPACITY','FK_I_INVALID_TRANSITION','FK_I_INVALID_RECEIPT',
           'FK_I_TERMINAL_IMMUTABLE','FK_I_REVISION_EXHAUSTED','FK_I_RUN_NOT_FOUND','FK_I_HOST_DENIED',
           'FK_I_OPERATION_CHANGED','FK_I_RUN_DEADLINE'].includes(error?.code)) throw error;
+        if (error?.code==='FK_I_STALE_RECEIPT' && artifactLedgers.has(store)) throw error;
         let saved,latest;
         try {
           saved=await store.loadTransition(runId,transitionId);
@@ -350,7 +380,7 @@ async function checkAccess(options,action,resource) {
   const callbacks=authCallbacks.get(options.auth);
   if (!callbacks || options.auth.namespace!==options.store.namespace
     || options.programRegistry.namespace!==options.store.namespace) throw fail('FK_I_HOST_DENIED','invalid Host capability');
-  const request=Object.freeze({namespace:options.auth.namespace,subjectId:options.auth.subjectId,action,...resource});
+  const request=Object.freeze({...resource,namespace:options.auth.namespace,subjectId:options.auth.subjectId,action});
   let approved;
   try {approved=await callbacks.authorize(request);} catch {}
   if (approved!==true) throw fail('FK_I_HOST_DENIED','Host authorization denied');
@@ -373,9 +403,110 @@ async function readTerminalResult(resultRef,options) {
   return safeJSONSnapshot({
     projectionVersion:1,namespace:cp.namespace,runId:cp.runId,status:cp.status,
     state:cp.state,contextError:cp.execution.contextError,
+    ...(Object.hasOwn(cp,'publicOutput')?{publicOutput:cp.publicOutput}:{}),
     ...(cp.status==='succeeded'||cp.status==='failed' ? {terminal:{nodeId:cp.terminal.nodeId,status:cp.status}} : {}),
     ...(typeof cp.causeCode==='string' ? {causeCode:cp.causeCode} : {}),
   });
+}
+
+async function viewerTarget(input,options,action) {
+  const ref=safeJSONSnapshot(input,4096);
+  const accessKeys=['namespace','runId','artifactHash','graphDigest'];
+  const approvalKeys=['collectionId','candidateHash','approvalRef'];
+  const hasApproval=approvalKeys.some(key=>ref&&Object.hasOwn(ref,key));
+  const required=hasApproval?[...accessKeys,...approvalKeys]:accessKeys;
+  if (!ref || Object.keys(ref).length!==required.length || required.some(key=>
+    typeof ref[key]!=='string'||!ref[key]||ref[key].length>256) || ref.namespace!==options.auth.namespace
+    || [ref.artifactHash,ref.graphDigest,...(hasApproval?[ref.candidateHash]:[])]
+      .some(digest=>!/^sha256:[0-9a-f]{64}$/.test(digest))) throw fail('FK_I_HOST_DENIED','invalid viewer identity');
+  const callbacks=await checkAccess(options,action,ref);
+  const persisted=await options.store.load(ref.runId);
+  if (persisted?.namespace!==ref.namespace || persisted.runId!==ref.runId
+    || persisted.policyIdentity.policyHash!==hash(options.policy)
+    || persisted.program.artifactHash!==ref.artifactHash) throw fail('FK_I_HOST_DENIED','Run view is not accessible');
+  let graph;
+  try {
+    graph=verifyGraphSnapshot(safeJSONSnapshot(options.graphSnapshot,8*1024*1024),persisted.program);
+    if (graph.graphDigest!==ref.graphDigest) throw new Error('Graph digest differs');
+  } catch {throw fail('FK_I_PROGRAM_MISMATCH','Run view graph does not match its pinned Program');}
+  return {ref,callbacks,persisted,graph};
+}
+
+/** Read a particular approved graph's Run without consuming a transition or disclosing state. */
+async function readRunView(input,options) {
+  options=operationOptions(options);
+  const {ref,callbacks,persisted,graph}=await viewerTarget(input,options,'viewer:read');
+  const cp=decodeCheckpoint(persisted);
+  const scopes=cp.parallel?new Map(parallelPendingEntries(cp.parallel).map(entry=>[entry.pending.requestId,pendingScope(entry)])):null;
+  const pending=[];
+  for (const task of persisted.pending) {
+    if (!await allowsPending(callbacks,options.auth,persisted,task)) continue;
+    pending.push({nodeId:task.nodeId,kind:task.kind,activation:task.activation,attempt:task.attempt,
+      requestId:task.requestId,scope:scopes?.get(task.requestId)??[]});
+  }
+  let publicOutput;
+  if (cp.publicOutput!==undefined) {
+    try {
+      await checkAccess(options,'viewer:output',{...ref,revision:cp.revision});
+      if (cp.outputContractDigest===graph.contract?.digest) publicOutput=cp.publicOutput;
+    } catch (error) {if (error.code!=='FK_I_HOST_DENIED') throw error;}
+  }
+  await checkAccess(options,'viewer:read',ref);
+  return safeJSONSnapshot({schemaVersion:1,graphDigest:graph.graphDigest,artifactHash:cp.artifactHash,
+    namespace:cp.namespace,runId:cp.runId,revision:cp.revision,status:cp.status,pending,
+    ...(cp.pauseReason?{pauseReason:cp.pauseReason}:{}),
+    ...(publicOutput===undefined?{}:{publicOutput})});
+}
+
+async function listRunViewEvents(input,options) {
+  options=operationOptions(options);
+  const {ref,afterRevision=-1,limit=50}=safeJSONSnapshot(input,8192);
+  if (!Number.isSafeInteger(afterRevision)||afterRevision< -1 || !Number.isSafeInteger(limit)||limit<1||limit>100) {
+    throw fail('FK_I_INVALID_TRANSITION','invalid viewer cursor');
+  }
+  const {ref:identity,persisted,graph}=await viewerTarget(ref,options,'viewer:events');
+  if (typeof options.store.loadJournalPage!=='function') throw fail('FK_I_BINDING_MISSING','Viewer replay requires a journal reader');
+  if (afterRevision>persisted.revision) throw fail('FK_I_INVALID_TRANSITION','cursor exceeds Run revision');
+  const page=await options.store.loadJournalPage(identity.runId,{afterRevision,limit});
+  const events=[];
+  const nodes=new Set(graph.nodes.map(node=>node.id));
+  for (const record of page?.records??[]) {
+    if (record.revision>persisted.revision) break;
+    const {entry}=record;
+    const transition=entry.transition;
+    if (transition?.namespace!==identity.namespace || transition.runId!==identity.runId
+      || transition.programHash!==identity.artifactHash || transition.toRevision!==record.revision
+      || transition.transitionId!==record.transitionId || record.revision!==afterRevision+events.length+1) {
+      throw fail('FK_I_STORE_CORRUPT','viewer transition identity differs');
+    }
+    const block=transition.fromBlockId??transition.toBlockId;
+    const nodeId=entry.nodeId??block?.slice(0,block.lastIndexOf('::'));
+    const kind=record.revision===0?'run.started':transition.toBlockId===null?'run.finished':
+      entry.kind==='receipt-accepted'?'receipt.accepted':'transition.committed';
+    events.push({eventId:record.transitionId,revision:record.revision,kind,occurredAt:transition.committedAt,
+      ...(nodes.has(nodeId)?{nodeId}:{}),
+      ...(entry.kind==='receipt-accepted'?{requestId:entry.requestId,attempt:entry.attempt,
+        activation:entry.activation,scope:entry.scope,receiptOutcome:entry.receiptOutcome}:{}),
+    });
+  }
+  const cursor=events.at(-1)?.revision??afterRevision;
+  if (cursor<persisted.revision && events.length<limit) throw fail('FK_I_STORE_CORRUPT','viewer journal page is incomplete');
+  await checkAccess(options,'viewer:events',identity);
+  return safeJSONSnapshot({schemaVersion:1,runId:identity.runId,namespace:identity.namespace,
+    graphDigest:identity.graphDigest,artifactHash:identity.artifactHash,headRevision:persisted.revision,cursor,events});
+}
+
+async function readRunArtifacts(input,options) {
+  options=operationOptions(options);
+  const {ref,after=0}=safeJSONSnapshot(input,8192);
+  if(!Number.isSafeInteger(after)||after<0) throw fail('FK_I_INVALID_OPERATION','Invalid artifact cursor');
+  const {ref:identity}=await viewerTarget(ref,options,'viewer:artifacts');
+  const ledger=artifactLedgers.get(options.store);
+  if(!ledger) throw fail('FK_I_BINDING_MISSING','Artifact view requires a durable ledger');
+  const page=ledger.list(identity.runId,after);
+  await checkAccess(options,'viewer:artifacts',identity);
+  return safeJSONSnapshot({schemaVersion:1,namespace:identity.namespace,runId:identity.runId,
+    artifactHash:identity.artifactHash,graphDigest:identity.graphDigest,...page});
 }
 
 function bindingRuntime(runtime,policy) {
@@ -415,6 +546,9 @@ function bind(runtime,options) {
     || (policy.parallelEffectMode!==undefined&&!['retain','compensate'].includes(policy.parallelEffectMode))
     || policy.canonicalizationVersion!=='jcs-rfc8785-v1' || typeof policy.id!=='string'
     || !policy.id || typeof policy.version!=='string' || !policy.version
+    || (policy.requiredBundleReviews!==undefined && (!Array.isArray(policy.requiredBundleReviews)
+      || policy.requiredBundleReviews.some(id=>typeof id!=='string'||!id)
+      || new Set(policy.requiredBundleReviews).size!==policy.requiredBundleReviews.length))
     || typeof policy.disclosePolicyId!=='string' || !policy.disclosePolicyId
     || !policy.bindingManifest || !runtime
     || !['createIfAbsent','load','compareAndSwap','loadTransition','loadReceipt'].every(key=>typeof store[key]==='function')
@@ -502,9 +636,10 @@ export async function complete(submission,runtime,options) {
   const input=safeJSONSnapshot(submission);
   if (!hasStepFrame(input?.kind) || typeof input.runId!=='string' || typeof input.requestId!=='string'
     || !['succeeded','failed'].includes(input.outcome)
-    || Object.keys(input).length!==(['action','human'].includes(input.kind)?6:5)
+    || Object.keys(input).length!==(['action','human'].includes(input.kind)?6:5)+(input.kind==='human'&&Object.hasOwn(input,'bundleHash')?1:0)
     || (input.kind==='action')!==Object.hasOwn(input,'operationKey')
-    || (input.kind==='human' && (input.outcome!=='succeeded' || !/^sha256:[0-9a-f]{64}$/.test(input.reviewDigest)))
+    || (input.kind==='human' && (input.outcome!=='succeeded' || !/^sha256:[0-9a-f]{64}$/.test(input.reviewDigest)
+      || Object.hasOwn(input,'bundleHash')&&!/^sha256:[0-9a-f]{64}$/.test(input.bundleHash)))
     || (input.outcome==='failed' && (typeof input.error?.message!=='string' || !input.error.message
       || typeof input.error.code!=='string' || !input.error.code
       || (input.error.retryable!==undefined && typeof input.error.retryable!=='boolean')
@@ -555,6 +690,8 @@ export async function complete(submission,runtime,options) {
       || (input.outcome==='failed' && input.error.sideEffectStatus!==(settlement.effect==='applied'?'known':'none'))
       || hash(settlement.result)!==hash(expected)) {
       throw fail('FK_I_INVALID_OPERATION','Action receipt requires its durable operation settlement');
+    } else {
+      operationSafety='settled';
     }
   }
   let humanProof;
@@ -568,14 +705,29 @@ export async function complete(submission,runtime,options) {
     if (task.publicTask.reviewDigest!==input.reviewDigest) {
       throw fail('FK_I_STALE_RECEIPT','Human decision does not match the reviewed content');
     }
+    const bundle=artifactLedgers.get(options.store)?.readBundle(input.runId,input.requestId);
+    const requiresBundle=options.policy.requiredBundleReviews?.includes(task.nodeId);
+    if ((requiresBundle||bundle||input.bundleHash) && (!bundle||bundle.bundleHash!==input.bundleHash
+      || bundle.reviewDigest!==input.reviewDigest||bundle.expiresAt<=Date.now())) {
+      throw fail('FK_I_STALE_RECEIPT','Human decision does not match the current artifact bundle');
+    }
+    const {decision,comment}=input.result;
+    if(bundle) {
+      const program=await loadInteractiveProgram(await options.programRegistry.resolveByHash(cp.program.artifactHash),cp.program.artifactHash);
+      if(!program.programTable.nodes[task.nodeId]?.metadata.onDecline || !['approve','revise','decline'].includes(decision) ||
+        Object.keys(input.result).some(key=>!['decision','comment'].includes(key)) || comment!=null&&typeof comment!=='string') {
+        throw fail('FK_I_INVALID_RECEIPT','A validated three-outcome Human decision is required for a review bundle');
+      }
+    }
     try {
       const evidence=await callbacks.authorizeHuman?.(Object.freeze({
         namespace:options.auth.namespace,subjectId:options.auth.subjectId,runId:input.runId,
         requestId:input.requestId,reviewDigest:input.reviewDigest,result:safeJSONSnapshot(input.result),
+        ...(bundle?{bundle:safeJSONSnapshot(bundle)}:{}),
       }));
       if (evidence) {
         const {proofId,evidenceHash}=safeJSONSnapshot(evidence,2048);
-        humanProof={subjectId:options.auth.subjectId,proofId,evidenceHash};
+        humanProof={subjectId:options.auth.subjectId,proofId,evidenceHash,...(bundle?{bundleHash:bundle.bundleHash,decision}:{})};
       }
     } catch {}
     if (!isHumanProof(humanProof)) throw fail('FK_I_HOST_DENIED','independent Human decision evidence is required');

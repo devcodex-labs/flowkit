@@ -86,6 +86,9 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   const {snapshot,definition,graph} = compiled;
   const artifact = executionMode === 'standard' ? compiled.artifact : {...compiled,artifactHash:compiled.programIdentity?.artifactHash};
   if (!artifact.artifactHash) return { candidate: null, diagnostics: artifact.diagnostics };
+  if (plan && plan.contractDigest!==artifact.graphSnapshot.contract?.digest) {
+    throw Object.assign(new Error('Compiled root contract differs from the WorkflowPlan.'),{code:'FKA_PLAN_MISMATCH'});
+  }
   if (plan?.sourceHash !== undefined && plan.sourceHash !== `sha256:${snapshot.sourceHash}`) {
     throw Object.assign(new Error('Compiled source bytes differ from the WorkflowPlan.'), {
       code: 'FKA_PLAN_MISMATCH', detail: { expectedSourceHash: plan.sourceHash, actualSourceHash: `sha256:${snapshot.sourceHash}` }

@@ -11,11 +11,16 @@ Host 接入的 `ApiHostOptions`、`IndependentAgentOptions` 和 `CompilationCach
 | FlowkitOptions | 11项可选配置，类型/默认/适用矩阵见[配置参考](/reference/options) |
 | Diagnostic | code可为string或null；message/file/line/column/severity必需，nodeId可选 |
 | WorkflowResult | status为succeeded或failed，terminal为终点id |
-| RunResult | 扩展WorkflowResult，含state和可选error |
+| RunResult | 扩展 WorkflowResult，含内部 `state`、可选 `error` 和校验后的 `publicOutput` |
 | CompileResult | code、mermaid字符串和diagnostics数组 |
+| GraphSnapshotV1 | 同次静态编译生成的只读图，包含程序、源、模式、区域与契约身份 |
+| GraphSnapshotEdge | 声明或派生边的稳定标识、起点、终点、角色与 sourcePath |
+| InteractiveHumanDecision | 三结果 Human 的 `approve`、`revise` 或 `decline` |
 | Ctx | runtime/state必需，signal/runId/error可选 |
 | AgentStep | id/name/instruction/input/missing/resultSchema/attempt/reasons必需，overview/signal/runId可选 |
 | Runtime | 10方法与trace的start/end钩子；isControlSignal必需，业务方法按节点使用 |
+
+图的 `inputs` 只包含节点显式读取的键。`declared` 来自根输入 Schema，`inferred` 表示各到达路径都先提交了该 Human 的保留决定键，`conditional` 表示存在可能写入的上游节点，`unknown` 表示静态分析尚无来源证据。
 
 下面是本版本完整SDK声明，包含每个字段、参数、同步/异步返回和六函数签名。运行语义仍以[SDK API](/reference/sdk)和[Runtime契约](/reference/runtime)为准。
 
@@ -40,16 +45,17 @@ Host 接入的 `ApiHostOptions`、`IndependentAgentOptions` 和 `CompilationCach
 | JsonValue | JSON标量、只读数组和字符串键对象；对象字段可含undefined以描述可选项 |
 | JsonSchemaObject | 任意Schema关键词映射到JsonValue/undefined |
 | ObjectSchema | JsonSchemaObject与必需type:'object'组合 |
+| WorkflowContract | 工作流根级的可选 `input` 和 `output` 对象 Schema，执行前后由 FlowKit 校验 |
 | DeepReadonly | 递归只读映射，描述构造器返回的定义 |
 | Retries | 0–10整数联合 |
 | MaxIterations | 1–100整数联合 |
 | AgentOptions | name/output与可选inputs/retries/verify/overview/integrity/next；agent/skill至少一个 |
-| ActionOptions | name/action必需，writes/next可选，具体后继由上下文检查 |
+| ActionOptions | name/action 必需，支持 reads/writes/effect/next。Interactive 普通 Action 和子流程 Action 可声明 `onError`。 |
 | VerificationOptions | name/verifier必需，onSuccess/onFailure上下文决定 |
 | ParallelOptions | name、至少2项branches元组、join.strategy/next |
 | ConditionOptions | name、非空branches元组，每项when/next |
 | LoopOptions | name/maxIterations/body/onSuccess/onMaxExceeded |
-| HumanOptions | name/onApprove/onReject |
+| HumanOptions | name/onApprove/onReject；可通过 onDecline 和 maxRevisions 启用三结果审核 |
 | TerminalOptions | name/status |
 
 ## 节点与工作流类型

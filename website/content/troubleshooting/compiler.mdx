@@ -264,6 +264,22 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[term
 
 ## 节点与图结构
 
+### FK_C008 · 工作流输入输出契约不合法 {#FK_C008}
+
+级别为 **error**。触发条件包括根 Schema 类型无效、含校验器不支持的关键字，或输出把未声明的属性设为必需。
+
+```js
+import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl'; export default defineWorkflow({id:'root',name:'Root',version:'1.0.0',contract:{output:{type:'object',properties:{},required:['undeclared']}},nodes:[terminal('done',{name:'Done',status:'succeeded'})]});
+```
+
+修复时检查 `contract.input` 和 `contract.output`，补齐真正需要的输出属性及类型，或移除错误的必需键。
+
+```js
+import {defineWorkflow,terminal} from '@devcodex-labs/flowkit/dsl'; export default defineWorkflow({id:'root',name:'Root',version:'1.0.0',contract:{output:{type:'object',properties:{},required:[]}},nodes:[terminal('done',{name:'Done',status:'succeeded'})]});
+```
+
+复验使用 `node --test --test-name-pattern="acceptance FK_C008:" tests/compiler/acceptance-errors.test.mjs`。编译通过后运行含有和缺少必需结果的路径。
+
 ### FK_C010 · node id 格式非法 {#FK_C010}
 
 级别：**error**。触发：node id 格式非法。

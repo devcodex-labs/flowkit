@@ -12,19 +12,17 @@ test('公开 SDK 与 Standard 产物入口及 11 个选项和声明一致', asyn
   assert.deepEqual([...options.matchAll(/^\s+(\w+)\?:/gm)].map(x => x[1]), OPTION_KEYS);
 });
 
-test('61码与独立定稿快照一致，只有两warning和一个预留码', async () => {
+test('错误码与独立定稿快照一致，只有两 warning 和一个预留码', async () => {
   const baseline = JSON.parse(await readFile(new URL('./fixtures/contract-codes.json', import.meta.url), 'utf8'));
-  assert.equal(Object.keys(ERROR_CATALOG).length, 61);
   assert.deepEqual(Object.keys(ERROR_CATALOG), baseline.codes.map(x => x.code));
   assert.deepEqual(Object.values(ERROR_CATALOG).map(x => x.message), baseline.codes.map(x => x.message));
-  assert.equal(Object.keys(ERROR_CATALOG).filter(x => x.startsWith('FK_C')).length, 52);
   assert.deepEqual(Object.keys(ERROR_CATALOG).filter(x => ERROR_CATALOG[x].severity === 'warning'), ['FK_C053', 'FK_C059']);
   assert.deepEqual(Object.keys(ERROR_CATALOG).filter(x => ERROR_CATALOG[x].reserved), ['FK_R003']);
 });
 
 test('字段、类型和目录边界固定且不可改写', async () => {
   assert.deepEqual(Object.keys(NODE_TYPES).sort(), ['action', 'condition', 'human', 'loop', 'node', 'parallel', 'terminal', 'verification']);
-  assert.deepEqual(DSL_FIELDS.defineWorkflow, ['id', 'version', 'name', 'nodes']);
+  assert.deepEqual(DSL_FIELDS.defineWorkflow, ['id', 'version', 'name', 'nodes', 'contract']);
   assert.equal(NODE_TYPES.node, 'agent');
   assert.ok(Object.isFrozen(DSL_FIELDS.node));
   assert.ok(Object.isFrozen(ERROR_CATALOG.FK_C053));

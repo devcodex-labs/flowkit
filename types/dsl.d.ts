@@ -50,6 +50,7 @@ export interface ActionOptions extends Named {
   readonly writes?: readonly string[];
   readonly effect?: 'read-only' | 'write';
   readonly next?: string;
+  readonly onError?: string;
 }
 export interface VerificationOptions extends Named { readonly verifier: string; readonly onSuccess?: string; readonly onFailure?: string }
 export interface ParallelOptions extends Named {
@@ -59,7 +60,10 @@ export interface ParallelOptions extends Named {
 }
 export interface ConditionOptions extends Named { readonly branches: readonly [{ readonly when: string; readonly next: string }, ...{ readonly when: string; readonly next: string }[]] }
 export interface LoopOptions extends Named { readonly maxIterations: MaxIterations; readonly body: string; readonly onSuccess: string; readonly onMaxExceeded: string }
-export interface HumanOptions extends Named { readonly onApprove: string; readonly onReject: string; readonly maxRevisions?: 0 | MaxIterations }
+export type HumanOptions = Named & { readonly onApprove: string; readonly onReject: string } & (
+  { readonly onDecline: string; readonly maxRevisions: 0 | MaxIterations } |
+  { readonly onDecline?: never; readonly maxRevisions?: 0 | MaxIterations }
+);
 export interface TerminalOptions extends Named { readonly status: 'succeeded' | 'failed' }
 
 export type AgentNode = AgentOptions & { readonly id: string; readonly type: 'agent' };
@@ -71,7 +75,15 @@ export type LoopNode = LoopOptions & { readonly id: string; readonly type: 'loop
 export type HumanNode = HumanOptions & { readonly id: string; readonly type: 'human' };
 export type TerminalNode = TerminalOptions & { readonly id: string; readonly type: 'terminal' };
 export type DslNode = AgentNode | ActionNode | VerificationNode | ParallelNode | ConditionNode | LoopNode | HumanNode | TerminalNode;
-export interface WorkflowDefinition { readonly id: string; readonly version: string; readonly name: string; readonly nodes: readonly DslNode[] }
+export type WorkflowContract = { readonly input: ObjectSchema; readonly output?: ObjectSchema }
+  | { readonly input?: ObjectSchema; readonly output: ObjectSchema };
+export interface WorkflowDefinition {
+  readonly id: string;
+  readonly version: string;
+  readonly name: string;
+  readonly nodes: readonly DslNode[];
+  readonly contract?: WorkflowContract;
+}
 
 type NoExtra<T, Shape> = Record<Exclude<keyof T, keyof Shape>, never>;
 type BranchExtras<B> = B extends object ? Exclude<keyof B, 'when' | 'next'> : never;
@@ -94,13 +106,13 @@ type References<T> = T extends { type: 'parallel'; branches: readonly string[]; 
   ? T['branches'][number] | T['join']['next']
   : T extends { type: 'condition'; branches: readonly { next: string }[] } ? T['branches'][number]['next']
   : T extends { type: 'loop' } ? ValueAt<T, 'body'> | ValueAt<T, 'onSuccess'> | ValueAt<T, 'onMaxExceeded'>
-  : T extends { type: 'human' } ? ValueAt<T, 'onApprove'> | ValueAt<T, 'onReject'>
+  : T extends { type: 'human' } ? ValueAt<T, 'onApprove'> | ValueAt<T, 'onReject'> | ValueAt<T, 'onDecline'>
   : T extends { type: 'verification' } ? ValueAt<T, 'onSuccess'> | ValueAt<T, 'onFailure'>
-  : ValueAt<T, 'next'>;
+  : ValueAt<T, 'next'> | ValueAt<T, 'onError'>;
 type Members<N extends readonly DslNode[]> = Extract<N[number], { type: 'parallel' }>['branches'][number];
 type ContextError<T extends DslNode, N extends readonly DslNode[]> =
   T['id'] extends Members<N> ? (
-    T extends AgentNode | ActionNode ? ('next' extends keyof T ? T['id'] : never)
+    T extends AgentNode | ActionNode ? ('next' extends keyof T ? T['id'] : 'onError' extends keyof T ? T['id'] : never)
     : T extends VerificationNode ? ('onSuccess' extends keyof T ? T['id'] : 'onFailure' extends keyof T ? T['id'] : never)
     : T['id']
   ) : T extends AgentNode | ActionNode ? (T extends { next: string } ? never : T['id'])
