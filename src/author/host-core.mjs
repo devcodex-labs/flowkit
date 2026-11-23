@@ -117,6 +117,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   let reviewObservation;
   const state = { reviewOnly: turn.kind === 'review-only' };
   const continuation = turn.clarifyingDraft || !!turn.reviewRevision;
+  const supportsNodeOptions = ['standard', 'interactive-p1', 'interactive-p2'].includes(draft.choices.executionMode);
   const answered = new Set(turn.answeredQuestionIds);
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
@@ -150,8 +151,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.authorizedRequest = structuredClone(authorization);
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
       ctx.state.authorizedRequest.choices = draft.choices;
-      if (options.useNodeOptionsForNewDrafts && draft.operation === 'create' && !draft.candidate &&
-          draft.choices.executionMode === 'standard') ctx.state.authorizedRequest.planSource = 'node-options';
+      if (supportsNodeOptions && options.useNodeOptionsForNewDrafts && draft.operation === 'create' && !draft.candidate) {
+        ctx.state.authorizedRequest.planSource = 'node-options';
+      }
       let input = turn.request.input;
       let context = turn.request.contextSnapshot;
       let draftContext;
@@ -167,7 +169,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         ctx.state.authorizedRequest.contextSnapshot = context ?? null;
         draftContext = { draftId: draft.id, operation: draft.operation, goal: draft.goal };
         ctx.state.authorizedRequest.currentDraft = draftContext;
-        if (draft.choices.executionMode === 'standard') ctx.state.authorizedRequest.planSource = 'node-options';
+        if (supportsNodeOptions) ctx.state.authorizedRequest.planSource = 'node-options';
       }
       const baseline = Object.hasOwn(authorization, 'baseline') ? authorization.baseline : continuation ? undefined : draft.intentBaseline;
       const mayRepairIntentOutput = draft.operation === 'create' && (!draft.candidate || !!turn.reviewRevision) && !baseline;
@@ -374,7 +376,17 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       maxDispatches: turn.budget.limits.maxRequests, maxTaskBytes: turn.budget.limits.maxBytes },
     async runAgentTask(prepared, context) {
       const id = prepared.task.node.id;
-      if (id.endsWith('-repair')) ports.repair(`${turn.attemptId}/${prepared.task.execution.activationId}`);
+      if (id.endsWith('-repair')) {
+        try {
+          ports.repair(`${turn.attemptId}/${prepared.task.execution.activationId}`);
+        } catch (error) {
+          if (error.code === 'FKA_REPAIR_EXHAUSTED') {
+            const { planDiagnostics, compileDiagnostics } = prepared.task.input;
+            error.repairDiagnostics = planDiagnostics ?? compileDiagnostics ?? [];
+          }
+          throw error;
+        }
+      }
       const result = await observed(() => session.runtime.runAgentTask(prepared, context));
       if (result?.status === 'succeeded' && (id === 'semantic-review' ?
         typeof result.result?.passed !== 'boolean' || !Array.isArray(result.result?.findings) || result.result.findings.some(item => !isReviewFinding(item)) :

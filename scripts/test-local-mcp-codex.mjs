@@ -8,14 +8,14 @@ import { buildCodexMarketplace } from './build-codex-plugin.mjs';
 import { startLocalMcp } from './run-local-mcp.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from '../tests/integrations/local-mcp-fixture.mjs';
 import { createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
-  start, complete } from '../src/interactive/index.mjs';
+  start, complete } from '@devcodex-labs/flowkit/interactive';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 
 const token = randomBytes(32).toString('hex');
 const live = process.argv.includes('--live');
 const interactive=process.argv.includes('--interactive');
 const goal = interactive?
-  '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。分支使用既有 Host 只读校验器，所有校验结果决定各自成功或失败。' :
+  '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
   '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。Host 的 check-input 只读校验 employeeId、month、hours，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点，调用方从 Standard runArtifact 的 state.copyRef 读取结果。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
 const base = path.resolve('.tmp');
 await mkdir(base, { recursive: true });
@@ -31,23 +31,38 @@ async function runExport(directory) {
   const artifactHash=artifactDigest(bytes);
   const program=await loadInteractiveProgram(bytes,artifactHash);
   assert.equal(program.interactiveProgram.identity.implementedStage,'P2');
+  const groups=Object.entries(program.programTable.nodes).filter(([,node])=>node.kind==='parallel');
+  assert.ok(groups.some(([id,inner])=>inner.metadata.strategy==='any' &&
+    groups.some(([,outer])=>outer.metadata.strategy==='all_succeeded' &&
+      outer.metadata.branchNodes?.some(branch=>branch.includes(id)))), 'Expected an any group nested inside all_succeeded');
   const namespace='cli-export';
   const persistence=createSqliteInteractivePersistence(path.join(root,'run.sqlite'),{namespace});
   const auth=createInteractiveHostContext({namespace,subjectId:'fixture',authorize:()=>true,authorizeTask:()=>true});
-  const options={...persistence,auth,startKey:'fixture',policy:{id:'cli-export',version:'1',
+  const options={...persistence,auth,policy:{id:'cli-export',version:'1',
     canonicalizationVersion:'jcs-rfc8785-v1',capabilityStage:'P2',disclosePolicyId:'test',bindingManifest:{}}};
   try {
     const reference=await persistence.programRegistry.putImmutable(bytes,{...program.interactiveProgram.identity,artifactHash});
-    let frame=await start(reference,{}, {},options);
-    assert.deepEqual(frame.pending.map(({nodeId})=>nodeId),['input','copy','original']);
-    for (const nodeId of ['input','copy']) {
-      const request=frame.pending.find(item=>item.nodeId===nodeId);
-      frame=await complete({runId:frame.runId,requestId:request.requestId,kind:'verification',
-        outcome:'succeeded',result:{passed:true}},{},options);
+    const verifiers=['check-input','check-copy','check-original'];
+    const cases=[
+      { label:'first-review-wins', passes:['check-input','check-copy'], visited:verifiers.slice(0,2), terminal:'succeeded' },
+      { label:'fallback-review-wins', passes:['check-input','check-original'], visited:verifiers, terminal:'succeeded' },
+      { label:'all-reviews-fail', passes:['check-input'], visited:verifiers, terminal:'failed' },
+      { label:'input-rejected', passes:['check-copy','check-original'], visited:verifiers.slice(0,1), terminal:'failed' }
+    ];
+    for (const {label,passes,visited,terminal} of cases) {
+      const runOptions={...options,startKey:label};
+      let frame=await start(reference,{}, {},runOptions);
+      assert.deepEqual(frame.pending.map(task=>task.task.verifier).sort(),[...verifiers].sort());
+      for (const verifier of visited) {
+        const request=frame.pending.find(item=>item.task.verifier===verifier);
+        assert.equal(request?.kind,'verification',label+' needs Pending '+verifier);
+        frame=await complete({runId:frame.runId,requestId:request.requestId,kind:'verification',
+          outcome:'succeeded',result:{passed:passes.includes(verifier)}},{},runOptions);
+      }
+      assert.equal(frame.status,terminal,label);
     }
-    assert.equal(frame.status,'succeeded');
-    assert.equal(frame.cancelledRequests.length,1);
-    console.log(JSON.stringify({path:'interactive-sdk',stage:'P2',status:frame.status}));
+    console.log(JSON.stringify({path:'interactive-sdk',stage:'P2',
+      cases:Object.fromEntries(cases.map(({label,terminal})=>[label,terminal]))}));
   } finally {persistence.close();}
 }
 
@@ -145,7 +160,7 @@ try {
     assert.deepEqual((await readdir(exported.directory)).sort(), ['workflow.html','workflow.js','workflow.mmd']);
     assert.match(await readFile(path.join(exported.directory, 'workflow.mmd'), 'utf8'),
       live ? /flowchart/ : interactive ? /Review alternatives/ : /Verify copy/);
-    if (interactive&&!live) await runExport(exported.directory);
+    if (interactive) await runExport(exported.directory);
     const add = { requestId: 'monthly-cli-add', sourceRef: draft.id, candidateHash: identity.candidateHash };
     const waiting = await tool('flowkit_add_workflow', add);
     saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();

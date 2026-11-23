@@ -38,12 +38,22 @@ export function monthlyTimesheetModel({interactive=false}={}) {
     execution: {
       async request({ prepared, flowkitIntent }) {
         if (flowkitIntent) return intent;
+        const id = prepared.task.node.id;
+        if (interactive && id === 'proposal') {
+          const proposal = { ...proposalInput, edges: [
+            { from: 'outer', to: 'input' },
+            { from: 'review', to: 'copy', kind: 'branch' }
+          ] };
+          return { status: 'succeeded', result: { rawText: JSON.stringify(proposal) }, events: [] };
+        }
+        if (interactive && ['plan-repair','dsl-source','dsl-repair'].includes(id)) {
+          throw new Error('The immutable P2 graph should materialize from the initial Plan options');
+        }
         plan ??= materializePlan({ target: { name: 'monthly-timesheet', version: '1.0.0' },
           choices:{executionMode:interactive?'interactive-p2':'standard'} }, proposalInput,
           { filename: 'monthly-timesheet.workflow.js' });
         const { source, proposal, diagnostics } = await plan;
         if (diagnostics) throw new Error(JSON.stringify(diagnostics));
-        const id = prepared.task.node.id;
         if (id === 'semantic-review') reviewRequests.add(prepared.task.execution.requestId);
         const result = ['proposal','plan-repair'].includes(id) ? { rawText: JSON.stringify(proposal) } :
           id === 'semantic-review' ? { passed: true, findings: [] } : { rawText: source };

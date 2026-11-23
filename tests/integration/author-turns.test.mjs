@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fixture, context, intent, proposal, executableProposal, source } from './author-host-fixture.mjs';
@@ -441,6 +441,65 @@ test('Plan repair receives a specific diagnostic when the proposal omits a termi
   const result = await advance(f, await f.start());
   assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
   assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'plan-repair').length, 1);
+});
+
+test('P2 derives subflow controls from bundled node options and validates supplementary edges', async t => {
+  const f = await setup(t, { useNodeOptionsForNewDrafts: true });
+  const request = f.options.execution.request;
+  const guide = await readFile(new URL('../../src/author/flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8');
+  const example = JSON.parse(guide.split('### Interactive subflows')[1].split('```json')[1].split('```')[0]);
+  const optional = { from: 'input', to: 'copy', kind: 'data' };
+  const raw = { ...example, coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['checks'] }],
+    edges: [{ from: 'checks', to: 'input' }, { from: 'review', to: 'copy', kind: 'branch' }, optional] };
+  f.options.execution.request = async input => {
+    const task = input.prepared?.task;
+    if (task?.node.id === 'proposal') {
+      assert.equal(task.input.authorizedRequest.planSource, 'node-options');
+      f.calls.push(input);
+      return agentResult({ rawText: JSON.stringify({ ...raw,
+        edges: [...raw.edges, { from: 'input', to: 'missing', kind: 'resource' }] }) });
+    }
+    if (task?.node.id === 'plan-repair') {
+      assert.match(task.input.planDiagnostics[0].message, /must connect existing node IDs using from and to/);
+      f.calls.push(input);
+      return agentResult({ rawText: JSON.stringify(raw) });
+    }
+    assert.ok(!['dsl-source', 'dsl-repair'].includes(task?.node.id));
+    return request(input);
+  };
+  const ready = await advance(f, await f.start(), { choices: { executionMode: 'interactive-p2' } });
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.equal(ready.candidate.manifest.implementedStage, 'P2');
+  assert.deepEqual(ready.plan.edges.filter(edge => edge.kind !== 'control'), [optional]);
+  assert.ok(ready.plan.edges.some(edge => edge.from === 'review' && edge.to === 'copy' && edge.kind === 'control'));
+  assert.ok(ready.diff.compilerEvidence.parallel.every(group => group.branchMode === 'subflow' &&
+    group.branchBoundary === 'continuation-or-local-terminal'));
+  assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id),
+    ['proposal', 'plan-repair', 'semantic-review']);
+});
+
+test('Repair exhaustion returns the last compiler error after two Plan repairs', async t => {
+  const f = await setup(t);
+  const request = f.options.execution.request;
+  let repairs = 0;
+  f.options.execution.request = async input => {
+    const id = input.prepared?.task.node.id;
+    if (id === 'proposal' || (id === 'plan-repair' && ++repairs === 1)) {
+      f.calls.push(input);
+      return agentResult({ rawText: JSON.stringify({ ...proposal, edges: [{ from: 'work', to: 'done' }] }) });
+    }
+    if (id === 'dsl-source') {
+      f.calls.push(input);
+      return agentResult({ rawText: source.replace("next:'done'", "next:'missing'") });
+    }
+    return request(input);
+  };
+  const result = await advance(f, await f.start());
+  assert.equal(result.status, 'needs-revision');
+  assert.equal(result.diagnostics[0].code, 'FKA_REPAIR_EXHAUSTED');
+  assert.ok(result.diagnostics.some(item => item.code === 'FK_C015' && item.message.includes('missing')));
+  assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id),
+    ['proposal', 'plan-repair', 'plan-repair', 'dsl-source']);
 });
 
 test('Known constraints with invalid coverage and a stale DSL graph repair within the existing shared budget', async t => {

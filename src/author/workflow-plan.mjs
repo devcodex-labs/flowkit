@@ -37,7 +37,12 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   for (const { from, to } of [...analysis.graph.referenceEdges, ...analysis.graph.executionEdges]) {
     control.set(JSON.stringify([from, to]), { from, to, kind: 'control' });
   }
-  const edges = [...control.values(), ...(proposal.edges ?? []).filter(edge => edge.kind !== 'control')];
+  const suppliedEdges = proposal.edges ?? [];
+  if (!Array.isArray(suppliedEdges)) throw new TypeError('Plan edges must be an array when supplied');
+  // Only compiler-derived control edges can run. Preserve typed supplementary links for validation.
+  const annotations = suppliedEdges.filter(edge => edge?.kind !== 'control' &&
+    (EDGE_KINDS.has(edge?.kind) || !control.has(JSON.stringify([edge?.from, edge?.to]))));
+  const edges = [...control.values(), ...annotations];
   const plannedNodes = nodes.map(({ id, kind, name, options }) => ({ id, kind, name, options,
     ...(kind === 'loop' ? { onSuccess: options.onSuccess, onMaxExceeded: options.onMaxExceeded } : {}) }));
   return { source, proposal: { ...proposal, nodes: plannedNodes, edges }, sourceHash: artifactDigest(source) };
@@ -93,8 +98,14 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
   if (!nodes.some(node => node.kind === 'terminal')) {
     throw new TypeError('WorkflowPlan needs a terminal node and control edges from the last steps that reach it');
   }
-  if (edges.some(edge => !ids.has(edge.from) || !ids.has(edge.to) || !EDGE_KINDS.has(edge.kind))) {
-    throw new TypeError('WorkflowPlan edges must connect existing node IDs and use a supported edge kind');
+  if (!Array.isArray(edges)) throw new TypeError('WorkflowPlan edges must be an array');
+  const invalidEdgeIndex = edges.findIndex(edge => !ids.has(edge?.from) || !ids.has(edge?.to) || !EDGE_KINDS.has(edge?.kind));
+  if (invalidEdgeIndex !== -1) {
+    const edge = edges[invalidEdgeIndex];
+    if (!ids.has(edge?.from) || !ids.has(edge?.to)) {
+      throw new TypeError(`WorkflowPlan edges[${invalidEdgeIndex}] must connect existing node IDs using from and to`);
+    }
+    throw new TypeError(`WorkflowPlan edges[${invalidEdgeIndex}].kind must be control, data, capability, or resource`);
   }
   if (previous && previous.planId !== draft.id) throw new TypeError('Previous Plan belongs to a different draft');
 

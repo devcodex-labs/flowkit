@@ -65,6 +65,8 @@ codex plugin list --marketplace flowkit-local
 
 起草时可以明确选择 Standard、Interactive P0-A、P0-B、P1 或 P2。需要持久 Action、人工确认及循环时选 P0-B，需要持久并行时选 P1，需要首个合格分支选胜时选 P2。MCP 用同一次编译的图供复审并导出三文件。执行方用可信的产物 SHA-256 校验工作流，再通过 [Standard SDK](/reference/sdk#runArtifact) 或 [版本化 Interactive Host](/reference/interactive#start) 运行。
 
+起草嵌套 P2 时，说明外层和内层各自的成功条件、每个校验器在 Host 中的实际名称，以及何时整体失败。例如「外层同时校验输入和复核结果。输入用 `check-input`。内层 `check-copy` 和 `check-original` 任选首个通过。输入不通过或两路复核都不通过时整体失败」。[子流程分支规则](/dsl/parallel)
+
 ### 已有文件的备用导入
 
 手上只有已有文件、Codex 没有候选或来源引用时，可用本机页面的「添加已有工作流」登记来源。当前 MCP 添加工具接收候选引用或已登记的来源引用。选择之前导出的三个文件，或选择可信的候选 JSON，点击「生成来源引用」，再把返回的引用交给 Codex 发起添加。
@@ -73,16 +75,20 @@ codex plugin list --marketplace flowkit-local
 
 ### 自动验证与卸载
 
-维护者可先用固定输入验证 CLI 连接和协议，再用已登录的 Codex CLI 验证真实生成。
+维护者可先构建当前代码，再用固定输入验证 CLI 连接和协议。已登录的 Codex CLI 可以运行真实模型验证。`--live --interactive` 起草真实嵌套 P2、复审并导出三个文件，随后从公开 SDK 验证首路通过、另一路接替、复核全失败和输入不通过。
 
 ```text
+npm run build
 node scripts/test-local-mcp-codex.mjs
 node scripts/test-local-mcp-codex.mjs --interactive
 node scripts/test-local-mcp-codex.mjs --live
+node scripts/test-local-mcp-codex.mjs --live --interactive
 codex plugin remove flowkit-mcp@flowkit-local
 ```
 
 ## 用 Author 准备 Workflow Skill
+
+本机 MCP 的新建 Standard、P1 和 P2 草稿使用已校验的节点选项直接编译，再从同一张图推导控制边。真实业务缺项在原草稿中补答。Plan 和 DSL 共用两次自动技术修订，额度耗尽时保留最近的具体诊断，方便在原草稿修订。
 
 Author 读取的文档 revision、来源 URI 和内容 Hash 随候选保存，编译前重新检查当前来源；过期或错版不继续编写。复审同时显示实际编译节点的语义差异和文件差异。可选 `references` 只接收工作流专属资料，禁止嵌套 Skill；默认三文件保持不变，不复制整套 DSL 文档。
 
@@ -110,7 +116,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 以“根据topic写草稿，经检查和审批再交付”为主线，先明确输入、结构化输出、审批必须由谁作出、失败/修订出口及终态判据。对应[完整Host例](/guide/host-integration)已有DSL/Skill/Runtime；[直接Host例](/examples/direct-host)继续关联编译JS、trace和最终state。
 
-作者应先列业务验收，再选择Standard或P0-A，读取对应字段/结构约束，准备每个必要文件及Host方法。编译者使用compile/compileSource或CLI编译/检查，执行者按选定Host路径运行并核对输出/分支/副作用及失败处理。编译通过与业务目的正确分别判断。
+作者应先列业务验收，再选择 Standard 或适用的 Interactive 阶段，准备相应文件与 Host 方法。Standard 使用 `compile`、`compileSource` 或 CLI 编译检查，Interactive 使用 `compileInteractive`。执行者按选定 Host 路径核对输出、分支、副作用和失败处理。编译结果与业务验收分别记录。
 
 ## 图谱任务对应哪些说明
 
@@ -139,7 +145,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 | 错误、取消、观测与缓存 | [取消](/guide/cancellation)、[观测](/guide/observability)、[SDK缓存](/reference/sdk#run) | failed终点可正常resolve；异常/控制信号分开。取消需协作、trace需编译开启，编译缓存不是结果/进度恢复 |
 | Skill和外部前提 | [本地](/guide/local-skills)、[远程](/guide/remote-skills) | 必要文件、白名单、完整性和读取权限；自定义loader承担相应责任，文档不是访问许可 |
 | 交付编译JS | [AOT](/guide/aot)、[直接Host](/guide/direct-host) | 选择SDK或自供Ctx/Runtime；版本、源码/产物、Skill及结果组装准确，不借用未说明的上层依赖 |
-| 暂停与持久续跑 | [Interactive](/guide/interactive)、[Host/Store](/guide/interactive-host-store) | 当前P0-A子集、同Run/Pending、签收/授权/存储；不把Standard全部节点搬进去或把新Run当恢复 |
+| 暂停与持久续跑 | [Interactive](/guide/interactive)、[Host/Store](/guide/interactive-host-store) | 按 P0-A、P0-B、P1 或 P2 的节点能力起草，核对同一 Run 的请求、签收、授权和持久恢复 |
 | 从图谱发现并执行业务能力 | [Provider](/guide/capability-provider)、[Host绑定](/examples/capability-graph) | 图谱依赖图与控制流图区分；绑定、上下文、依赖、权限与业务执行各有负责人 |
 | 类型、复杂度与不支持目标 | [类型](/reference/types)、[结构/错误](/troubleshooting/compiler)、[兼容](/community/compatibility) | 字面量JS/可擦除TS、已定义/可达后继、字段及数量限制；编写时可生成文本，提交的DSL本身不能藏任意动态计算 |
 
@@ -155,7 +161,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 先核角色/权限与版本，再核文件、绑定、模式和图；编译error先修，不使用失败后残留的旧产物。warning按其实际含义检查，例如分支可达输入与Host初始state，不能一概忽略或把所有warning说成执行失败。
 
-用成功、相关业务失败和边界输入核对路线、尝试数、提交时点、状态与终态。类型/compile/check证明各自范围，不证明自然语言意图被正确理解。固定响应、真实模型、专家走读和真实用户分别记录；未来Skill完成后另验真实生成表现。
+用成功、相关业务失败和边界输入核对路线、尝试数、提交时点、状态与终态。类型和编译检验代码契约，自然语言意图由实际模型起草和语义复审验收。分别记录固定响应、真实模型、专家走读和真实用户证据。
 
 读取不到对应版本文档、缺权限/Skill/绑定或业务约束不明确时，指出具体缺项并补信息；不从其它版本猜接口、虚构能力ID或把不可访问的页面当已读。当前站点内容与授权版本、支持矩阵共同核对，公开部署/Registry/技术门禁分别验收。
 
@@ -180,4 +186,4 @@ Host已有能力、缺少的绑定/Skill/人工服务及处理方式：
 证据文件/摘要、未验证项与保留的限制：
 ```
 
-作者已经看过源码时标作专家/AI走读；固定响应例证明接口和控制流；真实模型任务记录实际模型与提示；真实读者另记参与者和任务结果。未运行未来Skill，就不能填“Skill生成通过”或宣称所有用户都能理解。文档改动使旧证据失效时，补受影响任务即可。
+作者已经看过源码时标作专家或 AI 走读。固定响应验证接口和控制流。真实模型任务记录实际模型、提示及候选的复审和运行结果，真实读者另记参与者和任务结果。文档变化时重新验证受影响的场景。

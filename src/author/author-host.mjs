@@ -470,7 +470,8 @@ export async function createWorkflowAuthorHost(supplied) {
               (['FKA_BUDGET_EXHAUSTED', 'FKA_REPAIR_EXHAUSTED', 'FKA_DEADLINE'].includes(error.code) ||
                 ['FKA_BUDGET_EXHAUSTED', 'FKA_DEADLINE'].includes(error.kind) ? 'needs-revision' : 'failed'));
             draft.reconciliationRequired = current.reconciliationRequired;
-            draft.diagnostics = [{ code: error.code ?? 'author-execution', message: error.message }];
+            draft.diagnostics = [{ code: error.code ?? 'author-execution', message: error.message },
+              ...(error.code === 'FKA_REPAIR_EXHAUSTED' ? error.repairDiagnostics ?? [] : [])];
             draft.questions = error.questions ?? [];
             draft.reviewReceipt = null; draft.approvalReceipt = null;
           }

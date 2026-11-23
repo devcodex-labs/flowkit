@@ -201,7 +201,9 @@ export function standardReviewEvidence({ manifest, files }) {
     parallel: nodes.filter(node => node.type === 'parallel').map(node => ({
       nodeId: node.id, members: [...node.branches], continuation: node.join.next, strategy: node.join.strategy,
       continuationRequires: node.join.strategy === 'all_succeeded' ? 'all-members-succeeded' : 'one-member-succeeded',
-      memberToContinuationEdges: 'derived-after-join'
+      ...(node.branchMode === 'subflow'
+        ? { branchMode: 'subflow', branchBoundary: 'continuation-or-local-terminal' }
+        : { memberToContinuationEdges: 'derived-after-join' })
     }))
   };
 }

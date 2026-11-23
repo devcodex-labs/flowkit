@@ -16,7 +16,7 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
    已明确的目标和约束缺少 Plan 节点映射时，先在同一授权范围内做有限修复。编译结果与固定 Plan 的节点或控制边不符时，只修 DSL。真正未决定的业务规则继续在同一草稿询问，沿用已知选择。
    Plan 节点 ID 使用编译器的 kebab-case 规则，最长 64 字符。节点显示名最长 40 字符。每个 Standard Loop 的 Plan 节点固定不同的 `onSuccess` 和 `onMaxExceeded` 目标及对应控制边，生成 DSL 时沿用两者各自的角色。
    Standard Parallel 中，每个成员只有一条派生控制边通往汇合后的节点。成员失败由并行运行语义处理。
-   无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。Standard 草稿补答的 Plan 以各节点的 DSL 选项为准，由编译器推导控制边，并由 AuthorHost 从已校验的选项直接生成候选源码。
+   无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。采用 `planSource: node-options` 时，Standard、Interactive P1/P2 均以 Plan 节点的 DSL 选项为准。编译器推导控制边，AuthorHost 直接使用经过校验的节点选项生成候选源码。没有附加关系时填写 `edges: []`。附加关系使用 `{from,to,kind}` 和既有节点 ID，`kind` 为 `data`、`capability` 或 `resource`。
    新建草稿的模型输出无效或不完整时，AuthorHost 在同一轮预算内至多再解析一次，已有答案保留。修复预算耗尽时，以新 turnId 在原草稿继续即可。原样重发一条补答只计入一次，不把模型的早期理解当作用户基线。
    补答后，模型报告的待确认事项必须指向仍未决定的业务选项。已经选定的方案、已知 Host 事实和技术诊断留在 Plan 校验路径。独立复审未通过时，展示 `reviewRejection.findings` 及绑定同一 `candidateHash` 的两个动作。用户可选 `review-only` 重审原候选，或用 `authoring` 按意见修订。修订沿用同草稿的原始授权对话，审查意见作为证据随 Plan 提供。
 5. 用 `reviewCandidate` 展示准确 Diff、真实 ReviewReceipt 或 `rejection`。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。使用 `candidateDiff.compilerEvidence` 区分声明节点、声明终点、Mermaid 渲染标记和 Parallel 实际后继。
@@ -43,15 +43,15 @@ Host 必须显式配置有限的 `capacity`：`maxPhysicalExecutions`、`maxDraf
 |---|---|
 | defineWorkflow | id、SemVer version、name、nodes；第一节点为入口 |
 | node | Agent：name、description、inputs、output JSON Schema、retries、next；requiredSkills 需准确版本 pin |
-| action | name、action、writes、next；实际操作由 Host 执行 |
+| action | name、action、writes、next；Interactive 还可声明 reads 和 effect；实际操作由 Host 执行 |
 | condition | name、branches: [{when, next}]；兜底使用 when: 'true' |
-| parallel | name、branches: [节点 ID]、join: {strategy: 'all_succeeded' 或 'any', next} |
+| parallel | name、branches: [节点 ID]、join: {strategy: 'all_succeeded' 或 'any', next}；Interactive P1/P2 可用 branchMode: 'subflow' |
 | loop | name、maxIterations、body、onSuccess、onMaxExceeded；修复区域遵循实际编译器检查 |
 | verification | name、verifier、onSuccess、onFailure；返回布尔 |
 | human | name、onApprove、onReject、有限 maxRevisions；拒绝路径必须合法 |
 | terminal | name、status: 'succeeded' 或 'failed' |
 
-并行示例使用 `all_succeeded` 等待两个分支均正常完成，再进入 `done`。验证分支返回 `false` 仍属于正常完成。
+下面的 Standard 并行示例使用 `all_succeeded` 等待两个分支均正常完成，再进入 `done`。Standard 并行成员的布尔校验返回 `false` 属于正常完成。
 
 <!-- standard-parallel-example -->
 ```js
@@ -65,6 +65,32 @@ export default defineWorkflow({ id: 'parallel-inspection', name: 'Parallel inspe
 ] });
 ```
 
-目标 Workflow 默认交付 `SKILL.md`、`workflow.js`、`workflow.mmd`，DSL 默认不分发；仅按显式选择保留 `source/workflow.dsl.js`。导入复用 Host 已批准源和既有集合规则；无 DSL 更新读取已验证 manifest.workflowDefinition、文件及依赖，不宣称反编译。Workflow Skill 与 Professional Skill 在集合的第二层平级，不加第三层。
+### Interactive subflows
+
+Interactive P1 使用 `all_succeeded`，P2 也支持 `any`。为包含多步或下一层并行的组使用 `branchMode: "subflow"`。每项 `branches` 是互相独立的分支入口。组内各步用自己的正常 DSL 后继。分支到达当前组的 `join.next` 时以成功完成，或以本分支内的 Terminal 状态完成。只有组的成功条件满足后才执行汇合后继。P2 内层 `any` 允许某个分支失败后继续等待其他分支。
+
+以下是一个嵌套 P2 的节点选项示例。外层必须同时通过输入校验和内层复核。内层只需要一个复核通过。使用已知的 Host 布尔回调作为 `verification.options.verifier`，`onSuccess` 和 `onFailure` 连接到实际目标。采用相同结构时，保留实际用户的回调名、意图覆盖和资源约束。
+
+```json
+{
+  "entryNodeId": "checks",
+  "nodes": [
+    {"id":"checks","kind":"parallel","name":"Check workflow","options":{"branchMode":"subflow","branches":["input","review"],"join":{"strategy":"all_succeeded","next":"done"}}},
+    {"id":"input","kind":"verification","name":"Check input","options":{"verifier":"check-input","onSuccess":"done","onFailure":"input-failed"}},
+    {"id":"review","kind":"parallel","name":"Review alternatives","options":{"branchMode":"subflow","branches":["copy","original"],"join":{"strategy":"any","next":"done"}}},
+    {"id":"copy","kind":"verification","name":"Check copy","options":{"verifier":"check-copy","onSuccess":"done","onFailure":"copy-failed"}},
+    {"id":"original","kind":"verification","name":"Check original","options":{"verifier":"check-original","onSuccess":"done","onFailure":"original-failed"}},
+    {"id":"input-failed","kind":"terminal","name":"Input rejected","options":{"status":"failed"}},
+    {"id":"copy-failed","kind":"terminal","name":"Copy rejected","options":{"status":"failed"}},
+    {"id":"original-failed","kind":"terminal","name":"Original rejected","options":{"status":"failed"}},
+    {"id":"done","kind":"terminal","name":"Checks succeeded","options":{"status":"succeeded"}}
+  ],
+  "edges": []
+}
+```
+
+每个验收关注点应映射到真实节点。复审核对外层全部通过、内层选首个成功、单分支失败仍可由另一路通过、必需校验失败和全失败终态。
+
+AuthorHost 内部 Workflow Skill 候选默认包括 `SKILL.md`、`workflow.js`、`workflow.mmd`。本机 MCP 向用户导出的三个文件是 `workflow.js`、`workflow.mmd`、`workflow.html`。DSL 留在内部，通用 Host 仅按显式选择保留 `source/workflow.dsl.js`。导入复用 Host 已批准源和既有集合规则；无 DSL 更新读取已验证 manifest.workflowDefinition、文件及依赖。Workflow Skill 与 Professional Skill 在集合的第二层平级。
 
 执行已有 Workflow Skill 时，使用该 Skill 的运行入口。宿主根据已批准的 Artifact 和实际能力执行。
