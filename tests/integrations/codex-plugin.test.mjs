@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { lstat, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -64,6 +67,7 @@ test('local MCP previews and confirms an exact candidate, exports three files an
   const origin = new URL(service.url).origin;
   const unauthorized = await fetch(service.url, { method: 'POST', headers: { authorization: 'Bearer wrong' } });
   assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.headers.get('connection'), 'close');
   assert.ok((await client.listTools()).tools.some(item => item.name === 'flowkit_add_workflow'));
   assert.equal(client.getServerCapabilities().resources, undefined);
   const collection = await tool('flowkit_collection', {});
@@ -169,3 +173,181 @@ test('local MCP previews and confirms an exact candidate, exports three files an
   assert.equal((await tool('flowkit_collection', {})).skills.length, 2);
   assert.deepEqual(await tool('flowkit_add_workflow', externalRequest), imported);
 });
+
+test('local MCP imports an intact three-file export only from a trusted origin and requires new approval', async t => {
+  let sender, receiver, sourceClient, targetClient;
+  t.after(async () => {
+    await sourceClient?.close();
+    await targetClient?.close();
+    await sender?.close();
+    await receiver?.close();
+  });
+  const root = await ownedDirectory(t);
+  const serviceConfig = name => ({ listen: { port: 0 }, dataDir: path.join(root, name), exportDir: path.join(root, name, 'exports') });
+  const credential = 'fixture-test-credential-for-flowkit-mcp';
+  const renderer = 'var mermaid = {initialize(){},async render(){return {svg:"<svg></svg>"}}};';
+  const options = { credential, renderer, modelBinding: monthlyTimesheetModel() };
+  const connect = async service => {
+    const client = new Client({ name: 'flowkit-portable-test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + credential } } }));
+    return client;
+  };
+  const call = async (client, name, args = {}) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  };
+  sender = await startLocalMcp(serviceConfig('sender'), options);
+  sourceClient = await connect(sender);
+  const draft = await call(sourceClient, 'flowkit_start_workflow', { operation: 'create', requestId: 'new', goal: '核对工时后验证副本。' });
+  const ready = await call(sourceClient, 'flowkit_prepare_workflow', { turn: { draftId: draft.id,
+    turnId: 'prepare', input: '核对工时后验证副本。', expectedStateVersion: draft.stateVersion } });
+  assert.equal(ready.status, 'candidate-ready');
+  const senderCookie = await browserIdentity(sender);
+  await confirmInTestBrowser(ready.candidate.previewUrl, senderCookie);
+  const delivered = await call(sourceClient, 'flowkit_export_workflow', { draftId: draft.id, candidateHash: ready.candidate.candidateHash });
+  const files = Object.fromEntries(await Promise.all(delivered.files.map(async file =>
+    [file.name, await readFile(path.join(delivered.directory, file.name), 'utf8')])));
+  assert.deepEqual(Object.keys(files).sort(), ['workflow.html', 'workflow.js', 'workflow.mmd']);
+  assert.match(files['workflow.html'], /id="flowkit-export-provenance"/);
+
+  const receiverConfig = serviceConfig('receiver');
+  const upload = async (filesToSend, cookie) => {
+    const origin = new URL(receiver.url).origin;
+    const response = await fetch(origin + '/sources', { method: 'POST', headers: { origin, cookie },
+      body: new URLSearchParams({ source: JSON.stringify(filesToSend) }) });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  receiver = await startLocalMcp(receiverConfig, options);
+  targetClient = await connect(receiver);
+  const unknown = await upload(files, await browserIdentity(receiver));
+  const choice = await call(targetClient, 'flowkit_add_workflow', { requestId: 'unknown', ...unknown });
+  assert.equal(choice.status, 'choice_required');
+  assert.equal(choice.options[0].available, false);
+  assert.match(choice.reason, /尚未信任/);
+  const receiverKey = receiver.exportPublicKey;
+  await targetClient.close(); targetClient = null;
+  await receiver.close(); receiver = null;
+
+  receiver = await startLocalMcp({ ...receiverConfig, trustedExportKeys: [sender.exportPublicKey] }, options);
+  assert.equal(receiver.exportPublicKey, receiverKey);
+  targetClient = await connect(receiver);
+  const cookie = await browserIdentity(receiver);
+  assert.notEqual(cookie.split('=')[0], senderCookie.split('=')[0]);
+  for (const name of Object.keys(files)) {
+    const changed = { ...files, [name]: name === 'workflow.html' ? files[name].replace('<title>', '<title>Changed ') : files[name] + '\nchanged' };
+    const ref = await upload(changed, cookie);
+    assert.equal((await call(targetClient, 'flowkit_add_workflow', { requestId: 'changed-' + name, ...ref })).status, 'conflict');
+  }
+  const trusted = await upload(files, cookie);
+  const add = { requestId: 'trusted', ...trusted };
+  const pending = await call(targetClient, 'flowkit_add_workflow', add);
+  assert.ok(pending.confirmationUrl, JSON.stringify(pending));
+  assert.equal((await call(targetClient, 'flowkit_collection')).skills.length, 0);
+  const accepted = await (await confirmInTestBrowser(pending.confirmationUrl, cookie)).json();
+  assert.equal(accepted.status, 'added');
+  assert.equal(accepted.collectionId, receiver.collectionId);
+  assert.notEqual(accepted.candidateHash, ready.candidate.candidateHash);
+  assert.deepEqual(await call(targetClient, 'flowkit_add_workflow', add), accepted);
+  const repeated = await upload(files, cookie);
+  assert.equal((await call(targetClient, 'flowkit_add_workflow', { requestId: 'again', ...repeated })).status, 'already_added');
+});
+
+async function verifyLocalRecovery(t, interruptedEffect) {
+  let client, recoveredService, worker, closed;
+  t.after(async () => {
+    if (worker?.exitCode === null && worker.signalCode === null) worker.kill();
+    await closed;
+    await client?.close();
+    await recoveredService?.close();
+  });
+  const root = await ownedDirectory(t);
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'exports') };
+  const credential = 'fixture-test-credential-for-flowkit-mcp';
+  const renderer = 'var mermaid = {initialize(){},async render(){return {svg:"<svg></svg>"}}};';
+  worker = spawn(process.execPath, ['--input-type=module', '-e', [
+    'const [serverUrl, fixtureUrl, rawConfig, credential, renderer, effect] = process.argv.slice(1);',
+    'const { startLocalMcp } = await import(serverUrl);',
+    'const { monthlyTimesheetModel } = await import(fixtureUrl);',
+    'const modelBinding = monthlyTimesheetModel();',
+    'const stopAfterReservation = () => { console.log("reserved"); return new Promise(() => {}); };',
+    'if (effect === "read") modelBinding.execution.request = stopAfterReservation;',
+    'else {',
+    '  modelBinding.execution.tool = stopAfterReservation;',
+    '  const createSession = modelBinding.execution.createSession;',
+    '  modelBinding.execution.createSession = async ports => {',
+    '    const session = await createSession(ports);',
+    '    session.intentRuntime.parse = () => ports.tool({example: true},',
+    '      {sideEffect: "write", toolName: "fixture-writer", operationKey: "interrupted"});',
+    '    return session;',
+    '  };',
+    '}',
+    'const service = await startLocalMcp(JSON.parse(rawConfig), { credential, renderer, modelBinding });',
+    'console.log(service.url);'
+  ].join('\n'), new URL('../../scripts/run-local-mcp.mjs', import.meta.url).href, new URL('./local-mcp-fixture.mjs', import.meta.url).href,
+    JSON.stringify(config), credential, renderer, interruptedEffect], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  closed = once(worker, 'close');
+  const ready = Promise.withResolvers();
+  const reserved = Promise.withResolvers();
+  worker.stderr.resume();
+  worker.on('error', ready.reject);
+  closed.then(([code]) => { ready.reject(new Error('Author worker exited with ' + code)); reserved.resolve(false); });
+  createInterface({ input: worker.stdout }).on('line', line => {
+    if (line === 'reserved') reserved.resolve(true);
+    else if (line.startsWith('http://127.0.0.1:')) ready.resolve(line);
+  });
+  const connect = async url => {
+    client = new Client({ name: 'flowkit-recovery-test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: 'Bearer ' + credential } } }));
+  };
+  const tool = async (name, args, success = true) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError === true, !success, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  };
+  const options = { credential, renderer, modelBinding: monthlyTimesheetModel() };
+  await connect(await ready.promise);
+  await assert.rejects(startLocalMcp(config, options), /无法获取写锁/);
+  const goal = '核对工时后验证副本。';
+  const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'start', goal });
+  const interrupted = client.callTool({ name: 'flowkit_prepare_workflow', arguments: { turn: {
+    draftId: draft.id, turnId: 'interrupted', input: goal, expectedStateVersion: draft.stateVersion
+  } } }).catch(() => {});
+  assert.equal(await reserved.promise, true);
+  worker.kill();
+  await closed;
+  await interrupted;
+  await client.close(); client = null;
+  recoveredService = await startLocalMcp(config, options);
+  await connect(recoveredService.url);
+  const list = (await client.listTools()).tools.map(item => item.name);
+  assert.ok(list.includes('flowkit_recover_workflow'));
+  assert.ok(!list.includes('flowkit_run_workflow') && !list.includes('flowkit_apply_collection_plan'));
+  const before = await tool('flowkit_get_workflow_draft', { draftId: draft.id });
+  assert.equal(before.status, 'reconciliation-required');
+  assert.equal(before.recovery.turnId, 'interrupted');
+  const input = { draftId: draft.id, expectedStateVersion: before.stateVersion };
+  if (interruptedEffect === 'write') {
+    const rejected = await tool('flowkit_recover_workflow', input, false);
+    assert.match(rejected.error.message, /Trusted Host settlement evidence/);
+    const unchanged = await tool('flowkit_get_workflow_draft', { draftId: draft.id });
+    assert.equal(unchanged.status, 'reconciliation-required');
+    assert.equal(unchanged.stateVersion, before.stateVersion);
+    return;
+  }
+  await tool('flowkit_recover_workflow', { ...input, expectedStateVersion: before.stateVersion - 1 }, false);
+  const settled = await tool('flowkit_recover_workflow', input);
+  assert.equal(settled.status, 'failed');
+  assert.equal(settled.recovery, undefined);
+  assert.equal((await tool('flowkit_recover_workflow', input)).stateVersion, settled.stateVersion);
+  const result = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'after-recovery',
+    input: goal, expectedStateVersion: settled.stateVersion } });
+  assert.equal(result.id, draft.id);
+  assert.equal(result.status, 'candidate-ready');
+}
+
+for (const interruptedEffect of ['read', 'write']) {
+  test('local MCP recovers a stopped process only with verifiable effects: ' + interruptedEffect, { timeout: 30000 },
+    t => verifyLocalRecovery(t, interruptedEffect));
+}

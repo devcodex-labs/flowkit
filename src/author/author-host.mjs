@@ -612,6 +612,7 @@ export async function createWorkflowAuthorHost(supplied) {
             budget.used.toolCalls < budget.limits.maxToolCalls && budget.used.ioCalls < budget.limits.maxIoCalls && budget.used.bytes < budget.limits.maxBytes;
           turn.retryRef = remaining && !abandoned ? turn.retryRef ?? randomUUID() : null; turn.retryStateVersion = current.stateVersion + 1;
           turn.status = abandoned ? 'abandoned' : 'failed'; turn.reconciliationRequired = false; current.reconciliationRequired = false;
+          if (!abandoned && ['running', 'reconciliation-required'].includes(current.status)) current.status = 'failed';
           for (const receipt of Object.values(budget.reservations)) if (receipt.sideEffectStatus === 'unknown') { receipt.sideEffectStatus = 'none'; receipt.settlementRef = input.evidenceRef; }
           for (const operation of Object.values(budget.toolOperations ?? {})) if (operation.status === 'unknown' || operation.status === 'running') operation.status = 'no-effect';
         } else if (input.decision === 'confirm-result') {

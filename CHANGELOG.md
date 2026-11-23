@@ -9,8 +9,10 @@ FlowKit v1.0.0 发布候选（实际发布状态以 GitHub Packages 记录和 Gi
 - 提供 run、compile、compileSource、check、evalWhen、isControlSignal，以及 compile/check 命令行。
 - 可选 capability-graph Provider 与宿主动作适配：仅负责能力声明、查询约束及显式动作绑定，不内置第二套 Runtime。
 - 通过宿主 Runtime 执行业务；支持本地和受限制的 HTTPS Skill、结果校验与重试、跟踪、取消信号及 AOT 一致性检查。
+- 提供 Host Author 和本机 FlowKit MCP。可从 Codex 起草、澄清、复审、预览并导出编译工作流和两份流程图文件，再加入 FlowKit 集合。纯 MCP 插件提供连接配置，业务运行由现有 SDK 或 Host 承担。
+- Interactive 支持 SQLite 持久化和跨进程恢复。P0-A 提供基础 Agent 流程，P0-B 增加有状态操作、验证、循环和人工任务，P1 支持全部成功的持久并行，P2 支持首个合格分支胜出以及对败者的对账。P1/P2 支持符合编译约束的嵌套子流程。
 - 提供详细中文文档、完整确定性示例和专有授权。
 
-需要 Node.js 22.13.0 或更高版本。FlowKit 不内置模型服务、Schema 校验器或持久化审批服务；这些能力由宿主提供。并行分支共享状态，any 汇合不会取消其他分支；AOT 部署仍需保留原始源码和对应 Skill。
+需要 Node.js 22.13.0 或更高版本。宿主提供模型、业务权限、Schema 校验、任务回执和所需的人工审批通道。Standard 并行共享状态，any 汇合不会自动取消其他分支。Interactive 的 P2 由 Host 消费取消请求并对账。使用 Standard AOT 加载时仍需保留原始源码和对应 Skill。
 
 [文档](https://devcodex-labs.github.io/flowkit/) · GitHub Packages（私有，需授权） · [许可证](LICENSE)

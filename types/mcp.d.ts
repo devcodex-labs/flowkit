@@ -27,6 +27,7 @@ export interface FlowkitMcpOptions {
   workflowUi?: {
     defaultCollectionId: string;
     present(draft: AuthorDraftView, context?: AuthorRequestContext): unknown;
+    recover?(input: { draftId: string; expectedStateVersion: number }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
     review(result: Awaited<ReturnType<WorkflowAuthorHost['reviewCandidate']>>): unknown;
     export(input: { collectionId: string; draftId: string; candidateHash: string }, context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     add(input: { collectionId: string; requestId: string; sourceRef: string; candidateHash?: string; approvalRef?: string; destination?: 'flowkit' | 'codex' },

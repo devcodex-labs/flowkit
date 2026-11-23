@@ -1,5 +1,5 @@
 // Keep references on the reviewed documentation snapshot rather than the moving main branch.
-const documentationCommit = '580f72d67661d8a273fd90c825edd65476ef102b';
+const documentationCommit = '30441a7934aa74bc3e869c35eac53cc4095ecf15';
 
 function document(id, page) {
   return {
@@ -16,14 +16,14 @@ function document(id, page) {
  * workflow runtime is created by FlowKit.
  */
 export const flowkitProvider = Object.freeze({
-  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.5',
+  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.6',
   description: 'Compile declarative JavaScript/TypeScript workflows and run them with an explicit host Runtime.',
   capabilities: [
     {
       id: 'define-workflow', name: 'Define workflow',
       description: 'Declare a workflow using the static FlowKit DSL.',
       whenToUse: 'A host needs a statically analyzable workflow definition.',
-      usage: { instructions: 'Use literal JS/TS DSL. Author Hosts use /host.createWorkflowAuthorHost with guarded execution, exact review and user approval. Author targets Standard or Interactive P0-A. The versioned Interactive SDK also supports P0-B sequential control, P1 all_succeeded and P2 any. Graph discovers and documents capabilities.' },
+      usage: { instructions: 'Use literal JS/TS DSL. Author Hosts use /host.createWorkflowAuthorHost with guarded execution, exact review and user approval. Author targets Standard and Interactive P0-A, P0-B, P1 or P2. Declare the external effect of every Interactive Action explicitly when authoring. A read-only Action may write workflow state. Graph discovers and documents capabilities.' },
       documents: [
         document('flowkit-doc-dsl', 'dsl/index'),
         document('flowkit-doc-authoring', 'guide/workflow-authoring'),

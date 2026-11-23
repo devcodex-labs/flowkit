@@ -122,6 +122,16 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     });
   }
   if (plan) {
+    const effectMismatches = stage ? plan.nodes.filter(node => node.kind === 'action').flatMap(node => {
+      const actual = graph.byId.get(node.id).effect;
+      return node.effect === actual && ['read-only', 'write'].includes(actual) ? [] :
+        [{ nodeId: node.id, expected: node.effect ?? null, actual: actual ?? null }];
+    }) : [];
+    if (effectMismatches.length) {
+      throw Object.assign(new Error('Compiled Interactive Action effects differ from the WorkflowPlan or are missing.'), {
+        code: 'FKA_PLAN_MISMATCH', detail: { effectMismatches }
+      });
+    }
     const loopMismatches = plan.nodes.filter(node => node.kind === 'loop').flatMap(node => {
       const actual = graph.byId.get(node.id);
       if (node.onSuccess === actual.onSuccess && node.onMaxExceeded === actual.onMaxExceeded) return [];
@@ -195,6 +205,10 @@ export function standardReviewEvidence({ manifest, files }) {
     declaredTerminalIds: nodes.filter(node => node.type === 'terminal').map(node => node.id),
     rendererOnlyIds: [...new Set(rendererOnlyIds)],
     documentationFiles: ['SKILL.md', 'workflow.mmd'],
+    actionEffects: interactiveStageForMode(manifest.mode) ? nodes.filter(node => node.type === 'action').map(node => ({
+      nodeId: node.id, action: node.action, declaredEffect: node.effect ?? null, effectiveEffect: node.effect ?? 'write',
+      stateWrites: node.writes ?? []
+    })) : [],
     conditions: nodes.filter(node => node.type === 'condition').map(node => ({
       nodeId: node.id, firstMatch: node.branches.map(({ when, next }) => ({ when, next }))
     })),

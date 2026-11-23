@@ -117,7 +117,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   let reviewObservation;
   const state = { reviewOnly: turn.kind === 'review-only' };
   const continuation = turn.clarifyingDraft || !!turn.reviewRevision;
-  const supportsNodeOptions = ['standard', 'interactive-p1', 'interactive-p2'].includes(draft.choices.executionMode);
+  const supportsNodeOptions = ['standard', 'interactive-p0-b', 'interactive-p1', 'interactive-p2'].includes(draft.choices.executionMode);
   const answered = new Set(turn.answeredQuestionIds);
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
@@ -141,6 +141,10 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.currentPlan = draft.plan;
       ctx.state.candidate = draft.candidate;
       ctx.state.candidateDiff = reviewStandardCandidate(draft.candidate, draft.previousCandidate);
+      if (draft.candidate.manifest.planRef && ctx.state.candidateDiff.compilerEvidence.actionEffects.some(item => !item.declaredEffect)) {
+        throw clarify('Interactive Action effect was not declared; rebuild before review',
+          [question('action-effect', 'Rebuild with explicit external Action effects', ['rebuild', 'cancel'])]);
+      }
       for (const item of draft.candidate.manifest.documents ?? []) {
         await author.readDocument({ ...item, ...(item.source.type === 'url' ? { url: item.source.url } : {}) });
       }

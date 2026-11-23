@@ -12,7 +12,8 @@ import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity } from '../src/author/host-target.mjs';
 import { checkCandidate } from '../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
-import { commitDelivery, deliveryNames, escapeHtml, graphPage, publicDelivery } from './local-mcp-artifacts.mjs';
+import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, graphPage, newExportKey, publicDelivery,
+  readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
 
 const interpreter = new URL('../website/node_modules/mermaid/dist/mermaid.min.js', import.meta.url);
@@ -69,6 +70,19 @@ function canInstall(selector) {
   return [...listing.installed, ...listing.available].some(plugin => plugin.pluginId === selector);
 }
 
+function acquireServiceLease(dataDir) {
+  const lease = new DatabaseSync(path.join(dataDir, 'service-lock.sqlite'));
+  try { lease.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE'); }
+  catch (cause) {
+    lease.close();
+    throw new Error('FlowKit 数据目录已被其他本机 MCP 服务占用，或无法获取写锁。', { cause });
+  }
+  let released = false;
+  return () => {
+    if (!released) { released = true; lease.close(); }
+  };
+}
+
 export async function startLocalMcp(config, dependencies = {}) {
   const listen = config.listen ?? {};
   const host = listen.host ?? '127.0.0.1';
@@ -85,6 +99,19 @@ export async function startLocalMcp(config, dependencies = {}) {
       typeof credential !== 'string' || credential.length < 24) throw new Error('Configure a loopback address and a FlowKit MCP token of at least 24 characters');
   await mkdir(dataDir, { recursive: true });
   const renderer = dependencies.renderer ?? await readFile(interpreter, 'utf8');
+  const trustedExports = exportTrust(config.trustedExportKeys);
+  const releaseLease = acquireServiceLease(dataDir);
+  try {
+    return await bindLocalMcp({ config, dependencies, host, port, mcpPath, namespace, workspaceId, dataDir,
+      exportDir, credential, collectionName, renderer, releaseLease, trustedExports });
+  } catch (error) {
+    releaseLease();
+    throw error;
+  }
+}
+
+async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespace, workspaceId, dataDir,
+  exportDir, credential, collectionName, renderer, releaseLease, trustedExports }) {
   const rendererHash = artifactDigest(renderer);
   const data = new DatabaseSync(path.join(dataDir, 'local-mcp.sqlite'));
   data.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS local_mcp (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;');
@@ -106,6 +133,8 @@ export async function startLocalMcp(config, dependencies = {}) {
   }
   const collectionPlan = get('collection-plan') ?? insert('collection-plan', planNewCollection({ name: collectionName }, [], () => null));
   const collectionId = collectionPlan.destination.id;
+  const operatorCookie = 'flowkit_operator_' + artifactDigest(collectionId).slice(7, 31);
+  const operatorCookiePattern = new RegExp('(?:^|;\\s*)' + operatorCookie + '=([^;]+)');
   const context = { namespace, workspaceId, principalId: 'flowkit-local-owner', sessionId: 'flowkit-local-workspace',
     authorizedCollections: [collectionId], authorizationSnapshotRef: 'flowkit-local-owner-v1' };
   const hostProfile = { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') };
@@ -125,15 +154,22 @@ export async function startLocalMcp(config, dependencies = {}) {
     if (data.kind === kind && data.until > Date.now()) return data.value;
   }
 
-  const operator = req => unseal('operator', req.headers.cookie?.match(/(?:^|;\s*)flowkit_operator=([^;]+)/)?.[1]) === workspaceId;
+  const operator = req => unseal('operator', req.headers.cookie?.match(operatorCookiePattern)?.[1]) === workspaceId;
   const approval = ref => get('approval:' + ref);
   const storeFile = path.join(dataDir, 'author.sqlite');
   let authorHost, server, modelWorkspace;
+  let storageClosed = false;
+  const recoveryProofs = new Map();
   const closeStorage = async () => {
-    data.close();
-    if (modelWorkspace) await rmdir(modelWorkspace);
+    if (storageClosed) return;
+    storageClosed = true;
+    try {
+      data.close();
+      if (modelWorkspace) await rmdir(modelWorkspace);
+    } finally { releaseLease(); }
   };
   try {
+    const exportKey = get('export-key-v1') ?? insert('export-key-v1', newExportKey());
     const provider = config.authorProvider ?? 'codex';
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
     const model = dependencies.modelBinding ?? localModel({ provider,
@@ -160,6 +196,14 @@ export async function startLocalMcp(config, dependencies = {}) {
             record.reviewRef === reviewRef && record.previousHash === previousHash && record.contentHash === contentHash;
           return { approved, subjectId: context.principalId, approvalId: approvalRef };
         },
+        verifySettlement({ evidenceRef, draftId, turnId, attemptId, decision, resultHash, reservations }) {
+          const proof = recoveryProofs.get(evidenceRef);
+          if (!proof || proof.draftId !== draftId || proof.turnId !== turnId || proof.attemptId !== attemptId ||
+              proof.decision !== decision || proof.resultHash !== resultHash) return;
+          const noEffect = Object.values(reservations).every(item => item.sideEffect === 'read' && item.sideEffectStatus === 'none');
+          if (decision === 'confirm-no-effect' && !noEffect) return;
+          return { verified: true, physicalDone: true, noEffect, draftId, turnId, attemptId, evidenceRef, resultHash };
+        },
         verifyImport({ sourceRef, sourceHash }) {
           return get('import:' + sourceRef)?.hash === sourceHash;
         }
@@ -176,6 +220,25 @@ export async function startLocalMcp(config, dependencies = {}) {
       if (withheld(draft.status) || draft.candidate?.hash !== candidateHash) throw new Error('候选已变更，请打开当前版本。');
       return draft;
     };
+    function recoveryAttempt(draft) {
+      if (draft.status !== 'reconciliation-required') return undefined;
+      return draft.recoveryRef ?? (draft.physicalOutstanding.length === 1 ? draft.physicalOutstanding[0] : undefined);
+    }
+
+    async function recover({ draftId, expectedStateVersion }, requestContext, signal) {
+      const draft = await authorHost.readDraft({ draftId }, requestContext, signal);
+      if (draft.status !== 'reconciliation-required') return draft;
+      const attempt = recoveryAttempt(draft);
+      if (!attempt) throw new Error('没有可由本机服务核验的恢复记录，请由 Host 对账。');
+      const evidenceRef = randomUUID();
+      const resultHash = attempt.resultHash ?? null;
+      const decision = resultHash ? 'confirm-result' : 'confirm-no-effect';
+      recoveryProofs.set(evidenceRef, { draftId, ...attempt, decision, resultHash });
+      try {
+        await authorHost.settleTurn({ draftId, turnId: attempt.turnId, decision, evidenceRef, expectedStateVersion }, requestContext, signal);
+      } finally { recoveryProofs.delete(evidenceRef); }
+      return authorHost.readDraft({ draftId }, requestContext, signal);
+    }
     const previewUrl = (draft, operation) => origin + '/preview/' + seal('preview',
       { draftId: draft.id, candidateHash: draft.candidate.hash, ...(operation ? { operation } : {}) });
     const publicReview = review => ({ qualified: review.receipt?.qualified === true,
@@ -186,9 +249,10 @@ export async function startLocalMcp(config, dependencies = {}) {
       const draft = await readDraft(draftId, candidateHash, signal);
       if (draft.approvalReceipt?.candidateHash !== candidateHash || !draft.reviewReceipt?.qualified ||
           !approval(draft.approvalReceipt.approvalRef)?.confirmed) throw new Error('请先在预览页确认当前候选。');
-      const receiptId = candidateHash.slice(7);
+      const portable = canExportPortable(draft.candidate);
+      const receiptId = portable ? artifactDigest(JSON.stringify(['portable-v1', candidateHash, exportKey.publicKey])).slice(7) : candidateHash.slice(7);
       const directory = path.join(exportDir, receiptId);
-      const files = publicDelivery(draft.candidate, renderer);
+      const files = publicDelivery(draft.candidate, renderer, portable ? exportKey : undefined);
       const hashes = Object.fromEntries(deliveryNames.map(name => [name, artifactDigest(files[name])]));
       const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, rendererHash });
       if (authorIdentity(record.hashes) !== authorIdentity(hashes) || record.directory !== directory) throw new Error('Export configuration or renderer changed for this candidate');
@@ -216,7 +280,8 @@ export async function startLocalMcp(config, dependencies = {}) {
       const { requestId, sourceRef, candidateHash, destination } = input;
       const uploaded = get('upload:' + sourceRef);
       const firstParty = uploaded?.provenance ?? (!uploaded && candidateHash ? { draftId: sourceRef, candidateHash } : null);
-      if (uploaded?.changed || (uploaded?.provenance && candidateHash && uploaded.provenance.candidateHash !== candidateHash)) {
+      if (uploaded?.changed || (uploaded?.provenance && candidateHash && uploaded.provenance.candidateHash !== candidateHash) ||
+          (uploaded?.portable && candidateHash && uploaded.candidate.hash !== candidateHash)) {
         return { requestId, status: 'conflict', reason: '导出文件与 FlowKit 来源记录不符。' };
       }
       const selector = uploaded?.codexSelector;
@@ -227,14 +292,16 @@ export async function startLocalMcp(config, dependencies = {}) {
           { destination: 'codex', label: '直接安装', available: await (dependencies.canInstall ?? canInstall)(selector) }
         ];
       }
-      if (!firstParty && !destination) return { requestId, status: 'choice_required', options: await withOptions(),
+      if (!firstParty && !uploaded?.portable && !destination) return { requestId, status: 'choice_required', options: await withOptions(),
+        ...(uploaded?.untrusted ? { reason: '来源签名有效，但接收实例尚未信任该导出公钥。' } : {}),
         ...(uploaded ? {} : { sourceUrl: origin + '/' }) };
       if (destination === 'codex') {
         return (await withOptions())[1].available ?
           { requestId, status: 'install_required', destination, selector, command: ['codex','plugin','add',selector] } :
           { requestId, status: 'rejected', reason: '缺少当前 Codex 可安装的外部插件包。' };
       }
-      if (!firstParty && !compatible(external)) return { requestId, status: 'rejected', reason: '缺少当前 Host 可核验的兼容工作流候选。' };
+      if (!firstParty && !compatible(external)) return { requestId, status: 'rejected', reason: uploaded?.untrusted ?
+        '接收实例尚未信任该导出公钥。' : '缺少当前 Host 可核验的兼容工作流候选。' };
       const material = authorIdentity({ sourceRef, candidateHash: candidateHash ?? null, destination: 'flowkit', collectionId });
       const operationKey = 'add:' + requestId;
       const operation = insert(operationKey, { material, publicationId: 'flowkit-local-' + artifactDigest(requestId).slice(7),
@@ -245,12 +312,13 @@ export async function startLocalMcp(config, dependencies = {}) {
       let draft;
       if (firstParty) draft = await readDraft(firstParty.draftId, firstParty.candidateHash, signal);
       else {
-        insert('import:' + sourceRef, external);
+        const verifiedSourceRef = 'verified-' + external.hash.slice(7);
+        insert('import:' + verifiedSourceRef, external);
         const identity = authorIdentity([external.manifest.collectionId, external.manifest.skillId, collectionId]);
         let imported = await authorHost.start({ operation: 'import', collectionId, requestId: 'local-import-' + identity.slice(7) + '-' + external.hash.slice(7),
-          goal: external.manifest.name, importSource: { sourceRef, mode: 'new-collection' },
+          goal: external.manifest.name, importSource: { sourceRef: verifiedSourceRef, mode: 'new-collection' },
           target: { skillId: 'imported-' + identity.slice(7, 39) } }, context, signal);
-        if (!imported.reviewReceipt?.qualified && imported.status !== 'saved') {
+        if (imported.status === 'needs-review' && imported.stateVersion === 1) {
           imported = await authorHost.advanceTurn({ draftId: imported.id, expectedStateVersion: imported.stateVersion,
             turnId: 'review-' + imported.candidate.hash.slice(7), input: '核对外部候选定义与来源。', kind: 'review-only',
             candidateHash: imported.candidate.hash }, context);
@@ -270,7 +338,12 @@ export async function startLocalMcp(config, dependencies = {}) {
       }
       const approvalRef = draft.approvalReceipt?.approvalRef;
       const proof = approval(approvalRef);
-      if (!draft.reviewReceipt?.qualified || proof?.publicationId !== operation.publicationId || proof.confirmed !== true) {
+      if (!draft.reviewReceipt?.qualified) {
+        return { requestId, status: 'needs_review', reason: '当前候选需要通过复审再确认添加。',
+          draftId: draft.id, stateVersion: draft.stateVersion, candidateHash: draft.candidate.hash,
+          review: publicReview({ receipt: draft.reviewReceipt, rejection: draft.reviewRejection }) };
+      }
+      if (proof?.publicationId !== operation.publicationId || proof.confirmed !== true) {
         return { requestId, status: 'rejected', reason: '请查看并确认将该版本加入目标集合。', confirmationUrl: previewUrl(draft, requestId) };
       }
       let receipt;
@@ -287,18 +360,21 @@ export async function startLocalMcp(config, dependencies = {}) {
       return result;
     }
 
+    function present(draft) {
+      const attempt = recoveryAttempt(draft);
+      return { id: draft.id, draftId: draft.id, stateVersion: draft.stateVersion, status: draft.status,
+        collectionId: draft.collectionId, previousHash: draft.previousHash, questions: draft.questions,
+        diagnostics: draft.diagnostics?.map(({ code, message }) => ({ code, message })),
+        review: publicReview({ receipt: draft.reviewReceipt, rejection: draft.reviewRejection }),
+        ...(attempt ? { recovery: { tool: 'flowkit_recover_workflow', turnId: attempt.turnId } } : {}),
+        ...(draft.plan?.planHash ? { planHash: draft.plan.planHash } : {}),
+        ...(draft.candidate ? { candidate: { name: draft.candidate.manifest.name, version: draft.candidate.manifest.version,
+          candidateHash: draft.candidate.hash, previewUrl: previewUrl(draft),
+          requiredCapabilities: draft.candidate.manifest.workflowDefinition?.nodes?.flatMap(node => [node.action ?? node.verifier].filter(Boolean)) } } : {}) };
+    }
+
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
-      { ...binding, workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add,
-        present: draft => ({ id: draft.id, draftId: draft.id, stateVersion: draft.stateVersion, status: draft.status,
-          collectionId: draft.collectionId, previousHash: draft.previousHash, questions: draft.questions,
-          planHash: draft.plan?.planHash,
-          diagnostics: draft.diagnostics?.map(({ code, message }) => ({ code, message })),
-          review: publicReview({ receipt: draft.reviewReceipt, rejection: draft.reviewRejection }),
-          ...(draft.plan?.planHash ? { planHash: draft.plan.planHash } : {}),
-          ...(draft.candidate ? { candidate: { name: draft.candidate.manifest.name, version: draft.candidate.manifest.version,
-            candidateHash: draft.candidate.hash, previewUrl: previewUrl(draft),
-            requiredCapabilities: draft.candidate.manifest.workflowDefinition?.nodes?.flatMap(node => [node.action ?? node.verifier].filter(Boolean)) } } : {}) })
-      } } : null);
+      { ...binding, workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present } } : null);
 
     async function web(req, res) {
       res.setHeader('Cache-Control', 'no-store');
@@ -308,11 +384,15 @@ export async function startLocalMcp(config, dependencies = {}) {
         return json(res, 403, { error: 'Only the configured loopback origin is allowed' });
       }
       const url = new URL(req.url, origin);
-      if (url.pathname === mcpPath) return mcp(req, res);
+      if (url.pathname === mcpPath) {
+        // Local MCP is stateless. Codex may keep a socket idle while the user reviews an export.
+        res.setHeader('Connection', 'close');
+        return mcp(req, res);
+      }
       const [, route, ref, action] = url.pathname.split('/');
       if (route === 'operator' && req.method === 'GET' && !bootstrapUsed && exact(ref, bootstrap)) {
         bootstrapUsed = true;
-        res.writeHead(303, { Location: '/', 'Set-Cookie': 'flowkit_operator=' + seal('operator', workspaceId) + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400' });
+        res.writeHead(303, { Location: '/', 'Set-Cookie': operatorCookie + '=' + seal('operator', workspaceId) + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400' });
         return res.end();
       }
       if (url.pathname === '/' && req.method === 'GET' && operator(req)) {
@@ -327,8 +407,11 @@ export async function startLocalMcp(config, dependencies = {}) {
         const provenance = deliveryNames.every(name => Object.hasOwn(hashes,name)) && get('export-source:' + authorIdentity(hashes));
         const changed = !provenance && Object.keys(hashes).length > 0 && Object.keys(hashes).some(name =>
           Boolean(get('export-member:' + name + ':' + hashes[name])));
+        const portable = !provenance && !changed ? readPortableExport(source, trustedExports) : {};
         const sourceRef = randomUUID();
-        insert('upload:' + sourceRef, { candidate: compatible(source) ? source : null, provenance, changed, codexSelector: form.get('codex') });
+        insert('upload:' + sourceRef, { candidate: portable.candidate ?? (compatible(source) ? source : null), provenance,
+          changed: changed || portable.invalid === true, portable: !!portable.candidate, untrusted: portable.untrusted === true,
+          codexSelector: form.get('codex') });
         return json(res, 200, { sourceRef });
       }
       if (route === 'exports' && req.method === 'GET' && deliveryNames.includes(action)) {
@@ -393,12 +476,15 @@ export async function startLocalMcp(config, dependencies = {}) {
     origin = 'http://' + host + ':' + server.address().port;
 
     return {
-      url: origin + mcpPath, collectionId, operatorUrl: origin + '/operator/' + bootstrap,
+      url: origin + mcpPath, collectionId, operatorUrl: origin + '/operator/' + bootstrap, exportPublicKey: exportKey.publicKey,
       async close() {
-        server.closeAllConnections();
-        await new Promise(resolve => server.close(resolve));
-        try { return await authorHost.close({ mode: 'cancel' }); }
-        finally { await closeStorage(); }
+        if (server.listening) {
+          server.closeAllConnections();
+          await new Promise(resolve => server.close(resolve));
+        }
+        const outcome = await authorHost.close({ mode: 'cancel' });
+        if (outcome.closed) await closeStorage();
+        return outcome;
       }
     };
   } catch (error) {
@@ -414,7 +500,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('Usage: npm run mcp:local -- --config <file>');
     const config = JSON.parse(await readFile(path.resolve(process.argv[3]), 'utf8'));
     const service = await startLocalMcp(config);
-    process.stdout.write(JSON.stringify({ url: service.url, collectionId: service.collectionId, operatorUrl: service.operatorUrl }) + '\n');
+    process.stdout.write(JSON.stringify({ url: service.url, collectionId: service.collectionId, operatorUrl: service.operatorUrl,
+      exportPublicKey: service.exportPublicKey }) + '\n');
     const stop = async () => {
       try { if (!(await service.close()).closed) process.exitCode = 1; }
       catch (error) { process.stderr.write(error.message + '\n'); process.exitCode = 1; }

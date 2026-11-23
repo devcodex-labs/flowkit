@@ -170,6 +170,15 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
         intentId: item.id });
     }
   }
+  if (stage && !issues.some(item => item.blocking && item.kind !== 'coverage-gap')) {
+    for (const node of nodes.filter(node => node.kind === 'action')) {
+      const effect = node.options?.effect ?? node.effect;
+      if (!['read-only', 'write'].includes(effect) || node.effect !== undefined && node.effect !== effect) {
+        throw new TypeError(`Interactive Action ${node.id} must declare an external effect of read-only or write consistently`);
+      }
+      node.effect = effect;
+    }
+  }
   const target = { ...(mode === undefined ? {} : { executionMode: mode }), ...(hostProfileRef ? { hostProfileRef } : {}) };
   const view = { schemaVersion: 1, planId: draft.id, intentRef: intent.intentRef, target,
     goal: draft.goal, constraints: intent.constraints, nonGoals, assumptions, unresolvedIssues: issues,

@@ -16,7 +16,8 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
    已明确的目标和约束缺少 Plan 节点映射时，先在同一授权范围内做有限修复。编译结果与固定 Plan 的节点或控制边不符时，只修 DSL。真正未决定的业务规则继续在同一草稿询问，沿用已知选择。
    Plan 节点 ID 使用编译器的 kebab-case 规则，最长 64 字符。节点显示名最长 40 字符。每个 Standard Loop 的 Plan 节点固定不同的 `onSuccess` 和 `onMaxExceeded` 目标及对应控制边，生成 DSL 时沿用两者各自的角色。
    Standard Parallel 中，每个成员只有一条派生控制边通往汇合后的节点。成员失败由并行运行语义处理。
-   无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。采用 `planSource: node-options` 时，Standard、Interactive P1/P2 均以 Plan 节点的 DSL 选项为准。编译器推导控制边，AuthorHost 直接使用经过校验的节点选项生成候选源码。没有附加关系时填写 `edges: []`。附加关系使用 `{from,to,kind}` 和既有节点 ID，`kind` 为 `data`、`capability` 或 `resource`。
+   无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。采用 `planSource: node-options` 时，Standard、Interactive P0-B/P1/P2 均以 Plan 节点的 DSL 选项为准。编译器推导控制边，AuthorHost 直接使用经过校验的节点选项生成候选源码。没有附加关系时填写 `edges: []`。附加关系使用 `{from,to,kind}` 和既有节点 ID，`kind` 为 `data`、`capability` 或 `resource`。
+   每个 Interactive Action 都必须明确声明外部效果。只读回调使用 `effect: 'read-only'`，仍可将结果写入工作流 state。经授权的外部写入使用 `effect: 'write'`。效果尚未确定时先澄清。复审用编译证据中的 `actionEffects` 逐个核对。
    新建草稿的模型输出无效或不完整时，AuthorHost 在同一轮预算内至多再解析一次，已有答案保留。修复预算耗尽时，以新 turnId 在原草稿继续即可。原样重发一条补答只计入一次，不把模型的早期理解当作用户基线。
    补答后，模型报告的待确认事项必须指向仍未决定的业务选项。已经选定的方案、已知 Host 事实和技术诊断留在 Plan 校验路径。独立复审未通过时，展示 `reviewRejection.findings` 及绑定同一 `candidateHash` 的两个动作。用户可选 `review-only` 重审原候选，或用 `authoring` 按意见修订。修订沿用同草稿的原始授权对话，审查意见作为证据随 Plan 提供。
 5. 用 `reviewCandidate` 展示准确 Diff、真实 ReviewReceipt 或 `rejection`。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。使用 `candidateDiff.compilerEvidence` 区分声明节点、声明终点、Mermaid 渲染标记和 Parallel 实际后继。

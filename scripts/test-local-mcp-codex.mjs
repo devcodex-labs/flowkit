@@ -10,11 +10,15 @@ import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from '..
 import { createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
   start, complete } from '@devcodex-labs/flowkit/interactive';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
+import { canonicalBytes } from '../src/interactive/canonical.mjs';
 
 const token = randomBytes(32).toString('hex');
 const live = process.argv.includes('--live');
 const interactive=process.argv.includes('--interactive');
-const goal = interactive?
+const readOnly = process.argv.includes('--p0b');
+if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
+const goal = readOnly ?
+  '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
   '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。Host 的 check-input 只读校验 employeeId、month、hours，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点，调用方从 Standard runArtifact 的 state.copyRef 读取结果。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
 const base = path.resolve('.tmp');
@@ -30,18 +34,46 @@ async function runExport(directory) {
   const bytes=await readFile(path.join(directory,'workflow.js'));
   const artifactHash=artifactDigest(bytes);
   const program=await loadInteractiveProgram(bytes,artifactHash);
-  assert.equal(program.interactiveProgram.identity.implementedStage,'P2');
-  const groups=Object.entries(program.programTable.nodes).filter(([,node])=>node.kind==='parallel');
-  assert.ok(groups.some(([id,inner])=>inner.metadata.strategy==='any' &&
-    groups.some(([,outer])=>outer.metadata.strategy==='all_succeeded' &&
-      outer.metadata.branchNodes?.some(branch=>branch.includes(id)))), 'Expected an any group nested inside all_succeeded');
+  const stage = readOnly ? 'P0-B' : 'P2';
+  assert.equal(program.interactiveProgram.identity.implementedStage, stage);
   const namespace='cli-export';
   const persistence=createSqliteInteractivePersistence(path.join(root,'run.sqlite'),{namespace});
   const auth=createInteractiveHostContext({namespace,subjectId:'fixture',authorize:()=>true,authorizeTask:()=>true});
   const options={...persistence,auth,policy:{id:'cli-export',version:'1',
-    canonicalizationVersion:'jcs-rfc8785-v1',capabilityStage:'P2',disclosePolicyId:'test',bindingManifest:{}}};
+    canonicalizationVersion:'jcs-rfc8785-v1',capabilityStage:stage,disclosePolicyId:'test',bindingManifest:{}}};
   try {
     const reference=await persistence.programRegistry.putImmutable(bytes,{...program.interactiveProgram.identity,artifactHash});
+    if (readOnly) {
+      const outcomes = {};
+      for (const passed of [true, false]) {
+        const startKey = passed ? 'check-passed' : 'check-rejected';
+        const runOptions = { ...options, startKey };
+        let frame = await start(reference, {}, {}, runOptions);
+        const [read] = frame.pending;
+        assert.equal(read.task.action, 'read-ticket');
+        const { operationKey } = read.task;
+        const inputHash = artifactDigest(canonicalBytes(read.task));
+        const claim = { runId: frame.runId, requestId: read.requestId, operationKey, inputHash };
+        assert.equal((await persistence.operationController.claim(claim, auth)).readOnly, true);
+        const result = { set: { ticket: { id: 'test-ticket' } } };
+        await persistence.operationController.settle({ runId: frame.runId, operationKey, inputHash,
+          effect: 'no-effect', evidenceHash: artifactDigest(startKey), result }, auth);
+        frame = await complete({ runId: frame.runId, requestId: read.requestId, operationKey,
+          kind: 'action', outcome: 'succeeded', result }, {}, runOptions);
+        const [verification] = frame.pending;
+        assert.equal(verification.task.verifier, 'check-ticket');
+        frame = await complete({ runId: frame.runId, requestId: verification.requestId, kind: 'verification',
+          outcome: 'succeeded', result: { passed } }, {}, runOptions);
+        assert.equal(frame.status, passed ? 'succeeded' : 'failed');
+        outcomes[startKey] = frame.status;
+      }
+      console.log(JSON.stringify({ path: 'interactive-sdk', stage, effect: 'no-effect', cases: outcomes }));
+      return;
+    }
+    const groups=Object.entries(program.programTable.nodes).filter(([,node])=>node.kind==='parallel');
+    assert.ok(groups.some(([id,inner])=>inner.metadata.strategy==='any' &&
+      groups.some(([,outer])=>outer.metadata.strategy==='all_succeeded' &&
+        outer.metadata.branchNodes?.some(branch=>branch.includes(id)))), 'Expected an any group nested inside all_succeeded');
     const verifiers=['check-input','check-copy','check-original'];
     const cases=[
       { label:'first-review-wins', passes:['check-input','check-copy'], visited:verifiers.slice(0,2), terminal:'succeeded' },
@@ -147,9 +179,9 @@ try {
     assert.equal(Boolean(flowkit.pluginId), false);
     assert.equal((await tool('flowkit_collection')).collection.id, service.collectionId);
     const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'monthly-cli-start',
-      goal,...(interactive?{executionMode:'interactive-p2'}:{}) });
+      goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive ? { executionMode: 'interactive-p2' } : {}) });
     const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'monthly-cli-plan',
-      expectedStateVersion: draft.stateVersion, input: goal, target: { name: 'monthly-timesheet' } } });
+      expectedStateVersion: draft.stateVersion, input: goal, target: { name: readOnly ? 'ticket-review' : 'monthly-timesheet' } } });
     assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
     assert.equal(Object.hasOwn(candidate.candidate, 'files'), false);
     const identity = { draftId: draft.id, candidateHash: candidate.candidate.candidateHash };
@@ -160,7 +192,7 @@ try {
     assert.deepEqual((await readdir(exported.directory)).sort(), ['workflow.html','workflow.js','workflow.mmd']);
     assert.match(await readFile(path.join(exported.directory, 'workflow.mmd'), 'utf8'),
       live ? /flowchart/ : interactive ? /Review alternatives/ : /Verify copy/);
-    if (interactive) await runExport(exported.directory);
+    if (interactive || readOnly) await runExport(exported.directory);
     const add = { requestId: 'monthly-cli-add', sourceRef: draft.id, candidateHash: identity.candidateHash };
     const waiting = await tool('flowkit_add_workflow', add);
     saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();

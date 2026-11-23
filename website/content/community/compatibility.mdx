@@ -14,7 +14,7 @@
 | 工作流源文件 | .workflow.js或.workflow.ts，可静态提取DSL |
 | SDK AOT入口 | .compiled.mjs，保留对应源码与Skill布局 |
 | 直接生成模块 | 本版所选Standard节点由Host自供Ctx/Runtime；见[直接执行](/guide/direct-host)，与SDK AOT校验不同 |
-| Interactive | 独立P0-A Host/Store协议，参考SQLite实现使用node:sqlite；见[接口分层](/guide/interactive) |
+| Interactive | P0-A、P0-B、P1 和 P2 Host/Store 协议。参考 SQLite 实现使用 node:sqlite。见[接口分层](/guide/interactive) |
 | TypeScript声明 | TypeScript 5.0+，使用const类型参数 |
 | 文档站开发 | Node >=24，website独立依赖与锁文件 |
 | 文档语言 | 简体中文；当前没有英文翻译版本 |
@@ -28,7 +28,7 @@
 
 ## 已有能力与宿主责任
 
-Standard 提供静态 DSL 编译、图和数据声明检查、可读生成代码、Mermaid、进程内执行和 Runtime 接缝。模型调用、完整 JSON Schema 校验、业务权限、部署和监控由宿主负责。内部 Interactive P0-A 候选提供由可信 Host 管理的 SQLite 持久化与跨进程续跑，适用节点和接入方式见[Interactive接入](/guide/interactive)。
+Standard 提供静态 DSL 编译、图和数据声明检查、可读生成代码、Mermaid、进程内执行和 Runtime 接缝。模型调用、完整 JSON Schema 校验、业务权限、部署和监控由宿主负责。Interactive 由可信 Host 管理 SQLite 持久化与跨进程续跑。P0-B 增加持久 Action、Verification、Human 和 Loop，P1 支持全部分支成功再合并，P2 支持首个合格分支胜出、取消及对账。适用节点和接入方式见 [Interactive 接入](/guide/interactive)。Author 可为 Standard 和上述各 Interactive 阶段生成可复审候选，见[起草指南](/guide/workflow-authoring)。
 
 Standard 的并行分支共享 state，`any` 汇合后其余分支仍可继续。初始 state 做顶层浅复制。默认 Skill loader 有范围、白名单、完整性和读取限制，自定义 loader 自行承担对应责任。AOT 完整性验证与执行隔离由各自的机制负责。
 

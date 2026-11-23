@@ -16,7 +16,7 @@ import { authorIdentity } from '../../src/author/host-target.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
 import { planProfessionalSkills, prepareProfessionalSkill, publishProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { startAuthorDraft } from '../../src/author/draft.mjs';
-import { createWorkflowPlan } from '../../src/author/workflow-plan.mjs';
+import { createWorkflowPlan, materializePlan } from '../../src/author/workflow-plan.mjs';
 import { prepareStandardSkill, publishStandardSkill,reviewStandardCandidate } from '../../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 
@@ -26,6 +26,31 @@ export default defineWorkflow({ id: 'example', version: '1.0.0', name: 'Example'
   terminal('done', { name: 'Done', status: 'succeeded' })
 ] });\n`;
 const hostProfile = { id: 'test-host', digest: artifactDigest('local capability fixture') };
+
+test('Interactive Author requires the explicit Action effect, binds it to the compiled workflow and shows it in review', async t => {
+  const draft = { id: 'effect-draft', choices: { executionMode: 'interactive-p0-b' },
+    target: { name: 'example', version: '1.0.0' }, goal: 'Read the record without changing the source' };
+  const intent = { intentRef: { effectiveIntentHash: artifactDigest('read the record') }, goals: [{ id: 'read' }],
+    constraints: [], issues: [], unresolved: [], coverage: 'complete' };
+  const proposal = { entryNodeId: 'read', edges: [], coverage: { read: ['read'] }, nodes: [
+    { id: 'read', name: 'Read', kind: 'action', options: { action: 'read-record', writes: ['record'], next: 'done' } },
+    { id: 'done', name: 'Done', kind: 'terminal', options: { status: 'succeeded' } }
+  ] };
+  const missing = await materializePlan(draft, proposal, { filename: 'effect.workflow.js' });
+  assert.throws(() => createWorkflowPlan(draft, intent, missing.proposal), /declare an external effect/);
+  proposal.nodes[0].options.effect = 'read-only';
+  const declared = await materializePlan(draft, proposal, { filename: 'effect.workflow.js' });
+  const plan = createWorkflowPlan(draft, intent, declared.proposal);
+  assert.equal(plan.nodes[0].effect, 'read-only');
+  const { options } = await fixture(t, declared.source);
+  const { candidate } = await prepareStandardSkill({ ...options, plan });
+  assert.deepEqual(reviewStandardCandidate(candidate).compilerEvidence.actionEffects, [{
+    nodeId: 'read', action: 'read-record', declaredEffect: 'read-only', effectiveEffect: 'read-only', stateWrites: ['record']
+  }]);
+  await writeFile(options.file, declared.source.replace('"read-only"', '"write"'));
+  await assert.rejects(prepareStandardSkill({ ...options, plan }), error =>
+    error.code === 'FKA_PLAN_MISMATCH' && error.detail.effectMismatches[0].actual === 'write');
+});
 
 async function fixture(t, text = source, close = () => {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'flowkit-author-'));

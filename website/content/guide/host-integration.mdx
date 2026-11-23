@@ -83,7 +83,7 @@ settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提�
 
 本地通过 stdio 连接。HTTP handler 由 Host 放进自己的服务，传入逐请求认证函数，返回 `authorHost.createMcpOptions(currentRequestContext, bindings)`。同一长期 AuthorHost 使用 namespace 独占的文件数据库保存草稿、回合和批准，不使用连接内候选 Map。每次请求都传当前主体、会话、工作区与授权集合；连接关闭不会关闭共享 AuthorHost。
 
-`flowkit_start_workflow` 接收 `requestId`、明确的 create/update/import 操作和目标引用。`flowkit_prepare_workflow` 的 `inputRef` 由 Host 解析为准确 draftId、turnId、expectedStateVersion、当前输入及实际上下文，再调用同一 `advanceTurn`。查看差异需要 draftId/candidateHash/previousHash；发布还需最新状态版本、publicationId、真实 reviewRef 和用户 approvalRef。批准登记与保存可以在一个事务中完成。取消、对账和关闭由服务所有者使用 SDK；不增加 MCP 工具名。
+`flowkit_start_workflow` 接收 `requestId`、明确的 create/update/import 操作和目标引用。`flowkit_prepare_workflow` 的 `inputRef` 由 Host 解析为准确 draftId、turnId、expectedStateVersion、当前输入及实际上下文，再调用同一 `advanceTurn`。查看差异需要 draftId/candidateHash/previousHash；发布还需最新状态版本、publicationId、真实 reviewRef 和用户 approvalRef。批准登记与保存可以在一个事务中完成。通用 Host 的取消、对账和关闭由服务所有者使用 SDK。本机 FlowKit MCP 提供经本机数据目录独占锁约束的草稿恢复入口，详见[本机 Author 指南](/guide/workflow-authoring)。
 
 `flowkit_review_candidate` 返回的 `rejection.actions` 使用相同的两种动作。Host 将动作的 `kind`、`candidateHash` 及当轮材料绑定到新的 `inputRef`，再调用 `flowkit_prepare_workflow`。客户端继续使用现有工具参数，候选变化后需要按当前草稿重新生成引用。
 

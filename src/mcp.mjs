@@ -25,6 +25,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const allowed = new Set(collectionIds);
   const server = new McpServer({ name: 'flowkit', version: '1.0.0' }, workflowUi ? {
     instructions: 'Use flowkit_start_workflow to create a draft, then flowkit_prepare_workflow with a turn to clarify or compile. ' +
+      (workflowUi.recover ? 'For a draft with recovery information, use flowkit_recover_workflow before sending another turn. ' : '') +
       'Open the candidate preview for visual review and user confirmation. Use flowkit_export_workflow for the three files and ' +
       'flowkit_add_workflow only for an explicit request to add the exact candidate or import a selected source.'
   } : undefined);
@@ -135,24 +136,36 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       await exactDraft(collectionId, input.draftId, ctx.signal);
       return draftView(await author().discard(input, requestContext, ctx.signal));
     });
-  tool('flowkit_apply_collection_plan', 'Apply a Host-selected reviewed collection creation or migration plan.',
-    { collectionId: id, planRef: id, approvalRef: id }, async ({ collectionId, planRef, approvalRef }, ctx) => {
-      if (typeof resolveCollectionPlan !== 'function') throw new Error('Host collection binding is unavailable');
-      const plan = await resolveCollectionPlan({ namespace, collectionId, planRef, requestContext, signal: ctx.signal });
-      if (plan.destination.id !== collectionId) throw new Error('Host collection plan belongs to a different collection');
-      if (typeof applyCollectionPlan !== 'function') throw new Error('Host collection approval binding is unavailable');
-      return applyCollectionPlan(plan, approvalRef, requestContext, ctx.signal);
-    });
-  tool('flowkit_run_workflow', 'Run a fixed approved Artifact using the Host execution binding.',
-    { collectionId: id, skillId: id, candidateHash: hash, executionRef: id }, async (input, ctx) => {
-      if (typeof runWorkflow !== 'function') throw new Error('Host execution binding is unavailable');
-      return runWorkflow({ namespace, ...input, requestContext, signal: ctx.signal });
-    });
+  if (!workflowUi || typeof resolveCollectionPlan === 'function' && typeof applyCollectionPlan === 'function') {
+    tool('flowkit_apply_collection_plan', 'Apply a Host-selected reviewed collection creation or migration plan.',
+      { collectionId: id, planRef: id, approvalRef: id }, async ({ collectionId, planRef, approvalRef }, ctx) => {
+        if (typeof resolveCollectionPlan !== 'function') throw new Error('Host collection binding is unavailable');
+        const plan = await resolveCollectionPlan({ namespace, collectionId, planRef, requestContext, signal: ctx.signal });
+        if (plan.destination.id !== collectionId) throw new Error('Host collection plan belongs to a different collection');
+        if (typeof applyCollectionPlan !== 'function') throw new Error('Host collection approval binding is unavailable');
+        return applyCollectionPlan(plan, approvalRef, requestContext, ctx.signal);
+      });
+  }
+  if (!workflowUi || typeof runWorkflow === 'function') {
+    tool('flowkit_run_workflow', 'Run a fixed approved Artifact using the Host execution binding.',
+      { collectionId: id, skillId: id, candidateHash: hash, executionRef: id }, async (input, ctx) => {
+        if (typeof runWorkflow !== 'function') throw new Error('Host execution binding is unavailable');
+        return runWorkflow({ namespace, ...input, requestContext, signal: ctx.signal });
+      });
+  }
 
   if (workflowUi) {
     tool('flowkit_get_workflow_draft', 'Read the current candidate and its preview after a user decision.',
       { collectionId: id, draftId: id }, async ({ collectionId, draftId }, ctx) =>
         draftView(await exactDraft(collectionId, draftId, ctx.signal)), true);
+    if (workflowUi.recover) {
+      tool('flowkit_recover_workflow', 'Reconcile an interrupted local Author draft without replaying unknown effects.',
+        { collectionId: id, draftId: id, expectedStateVersion: z.number().int().positive() },
+        async ({ collectionId, ...input }, ctx) => {
+          await exactDraft(collectionId, input.draftId, ctx.signal);
+          return draftView(await workflowUi.recover(input, requestContext, ctx.signal));
+        });
+    }
     tool('flowkit_export_workflow', 'Export the three public files for an exact confirmed candidate.',
       { collectionId: id, draftId: id, candidateHash: hash }, (input, ctx) => workflowUi.export(input, requestContext, ctx.signal));
     tool('flowkit_add_workflow', 'Add a verified candidate or inspect the supported destinations for an external workflow.',
