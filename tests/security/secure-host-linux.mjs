@@ -104,7 +104,7 @@ try {
   }
   for (const relative of ['tests/security/secure-host-worker.mjs','tests/security/codex-model-identity.mjs',
     'src/interactive/sqlite-store.mjs','src/interactive/checkpoint.mjs','src/interactive/canonical.mjs',
-    'src/interactive/protocol.mjs','src/interactive/operation-ledger.mjs']) {
+    'src/interactive/protocol.mjs','src/interactive/operation-ledger.mjs','src/interactive/artifact-ledger.mjs']) {
     const destination=path.join(publicDir,relative);
     await mkdir(path.dirname(destination),{recursive:true,mode:0o755});
     await copyFile(path.join(repo,relative),destination);

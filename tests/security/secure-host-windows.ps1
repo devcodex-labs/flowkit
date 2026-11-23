@@ -143,7 +143,7 @@ try {
   foreach ($file in @(
     'tests\security\secure-host-worker.mjs',
     'src\interactive\sqlite-store.mjs','src\interactive\checkpoint.mjs','src\interactive\canonical.mjs',
-    'src\interactive\protocol.mjs','src\interactive\operation-ledger.mjs'
+    'src\interactive\protocol.mjs','src\interactive\operation-ledger.mjs','src\interactive\artifact-ledger.mjs'
   )) {
     $destination = Join-Path $publicDir $file
     [void][IO.Directory]::CreateDirectory((Split-Path $destination -Parent))
