@@ -8,10 +8,10 @@ import { analyzeDataflow } from './dataflow.mjs';
 import { parseWhen, WhenSyntaxError } from '../when/parser.mjs';
 
 /** Private analysis pipeline; it does not generate code or establish SDK runtime validity. */
-export async function analyzeSource(source, suppliedOptions = {}) {
+export async function analyzeSource(source, suppliedOptions = {}, {interactiveStage} = {}) {
   const options = normalizeOptions(suppliedOptions);
   const snapshot = createSourceSnapshot(source, options.filename);
-  const context = createCompileContext(snapshot, options);
+  const context = {...createCompileContext(snapshot, options),interactiveStage,subflows:['P1','P2'].includes(interactiveStage)};
   const { literal, diagnostics } = extractWorkflow(snapshot);
   let graph = null;
   let dataflow = null;

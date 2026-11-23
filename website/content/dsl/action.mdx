@@ -6,8 +6,10 @@
 |---|---|---|
 | `name` | 必需string | 节点显示名称 |
 | `action` | 必需非空string | 传给runtime.runAction的业务标识 |
+| `reads` | Interactive 可选 string[] | 必需状态键。声明后只向该 Action 披露这些键，缺失时停止派发 |
 | `writes` | 可选string[]，默认[] | 声明可能写入的state顶层键，条目非空且唯一 |
-| `next` | 节点id | 普通上下文必需，parallel成员禁止 |
+| `effect` | Interactive 可选 `'write'` 或 `'read-only'` | 默认写入。只读任务使用无外部效果结算 |
+| `next` | 节点id | 普通节点和子流程节点必需，单节点并行成员省略 |
 
 `id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
 

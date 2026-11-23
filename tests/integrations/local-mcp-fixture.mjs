@@ -8,23 +8,38 @@ const definition = [
   { id: 'failed', kind: 'terminal', name: 'Report failure', options: { status: 'failed' } }
 ];
 
-export function monthlyTimesheetModel() {
+const structured=[
+  {id:'outer',kind:'parallel',name:'Check independent inputs',options:{branchMode:'subflow',
+    branches:['input','review'],join:{strategy:'all_succeeded',next:'done'}}},
+  {id:'input',kind:'verification',name:'Check input',options:{verifier:'check-input',onSuccess:'done',onFailure:'invalid-input'}},
+  {id:'review',kind:'parallel',name:'Review alternatives',options:{branchMode:'subflow',
+    branches:['copy','original'],join:{strategy:'any',next:'done'}}},
+  {id:'copy',kind:'verification',name:'Verify copy',options:{verifier:'check-copy',onSuccess:'done',onFailure:'invalid-copy'}},
+  {id:'original',kind:'verification',name:'Verify original',options:{verifier:'check-original',onSuccess:'done',onFailure:'invalid-original'}},
+  {id:'done',kind:'terminal',name:'Deliver',options:{status:'succeeded'}},
+  ...['input','copy','original'].map(id=>({id:'invalid-'+id,kind:'terminal',name:'Reject '+id,options:{status:'failed'}}))
+];
+
+export function monthlyTimesheetModel({interactive=false}={}) {
   const reviewRequests = new Set();
   const intent = { effective: { intents: [{ id: 'timesheet', goal: '月度工时', children: [], constraints: [] }],
-    constraints: [{ id: 'verify-copy', text: '输入或副本校验失败时结束。', kind: 'requirement', scope: { intentId: null } }],
+    constraints: [{ id: 'verify-copy', text: interactive?'输入与任一复核分支均通过才结束。':'输入或副本校验失败时结束。',
+      kind: 'requirement', scope: { intentId: null } }],
     relations: [], coverage: 'complete', unresolved: [] }, turn: { changes: [], facts: {} }, issues: [], inferences: [], evidence: [] };
+  const nodes=interactive?structured:definition;
   const proposalInput = {
-    entryNodeId: 'input', nodes: definition,
+    entryNodeId: nodes[0].id, nodes,
     coverage: [
-      { intentId: 'timesheet', status: 'covered', coveredBy: definition.map(node => node.id) },
-      { intentId: 'verify-copy', status: 'covered', coveredBy: ['input','verify','failed'] }
+      { intentId: 'timesheet', status: 'covered', coveredBy: nodes.map(node => node.id) },
+      { intentId: 'verify-copy', status: 'covered', coveredBy: interactive?['input','review','done']:['input','verify','failed'] }
     ] };
   let plan;
   return {
     execution: {
       async request({ prepared, flowkitIntent }) {
         if (flowkitIntent) return intent;
-        plan ??= materializePlan({ target: { name: 'monthly-timesheet', version: '1.0.0' } }, proposalInput,
+        plan ??= materializePlan({ target: { name: 'monthly-timesheet', version: '1.0.0' },
+          choices:{executionMode:interactive?'interactive-p2':'standard'} }, proposalInput,
           { filename: 'monthly-timesheet.workflow.js' });
         const { source, proposal, diagnostics } = await plan;
         if (diagnostics) throw new Error(JSON.stringify(diagnostics));

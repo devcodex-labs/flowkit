@@ -1,5 +1,5 @@
 import {MAX_CHECKPOINT_BYTES,assertSHA256,canonicalBytes,sha256Bytes} from './canonical.mjs';
-import { isInteractiveStage, hasStepFrame, isHumanProof } from './protocol.mjs';
+import { isInteractiveStage, hasStepFrame, isHumanProof, parallelPendingEntries } from './protocol.mjs';
 
 const finished=new Set(['succeeded','failed','errored','cancelled']);
 const phases=new Set(['enter','prepare','dispatch-ready','awaiting','validate','commit','route','finished']);
@@ -31,7 +31,7 @@ function encodePending(task,activation,revision) {
 
 function pendingFromExecution(cp) {
   if (cp.parallel) {
-    return cp.parallel.lanes.flatMap(lane=>lane.pending?[encodePending(lane.pending,lane.activation,cp.revision)]:[]);
+    return parallelPendingEntries(cp.parallel).map(({pending,activation})=>encodePending(pending,activation,cp.revision));
   }
   const task=cp.pending??cp.prepared;
   return task?[encodePending(task,cp.controlStack.at(-1).activation,cp.revision)]:[];
@@ -65,6 +65,27 @@ export function encodeCheckpoint(cp) {
     limits:{stageCount:cp.stageCount??0,receiptCount:cp.receiptCount??0,bytes:MAX_CHECKPOINT_BYTES},
     ...(causeCode?{causeCode}:{}),
   };
+}
+
+function validSubflows(group,revision,depth=0) {
+  if (!group.structured) return !group.lanes.some(lane=>lane.scope);
+  if (depth>8 || group.lanes.length<2 || group.lanes.length>16) return false;
+  return group.lanes.every(lane=>{
+    const scope=lane.scope;
+    if (!scope) return lane.status!=='ready';
+    if (!object(scope) || !['ready','cancelled'].includes(lane.status)
+      || !text(scope.blockId) || !phases.has(scope.phase) || !scope.blockId.endsWith('::'+scope.phase)
+      || !object(scope.state) || !Array.isArray(scope.controlStack) || scope.controlStack.length>1
+      || !['running','waiting'].includes(scope.status)) return false;
+    if (scope.parallel && (scope.phase!=='route' || !Array.isArray(scope.parallel.lanes)
+      || scope.blockId!==scope.parallel.nodeId+'::route' || !validSubflows(scope.parallel,revision,depth+1))) return false;
+    const task=scope.pending;
+    if (!task) return scope.phase!=='awaiting';
+    const frame=scope.controlStack.at(-1);
+    return scope.phase==='awaiting' && scope.status==='waiting' && text(task.requestId)
+      && count(task.issuedRevision) && task.issuedRevision<=revision && hasStepFrame(task.kind)
+      && task.nodeId===frame?.nodeId && task.attempt===frame?.attempt;
+  });
 }
 
 export function decodeCheckpoint(cp) {
@@ -119,6 +140,7 @@ export function decodeCheckpoint(cp) {
         || lane.pending&&(lane.pending.nodeId!==lane.nodeId || lane.pending.attempt!==lane.attempt
           || !text(lane.pending.requestId) || !count(lane.pending.issuedRevision)
           || lane.pending.issuedRevision>revision || !hasStepFrame(lane.pending.kind)))
+      || !validSubflows(parallel,revision)
       || (status==='waiting')!==(cp.pending.length>0)
       || hash(pendingFromExecution({parallel,revision}))!==hash(cp.pending)) throw invalid();
   }

@@ -1,7 +1,8 @@
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { isWorkflowId, isWorkflowNodeName, WORKFLOW_ID_MAX_LENGTH, WORKFLOW_NODE_NAME_MAX_LENGTH } from '../shared/contracts.mjs';
 import { analyzeSource } from '../compiler/analyze.mjs';
-import { supportsP0ANodeKind } from '../compiler/interactive/feature-gate.mjs';
+import { supportsInteractiveNodeKind } from '../compiler/interactive/feature-gate.mjs';
+import { interactiveStageForMode } from '../interactive/protocol.mjs';
 
 const NODE_KINDS = new Set(['agent', 'action', 'verification', 'condition', 'parallel', 'loop', 'human', 'terminal']);
 const EDGE_KINDS = new Set(['control', 'data', 'capability', 'resource']);
@@ -28,7 +29,9 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   const id = JSON.stringify(draft.target.name);
   const source = `import { ${[...builders].join(', ')} } from '@devcodex-labs/flowkit/dsl';\n` +
     `export default defineWorkflow({id:${id},name:${id},version:${JSON.stringify(draft.target.version)},nodes:[\n${steps.join(',\n')}\n]});\n`;
-  const analysis = await analyzeSource(source, { ...compilerOptions, skillCheck: false });
+  const stage=interactiveStageForMode(draft.choices?.executionMode);
+  const analysis = await analyzeSource(source, { ...compilerOptions, skillCheck: false },
+    {interactiveStage:stage});
   if (analysis.diagnostics.some(item => item.severity === 'error')) return { diagnostics: analysis.diagnostics };
   const control = new Map();
   for (const { from, to } of [...analysis.graph.referenceEdges, ...analysis.graph.executionEdges]) {
@@ -123,10 +126,11 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
   const issues = [...unresolvedIssues];
   if (issues.some(item => item.kind === 'coverage-gap')) throw new TypeError('Plan coverage gaps must be derived from the authorized intent');
   if (mode === undefined) issues.push(issue('execution-mode', 'Choose the target execution mode'));
-  if (mode === 'interactive-p0-a') {
+  const stage=interactiveStageForMode(mode);
+  if (stage) {
     for (const node of nodes) {
-      if (!supportsP0ANodeKind(node.kind) || node.kind === 'agent' && node.verification) {
-        issues.push(issue(`unsupported-${node.id}`, `Interactive P0-A cannot express ${node.name ?? node.id}`, 'capability-gap'));
+      if (!supportsInteractiveNodeKind(stage,node.kind) || stage==='P0-A' && node.kind==='agent' && node.verification) {
+        issues.push(issue(`unsupported-${node.id}`, `Interactive ${stage} cannot express ${node.name ?? node.id}`, 'capability-gap'));
       }
     }
   }

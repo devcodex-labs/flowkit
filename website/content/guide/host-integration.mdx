@@ -104,7 +104,7 @@ Runtime 是 FlowKit 与模型、审批界面、业务函数之间的接缝。本
 | 模式 | 入口和适用范围 |
 | --- | --- |
 | Standard | 使用根入口 `run`，在同一进程执行完整流程。下方示例覆盖 Agent 校验、验证和人工审批。 |
-| Interactive P0-A | 内部候选通过 `@devcodex-labs/flowkit/interactive` 由可信 Host 调用。Agent、Condition 和 Terminal 可通过 SQLite 保存进度并在进程重启后续跑。Human、Action、Verification、Loop 和 Parallel 属于后续阶段。 |
+| Interactive | 可信 Host 通过 `@devcodex-labs/flowkit/interactive` 和 SQLite 保存并恢复同一 Run。P0-A 提供 Agent、Condition 和 Terminal，P0-B 增加 Human、Action、Verification 和 Loop，P1/P2 支持持久并行及子流程。 |
 
 Interactive 的 Host 负责持久化、模型隔离和权限检查。经 OS 认证的操作员会话绑定租户，完整结果由单独授权的审计角色读取。发行与部署状态以内部验收记录为准。 [Interactive 接入与完整示例](/guide/interactive)
 

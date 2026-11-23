@@ -48,7 +48,7 @@ export async function compileInteractiveDraft(file, options) {
   const snapshot = await readFile(filename); // original source bytes, never imported
   const analysis = await analyzeSource(snapshot,{
     ...analyzerOptions,filename,projectRoot,
-  });
+  },{interactiveStage:snapshotOptions.featureStage});
   const lowered = lowerInteractive(analysis,{featureStage:snapshotOptions.featureStage});
   if (!lowered.ir) return {code:'',diagnostics:[...lowered.diagnostics]};
   const mermaidDiagnostics = checkMermaidIds(analysis);

@@ -36,17 +36,26 @@ export function renderMermaid(analysis) {
     lines.push(`${indent}${id}${shape}`);
   }
   const drawn = new Set();
-  for (const node of nodes) {
-    if (drawn.has(node.id) || graph.owners.get(node.id) && graph.regions.get(graph.owners.get(node.id)).kind !== 'human') continue;
-    if (['parallel', 'loop'].includes(node.type)) {
-      lines.push(`  subgraph ${pascalCase(node.id)}[${label(`${node.name} · ${node.type === 'parallel' ? node.join.strategy : `最多 ${node.maxIterations} 次`}`)}]`);
-      if (node.type === 'parallel') lines.push(`    ${start(node.id)}((${label('并行')}))`);
-      for (const member of nodes.filter(member => graph.owners.get(member.id) === node.id)) { declaration(member, '    '); drawn.add(member.id); }
-      if (node.type === 'parallel') lines.push(`    ${join(node.id)}((${label('汇合')}))`);
-      lines.push('  end');
-    } else declaration(node, '  ');
-    drawn.add(node.id);
+  const visualOwners=new Map([...graph.owners].filter(([,owner])=>graph.regions.get(owner).kind!=='human'));
+  const subflows=[...graph.subflowBranches].map(([id,branches])=>
+    ({id,members:new Set([...branches.values()].flatMap(members=>[...members]))}))
+    .sort((left,right)=>left.members.size-right.members.size);
+  for (const {id,members} of subflows) for (const member of members) {
+    if (!visualOwners.has(member)) visualOwners.set(member,id);
   }
+  function draw(node,indent) {
+    if (drawn.has(node.id)) return;
+    drawn.add(node.id);
+    if (['parallel', 'loop'].includes(node.type)) {
+      lines.push(`${indent}subgraph ${pascalCase(node.id)}[${label(`${node.name} · ${node.type === 'parallel' ? node.join.strategy : `最多 ${node.maxIterations} 次`}`)}]`);
+      const inner=indent+'  ';
+      if (node.type === 'parallel') lines.push(`${inner}${start(node.id)}((${label('并行')}))`);
+      for (const member of nodes.filter(member=>visualOwners.get(member.id)===node.id)) draw(member,inner);
+      if (node.type === 'parallel') lines.push(`${inner}${join(node.id)}((${label('汇合')}))`);
+      lines.push(indent+'end');
+    } else declaration(node,indent);
+  }
+  for (const node of nodes) if (!visualOwners.has(node.id)) draw(node,'  ');
   const edge = (from, to, text = '', dashed = false) => lines.push(`  ${from} ${text
     ? dashed ? `-. ${label(text)} .->` : `-- ${label(text)} -->` : dashed ? '-.->' : '-->'} ${to}`);
   let exception = false;
@@ -69,13 +78,19 @@ export function renderMermaid(analysis) {
       text = `超过次数（第${graph.byId.get(graph.owners.get(item.from)).maxIterations}次失败不再修复）`; dashed = true;
     }
     if (item.role === 'action-failure') { text = '出错'; dashed = true; }
-    edge(from, endpoint(item.to), text, dashed);
+    const enclosing=subflows.find(({id,members})=>members.has(item.from)&&graph.byId.get(id).join.next===item.to);
+    edge(from,enclosing?join(enclosing.id):endpoint(item.to),text,dashed);
   }
   for (const node of nodes.filter(node => node.type === 'parallel')) {
-    for (const id of node.branches) edge(endpoint(id), join(node.id));
-    edge(join(node.id), endpoint(node.join.next));
+    if (node.branchMode!=='subflow') for (const id of node.branches) edge(endpoint(id), join(node.id));
+    const enclosing=subflows.find(({id,members})=>members.has(node.id)&&graph.byId.get(id).join.next===node.join.next);
+    edge(join(node.id),enclosing?join(enclosing.id):endpoint(node.join.next));
     edge(join(node.id), '_FlowkitException', node.join.strategy === 'any' ? '控制信号 / 全部业务失败' : '控制信号（最先拒绝者）', true);
     exception = true;
+  }
+  for (const node of nodes.filter(node=>node.type==='terminal'&&node.status==='succeeded')) {
+    const enclosing=subflows.find(({members})=>members.has(node.id));
+    if (enclosing) edge(endpoint(node.id),join(enclosing.id));
   }
   if (exception) lines.push(`  _FlowkitException(${label('异常结束')})`);
   return lines.join('\n') + '\n';

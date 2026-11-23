@@ -27,7 +27,7 @@ maxIterations为3时，最多检查3次、修复2次。第一次就通过则检�
 
 ## 结构约束
 
-body入口必须是verification；修复链必须回到约定校验结构，不能任意离开或跳进另一个回路。循环内不允许parallel，修复链不能包含loop或human。体外普通节点可以指向loop容器作为正常入口，但体外action不能直接跳进循环内部。区域成员指向loop容器时，仅允许入口verification的onSuccess返回；内部修复链应回到body，不应直接回loop id。
+body 入口必须是 Verification。修复链必须回到该校验节点。Interactive P1/P2 允许修复链开启 Parallel，包括子流程分支，其汇合后继须按原修复路径返回校验节点。Standard 修复链不包含 Parallel。修复链也不直接包含另一个 Loop 或 Human。外部路径可通过 Loop 容器进入，内部修复步骤回到 body，只有入口 Verification 的 onSuccess 指回 Loop ID。
 
 这些约束用于让检查、修复和次数上限有可预测语义。需要人工审批时，将human放在循环外的合适后继；需要并发生成时，先在循环外完成并行，再用循环检查修复汇总结果。
 

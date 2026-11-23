@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { validateSkillName } from './skill-document.mjs';
+import { workflowExecutionModes } from '../interactive/protocol.mjs';
 
 const constraintKinds = Object.freeze({ requirement: 'must', prohibition: 'must_not',
   precondition: 'precondition', preference: 'should' });
@@ -15,14 +16,17 @@ export function startAuthorDraft(goal, { project, collectionName = 'flowkit-work
   if (typeof goal !== 'string' || !goal.trim()) throw new TypeError('A workflow goal is required');
   validateSkillName(collectionName);
   if (typeof includeSource !== 'boolean') throw new TypeError('includeSource must be boolean');
-  if (executionMode !== undefined && executionMode !== 'standard' && executionMode !== 'interactive-p0-a') {
-    throw new TypeError('Choose Standard or Interactive P0-A');
+  if (executionMode !== undefined && !workflowExecutionModes.includes(executionMode)) {
+    throw new TypeError('Choose Standard or a supported Interactive stage');
   }
   const choices = Object.freeze({ ...(project === undefined ? {} : { project }), collectionName,
     includeSource, ...(executionMode === undefined ? {} : { executionMode }) });
   const questions = executionMode === undefined ? [{ id: 'execution-mode', question: 'How should this workflow run?',
     options: [{ value: 'standard', label: 'Standard', reason: 'Use for ordinary workflows with approvals and bounded retries.' },
-      { value: 'interactive-p0-a', label: 'Interactive P0-A', reason: 'Use when a run needs durable pause and resume.' }],
+      { value: 'interactive-p0-a', label: 'Interactive P0-A', reason: 'Durable Agent and condition steps.' },
+      { value: 'interactive-p0-b', label: 'Interactive P0-B', reason: 'Durable Actions, human decisions and loops.' },
+      { value: 'interactive-p1', label: 'Interactive P1', reason: 'Durable parallel execution requiring every branch to succeed.' },
+      { value: 'interactive-p2', label: 'Interactive P2', reason: 'Durable parallel execution that can select the first success.' }],
     recommended: 'standard', customAllowed: true }] : [];
   return Object.freeze({ id: randomUUID(), status: 'draft', goal: goal.trim(), choices, questions });
 }

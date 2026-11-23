@@ -3,6 +3,7 @@ import { SkillsExtension, skillEntry } from '@modelcontextprotocol/server/ext/sk
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import * as z from 'zod/v4';
+import { workflowExecutionModes } from './interactive/protocol.mjs';
 
 const id = z.string().min(1).max(256);
 const hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -93,7 +94,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     collectionId: id, requestId: id, operation: z.enum(['create', 'update', 'import']), goal: z.string().min(1).max(maxBytes),
     targetRef: z.union([z.object({ collectionId: id, skillId: id, baseArtifactHash: hash, baseVersion: id }).strict(),
       z.object({ sourceRef: id, mode: z.enum(['new-collection', 'migration']) }).strict()]).optional(),
-    executionMode: z.enum(['standard', 'interactive-p0-a']).optional(),
+    executionMode: z.enum(workflowExecutionModes).optional(),
     includeSource: z.boolean().optional()
   }, async ({ collectionId, goal, requestId, operation, targetRef, executionMode, includeSource }, ctx) => draftView(await author().start({ collectionId,
     goal, requestId, operation, ...(operation === 'import' ? { importSource: targetRef } : { targetRef }), choices: { collectionName: catalog(collectionId).collection.name,
@@ -102,7 +103,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const turn = z.object({
     draftId: id, turnId: id, expectedStateVersion: z.number().int().positive(), input: z.string().min(1).max(maxBytes),
     kind: z.enum(['authoring', 'review-only']).optional(), candidateHash: hash.optional(), confirmedPlanHash: hash.optional(),
-    choices: z.object({ executionMode: z.enum(['standard','interactive-p0-a']).optional() }).strict().optional(),
+    choices: z.object({ executionMode: z.enum(workflowExecutionModes).optional() }).strict().optional(),
     target: z.object({ name: id.optional(), version: id.optional() }).strict().optional()
   }).strict();
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',

@@ -5,16 +5,21 @@
 | 字段 | 类型/必需性 | 规则 |
 |---|---|---|
 | `name` | 必需string | 并行区域显示名称 |
-| `branches` | 必需节点id数组 | 2–16项；成员只能是Agent/action/verification |
+| `branches` | 必需节点id数组 | 2–16项。默认每项是单个 Agent、Action 或 Verification |
+| `branchMode` | 可选 `'subflow'` | Interactive P1/P2 支持。每项是隔离分支的入口节点 |
 | `join` | 必需对象 | 仅strategy和next |
 | `join.strategy` | 必需枚举 | all_succeeded或any |
 | `join.next` | 必需节点id | 汇合后的后继 |
 
-成员不能自带后继或被其他路线直接引用。Agent/action成员省略next，verification成员省略onSuccess/onFailure。每个成员是一个节点，不是任意嵌套子图。
+默认模式下，成员不声明后继，也不能被其他路径直接引用。Agent 和 Action 省略 `next`，Verification 省略 `onSuccess`、`onFailure`。
+
+在 Interactive P1/P2 中配置 `branchMode:'subflow'` 后，分支节点使用常规后继。分支可包含条件、人工确认、循环和并行。到达组的 `join.next` 时先完成分支，汇合后由父流程执行该后继。分支内的 Terminal 表示分支结果。分支内部不共享节点，其他路径只能通过组入口进入。最多八层分支作用域。
 
 `id` / `name` 的合法值、唯一性及字符限制见[公共节点规则](/dsl/index#node-rules)；普通节点与并行成员的后继差异见[后继上下文](/dsl/index#successors)。
 
 ## 两种汇合策略
+
+下表是 Standard 运行语义。持久化选胜、分支快照、取消和补偿见 [Interactive API](/reference/interactive)。
 
 | 策略 | 继续条件 | 拒绝与剩余工作 |
 |---|---|---|

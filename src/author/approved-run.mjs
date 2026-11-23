@@ -4,6 +4,8 @@ import { runVerifiedArtifact } from '../runtime/run.mjs';
 import {createInteractiveCoordinator} from '../interactive/coordinator.mjs';
 import {artifactDigest} from '../shared/artifact-identity.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
+import { interactiveStageForMode } from '../interactive/protocol.mjs';
+import { start as startInteractive } from '../interactive/versioned.mjs';
 
 /** Execute a version the Host approved and installed. Keep required Skill resources pinned for the Run. */
 export async function runApprovedCollectionWorkflow(store, { collectionId, skillId, candidateHash, skillDirectory, executionRef },
@@ -30,21 +32,35 @@ export async function runApprovedCollectionWorkflow(store, { collectionId, skill
       return resolved.logicalId !== pin.id || resolved.resolvedVersion !== pin.version || resolved.digest !== pin.digest;
     })) throw new Error('Prepared Professional Skills differ from the approved Run bindings');
   };
-  if (manifest.mode === 'interactive-p0-a') {
+  const stage=interactiveStageForMode(manifest.mode);
+  if (stage) {
+    const bytes = await readFile(workflowFile);
+    if (artifactDigest(bytes) !== manifest.artifactHash) throw new Error('Installed Program differs from the approved artifact');
+    const programIdentity = Object.fromEntries(['artifactHash','sourceHash','workflowId','workflowVersion','compilerVersion',
+      'programAbiVersion','semanticsVersion','checkpointSchemaVersion','canonicalizationVersion','implementedStage']
+      .map(key=>[key,manifest[key]]));
+    if (stage!=='P0-A' || interactive?.programRegistry) {
+      if (!interactive?.programRegistry || interactive.policy?.capabilityStage!==stage) {
+        throw new Error('Approved Interactive execution requires a matching versioned Host');
+      }
+      const authorize=runtime.authorizeAgentTask;
+      const pinnedRuntime=authorize ? {...runtime,authorizeAgentTask:{...authorize,implementation(prepared,context) {
+        checkPreparedSkills(prepared.task.node.id,prepared.skills);
+        return authorize.implementation(prepared,context);
+      }}} : runtime;
+      const reference=await interactive.programRegistry.putImmutable(bytes,programIdentity);
+      return startInteractive(reference,pinnedRuntime,state,{...interactive,
+        policy:{...interactive.policy,approvedSkillHash:candidateHash}});
+    }
     if (!interactive?.store || typeof runtime.authorizeAgentTask !== 'function') {
       throw new Error('Approved Interactive execution requires Host persistence and task authorization');
     }
-    const bytes = await readFile(workflowFile);
-    if (artifactDigest(bytes) !== manifest.artifactHash) throw new Error('Installed Program differs from the approved artifact');
     const pinnedRuntime = {...runtime,authorizeAgentTask(prepared,context) {
       checkPreparedSkills(prepared.task.node.id,prepared.skills);
       return runtime.authorizeAgentTask(prepared,context);
     }};
     const api = createInteractiveCoordinator({store:interactive.store,runtime:pinnedRuntime,
       policy:{...interactive.policy,approvedSkillHash:candidateHash}});
-    const programIdentity = Object.fromEntries(['artifactHash','sourceHash','workflowId','workflowVersion','compilerVersion',
-      'programAbiVersion','semanticsVersion','checkpointSchemaVersion','canonicalizationVersion','implementedStage']
-      .map(key=>[key,manifest[key]]));
     return api.start({programBytes:bytes,programIdentity,state,startKey:interactive.startKey,runId:interactive.runId});
   }
   return runVerifiedArtifact(workflowFile, manifest.artifactHash, runtime, state, options, checkPreparedSkills);

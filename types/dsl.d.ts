@@ -44,9 +44,16 @@ type MappedInstructions = {
   { readonly agent: string; readonly skill?: string } | { readonly agent?: string; readonly skill: string }
 );
 export type AgentOptions = AgentFields & (TaskInstructions | MappedInstructions);
-export interface ActionOptions extends Named { readonly action: string; readonly writes?: readonly string[]; readonly next?: string }
+export interface ActionOptions extends Named {
+  readonly action: string;
+  readonly reads?: readonly string[];
+  readonly writes?: readonly string[];
+  readonly effect?: 'read-only' | 'write';
+  readonly next?: string;
+}
 export interface VerificationOptions extends Named { readonly verifier: string; readonly onSuccess?: string; readonly onFailure?: string }
 export interface ParallelOptions extends Named {
+  readonly branchMode?: 'subflow';
   readonly branches: readonly [string, string, ...string[]];
   readonly join: { readonly strategy: 'all_succeeded' | 'any'; readonly next: string };
 }

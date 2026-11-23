@@ -388,6 +388,7 @@ export interface ReceiptRecordV1 {
   requestId:string;
   kind:InteractiveStepKind;
   humanProof?:InteractiveHumanProof;
+  subjectId?:string;
   operationSafety?:'unclaimed'|'settled'|'no-effect';
   submissionDigest:string;
   acceptedRevision:number;
@@ -476,8 +477,9 @@ export interface InteractiveOperationRecord {
   requestId:string;
   inputHash:string;
   businessKey?:string;
+  readOnly?:true;
   compensationPlan?:{capabilityId:string;inputHash:string};
-  compensation?:{key:string;evidenceHash:string|null};
+  compensation?:{key:string;idempotencyKey:string;evidenceHash:string|null};
   settlement:{effect:'applied'|'no-effect';evidenceHash:string;result:unknown}|null;
 }
 export interface InteractiveOperationController {
@@ -489,6 +491,8 @@ export interface InteractiveOperationController {
     auth:TrustedHostContextV1):Promise<InteractiveOperationRecord>;
   list(input:{runId:string},auth:TrustedHostContextV1):Promise<Array<InteractiveOperationRecord & {operationKey:string}>>;
   claimCompensation(input:{runId:string;operationKey:string},
+    auth:TrustedHostContextV1):Promise<InteractiveOperationRecord & {claimed:boolean}>;
+  recoverCompensation(input:{runId:string;operationKey:string;compensationKey:string;evidenceHash:string},
     auth:TrustedHostContextV1):Promise<InteractiveOperationRecord & {claimed:boolean}>;
   settleCompensation(input:{runId:string;operationKey:string;compensationKey:string;evidenceHash:string},
     auth:TrustedHostContextV1):Promise<InteractiveOperationRecord>;
@@ -526,7 +530,8 @@ export type PublicPendingV1 = {
   intent:'execute';
 } & (
   | {kind:'agent';task:Pick<InteractiveAgentPending,'name'|'instruction'|'input'|'missing'|'resultSchema'|'reasons'|'overview'|'preparedTask'>}
-  | {kind:'action';task:InteractiveStepTask & {action:string;writes:readonly string[];operationKey:string}}
+  | {kind:'action';task:InteractiveStepTask & {action:string;writes:readonly string[];
+      effect?:'read-only'|'write';operationKey:string}}
   | {kind:'verification';task:InteractiveStepTask & {verifier:string}}
   | {kind:'human';task:InteractiveStepTask & {reviewDigest:string}}
 );
@@ -555,11 +560,12 @@ export declare function createInteractiveHostContext(options:{
   namespace:string;
   subjectId:string;
   authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|
-    'operation:claim'|'operation:read'|'operation:settle'|'operation:list'|'operation:compensate'|'operation:settle-compensation';
+    'operation:claim'|'operation:read'|'operation:settle'|'operation:list'|'operation:compensate'|
+    'operation:recover-compensation'|'operation:settle-compensation';
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
     reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';
     evidenceHash?:string;compensationKey?:string;compensationPlan?:Readonly<{capabilityId:string;inputHash:string}>}>):boolean|Promise<boolean>;
-  authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;
+  authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;nodeId:string;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
   authorizeHuman?(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;reviewDigest:string;
     result:{approved:boolean;comment?:string|null}}>):{proofId:string;evidenceHash:string}|null

@@ -40,7 +40,7 @@ export function validateFields(literal, context) {
   // Membership only selects local successor rules; graph ownership is validated later.
   const members = new Set();
   definition.nodes.forEach((node, index) => {
-    if (constructors.get(`/nodes/${index}`).kind === 'parallel' && Array.isArray(node.branches)) {
+    if (constructors.get(`/nodes/${index}`).kind === 'parallel' && node.branchMode!=='subflow' && Array.isArray(node.branches)) {
       node.branches.forEach(id => { if (typeof id === 'string') members.add(id); });
     }
   });
@@ -167,7 +167,14 @@ export function validateFields(literal, context) {
       if (present('verify')) requiredString('verify');
     } else if (kind === 'action') {
       requiredString('action');
+      stringArray('reads');
       stringArray('writes');
+      if (!context.interactiveStage && (present('reads') || present('effect'))) {
+        emit('FK_C007',present('reads')?'reads':'effect','Action reads and effect require Interactive execution');
+      }
+      if (present('effect') && !['read-only','write'].includes(node.effect)) {
+        emit('FK_C007','effect','Action effect must be read-only or write');
+      }
     } else if (kind === 'verification') {
       requiredString('verifier');
       for (const key of ['onSuccess', 'onFailure']) {
@@ -175,6 +182,9 @@ export function validateFields(literal, context) {
         else successor(key);
       }
     } else if (kind === 'parallel') {
+      if (present('branchMode') && (node.branchMode!=='subflow' || !context.subflows)) {
+        emit('FK_C022','branchMode','Subflow branches require Interactive P1 or P2');
+      }
       if (!Array.isArray(node.branches) || node.branches.length < 2 || node.branches.length > 16 || !node.branches.every(nonempty)) {
         emit('FK_C020', 'branches', 'Parallel requires 2 to 16 branch ids');
       }

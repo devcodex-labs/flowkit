@@ -15,7 +15,8 @@ export interface AuthorGuardedPorts {
   io(input: unknown, context?: object): Promise<unknown>;
 }
 export interface AuthorTarget { skillId?: string; name: string; description: string; version: string }
-export interface AuthorChoices { project?: string; collectionName?: string; executionMode?: 'standard' | 'interactive-p0-a'; includeSource?: boolean }
+export type AuthorExecutionMode = 'standard' | 'interactive-p0-a' | 'interactive-p0-b' | 'interactive-p1' | 'interactive-p2';
+export interface AuthorChoices { project?: string; collectionName?: string; executionMode?: AuthorExecutionMode; includeSource?: boolean }
 export interface AuthorCandidate {
   files: Record<string, string>; hash: string;
   manifest: { collectionId: string; skillId: string; name: string; version: string; artifactHash: string; [key: string]: unknown };

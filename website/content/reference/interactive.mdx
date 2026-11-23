@@ -136,6 +136,8 @@ readHistoricalAck接收namespace/runId/requestId/nodeId/attempt/receiptHash，�
 
 `operationController.settle(input,auth)` 保存效果、证据摘要和结果，允许同内容重试。Action 的 `complete` 需要该账本的匹配结果。成功结果带 `set` 和可选 `remove`，字段须在该 Action 的 `writes` 中。Verification 成功回执结果为 `{passed:boolean}`，`false` 进入业务失败路径。
 
+Action 的 `reads` 声明必需输入。声明后只向该任务提供列出的字段，任一字段缺失时拒绝派发。P2 存在败者独占字段时，后继 Action 必须明确声明所需字段，无需读入任何字段时使用 `reads:[]`。声明 `effect:'read-only'` 的 Action 用 `no-effect` 结算成功，仍可更新允许的工作流结果字段，无须外部补偿计划。
+
 ### cancelInteractiveRun {#cancelInteractiveRun}
 
 `cancelInteractiveRun(runId,reasonCode,options)` 使用 `run:cancel` 权限封锁新派发。已派发操作可用独立的 `operation:read` 和 `operation:settle` 权限继续对账。
@@ -154,6 +156,10 @@ P1 的 `all_succeeded` 将同一 Run 的多个 Pending 同时公开。请求按�
 
 并行写入须在操作声明中提供同一业务效果的稳定 `businessKey`。API Agent adapter 使用 Host 工具的 `operationKey` 生成该键，且要求传入 `interactiveOperations:{controller,auth}`。Host 确认未取得派发权的 Action 可用 `FK_I_ACTION_NOT_DISPATCHED`、`sideEffectStatus:'none'` 提交失败，Store 会在接纳事务中检查该请求没有已登记操作。
 
+P0-B/P1/P2 的 API Agent 写工具均使用持久账本。同逻辑操作的新尝试沿用业务键，在旧尝试经 Host 证实无效果且参数、补偿计划相同时可重新领取。未知或已生效的写入继续封锁。P0-B/P1 的共享 Run 截止后拒绝新增派发，原已接纳回执仍可向原提交主体确认。
+
+P1/P2 可通过 [子流程分支](/dsl/parallel) 在同一 Run 保存多层分支。各层合并自己的结果。外层选胜时封锁败者的全部活跃后代，并保留其外部操作供核对。
+
 ### P2 选胜与外部效果
 
 P2 `any` 在同一状态事务提交唯一胜者和败者派发封锁。Host 对 `cancelledRequests` 中的已派发请求发出取消信号，并使用操作账本审查真实外部结果。败者的新回执只可进入已授权的对账。
@@ -162,13 +168,13 @@ P2 `any` 在同一状态事务提交唯一胜者和败者派发封锁。Host 对
 
 在 `compensate` 模式下，写入申请须同时提交 `compensationPlan:{capabilityId,inputHash}`。Host 在授予写入前核验补偿能力和参数摘要。API Agent 工具可用 `compensationPlan(args,task)` 提供同一信息。
 
-`claimCompensation` 为已确认写入的封锁败者返回稳定的 `compensation.key` 和已固定的计划。取得派发权后执行该补偿操作。已派发而未收到证据时，用原键向目标对账。`settleCompensation` 保存真实结果证据，随后使用 `resume` 继续原 Run。`retain` 模式在 Run 活跃期间保留已确认的败者结果。
+`claimCompensation` 为已确认写入的封锁败者返回计划、当前尝试凭证 `compensation.key` 和稳定的外部 `compensation.idempotencyKey`。以当前尝试凭证提交 `settleCompensation`。恢复时，Host 只有在证实旧执行者已停止且补偿未生效后，才可凭相关证据调用 `recoverCompensation`。该入口需要 `operation:recover-compensation` 权限，原子轮转尝试凭证，外部幂等键保持一致。未知效果继续对账，旧凭证不能结算新尝试。保存成功证据后可 `resume` 原 Run。
 
 putImmutable(bytes,programIdentity)返回TrustedProgramRefV1。产物引用有namespace、artifactHash和programId；保留/释放与Run持久引用一致，不能在Run仍引用时自行删产物。自定义实现必须保留R5封套全部字段以及原子创建/CAS、转换与回执对账契约；不要把公开frame当checkpoint存储。
 
 ### createInteractiveHostContext {#createInteractiveHostContext}
 
-`createInteractiveHostContext({namespace,subjectId,authorize,authorizeTask})`返回不透明授权对象。四项必需；authorize判断run:create/run:complete/run:resume/result:read，authorizeTask逐次决定任务披露，两者只有严格true允许。工厂保存回调绑定，不能用展开/反序列化对象替代。它不自动从OS取得subjectId或证明生产身份。
+`createInteractiveHostContext({namespace,subjectId,authorize,authorizeTask})` 返回不透明授权对象。四项必需。用 `authorize` 判断 Run、结果和账本调用权限，用 `authorizeTask` 按请求和 `nodeId` 判定任务披露及派发。P0-B/P1/P2 的回执也核对当前任务授权，已接纳回执绑定原提交主体。并行时每位 Host 只看到获授权的 Pending，可以分别完成各自的分支。完整结果仍使用独立的 `result:read` 授权。
 
 ### start {#start}
 

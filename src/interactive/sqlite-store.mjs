@@ -8,7 +8,7 @@ import {
 
 import {checkpointPolicy,decodeCheckpoint,encodeCheckpoint} from './checkpoint.mjs';
 import {prepareOperationLedger} from './operation-ledger.mjs';
-import {isInteractiveStage,publishedInteractivePending} from './protocol.mjs';
+import {isInteractiveStage,publishedInteractivePending,runDeadlineExpired,parallelPendingEntries,groupOwnsCompensation} from './protocol.mjs';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'errored', 'cancelled']);
 const STATUSES = new Set(['running', 'waiting', 'paused', ...TERMINAL]);
@@ -16,7 +16,7 @@ export const sqliteAdminTerminate=Symbol('SQLite admin terminate');
 export const sqliteHostTrust=Symbol('SQLite Host trust');
 export const sqliteOperationLedger=Symbol('SQLite workflow operation ledger');
 const digest=value=>sha256Bytes(canonicalBytes(value));
-const SQLITE_SCHEMA_VERSION = 6;
+const SQLITE_SCHEMA_VERSION = 7;
 function boundedCheckpointBytes(input) {
   try { return canonicalBytes(input); }
   catch (error) {
@@ -138,17 +138,24 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ') STRICT;',
       'CREATE TABLE IF NOT EXISTS fk_i_operations (',
       ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, operation_key TEXT NOT NULL,',
-      ' request_id TEXT NOT NULL, input_hash TEXT NOT NULL, business_key TEXT,',
+      ' request_id TEXT NOT NULL, input_hash TEXT NOT NULL, business_key TEXT, read_only INTEGER NOT NULL CHECK (read_only IN (0,1)),',
       " effect TEXT CHECK (effect IN ('applied', 'no-effect')),",
       ' evidence_hash TEXT, result_json TEXT, result_hash TEXT,',
       ' compensation_plan TEXT, compensation_key TEXT, compensation_evidence_hash TEXT,',
       ' PRIMARY KEY (namespace, run_id, operation_key),',
-      ' UNIQUE (namespace, run_id, business_key),',
       ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id),',
       ' CHECK ((effect IS NULL AND evidence_hash IS NULL AND result_json IS NULL AND result_hash IS NULL)',
       ' OR (effect IS NOT NULL AND evidence_hash IS NOT NULL AND result_json IS NOT NULL AND result_hash IS NOT NULL)),',
       ' CHECK (compensation_key IS NULL OR compensation_plan IS NOT NULL),',
       ' CHECK (compensation_evidence_hash IS NULL OR compensation_key IS NOT NULL)',
+      ') STRICT;',
+      "CREATE UNIQUE INDEX IF NOT EXISTS fk_i_operation_active_effect ON fk_i_operations (namespace, run_id, business_key) WHERE effect IS NOT 'no-effect';",
+      'CREATE INDEX IF NOT EXISTS fk_i_operation_business_history ON fk_i_operations (namespace, run_id, business_key);',
+      'CREATE TABLE IF NOT EXISTS fk_i_compensation_attempts (',
+      ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, operation_key TEXT NOT NULL,',
+      ' attempt_key TEXT NOT NULL, no_effect_evidence TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, run_id, operation_key, attempt_key),',
+      ' FOREIGN KEY (namespace, run_id, operation_key) REFERENCES fk_i_operations(namespace, run_id, operation_key)',
       ') STRICT;',
       'CREATE TABLE IF NOT EXISTS fk_i_admin_events (',
       ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, transition_id TEXT NOT NULL,',
@@ -289,30 +296,35 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
           throw failure('FK_I_STALE_RECEIPT','Operation dispatch requires the current Pending');
         }
         assertActive(current.policyHash);
-        if (pending.preparedTask && pending.preparedTask.task.execution.deadlineMs<=Date.now()) {
+        if (runDeadlineExpired(current) || pending.preparedTask?.task.execution.deadlineMs<=Date.now()) {
           throw failure('FK_I_STALE_RECEIPT','Task dispatch deadline expired');
         }
-        if (current.parallel?.strategy==='any' && !current.parallel.effectMode) {
+        const readOnly=pending.kind==='action' && pending.task.effect==='read-only';
+        if (readOnly && compensationPlan) {
+          throw failure('FK_I_INVALID_OPERATION','Read-only Actions do not have a compensation plan');
+        }
+        const groups=current.parallel ? parallelPendingEntries(current.parallel)
+          .find(entry=>entry.pending.requestId===requestId)?.groups??[] : [];
+        if (!readOnly && groups.some(group=>group.strategy==='any'&&!group.effectMode)) {
           throw failure('FK_I_INVALID_OPERATION','Parallel any writes require an explicit effect policy');
         }
-        if (current.parallel?.strategy==='any' && current.parallel.effectMode==='compensate' && !compensationPlan) {
+        if (!readOnly && groups.some(group=>group.strategy==='any'&&group.effectMode==='compensate') && !compensationPlan) {
           throw failure('FK_I_INVALID_OPERATION','Parallel any write requires an authorized compensation plan');
         }
-        if (current.parallel && !businessKey) {
+        if (!readOnly && current.parallel && !businessKey) {
           throw failure('FK_I_INVALID_OPERATION','Parallel writes require a stable business key');
         }
         if (pending.kind==='action' && (digest(pending.task)!==inputHash
           || pending.task.operationKey!==operationKey)) {
           throw failure('FK_I_OPERATION_CONFLICT','operation input does not match the published Action');
         }
+        return {readOnly};
       },
       assertCompensable(runId,requestId) {
         const current=decodeRow(read.get(namespace,runId));
         if (current?.status==='cancelled') return;
         const group=current?.parallel;
-        if (group?.strategy!=='any'||group.effectMode!=='compensate'||!group.decision
-          || !group.lanes.some(lane=>lane.nodeId!==group.decision.winner
-          && lane.requestIds?.includes(requestId))) {
+        if (!groupOwnsCompensation(group,requestId)) {
           throw failure('FK_I_OPERATION_CONFLICT','Compensation is limited to sealed losers or cancelled Runs');
         }
         assertActive(current.policyHash);
@@ -543,6 +555,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         const entryHash = appendJournal(runId, next.revision, transitionId, checkpointHash,
           last.entry_hash, journal);
         if (journal?.kind === 'receipt-accepted') {
+          if (runDeadlineExpired(current)) throw failure('FK_I_RUN_DEADLINE','Run deadline expired before acceptance');
           const laneReceipt=next.parallel?.receipt;
           const accepted=next.receivedSubmission??laneReceipt;
           const candidate=next.candidate??laneReceipt;

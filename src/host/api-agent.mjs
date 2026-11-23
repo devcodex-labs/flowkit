@@ -138,9 +138,9 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
             replayedCalls.set(call.call_id, fingerprint);
             const operationId = tool.sideEffect === 'write' ? await during(signal, () => tool.operationKey(args, task)) : `${task.execution.requestId}:${call.call_id}`;
             if (typeof operationId !== 'string' || !operationId) fail('invalid-operation-key', 'Host tool operation key is missing', sideEffects);
-            if (tool.sideEffect==='write' && ['P1','P2'].includes(task.workflow.implementedStage)) {
+            if (tool.sideEffect==='write' && ['P0-B','P1','P2'].includes(task.workflow.implementedStage)) {
               const {controller,auth}=context.interactiveOperations??{};
-              if (!controller || !auth) fail('durable-operation-required','Parallel tool write requires the Interactive operation controller',sideEffects);
+              if (!controller || !auth) fail('durable-operation-required','Interactive tool write requires the durable operation controller',sideEffects);
               const {runId}=task.run;
               const {requestId}=task.execution;
               const businessKey=artifactDigest(canonicalBytes(operationId));

@@ -63,7 +63,7 @@ codex plugin list --marketplace flowkit-local
 3. 要求导出选中的候选。打开 `workflow.html` 即可离线查看流程图，`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、下载链接及每个文件的 SHA-256。
 4. 在同一个 Codex 会话说「把这个工作流添加到 FlowKit」。Codex 使用当前候选发起添加。打开返回的链接，核对候选名称和版本，再点「确认并加入 FlowKit」。回到 Codex 查看保存结果，或让 FlowKit 列出默认集合中的工作流。
 
-执行方通过现有 Runtime 提供业务方法和数据，并以可信的产物 SHA-256 校验工作流。见 [SDK runArtifact](/reference/sdk#runArtifact) 或 [直接 Host](/guide/direct-host)。
+起草时可以明确选择 Standard、Interactive P0-A、P0-B、P1 或 P2。需要持久 Action、人工确认及循环时选 P0-B，需要持久并行时选 P1，需要首个合格分支选胜时选 P2。MCP 用同一次编译的图供复审并导出三文件。执行方用可信的产物 SHA-256 校验工作流，再通过 [Standard SDK](/reference/sdk#runArtifact) 或 [版本化 Interactive Host](/reference/interactive#start) 运行。
 
 ### 已有文件的备用导入
 
@@ -77,6 +77,7 @@ codex plugin list --marketplace flowkit-local
 
 ```text
 node scripts/test-local-mcp-codex.mjs
+node scripts/test-local-mcp-codex.mjs --interactive
 node scripts/test-local-mcp-codex.mjs --live
 codex plugin remove flowkit-mcp@flowkit-local
 ```

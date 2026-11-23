@@ -3,7 +3,8 @@ import {MAX_INLINE_AGENT_RESULT_BYTES, canonicalBytes, safeJSONSnapshot, sha256B
 import {loadInteractiveProgram} from './load.mjs';
 import {checkpointPolicy} from './checkpoint.mjs';
 import {stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
-import {hasStepFrame,isHumanProof,publishedInteractivePending} from './protocol.mjs';
+import {hasStepFrame,isHumanProof,publishedInteractivePending,runDeadlineExpired,interactiveModeForStage,
+  parallelPendingEntries,laneRequestIds} from './protocol.mjs';
 import {createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
 import {createDescriptionResources} from '../runtime/task-resources.mjs';
 
@@ -374,7 +375,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       && (!cp.parallel || cp.parallel.decision);
     const mustCloseExpiredParallel=cp.parallel && (cp.parallel.decision?.deadline
       || !cp.parallel.decision && cp.taskContext?.deadlineMs<=Date.now());
-    if (!FINISHED.has(cp.status) && cp.taskContext && !p2WithoutDispatch && !mustCloseExpiredParallel) {
+    if (!FINISHED.has(cp.status) && cp.taskContext && !runDeadlineExpired(cp) && !p2WithoutDispatch && !mustCloseExpiredParallel) {
       const budget = createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext);
       budget.check();
       const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647,budget.deadlineMs-Date.now())));
@@ -419,28 +420,30 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       ...args.journalEntry,transition,...(receiptOutcome ? {receiptOutcome} : {}),
     }});
   }
-  async function failCapacity(cp) {
+  async function failRun(cp,causeCode,kind) {
     if (FINISHED.has(cp.status)) return {committed:false,checkpoint:cp};
     const nodeId=cp.blockId.slice(0,cp.blockId.lastIndexOf('::'));
     const next={
       ...cp,revision:cp.revision+1,status:'errored',
-      terminal:{status:'errored',nodeId,causeCode:'FK_I_CHECKPOINT_CAPACITY'},
+      terminal:{status:'errored',nodeId,causeCode},
       pending:null,prepared:null,candidate:null,receivedSubmission:null,
       pauseReason:null,parallel:null,
+      cancelledRequests:[...new Set([...(cp.cancelledRequests??[]),
+        ...publishedInteractivePending(cp).map(task=>task.requestId)])],
     };
     // This terminal transition may use the Store's reserved 256 KiB; it
     // never drops State or accepted receipt identities.
     return writeTransition(cp,{
       runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
-      journalEntry:{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY',
-        from:cp.blockId},
-    },{kind:'capacity-terminal'},{kind:'capacity-terminal',causeCode:'FK_I_CHECKPOINT_CAPACITY'});
+      journalEntry:{kind,causeCode,from:cp.blockId},
+    },{kind},{kind,causeCode});
   }
   async function casOrCapacityExit(cp, args, event, proposal, receiptOutcome) {
     try { return await writeTransition(cp,args,event,proposal,receiptOutcome); }
     catch(error) {
+      if (error?.code==='FK_I_RUN_DEADLINE') return {committed:false,checkpoint:cp};
       if (error?.code!=='FK_I_CHECKPOINT_CAPACITY') throw error;
-      const terminal=await failCapacity(cp);
+      const terminal=await failRun(cp,'FK_I_CHECKPOINT_CAPACITY','capacity-terminal');
       return {...terminal,capacityExit:terminal.committed};
     }
   }
@@ -454,7 +457,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
   }
 
-  function stepCAS(cp, proposal, event, legacyEventKind, extras={}) {
+  function stepCheckpoint(cp,proposal,extras) {
     const next = {...cp,revision:cp.revision+1,stageCount:cp.stageCount+1,receivedSubmission:null,pauseReason:null};
     if (proposal.kind === 'raise-error') {
       next.status='errored';
@@ -532,7 +535,12 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       next.activationSeq=cp.activationSeq+1;
       if (proposal.stackEffect.frame.kind==='agent') next.agentStepCounter=cp.agentStepCounter+1;
     }
-    const write=casOrCapacityExit(cp,{
+    return next;
+  }
+
+  function stepCAS(cp,proposal,event,legacyEventKind,extras={}) {
+    const next=stepCheckpoint(cp,proposal,extras);
+    return casOrCapacityExit(cp,{
       runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
       journalEntry:{
         kind:proposal.kind,event:legacyEventKind,from:cp.blockId,
@@ -541,7 +549,6 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     },Object.keys(extras).length ? {
       eventDigest:fingerprint([event.eventDigest,extras]),
     } : event,proposal);
-    return write;
   }
 
   async function makePrepared(cp,program) {
@@ -552,11 +559,16 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       throw failure('FK_I_INVALID_CHECKPOINT','not at a step prepare phase');
     }
     if (node.kind!=='agent') {
-      const {name,action,writes,verifier}=node.metadata;
+      const {name,action,reads,writes,verifier,effect}=node.metadata;
+      const input=reads===undefined?cp.state:inputForAgent(cp.state,reads).input;
+      if (node.kind==='action' && (reads?.some(key=>!Object.hasOwn(input,key))
+        || reads===undefined && cp.unavailableParallelKeys?.some(key=>!Object.hasOwn(cp.state,key)))) {
+        throw failure('FK_I_PARALLEL_INPUT','Action requires declared inputs available in the current state');
+      }
       const requestId='req:'+fingerprint([cp.namespace,cp.runId,cp.artifactHash,block.nodeId,
         frame.activation,frame.attempt]).slice(7);
-      const task={name,input:cp.state,contextError:cp.contextError,
-        ...(node.kind==='action'?{action,writes,operationKey:fingerprint([
+      const task={name,input,contextError:cp.contextError,
+        ...(node.kind==='action'?{action,writes,...(effect?{effect}:{}),operationKey:fingerprint([
           cp.namespace,cp.runId,cp.artifactHash,block.nodeId,frame.activation,
         ])}:node.kind==='verification'?{verifier}:{reviewDigest:fingerprint([requestId,name,cp.state,cp.contextError])})};
       return copy({kind:node.kind,runId:cp.runId,nodeId:block.nodeId,id:block.nodeId,name,
@@ -578,16 +590,17 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         createDescriptionResources(node.metadata.task.descriptionRefs ?? [],policy,
           {remoteSkillHosts:policy.remoteSkillHosts},budget,taskSignal));
       const requestId = 'req:' + fingerprint([cp.namespace,cp.runId,cp.artifactHash,frame.nodeId,frame.activation,frame.attempt]).slice(7);
+      const mode=interactiveModeForStage(cp.program.implementedStage);
       const task = freezeDeep(copy({protocolVersion:2,
         workflow:{id:program.interactiveProgram.identity.workflowId,version:program.interactiveProgram.identity.workflowVersion,
-          ...program.interactiveProgram.identity,artifactHash:cp.artifactHash,mode:'interactive-p0-a'},
+          ...program.interactiveProgram.identity,artifactHash:cp.artifactHash,mode},
         run:{runId:cp.runId},node:{id:block.nodeId,name:node.metadata.name},task:node.metadata.task,
         input,missing,outputSchema:node.metadata.output,
         execution:{activationId,requestId,deadlineMs:budget.deadlineMs,attempt:frame.attempt,reasons:frame.reasons}}));
       const context = Object.freeze({signal:taskSignal,budget,deadlineMs:budget.deadlineMs,
         descriptionResources,projectRoot:policy.projectRoot,hostProfile:policy.hostProfile,
         authorizationContextRef:policy.authorizationContextRef});
-      const prepared = await prepareTaskV2(task,execution,policy,context,'interactive-p0-a');
+      const prepared = await prepareTaskV2(task,execution,policy,context,mode);
       if (saved && prepared.resourceManifest.manifestHash !== saved.prepared.resourceManifest.manifestHash) {
         throw failure('FK_I_PROGRAM_MISMATCH','Prepared task resources changed within the activation');
       }
@@ -728,13 +741,17 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       : {kind:'validation-passed',reasons:[]};
   }
 
-  function createParallel(cp,program,block,record) {
+  function createParallel(cp,program,block,record,scoped=false) {
     let activationSeq=cp.activationSeq,agentStepCounter=cp.agentStepCounter;
+    const structured=scoped || record.metadata.branchNodes!==undefined;
     const lanes=record.metadata.branches.map(nodeId=>({
       nodeId,activation:++activationSeq,attempt:1,reasons:[],status:'ready',
       overviewStep:program.programTable.nodes[nodeId].kind==='agent'?++agentStepCounter:activationSeq,
+      ...(structured?{scope:{blockId:nodeId+'::enter',phase:'enter',status:'running',
+        state:cp.state,controlStack:[],contextError:cp.contextError,regionCounters:{},
+        unavailableParallelKeys:cp.unavailableParallelKeys??[]}}:{})
     }));
-    return {parallel:{nodeId:block.nodeId,strategy:record.metadata.strategy,lanes,
+    return {parallel:{nodeId:block.nodeId,strategy:record.metadata.strategy,lanes,...(structured?{structured}:{}),
       ...(policySnapshot.parallelEffectMode?{effectMode:policySnapshot.parallelEffectMode}:{})},activationSeq,agentStepCounter};
   }
 
@@ -751,6 +768,253 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       requestIds:[...(lane.requestIds??[]),pending.requestId],
       ...(skillSnapshot?{skillSnapshot}:{}),...(active?{resources:active}:{})},
     ...(preparedBudget?{taskContext:budget}:{})};
+  }
+
+  function scopedWork(cp) {
+    return {revision:cp.revision+1,activationSeq:cp.activationSeq,agentStepCounter:cp.agentStepCounter,
+      taskContext:cp.taskContext,cancelled:new Set(cp.cancelledRequests),retryRequests:new Set()};
+  }
+
+  function syncScopedWork(work,local) {
+    work.activationSeq=local.activationSeq;
+    work.agentStepCounter=local.agentStepCounter;
+    if (local.taskContext) {
+      const {active,...budget}=local.taskContext;
+      work.taskContext=budget;
+    }
+  }
+
+  function storeScope(lane,local) {
+    const {blockId,phase,status,state,controlStack,contextError,regionCounters,
+      pending,prepared,candidate,receivedSubmission,skillSnapshot,parallel,unavailableParallelKeys}=local;
+    lane.scope={blockId,phase,status,state,controlStack,contextError,regionCounters,
+      ...(pending?{pending}:{}),...(prepared?{prepared}:{}),...(candidate?{candidate}:{}),
+      ...(receivedSubmission?{receivedSubmission}:{}),...(skillSnapshot?{skillSnapshot}:{}),
+      ...(parallel?{parallel}:{}),...(unavailableParallelKeys?.length?{unavailableParallelKeys}:{}),
+      ...(local.taskContext?.active?{resources:local.taskContext.active}:{})};
+  }
+
+  function branchPatch(before,after) {
+    return {set:Object.fromEntries(Object.entries(after).filter(([key,value])=>
+      !Object.hasOwn(before,key)||fingerprint(before[key])!==fingerprint(value))),
+    remove:Object.keys(before).filter(key=>!Object.hasOwn(after,key))};
+  }
+
+  function closeScopedLane(lane,group,baseline,local,work) {
+    if (local.parallel) {
+      lane.requestIds=[...new Set([...(lane.requestIds??[]),...local.parallel.lanes.flatMap(laneRequestIds)])];
+    }
+    delete lane.scope;
+    lane.status=local.status;
+    if (lane.status==='succeeded') lane.patch=branchPatch(baseline,local.state);
+    else lane.failure={outcome:lane.status,...(local.terminal?.causeCode?{code:local.terminal.causeCode}:{})};
+    if (lane.status==='succeeded' && group.strategy==='any') {
+      group.decision={outcome:'succeeded',winner:lane.nodeId,revision:work.revision};
+    } else if (group.strategy==='all_succeeded' && lane.failure) {
+      group.decision={...lane.failure,revision:work.revision};
+    }
+    if (group.decision) {
+      for (const other of group.lanes) {
+        if (!other.scope) continue;
+        if (other.scope.pending) work.cancelled.add(other.scope.pending.requestId);
+        if (other.scope.parallel) {
+          for (const entry of parallelPendingEntries(other.scope.parallel)) work.cancelled.add(entry.pending.requestId);
+        }
+        other.status='cancelled';
+      }
+    }
+  }
+
+  async function advanceScope(root,parent,group,lane,program,work) {
+    const record=program.programTable.nodes[group.nodeId];
+    const allowed=record.metadata.branchNodes?.[group.lanes.indexOf(lane)]??[lane.nodeId];
+    const scope=lane.scope;
+    let local={...root,...scope,parallel:scope.parallel??null,pending:scope.pending??null,
+      prepared:scope.prepared??null,candidate:scope.candidate??null,receivedSubmission:scope.receivedSubmission??null,
+      skillSnapshot:scope.skillSnapshot,terminal:null,revision:work.revision-1,activationSeq:work.activationSeq,
+      agentStepCounter:work.agentStepCounter,taskContext:work.taskContext&&{...work.taskContext,active:scope.resources}};
+    let reason='ready';
+    for (let step=0;step<16;step++) {
+      checkSignal();
+      if (local.blockId===record.metadata.next+'::enter' || FINISHED.has(local.status)) {
+        if (!FINISHED.has(local.status)) local.status='succeeded';
+        closeScopedLane(lane,group,parent.state,local,work);
+        return 'ready';
+      }
+      if (!allowed.includes(local.blockId.slice(0,local.blockId.lastIndexOf('::')))) {
+        throw failure('FK_I_INVALID_CHECKPOINT','Subflow escaped its immutable branch');
+      }
+      if (local.parallel) {
+        const nested=local.parallel;
+        reason=await tickScopedGroup(root,local,program,work);
+        if (local.parallel) break;
+        lane.requestIds=[...new Set([...(lane.requestIds??[]),...nested.lanes.flatMap(laneRequestIds)])];
+        local.activationSeq=work.activationSeq;
+        local.agentStepCounter=work.agentStepCounter;
+        if (work.taskContext) local.taskContext=work.taskContext;
+        continue;
+      }
+      if (local.pending) {
+        if (!(local.pending.preparedTask?.task.execution.deadlineMs<=Date.now())) {
+          reason='waiting';
+          break;
+        }
+        work.cancelled.add(local.pending.requestId);
+        local.status='errored';
+        local.terminal={causeCode:'FK_R004'};
+        continue;
+      }
+      const {block,record:node}=confirmCurrentBlock(local,program);
+      let event;
+      const extras={};
+      if (local.phase==='prepare') {
+        try {
+          extras.prepared=await makePrepared(local,program);
+          event=internalEvent(local,'internal-step');
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          const code=['FK_I_PARALLEL_INPUT','FK_R004'].includes(error?.code)?error.code:'FK_I_PARALLEL_PREPARE';
+          event=internalEvent(local,'deterministic-failure',{error:{code}});
+        }
+      } else if (local.phase==='validate') {
+        let evaluation=await validateCandidate(local,program);
+        if (local.candidate.kind==='agent' && ['validation-rejected','agent-call-failed'].includes(evaluation.kind)) {
+          const effects=await store.parallelEffects(root.runId,[local.candidate.requestId]);
+          if (effects.some(effect=>effect.settlement?.effect!=='no-effect')) {
+            evaluation={kind:'deterministic-failure',causeCode:'FK_I_RECONCILIATION_PENDING'};
+          } else work.retryRequests.add(local.candidate.requestId);
+        }
+        if (node.metadata.parallelOwner===group.nodeId && evaluation.kind==='external-rejected') {
+          local.status='failed';
+          continue;
+        }
+        event=internalEvent(local,evaluation.kind,evaluation.causeCode?{error:{code:evaluation.causeCode}}:{});
+        if (evaluation.patch) extras.patch=evaluation.patch;
+        if (evaluation.counter) extras.counter=evaluation.counter;
+        if (evaluation.reasons?.length) extras.retryReasons=evaluation.reasons;
+        if (Object.hasOwn(evaluation,'contextError')) extras.contextError=evaluation.contextError;
+        if (node.kind==='verification'&&node.metadata.parallelOwner===group.nodeId&&evaluation.kind==='external-passed') {
+          extras.patch={set:{[block.nodeId]:true}};
+        }
+      } else {
+        const kind=local.phase==='dispatch-ready'?'pending-prepared':'internal-step';
+        event=internalEvent(local,kind,local.phase==='enter'&&hasStepFrame(node.kind)?
+          {activation:work.activationSeq+1,...(node.kind==='agent'?{overviewStep:work.agentStepCounter+1}:{})}:{});
+      }
+      const certified=advanceSafely(local,program,event);
+      if (certified.proposal.kind==='begin-parallel') Object.assign(extras,createParallel(local,program,block,node,true));
+      local=stepCheckpoint(local,certified.proposal,extras);
+      local.revision=work.revision-1;
+      syncScopedWork(work,local);
+      if (local.pending && !lane.requestIds?.includes(local.pending.requestId)) {
+        lane.requestIds=[...(lane.requestIds??[]),local.pending.requestId];
+      }
+    }
+    storeScope(lane,local);
+    return reason;
+  }
+
+  async function tickScopedGroup(root,parent,program,work) {
+    const group=parent.parallel;
+    if (group.decision) {
+      const {decision}=group;
+      if (decision.revision===work.revision) return 'ready';
+      const winners=decision.winner?group.lanes.filter(lane=>lane.nodeId===decision.winner):group.lanes;
+      if (group.strategy==='any') {
+        const lost=group.lanes.filter(lane=>lane.nodeId!==decision.winner).flatMap(laneRequestIds);
+        const effects=await store.parallelEffects(root.runId,lost);
+        if (effects.some(effect=>!effect.settlement||keyRequiresCompensation(effect))) return 'reconciliation';
+      }
+      const patch=decision.outcome==='succeeded'?mergeParallel(winners):null;
+      const code=decision.code??(decision.outcome==='succeeded'&&!patch?'FK_I_PARALLEL_CONFLICT':null);
+      const event=internalEvent(parent,code?'deterministic-failure':patch?'parallel-passed':'parallel-rejected',
+        code?{error:{code}}:{});
+      const {proposal}=advanceSafely(parent,program,event);
+      const after=patch?{...parent.state,...patch.set}:{};
+      for (const key of patch?.remove??[]) delete after[key];
+      const unavailableParallelKeys=decision.winner&&patch
+        ? branchOutputKeys(program,program.programTable.nodes[group.nodeId]).filter(key=>!Object.hasOwn(after,key))
+        : [];
+      Object.assign(parent,stepCheckpoint(parent,proposal,patch&&!code?{patch,unavailableParallelKeys}:{}));
+      return 'ready';
+    }
+    const progress=[];
+    for (const lane of group.lanes) {
+      if (group.decision) break;
+      if (lane.scope) progress.push(await advanceScope(root,parent,group,lane,program,work));
+    }
+    if (!group.decision && group.lanes.every(lane=>!lane.scope)) {
+      group.decision={...(group.lanes.find(lane=>lane.failure?.code)?.failure??
+        (group.lanes.every(lane=>lane.status==='succeeded')?{outcome:'succeeded'}:{outcome:'failed'})),
+      revision:work.revision};
+    }
+    return group.decision||progress.includes('ready')?'ready'
+      :progress.includes('reconciliation')?'reconciliation':'waiting';
+  }
+
+  function publishScoped(cp,next,work,progress) {
+    if (next.parallel) {
+      next.status=parallelPendingEntries(next.parallel).length?'waiting'
+        :progress==='reconciliation'?'paused':'running';
+      next.pauseReason=next.status==='paused'?'reconciliation':null;
+    }
+    next.revision=work.revision;
+    next.stageCount=cp.stageCount+1;
+    next.activationSeq=work.activationSeq;
+    next.agentStepCounter=work.agentStepCounter;
+    if (work.taskContext) next.taskContext=work.taskContext;
+    if (work.cancelled.size) next.cancelledRequests=[...work.cancelled];
+  }
+
+  async function driveStructured(cp,program) {
+    const next=copy(cp);
+    const work=scopedWork(cp);
+    const progress=await tickScopedGroup(cp,next,program,work);
+    publishScoped(cp,next,work,progress);
+    if (cp.status===next.status && cp.pauseReason===next.pauseReason && next.parallel
+      && fingerprint(cp.parallel)===fingerprint(next.parallel)) return {committed:false,idle:true};
+    const transition={kind:'scoped-parallel-step',nodeId:cp.parallel.nodeId};
+    return casOrCapacityExit(cp,{runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
+      journalEntry:transition},transition,transition);
+  }
+
+  async function acceptStructured(cp,program,submission,digest,operationSafety,subjectId,humanProof,receivedPayload) {
+    const {requestId,nodeId,attempt,kind}=submission;
+    const stepKind=kind.split('-')[0];
+    const success=kind===stepKind+'-result';
+    const next=copy(cp);
+    const active=parallelPendingEntries(next.parallel).find(entry=>entry.pending.requestId===requestId);
+    if (!active || active.pending.nodeId!==nodeId || active.pending.attempt!==attempt || active.pending.kind!==stepKind) {
+      throw failure('FK_I_STALE_RECEIPT','Subflow request is not current');
+    }
+    if (active.pending.preparedTask?.task.execution.deadlineMs<=Date.now()) {
+      throw failure('FK_I_STALE_RECEIPT','Subflow task deadline expired');
+    }
+    if (stepKind==='agent'&&success) {
+      const effects=await store.parallelEffects(cp.runId,[requestId]);
+      if (effects.some(effect=>!effect.settlement)) throw failure('FK_I_RECONCILIATION_PENDING','Agent has an unsettled external write');
+      operationSafety='settled';
+    }
+    const work=scopedWork(cp);
+    const scope=active.lane.scope;
+    delete scope.pending;
+    scope.phase='validate';
+    scope.status='running';
+    scope.blockId=nodeId+'::validate';
+    scope.receivedSubmission={payload:receivedPayload??submission};
+    scope.candidate={kind:stepKind,requestId,nodeId,attempt,submissionKind:kind,
+      ...(success?{result:submission.result}:{failure:submission.failure}),validated:false};
+    const progress=await tickScopedGroup(cp,next,program,work);
+    publishScoped(cp,next,work,progress);
+    if (work.retryRequests.has(requestId)) operationSafety='no-effect';
+    next.receiptCount++;
+    next.parallel.receipt={requestId,nodeId,attempt,kind:stepKind,canonicalDigest:digest,
+      acceptedRevision:next.revision,...(humanProof?{humanProof}:{})};
+    const transition={kind:'scoped-parallel-receipt',requestId,nodeId,digest};
+    return casOrCapacityExit(cp,{runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
+      journalEntry:{kind:'receipt-accepted',stepKind,nodeId,attempt,requestId,digest,
+        ...(subjectId?{subjectId}:{}),...(operationSafety?{operationSafety}:{})}},
+    transition,transition,success?'succeeded':'failed');
   }
 
   function mergeParallel(lanes) {
@@ -773,19 +1037,29 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const next=copy(cp);
       next.revision++;
       next.stageCount++;
-      try {
-        for (const [index,lane] of next.parallel.lanes.entries()) {
-          if (lane.status!=='ready') continue;
+      for (const [index,lane] of next.parallel.lanes.entries()) {
+        if (lane.status!=='ready') continue;
+        try {
           const prepared=await prepareLane(next,program,lane,next.revision);
           next.parallel.lanes[index]=prepared.lane;
           if (prepared.taskContext) next.taskContext=prepared.taskContext;
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          const code=error?.code==='FK_I_PARALLEL_INPUT'?error.code:'FK_I_PARALLEL_PREPARE';
+          if (next.parallel.strategy==='all_succeeded') {
+            const event=internalEvent(cp,'deterministic-failure',{error:{code}});
+            const {proposal}=advanceSafely(cp,program,event);
+            return stepCAS(cp,proposal,event,event.kind);
+          }
+          lane.status='errored';
+          lane.failure={outcome:'errored',code};
         }
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        const event=internalEvent(cp,'deterministic-failure',{error:{code:'FK_I_PARALLEL_PREPARE'}});
-        return stepCAS(cp,advanceSafely(cp,program,event).proposal,event,event.kind);
       }
-      next.status='waiting';
+      if (next.parallel.lanes.some(lane=>lane.status==='pending')) next.status='waiting';
+      else {
+        next.parallel.decision=next.parallel.lanes.find(lane=>lane.failure).failure;
+        next.status='running';
+      }
       return casOrCapacityExit(cp,{runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
         journalEntry:{kind:'parallel-dispatch',nodeId:cp.parallel.nodeId}},
       {kind:'parallel-dispatch'},{kind:'parallel-dispatch'});
@@ -832,18 +1106,24 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   function parallelOutputKeys(program,branchIds) {
     return [...new Set(branchIds.flatMap(id=>{
       const {kind,metadata}=program.programTable.nodes[id];
-      return kind==='verification'?[id]
-        :kind==='action'?metadata.writes:Object.keys(metadata.output.properties??{});
+      if (kind==='human'||kind==='verification'&&metadata.parallelOwner) return [id];
+      if (kind==='action') return metadata.writes;
+      return kind==='agent'?Object.keys(metadata.output.properties??{}):[];
     }))];
   }
 
+  function branchOutputKeys(program,record) {
+    return parallelOutputKeys(program,record.metadata.branchNodes?.flat()??record.metadata.branches);
+  }
+
   function missingMandatoryParallelInput(cp,program,record) {
+    if (record.metadata.branchNodes) return false;
     let successor=record.metadata.next;
     const visited=new Set();
     while (!visited.has(successor)) {
       const node=program.programTable.nodes[successor];
       if (node.kind==='agent') {
-        const writes=parallelOutputKeys(program,record.metadata.branches);
+        const writes=branchOutputKeys(program,record);
         return node.metadata.inputs.some(key=>writes.includes(key)&&!Object.hasOwn(cp.state,key));
       }
       if (node.kind!=='condition' || new Set(node.metadata.branches.map(branch=>branch.next)).size!==1) break;
@@ -853,7 +1133,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     return false;
   }
 
-  async function acceptParallel(cp,program,submission,digest,operationSafety) {
+  async function acceptParallel(cp,program,submission,digest,operationSafety,subjectId) {
     const {requestId,nodeId,attempt,kind}=submission;
     const index=cp.parallel.lanes.findIndex(lane=>lane.pending?.requestId===requestId);
     const current=cp.parallel.lanes[index];
@@ -925,6 +1205,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     next.status=parallel.decision?'running':'waiting';
     return casOrCapacityExit(cp,{runId:cp.runId,expectedRevision:cp.revision,nextCheckpoint:next,
       journalEntry:{kind:'receipt-accepted',stepKind,nodeId,attempt,requestId,digest,
+        ...(subjectId?{subjectId}:{}),
         ...(operationSafety?{operationSafety}:{})}},
     {kind:'parallel-receipt',nodeId,requestId,submissionDigest:digest},
     {kind:'parallel-receipt',decision:parallel.decision??null},didSucceed?'succeeded':'failed');
@@ -966,6 +1247,23 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (cp.status==='cancelled' && cp.namespace===store.namespace && cp.policyHash===policyHash) return asPublicFrame(cp);
       const program=await loadPinned(cp);
       if (FINISHED.has(cp.status)) return asPublicFrame(cp);
+      if (runDeadlineExpired(cp)) {
+        const expired=await failRun(cp,'FK_R004','run-deadline');
+        if (expired.committed) return asPublicFrame(expired.checkpoint);
+        continue;
+      }
+      if (cp.parallel?.structured) {
+        const scoped=await driveStructured(cp,program);
+        if (!scoped.committed) {
+          if (scoped.idle) return asPublicFrame(cp);
+          continue;
+        }
+        count++;
+        if (scoped.checkpoint.status==='paused'&&scoped.checkpoint.pauseReason==='reconciliation') {
+          return asPublicFrame(scoped.checkpoint);
+        }
+        continue;
+      }
       if (cp.status==='waiting') {
         const expired=await expireParallelAgents(cp);
         if (!expired) return asPublicFrame(cp);
@@ -1021,7 +1319,14 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           extras.prepared=prepared;
         }
       } else if (cp.phase === 'validate') {
-        const evaluation=await validateCandidate(cp,program);
+        let evaluation=await validateCandidate(cp,program);
+        if (cp.candidate.kind==='agent' && cp.program.implementedStage!=='P0-A'
+          && ['validation-rejected','agent-call-failed'].includes(evaluation.kind)) {
+          const effects=await store.parallelEffects(cp.runId,[cp.candidate.requestId]);
+          if (effects.some(effect=>effect.settlement?.effect!=='no-effect')) {
+            evaluation={kind:'deterministic-failure',causeCode:'FK_I_RECONCILIATION_PENDING'};
+          }
+        }
         event=evaluation.kind === 'deterministic-failure'
           ? internalEvent(cp,'deterministic-failure',{error:{code:evaluation.causeCode}})
           : internalEvent(cp,evaluation.kind);
@@ -1101,8 +1406,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     }
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
     if (!policySnapshot.parallelEffectMode && Object.values(program.programTable.nodes).some(node=>
-      node.kind==='parallel'&&node.metadata.strategy==='any'&&node.metadata.branches.some(id=>
-        program.programTable.nodes[id].kind==='action'))) {
+      node.kind==='parallel'&&node.metadata.strategy==='any'&&(node.metadata.branchNodes?.flat()??node.metadata.branches).some(id=>
+        program.programTable.nodes[id].kind==='action'
+          && program.programTable.nodes[id].metadata.effect!=='read-only'))) {
       throw failure('FK_I_INVALID_OPERATION','Parallel any Actions require an explicit effect policy');
     }
     const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
@@ -1121,7 +1427,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
 
   /** Only a trusted Host may call complete; M5 will bind provenance/transport. */
   async function complete({runId,requestId,nodeId,attempt,kind='agent-result',result,failure:callFailure,
-    submissionDigest,receivedPayload,humanProof,operationSafety}={}) {
+    submissionDigest,receivedPayload,humanProof,operationSafety,subjectId}={}) {
     nonempty(runId,'runId');nonempty(requestId,'requestId');nonempty(nodeId,'nodeId');
     if (!Number.isSafeInteger(attempt) || attempt < 1) throw new TypeError('Invalid Agent attempt');
     const stepKind=typeof kind==='string'?kind.split('-')[0]:null;
@@ -1164,6 +1470,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const receiptLookup=store.getReceipt(runId,requestId);
       const already=versioned ? await receiptLookup : receiptLookup;
       if (already) {
+        if (already.subjectId && already.subjectId!==subjectId) {
+          throw failure('FK_I_HOST_DENIED','Receipt belongs to a different submitting Host');
+        }
         if (already.digest!==digest || (already.nodeId!==undefined && already.nodeId!==nodeId)
           || (already.attempt!==undefined && already.attempt!==attempt)) {
           throw failure('FK_I_RECEIPT_CONFLICT','Different receipt with accepted requestId');
@@ -1174,12 +1483,20 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         const current=await drive(runId);
         return {acceptedRevision:already.acceptedRevision,...current,duplicate:true};
       }
+      if (runDeadlineExpired(cp)) {
+        await drive(runId);
+        throw failure('FK_I_STALE_RECEIPT','Run deadline expired');
+      }
       if (cp.parallel) {
         if (inlineTooLarge) throw failure('FK_I_CHECKPOINT_CAPACITY','Parallel receipt is too large');
-        const expired=await expireParallelAgents(cp);
+        const expired=cp.parallel.structured ? null : await expireParallelAgents(cp);
         if (expired) continue;
         let persisted;
-        try {persisted=await acceptParallel(cp,program,submission,digest,operationSafety);}
+        try {
+          persisted=cp.parallel.structured
+            ? await acceptStructured(cp,program,submission,digest,operationSafety,subjectId,humanProof,receivedPayload)
+            : await acceptParallel(cp,program,submission,digest,operationSafety,subjectId);
+        }
         catch (error) {
           if (error.code==='FK_I_OPERATION_CHANGED' && operationSafety!=='unclaimed') continue;
           throw error;
@@ -1208,10 +1525,17 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       // reference. FlowKit never stores oversized inline results or invents
       // an external business-data provider. The durable failure is NOT an Ack.
       if (inlineTooLarge) {
-        const terminal=await failCapacity(cp);
+        const terminal=await failRun(cp,'FK_I_CHECKPOINT_CAPACITY','capacity-terminal');
         if (!terminal.committed) continue;
         throw failure('FK_I_CHECKPOINT_CAPACITY',
           'inline result exceeds the configured execution budget; Run is errored');
+      }
+      if (stepKind==='agent' && cp.program.implementedStage!=='P0-A' && didSucceed) {
+        const effects=await store.parallelEffects(cp.runId,[requestId]);
+        if (effects.some(effect=>!effect.settlement)) {
+          throw failure('FK_I_RECONCILIATION_PENDING','Agent has an unsettled external write');
+        }
+        operationSafety='settled';
       }
       const ledgerEntry={requestId,nodeId,attempt,digest,acceptedRevision:cp.revision+1};
       const next={
@@ -1228,6 +1552,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const persisted=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,
         nextCheckpoint:next,
         journalEntry:{kind:'receipt-accepted',stepKind,nodeId,attempt,requestId,digest,
+          ...(subjectId?{subjectId}:{}),
           ...(operationSafety?{operationSafety}:{})}},
         {kind:'receipt-accepted',requestId,nodeId,attempt,submissionDigest:digest,
           ...(stepKind==='human'?{humanProof}:{})},

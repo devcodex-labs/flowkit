@@ -15,6 +15,7 @@ export function analyzeGraph(literal, context) {
   const regions = new Map();
   const owners = new Map();
   const parallelOwners = new Map();
+  const subflowBranches = new Map();
   const loops = new Map(nodes.filter(node => node.type === 'loop').map(node => [node.id, node]));
   const loopBodies = new Set([...loops.values()].map(node => node.body));
   const report = (code, id, path, message) => {
@@ -51,6 +52,38 @@ export function analyzeGraph(literal, context) {
   for (const node of nodes.filter(node => node.type === 'parallel')) {
     const region = { id: node.id, kind: 'parallel', members: new Set(), backEdges: new Set() };
     regions.set(node.id, region);
+    if (node.branchMode==='subflow') {
+      const byBranch=new Map();
+      subflowBranches.set(node.id,byBranch);
+      const boundary=node.join.next;
+      const groupMembers=new Set();
+      for (const [index,id] of node.branches.entries()) {
+        const membership=new Set();
+        const queue=[id];
+        while (queue.length) {
+          const target=queue.pop();
+          if (target===boundary || membership.has(target)) continue;
+          if (target===node.id || target===ids[0]) {
+            report('FK_C024',node.id,`/branches/${index}`,'A subflow cannot enter its own group or the workflow entry');
+            continue;
+          }
+          membership.add(target);
+          for (const edge of edges) if (edge.from===target) queue.push(edge.to);
+        }
+        if (!membership.size || [...membership].some(member=>groupMembers.has(member))) {
+          report('FK_C024',node.id,`/branches/${index}`,'Subflows must have nonempty, disjoint interiors and meet only at the join');
+        }
+        for (const member of membership) groupMembers.add(member);
+        byBranch.set(id,membership);
+        for (const edge of edges) {
+          if (membership.has(edge.to) && !membership.has(edge.from)
+            && !(edge.from===node.id && edge.to===id && edge.role==='parallel-member')) {
+            report('FK_C024',edge.from,edge.path,'Reference enters an isolated parallel subflow');
+          }
+        }
+      }
+      continue;
+    }
     node.branches.forEach((id, index) => {
       if (!['agent', 'action', 'verification'].includes(byId.get(id).type)) report('FK_C022', node.id, `/branches/${index}`, 'Invalid parallel member type');
       if (parallelOwners.has(id)) report('FK_C024', node.id, `/branches/${index}`, 'Parallel members must have a single occurrence and owner');
@@ -61,7 +94,14 @@ export function analyzeGraph(literal, context) {
     !(edge.role === 'parallel-member' && parallelOwners.get(edge.to) === edge.from)) {
     report('FK_C024', edge.from, edge.path, 'Parallel member referenced outside its owner');
   }
+  if (subflowBranches.size) {
+    const members=[...subflowBranches.values()].flatMap(branches=>[...branches.values()]);
+    for (const id of ids) if (members.filter(branch=>branch.has(id)).length>8) {
+      report('FK_C022',id,'/id','Interactive subflows allow up to eight nested branch scopes');
+    }
+  }
 
+  const repairEdges=id=>edges.filter(edge=>edge.from===id && edge.role!=='parallel-member');
   function repairRegion(node, kind, start, stop) {
     const region = { id: node.id, kind, members: new Set(), backEdges: new Set(), body: kind === 'loop' ? stop : undefined };
     regions.set(node.id, region);
@@ -76,13 +116,13 @@ export function analyzeGraph(literal, context) {
       const current = byId.get(item.to);
       if (kind === 'loop' && item.to === node.id) { report('FK_C047', item.from, '', 'Repair must return to the body, not the loop container'); continue; }
       const allowed = kind === 'loop' ? ['agent', 'action', 'condition'] : ['agent', 'action'];
-      if (!allowed.includes(current.type)) {
+      if (!allowed.includes(current.type) && !(context.subflows && kind==='loop' && current.type==='parallel')) {
         const code = kind === 'human' ? 'FK_C061' : current.type === 'parallel' ? 'FK_C043'
           : current.type === 'loop' ? 'FK_C045' : current.type === 'human' ? 'FK_C046' : 'FK_C042';
         report(code, current.id, '', `Invalid ${kind} repair member: ${current.type}`); continue;
       }
       repair.add(current.id); own(region, current.id, kind === 'loop' ? 'FK_C042' : 'FK_C060');
-      for (const edge of edges.filter(edge => edge.from === current.id)) stack.push(edge);
+      for (const edge of repairEdges(current.id)) stack.push(edge);
     }
     // Every repair path must terminate at the agreed return, including condition alternatives.
     const returning = new Set([stop]);
@@ -90,7 +130,7 @@ export function analyzeGraph(literal, context) {
     while (changed) {
       changed = false;
       for (const id of repair) if (!returning.has(id)) {
-        const successors = edges.filter(edge => edge.from === id);
+        const successors = repairEdges(id);
         if (successors.length && successors.every(edge => returning.has(edge.to))) { returning.add(id); changed = true; }
       }
     }
@@ -114,7 +154,11 @@ export function analyzeGraph(literal, context) {
       const code = region.kind === 'parallel' ? 'FK_C024'
         : byId.get(edge.from).type === 'action' ? 'FK_C044' : 'FK_C042';
       // Parallel diagnostics were already emitted with the explicit reference check.
-      if (region.kind === 'loop') report(code, edge.from, edge.path, 'Reference enters the interior of another region');
+      if (region.kind === 'loop' && ![...subflowBranches].some(([group,branches])=>
+        owners.get(group)===owner && byId.get(group).join.next===edge.to
+        && [...branches.values()].some(members=>members.has(edge.from)))) {
+        report(code, edge.from, edge.path, 'Reference enters the interior of another region');
+      }
     }
     if (loops.has(edge.to)) {
       const target = regions.get(edge.to);
@@ -137,7 +181,10 @@ export function analyzeGraph(literal, context) {
   for (const node of nodes.filter(node => node.type === 'parallel')) {
     const written = new Set();
     node.branches.forEach((id, index) => {
-      for (const key of writeSets.get(id)) {
+      const members=subflowBranches.get(node.id)?.get(id);
+      const keys=members ? new Set([...members].flatMap(member=>[...writeSets.get(member)])) : writeSets.get(id);
+      for (const key of keys) {
+        if (members && node.join.strategy==='any') continue;
         if (written.has(key)) report('FK_C026', node.id, `/branches/${index}`, `Parallel branches both declare key ${key}`);
         written.add(key);
       }
@@ -150,6 +197,11 @@ export function analyzeGraph(literal, context) {
 
   const executionEdges = [];
   const legalBackEdges = new Set([...regions.values()].flatMap(region => [...region.backEdges]));
+  const repairJoin = group=>edges.some(edge=>edge.from===group && edge.role==='parallel-join' && legalBackEdges.has(edgeKey(edge)));
+  for (const [id,branches] of subflowBranches) if (repairJoin(id)) {
+    for (const edge of edges) if (edge.to===byId.get(id).join.next
+      && [...branches.values()].some(members=>members.has(edge.from))) legalBackEdges.add(edgeKey(edge));
+  }
   for (const edge of edges) {
     if (['loop-success', 'loop-exhausted', 'parallel-join'].includes(edge.role)) continue;
     const owner = owners.get(edge.from);
@@ -162,7 +214,8 @@ export function analyzeGraph(literal, context) {
       }
     } else executionEdges.push({ ...edge, role: legalBackEdges.has(edgeKey(edge)) ? 'repair-return' : edge.role });
   }
-  for (const [id, owner] of parallelOwners) executionEdges.push({ from: id, to: byId.get(owner).join.next, role: 'parallel-return', path: '' });
+  for (const [id, owner] of parallelOwners) executionEdges.push({ from: id, to: byId.get(owner).join.next,
+    role:repairJoin(owner)?'repair-return':'parallel-return',path:'' });
   for (const node of nodes.filter(node => node.type === 'action' && node.next && !loopBodies.has(node.next))) {
     const next = byId.get(node.next);
     if (next.type === 'verification' && !parallelOwners.has(next.id)) executionEdges.push({ from: node.id, to: next.onFailure, role: 'action-failure', path: '/next' });
@@ -179,7 +232,9 @@ export function analyzeGraph(literal, context) {
   const foldedEdges = executionEdges.map(edge => ({ ...edge, sourceNode: edge.from, targetNode: edge.to,
     from: representative(edge.from), to: representative(edge.to) }))
     .filter(edge => edge.from !== edge.to);
-  for (const edge of findBackEdges(rootIds, foldedEdges)) report('FK_C080', edge.sourceNode, edge.path, 'Cycle crosses region boundaries');
+  for (const edge of findBackEdges(rootIds, foldedEdges.filter(edge=>edge.role!=='repair-return'))) {
+    report('FK_C080', edge.sourceNode, edge.path, 'Cycle crosses region boundaries');
+  }
   if (diagnostics.length) return { graph: null, diagnostics };
   for (const node of nodes.filter(node => node.type === 'terminal')) foldedEdges.push({ from: node.id, to: EXIT, role: 'exit', path: '' });
   const forward = { ...forwardAnalysis(rootIds, foldedEdges, representative(ids[0])), entryTarget: ids[0] };
@@ -201,5 +256,5 @@ export function analyzeGraph(literal, context) {
     region.forward = region.entryForwards.get(region.id);
   }
   return { graph: { byId, referenceEdges: edges, executionEdges, outgoing, incoming: adjacency(ids, executionEdges, true),
-    regions, owners, parallelOwners, legalBackEdges, writeSets, dominators: domination, forward }, diagnostics };
+    regions, owners, parallelOwners, subflowBranches, legalBackEdges, writeSets, dominators: domination, forward }, diagnostics };
 }

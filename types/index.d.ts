@@ -72,7 +72,7 @@ export interface HostCapabilityProfile {
   readonly hostVersion: string;
   readonly adapterId: string;
   readonly adapterVersion: string;
-  readonly executionModes: readonly ('standard' | 'interactive-p0-a')[];
+  readonly executionModes: readonly import('./author-host.js').AuthorExecutionMode[];
   readonly capabilities: Readonly<Partial<Record<'modelExecution' | 'toolCalling' | 'nativeSkillDiscovery' |
     'skillResourceLoading' | 'fileAccess' | 'terminalExecution' | 'networkAccess' | 'durableResume' |
     'humanApproval' | 'trustedReceipt', CapabilitySupport>>>;

@@ -4,6 +4,7 @@ import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName,workflowReference } from './skill-document.mjs';
 import { assertReadyStandardPlan } from './workflow-plan.mjs';
 import { compileInteractiveDraft } from '../interactive/compile.mjs';
+import { interactiveStageForMode,workflowExecutionModes } from '../interactive/protocol.mjs';
 
 const SOURCE_PATH = 'source/workflow.dsl.js';
 const FORMAL_PATHS = ['SKILL.md', 'workflow.js', 'workflow.mmd'];
@@ -11,11 +12,11 @@ const digest = value => typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.tes
 const identifier = value => typeof value === 'string' && value.length > 0 && !/\s/.test(value);
 const bindingKey = (nodeId, id) => JSON.stringify([nodeId, id]);
 
-function interactiveIdentity(code) {
+function interactiveIdentity(code,stage) {
   const line = code.split('\n').find(line=>line.startsWith('export const interactiveProgram = freezeData('));
   const metadata = JSON.parse(line?.slice('export const interactiveProgram = freezeData('.length,-2));
   if (metadata.artifactFormat !== 'FlowkitInteractiveProgramV1' || metadata.identity.programAbiVersion !== 1 ||
-    metadata.identity.semanticsVersion !== 'interactive-state-machine-v1' || metadata.identity.implementedStage !== 'P0-A') {
+    metadata.identity.semanticsVersion !== 'interactive-state-machine-v1' || metadata.identity.implementedStage !== stage) {
     throw new TypeError('Invalid Interactive artifact identity');
   }
   return {...metadata.identity,artifactHash:artifactDigest(code)};
@@ -51,7 +52,8 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   safetyPolicies=[],verifySafetyPolicy }) {
   references=structuredClone(references);professionalSkills=structuredClone(professionalSkills);
   safetyPolicies=structuredClone(safetyPolicies);
-  if (!['standard','interactive-p0-a'].includes(executionMode)) throw new TypeError('Unsupported Workflow Skill mode');
+  if (!workflowExecutionModes.includes(executionMode)) throw new TypeError('Unsupported Workflow Skill mode');
+  const stage=interactiveStageForMode(executionMode);
   if(!references || Object.entries(references).some(([name,body])=>!workflowReference(name)||typeof body!=='string') ||
     Object.keys(references).length!==new Set(Object.keys(references).map(name=>name.toLowerCase())).size) {
     throw new TypeError('Only portable workflow-specific references may be attached');
@@ -80,7 +82,7 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   const plan = suppliedPlan === undefined ? undefined : structuredClone(suppliedPlan);
   if (plan !== undefined) assertReadyStandardPlan(plan,executionMode);
   const compiled = executionMode === 'standard' ? await compileArtifactDraft(file, { ...compilerOptions, mermaid: true }) :
-    await compileInteractiveDraft(file, {...compilerOptions,output:'memory',featureStage:'P0-A'});
+    await compileInteractiveDraft(file, {...compilerOptions,output:'memory',featureStage:stage});
   const {snapshot,definition,graph} = compiled;
   const artifact = executionMode === 'standard' ? compiled.artifact : {...compiled,artifactHash:compiled.programIdentity?.artifactHash};
   if (!artifact.artifactHash) return { candidate: null, diagnostics: artifact.diagnostics };
@@ -95,11 +97,15 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     if(node.type==='human' && !Number.isSafeInteger(node.maxRevisions)) {
       throw Object.assign(new Error('Author requires a finite maxRevisions for automated Human revision'), { code: 'FKA_HUMAN_LIMIT_REQUIRED', nodeId: node.id });
     }
-    if(node.type==='parallel' && node.join.strategy==='any' && node.branches.some(id=>
-      ['agent','action'].includes(graph.byId.get(id)?.type))) {
+    const scopedNodes=node.type==='parallel'&&graph.subflowBranches.get(node.id);
+    const branches=scopedNodes ? [...scopedNodes.values()].flatMap(members=>[...members]) : node.branches;
+    if(node.type==='parallel' && node.join.strategy==='any' && branches.some(id=>{
+      const member=graph.byId.get(id);
+      return member?.type==='agent' || member?.type==='action'&&member.effect!=='read-only';
+    })) {
       const binding=safetyPolicies.find(item=>item?.nodeId===node.id);
       if(!identifier(binding?.policyRef)||typeof verifySafetyPolicy!=='function'||await verifySafetyPolicy({
-        node:structuredClone(node),branches:node.branches.map(id=>structuredClone(graph.byId.get(id))),
+        node:structuredClone(node),branches:branches.map(id=>structuredClone(graph.byId.get(id))),
         artifactHash:artifact.artifactHash,hostProfile:profile,policyRef:binding.policyRef})!==true) {
         throw Object.assign(new Error('parallel.any with possible writes requires a Host-approved policy for the exact artifact'), {
           code: 'FKA_SAFETY_POLICY_REQUIRED', nodeId: node.id, artifactHash: artifact.artifactHash });
@@ -159,8 +165,8 @@ export function checkCandidate({ files, manifest, hash }) {
   const names = Object.keys(files);
   const expected = [...FORMAL_PATHS,...(Object.hasOwn(files, SOURCE_PATH)?[SOURCE_PATH]:[])];
   const referenceNames=names.filter(workflowReference);expected.push(...referenceNames);
-  const interactive = manifest.mode === 'interactive-p0-a';
-  if (!['standard','interactive-p0-a'].includes(manifest.mode) || !identifier(manifest.collectionId) || !identifier(manifest.skillId) ||
+  const stage=interactiveStageForMode(manifest.mode);
+  if (!workflowExecutionModes.includes(manifest.mode) || !identifier(manifest.collectionId) || !identifier(manifest.skillId) ||
     !isSemVer(manifest.version) || !digest(manifest.sourceHash) || !identifier(manifest.hostProfile?.id) ||
     !digest(manifest.hostProfile.digest) || !Array.isArray(manifest.professionalSkills) ||
     manifest.documents && (!Array.isArray(manifest.documents)||manifest.documents.some(item=>!identifier(item?.capabilityId)||
@@ -172,9 +178,9 @@ export function checkCandidate({ files, manifest, hash }) {
     expected.some(name => !Object.hasOwn(files, name) || typeof files[name] !== 'string' ||
       artifactDigest(files[name]) !== manifest.files[name]) ||
     hash !== artifactDigest(JSON.stringify(manifest)) || !files['SKILL.md'].startsWith(`---\nname: ${manifest.name}\n`) ||
-    !files['workflow.mmd'].startsWith('flowchart TD\n') || !files['workflow.js'].startsWith(interactive ?
-      '// @generated by FlowKit Interactive — P0-A / Program ABI V1\n' : `${STANDARD_ARTIFACT_HEADER}\n`) ||
-    Object.entries(interactive ? interactiveIdentity(files['workflow.js']) : standardIdentity(files['workflow.js'])).some(([key, value]) => manifest[key] !== value) ||
+    !files['workflow.mmd'].startsWith('flowchart TD\n') || !files['workflow.js'].startsWith(stage ?
+      `// @generated by FlowKit Interactive — ${stage} / Program ABI V1\n` : `${STANDARD_ARTIFACT_HEADER}\n`) ||
+    Object.entries(stage ? interactiveIdentity(files['workflow.js'],stage) : standardIdentity(files['workflow.js'])).some(([key, value]) => manifest[key] !== value) ||
     Object.hasOwn(files, SOURCE_PATH) && manifest.sourceHash !== manifest.files[SOURCE_PATH]) {
     throw new TypeError('Workflow Skill candidate bytes or manifest differ');
   }

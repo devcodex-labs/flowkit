@@ -176,6 +176,8 @@ export function validateInteractiveIR(ir) {
     }
     if (record.kind==='action' && (typeof metadata.action!=='string' || typeof metadata.next!=='string'
       || !Array.isArray(metadata.writes) || metadata.writes.some(key=>typeof key!=='string')
+      || metadata.reads!==undefined && (!Array.isArray(metadata.reads) || metadata.reads.some(key=>typeof key!=='string'))
+      || metadata.effect!==undefined && !['read-only','write'].includes(metadata.effect)
       || (metadata.onFailure!==undefined && typeof metadata.onFailure!=='string'))) bad('Malformed Action metadata: '+id);
     if (record.kind==='verification' && (typeof metadata.verifier!=='string' || typeof metadata.next!=='string'
       || typeof metadata.onFailure!=='string')) bad('Malformed Verification metadata: '+id);
@@ -195,8 +197,13 @@ export function validateInteractiveIR(ir) {
     if (record.kind==='parallel' && ((!['all_succeeded','any'].includes(metadata.strategy)
       || metadata.strategy==='any'&&ir.featureStage!=='P2')
       || typeof metadata.next!=='string' || !Array.isArray(metadata.branches) || metadata.branches.length<2
-      || new Set(metadata.branches).size!==metadata.branches.length || metadata.branches.some(branch=>
-        !['agent','action','verification'].includes(ir.nodes[branch]?.kind) || ir.nodes[branch].metadata?.parallelOwner!==id))) {
+      || new Set(metadata.branches).size!==metadata.branches.length
+      || (metadata.branchNodes===undefined ? metadata.branches.some(branch=>
+        !['agent','action','verification'].includes(ir.nodes[branch]?.kind) || ir.nodes[branch].metadata?.parallelOwner!==id)
+        : !Array.isArray(metadata.branchNodes) || metadata.branchNodes.length!==metadata.branches.length
+          || metadata.branchNodes.some((nodes,index)=>!Array.isArray(nodes) || !nodes.includes(metadata.branches[index])
+            || nodes.some(node=>node===id || node===metadata.next || !Object.hasOwn(ir.nodes,node)))
+          || new Set(metadata.branchNodes.flat()).size!==metadata.branchNodes.flat().length))) {
       bad('Malformed Parallel metadata: '+id);
     }
     if (metadata.parallelOwner!==undefined && !ir.nodes[metadata.parallelOwner]?.metadata?.branches?.includes(id)) {

@@ -58,6 +58,8 @@ export function lowerInteractive(analysis, options = {}) {
     } else if (node.type==='action') {
       const failure=analysis.graph.executionEdges.find(edge=>edge.from===node.id && edge.role==='action-failure');
       metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next??parallelNext,
+        ...(node.reads!==undefined?{reads:node.reads}:{}),
+        ...(node.effect!==undefined?{effect:node.effect}:{}),
         ...(failure?{onFailure:failure.to}:{})};
     } else if (node.type==='verification') {
       const region=analysis.graph.regions.get(analysis.graph.owners.get(node.id));
@@ -66,7 +68,9 @@ export function lowerInteractive(analysis, options = {}) {
         onFailure:node.onFailure??parallelNext,
         ...(loop?{loop:{id:loop.id,maxIterations:loop.maxIterations,onMaxExceeded:loop.onMaxExceeded}}:{})};
     } else if (node.type==='parallel') {
-      metadata={name:node.name,next:node.join.next,strategy:node.join.strategy,branches:node.branches};
+      const scopes=analysis.graph.subflowBranches.get(node.id);
+      metadata={name:node.name,next:node.join.next,strategy:node.join.strategy,branches:node.branches,
+        ...(scopes?{branchNodes:node.branches.map(id=>[...scopes.get(id)])}:{})};
     } else if (node.type==='loop') {
       metadata={name:node.name,body:node.body,next:node.onSuccess,onMaxExceeded:node.onMaxExceeded,maxIterations:node.maxIterations};
     } else if (node.type==='human') {
