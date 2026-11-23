@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
+import { checkCandidate } from '../src/author/standard-artifact.mjs';
 
 const resource = name => readFileSync(new URL('./workflow-viewer/' + name, import.meta.url), 'utf8');
 const template = resource('viewer.html').replace(/\r\n/g, '\n');
@@ -76,6 +77,26 @@ function scriptData(value) {
     '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
 }
 
+function annotatedLayout(graph,manifest) {
+  const layout=layoutFor(graph);
+  if(manifest?.schemaVersion!==1||manifest.graphDigest!==graph.graphDigest||
+      !Array.isArray(manifest.nodeDescriptions)||manifest.nodeDescriptions.length>graph.nodes.length)return layout;
+  const nodeIds=new Set(graph.nodes.map(node=>node.id));
+  const descriptions=new Map();
+  for(const item of manifest.nodeDescriptions) {
+    if(!item||!nodeIds.has(item.nodeId)||descriptions.has(item.nodeId)||
+        typeof item.text!=='string'||!item.text.trim()||item.text.length>4096)return layout;
+    descriptions.set(item.nodeId,item.text);
+  }
+  return {...layout,nodes:layout.nodes.map(node=>descriptions.has(node.nodeId)
+    ?{...node,description:descriptions.get(node.nodeId),descriptionSource:'host'}:node)};
+}
+
+async function authorizedManifest({viewManifest,authorizeViewManifest,requestContext,ref}) {
+  if(viewManifest&&typeof authorizeViewManifest==='function'&&
+      await authorizeViewManifest({requestContext,ref:{...ref},viewManifest})===true)return viewManifest;
+}
+
 export function readWorkflowPageData(html) {
   const start = html.indexOf(dataStart);
   const end = html.indexOf('</script>', start + dataStart.length);
@@ -84,10 +105,10 @@ export function readWorkflowPageData(html) {
 }
 
 /** Assemble the confirmed offline viewer. The caller owns the same-origin confirmation form. */
-export function workflowPage({ graph, candidateHash, controls = '', runView }) {
+export function workflowPage({ graph, candidateHash, mermaid, controls = '', runView, viewManifest }) {
   if (!graph?.nodes?.length || typeof graph.graphDigest !== 'string') throw new TypeError('Missing compiled workflow graph');
-  const data = scriptData({ schemaVersion: 1, graph, layout: layoutFor(graph),
-    ...(candidateHash ? { candidateHash } : {}), ...(runView ? { runView } : {}) });
+  const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest),
+    ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}) });
   const html = controls ? shell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : shell.replace(controlsSlot, '');
   return html.replace(embeddedData, () => data);
@@ -101,28 +122,70 @@ async function viewSection(operation) {
   }
 }
 
+/** Render an observed, authorized Standard invocation without projecting a journal or edges. */
+export async function workflowTracePage({candidate,ref,standardTrace,authorizeTrace,requestContext,viewManifest,authorizeViewManifest}) {
+  const reject=()=>Object.assign(new Error('Standard trace is not accessible'),{code:'FK_I_HOST_DENIED'});
+  if(!ref?.runId||typeof authorizeTrace!=='function'||
+      await authorizeTrace({requestContext,ref:{...ref}})!==true)throw reject();
+  const graph=checkCandidate(candidate);
+  if(graph.mode!=='standard'||ref.candidateHash!==candidate.hash||ref.artifactHash!==graph.artifactHash||
+      ref.graphDigest!==graph.graphDigest)throw reject();
+  const {status,events}=standardTrace;
+  if(!['succeeded','failed','errored','cancelled'].includes(status)||!Array.isArray(events)||events.length>5000)throw reject();
+  const nodeIds=new Set(graph.nodes.map(node=>node.id));
+  const projected=events.map(event=>{
+    if(!event||typeof event!=='object')throw reject();
+    const {nodeId,kind,outcome}=event;
+    if(!nodeIds.has(nodeId)||!(kind==='start'&&outcome===undefined||
+        kind==='end'&&['ok','control','error'].includes(outcome)))throw reject();
+    return {nodeId,kind,...(outcome?{outcome}:{})};
+  });
+  const manifest=await authorizedManifest({requestContext,ref,viewManifest,authorizeViewManifest});
+  return workflowPage({graph,candidateHash:candidate.hash,mermaid:candidate.files['workflow.mmd'],viewManifest:manifest,
+    runView:{type:'standard-trace',status,events:projected,pending:[],artifacts:null}});
+}
+
 /** The integrating Host supplies a request-scoped authority. Queries never advance the Run. */
-export async function workflowRunPage({ auth, ref, options, afterRevision = -1, artifactAfter = 0 }) {
+export async function workflowRunPage({ auth, ref, options, candidate, afterRevision = -1, artifactAfter = 0,
+  viewManifest, authorizeViewManifest, requestContext }) {
   options = { ...options, graphSnapshot: structuredClone(options.graphSnapshot) };
+  const graph=options.graphSnapshot;
+  const snapshot = await auth.readRunView(ref, options);
+  let candidateHash, mermaid;
+  if (candidate || ref.candidateHash) {
+    try {
+      if (!candidate || candidate.hash!==ref.candidateHash || candidate.manifest?.collectionId!==ref.collectionId ||
+        checkCandidate(candidate).graphDigest!==graph.graphDigest) {
+        throw new Error('candidate identity differs');
+      }
+    } catch {
+      throw Object.assign(new Error('Viewer candidate does not match the running Program and graph'),{code:'FK_I_PROGRAM_MISMATCH'});
+    }
+    candidateHash=candidate.hash;
+    mermaid=candidate.files['workflow.mmd'];
+  }
+  const manifest=await authorizedManifest({requestContext,ref,viewManifest,authorizeViewManifest});
+  if(afterRevision>snapshot.revision)throw Object.assign(new Error('Viewer cursor exceeds Run revision'),{code:'FK_I_INVALID_TRANSITION'});
   const [events, artifacts] = await Promise.all([
     viewSection(() => auth.listRunViewEvents({ ref, afterRevision }, options)),
     viewSection(() => auth.readRunArtifacts({ ref, after: artifactAfter }, options)),
   ]);
-  const snapshot = await auth.readRunView(ref, options);
+  const page=events?.events.filter(event=>event.revision<=snapshot.revision);
+  const cursor=page?.at(-1)?.revision??afterRevision;
   const runPath = '/runs/' + encodeURIComponent(ref.runId);
   const links = ['<a href="' + runPath + '">刷新运行状态</a>'];
-  if (events && events.cursor < events.headRevision) {
-    links.push('<a href="' + runPath + '?afterRevision=' + events.cursor + '&amp;artifactAfter=' + artifactAfter +
+  if (events && cursor < snapshot.revision) {
+    links.push('<a href="' + runPath + '?afterRevision=' + cursor + '&amp;artifactAfter=' + artifactAfter +
       '">后续事件</a>');
   }
   if (artifacts?.next != null) {
     links.push('<a href="' + runPath + '?afterRevision=' + afterRevision + '&amp;artifactAfter=' + artifacts.next +
       '">更多产物</a>');
   }
-  return workflowPage({ graph: options.graphSnapshot, candidateHash: ref.candidateHash, controls: links.join(' '), runView: {
-    revision: snapshot.revision, status: snapshot.status, pauseReason: snapshot.pauseReason,
+  return workflowPage({ graph, candidateHash, mermaid, controls: links.join(' '), viewManifest:manifest, runView: {
+    type:'interactive-journal', revision: snapshot.revision, status: snapshot.status, pauseReason: snapshot.pauseReason,
     pending: snapshot.pending.map(({ nodeId, kind, activation, attempt }) => ({ nodeId, kind, activation, attempt })),
-    events: events?.events.map(({ revision, nodeId, kind, activation, attempt, receiptOutcome }) =>
+    events: page?.map(({ revision, nodeId, kind, activation, attempt, receiptOutcome }) =>
       ({ revision, nodeId, kind, activation, attempt, receiptOutcome })) ?? null,
     artifacts: artifacts?.items.map(({ artifactId, versionId, nodeId, contentHash, mimeType,
       sizeBytes, latestVersionId, effectiveVersionId }) =>

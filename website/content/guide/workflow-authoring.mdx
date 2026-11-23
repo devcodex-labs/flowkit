@@ -59,12 +59,18 @@ codex plugin list --marketplace flowkit-local
 
 1. 在 Codex 输入「用 FlowKit 起草一个核对导入文件的工作流。文件可读时核对字段，核对通过才返回结果。读取或核对失败时结束并返回原因。请复审候选并给我流程图预览」。有待决定的分支时，在原草稿补答。
 2. 打开候选的预览链接。页面使用同次编译的 GraphSnapshot，核对步骤、分支和终点后确认候选。改稿后按新候选重新预览和确认。
-3. 要求导出选中的候选。打开 `workflow.html` 即可离线查看与预览相同的流程图，`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、下载链接及每个文件的 SHA-256。
+3. 确认当前候选后要求导出。打开 `workflow.html` 即可离线查看与预览相同的流程图。概览的「阅读 Mermaid」和「阅读根契约」支持查找及放大文字。`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、文件链接及各自的 SHA-256。改稿后，使用新候选的预览链接重新复审和确认。
 
 已有 Interactive 运行绑定的宿主可以在调用 `startLocalMcp` 时提供 `resolveRunViewer`。解析器接收运行 ID 与当前操作员的服务端请求上下文，返回该次运行的 `{ auth, ref, options }`。其中 `auth` 为请求范围内的受信 Host 能力，`ref` 绑定实际运行及其 Program 和 GraphSnapshot，`options` 提供原运行的策略、Store、Program registry 和同一 GraphSnapshot。操作员可打开 `/runs/<runId>` 查阅状态、激活次数和重试记录，并按修订翻页。在产物中心可筛选当前页授权产物的节点、类型、版本或生效状态，点击产物可回到来源节点。刷新与翻页都只读取运行。文件正文仍由宿主的授权存储接口提供。
+
+宿主如需关联接收方的候选，可另外提供 `candidate`，并在 `ref` 中声明 `collectionId`、`candidateHash` 与 `approvalRef`。宿主应按这三项验证接收方的审批。页面还会验证候选文件及图摘要，才展示该候选和 Mermaid。导入可以生成新的候选身份，运行仍绑定原 Program 和 GraphSnapshot。
+
+Standard 宿主可以通过同一解析器显示一次真实调用的 trace。启用编译 trace，使用 `runtime.trace.start` 和 `runtime.trace.end` 收集节点调用，再返回 `{ ref, candidate, standardTrace, authorizeTrace }`。`ref` 含运行 ID、候选、产物和图摘要，`standardTrace` 含运行结果 `status` 和 `events`。每条事件含 `nodeId` 和 `kind`，结束事件另有 `outcome`。`authorizeTrace` 必须根据当前请求身份和这些摘要授权。页面只展示节点的实际调用记录，持久日志和修订分页由 Interactive 提供。
+
+宿主还可提供 `viewManifest` 添加节点说明。结构为 `{ schemaVersion: 1, graphDigest, nodeDescriptions: [{ nodeId, text }] }`。同时提供 `authorizeViewManifest`，依据当前请求、运行引用和清单核对资料读取权限。有效说明以纯文本展示；版本错误、未知节点或未授权时，页面仍显示原有编译视图。
 4. 在同一个 Codex 会话说「把这个工作流添加到 FlowKit」。Codex 使用当前候选发起添加。打开返回的链接，核对候选名称和版本，再点「确认并加入 FlowKit」。回到 Codex 查看保存结果，或让 FlowKit 列出默认集合中的工作流。
 
-起草时可以明确选择 Standard、Interactive P0-A、P0-B、P1 或 P2。需要持久 Action、人工确认及循环时选 P0-B，需要持久并行时选 P1，需要首个合格分支选胜时选 P2。MCP 用同一次编译的图供复审并导出三文件。执行方用可信的产物 SHA-256 校验工作流，再通过 [Standard SDK](/reference/sdk#runArtifact) 或 [版本化 Interactive Host](/reference/interactive#start) 运行。
+起草时可以明确选择 Standard、Interactive P0-A、P0-B、P1 或 P2。需要持久 Action、人工确认及循环时选 P0-B，需要持久并行时选 P1，需要首个合格分支选胜时选 P2。请求中说明根输入的类型、必填业务输出及负责生成该输出的步骤。复审根据实际编译结果核对来源和失败边界。执行方用可信的产物 SHA-256 校验工作流，再通过 [Standard SDK](/reference/sdk#runArtifact) 或 [版本化 Interactive Host](/reference/interactive#start) 运行。
 
 起草嵌套 P2 时，说明外层和内层各自的成功条件、每个校验器在 Host 中的实际名称，以及何时整体失败。例如「外层同时校验输入和复核结果。输入用 `check-input`。内层 `check-copy` 和 `check-original` 任选首个通过。输入不通过或两路复核都不通过时整体失败」。[子流程分支规则](/dsl/parallel)
 

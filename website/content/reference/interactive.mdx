@@ -198,7 +198,7 @@ maxStagesPerCall默认128，signal可选并需宿主协作。JSON状态和策略
 
 `await complete(submission,runtime,options)`是Host特权调用。成功submission仅有kind:'agent'、runId、requestId、outcome:'succeeded'及result对象；失败用outcome:'failed'及error对象，其code/message必需，retryable/origin可选。origin仅为runtime/executor/validator/store/policy之一。
 
-Host先校验真实执行器来源并关联当前请求，再调用本接口；它不接受Trusted Host的attestation包，也不自动等价于Ed25519来源认证。结果的acknowledgement含requestId、acceptedRevision、repeated；同字节重试与不同内容冲突分别处理。
+Host先校验真实执行器来源并关联当前请求，再调用本接口；它不接受Trusted Host的attestation包，也不自动等价于Ed25519来源认证。结果的acknowledgement含requestId、acceptedRevision、repeated；同字节重试与不同内容冲突分别处理。已接纳回执的同字节重试只返回原接纳确认和当前检查点。如果执行仍有内部步骤待推进，或待处理任务已超出运行期限，返回可恢复的 `paused`，由具备恢复权限的宿主调用 `resume`。
 
 ### resume {#resume}
 

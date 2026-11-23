@@ -1047,6 +1047,8 @@ dialog.reader-overlay {width:100%;height:100%;max-width:none;max-height:none;mar
 .reader-tools input {min-width:0;max-width:100%;padding:6px 8px;border:1px solid #dce5f3;border-radius:6px}
 #readerContent[data-reader-size="large"] :is(p,li,pre,.contract-name,.contract-type,.meta-list) {font-size:1.15em}
 #readerContent .reader-match {outline:2px solid #eab548;outline-offset:2px}
+.reader-line {display:block;min-height:1.4em}
+.mermaid-reader {overflow:auto;white-space:pre;font-family:monospace}
 .contract-card[open] {border-color:#aec6f6}
 summary.contract-trigger::-webkit-details-marker {display:none}
 .contract-card[open] .contract-toggle-icon {transform:rotate(180deg)}
@@ -1232,6 +1234,7 @@ function prepare(config) {
       ? place.visualKind : kind;
     const referenceDescription = typeof place.description==='string' && place.description.length>0;
     const description = !spec ? '流程结构中的异常说明。具体故障与恢复结果由宿主的运行记录提供。' :
+      place.descriptionSource==='host' ? place.description :
       place.helper ? '同一个并行节点的结构标记。可查看分支入口、成员及汇合条件。' :
       referenceDescription ? place.description : [readableTypes(spec), spec.capabilityId ? '能力标识 ' + spec.capabilityId : '',
         spec.status ? '结束状态 ' + spec.status : ''].filter(Boolean).join(' · ');
@@ -1240,17 +1243,30 @@ function prepare(config) {
         'VerifyIntentResult','RouteIntent'].includes(place.id)?98:86,place.h)};
   });
   const sets = new Set(visualNodes.map(node => node.nodeId).filter(Boolean));
-  const visualIds = new Set(visualNodes.map(node => node.id));
+  const visualById = records(visualNodes);
+  if (visualById.size!==visualNodes.length) throw new Error('展示节点标识重复。');
+  const parallelRegions = new Map(graph.regions.filter(region=>region.kind==='parallel').map(region=>[region.ownerId,region]));
   const mapped = new Set();
   const visualEdges = layout.edges.map(place => {
     const spec = actualEdges.get(place.edgeId);
-    if ((place.edgeId && !spec) || !visualIds.has(place.source) || !visualIds.has(place.target)
-      || !Object.hasOwn(colors,place.kind)) throw new Error('存在无法校对的连线。');
+    const source=visualById.get(place.source), target=visualById.get(place.target);
+    if (!source || !target || !Object.hasOwn(colors,place.kind)) throw new Error('存在无法校对的连线。');
+    if (!spec) {
+      if (place.edgeId || place.kind!=='control' || source.helper!=='parallel-join' || target.helper!=='runtime-notice') {
+        throw new Error('展示配置含未声明的连线。');
+      }
+    } else {
+      const join=target.helper==='parallel-join'&&parallelRegions.get(target.nodeId);
+      const shownJoin=join&&join.memberIds.includes(spec.from)&&join.normalExits.includes(spec.to);
+      if (mapped.has(spec.edgeId) || source.nodeId!==spec.from || target.nodeId!==spec.to&&!shownJoin) {
+        throw new Error('展示连线与编译端点不一致。');
+      }
+    }
     if (spec) mapped.add(spec.edgeId);
     return {...place, spec};
   });
   if (sets.size !== actualNodes.size || mapped.size !== actualEdges.size) throw new Error('流程结构的展示映射不完整。');
-  return { graph, runView:config.runView, groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
+  return { graph, runView:config.runView, mermaid:config.mermaid, groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
     count:visualNodes.filter(node => node.phase===phase.id && !node.helper).length +
       new Set(visualNodes.filter(node => node.phase===phase.id && node.helper && node.spec).map(node => node.nodeId)).size,
   })), nodes:visualNodes, edges:visualEdges };
@@ -1883,9 +1899,12 @@ const pill = (value,color='') => '<span class="pill '+color+'">'+esc(value)+'</s
 const badges = (...items) => '<div style="display:flex;gap:6px;flex-wrap:wrap">'+items.join('')+'</div>';
 const wrapRows = items => '<div class="list-stack">'+items.join('')+'</div>';
 const offlineArtifact = '当前未绑定运行，暂无可查看的产物版本。';
-const runLabels={running:'运行中',waiting:'等待处理',paused:'已暂停',succeeded:'成功',failed:'失败',cancelled:'已取消'};
+const runLabels={running:'运行中',waiting:'等待处理',paused:'已暂停',succeeded:'成功',failed:'失败',errored:'出错',cancelled:'已取消'};
 const eventLabels={'run.started':'开始运行','run.finished':'运行结束','receipt.accepted':'已接收回执','transition.committed':'状态已提交'};
-const runSummary = () => [['运行状态',runLabels[DATA.runView.status]??DATA.runView.status],['修订',DATA.runView.revision],
+const isStandardTrace = DATA.runView?.type==='standard-trace';
+const runSummary = () => [['记录来源',isStandardTrace?'Standard 单次调用记录':'Interactive 持久日志'],
+  ['运行状态',runLabels[DATA.runView.status]??DATA.runView.status],
+  ...(!isStandardTrace?[['修订',DATA.runView.revision]]:[]),
   ...(DATA.runView.pauseReason?[['暂停原因',DATA.runView.pauseReason]]:[])];
 const activationLabel = ({activation,attempt}) => activation===undefined?'':` · 激活 ${activation} · 尝试 ${attempt}`;
 function runDetails(node) {
@@ -1893,6 +1912,12 @@ function runDetails(node) {
   if(!run)return `<div class="runtime-empty">${esc(modeNote)}</div>`;
   const pending=run.pending.filter(task=>task.nodeId===node.nodeId);
   const events=run.events?.filter(event=>event.nodeId===node.nodeId);
+  if(isStandardTrace){
+    const endLabels={ok:'调用返回',control:'调用中断',error:'调用出错'};
+    return facts(runSummary())+(events?.length
+      ?list(events.map(event=>event.kind==='start'?'开始调用':endLabels[event.outcome]))
+      :note('单次调用中没有该节点的记录。'));
+  }
   return facts(runSummary())+
     (pending.length?list(pending.map(task=>'待处理 · '+(types[task.kind]??task.kind)+activationLabel(task))):'')+
     (events?.length?list(events.map(event=>'#'+event.revision+' · '+(eventLabels[event.kind]??event.kind)+
@@ -1983,7 +2008,9 @@ function renderOverview() {
     section('输入输出契约',facts([
       ['根输入',Object.keys(g.contract?.input?.properties??{}).join('、')||'未声明'],
       ['根输出',g.contract?.outputKeys?.join('、')||'未声明'],
-    ]))+section('流程阶段',wrapRows(DATA.phases.map(p=>`<button type="button" class="relation-row" data-stage-focus="${esc(p.id)}"><span>${esc(p.title)}</span><small>${p.count} 个节点</small></button>`)))+
+    ])+(g.contract?'<div class="panel-actions"><button type="button" class="panel-btn" data-read-root-contract>阅读根契约</button></div>':''))+
+    section('流程阶段',wrapRows(DATA.phases.map(p=>`<button type="button" class="relation-row" data-stage-focus="${esc(p.id)}"><span>${esc(p.title)}</span><small>${p.count} 个节点</small></button>`)))+
+    (DATA.mermaid?section('流程定义','<button class="panel-btn" type="button" data-read-mermaid>阅读 Mermaid</button>'):'')+
     (DATA.runView?section('只读运行状态',facts(runSummary())):section('预览模式',note(modeNote))));
 }
 const joinRuleLabels={all_succeeded:'全部分支成功',any:'任一分支成功'};
@@ -2023,7 +2050,8 @@ function renderNodePanel(node) {
     (outgoing.length?badges(...outgoing.map(edge=>pill(lineName(edge),outcomeColors[edge.spec?.role]))):''):'';
   const jumps=[['description','描述'],['inputs','输入'],['outputs','输出'],['artifacts','产物'],
     ['constraints','约束'],['checks','校验'],['completionCriteria','完成'],['execution','运行']];
-  const scope = node.referenceDescription
+  const scope = node.descriptionSource==='host'
+    ? '<span class="sample-label">宿主说明</span><strong>展示说明与当前编译图绑定</strong>' : node.referenceDescription
     ? '<span class="sample-label">V4.5 节点说明</span><strong>描述来自设计稿，执行字段来自当前编译</strong>'
     : '<span class="sample-label">编译结构</span><strong>当前版本的节点定义</strong>';
   const content = [
@@ -2179,13 +2207,32 @@ function clearReaderMatch() {
   $('readerMatches').textContent='';
   readerMatchIndex=-1;
 }
+function openReader(title,subtitle,content) {
+  $('readerTitle').textContent=title;
+  $('readerSub').textContent=subtitle;
+  readerContent.replaceChildren(content);
+  readerSearch.value='';
+  clearReaderMatch();
+  reader.showModal();
+}
+function openTextReader(title,text) {
+  const body=document.createElement('pre');
+  body.className='mermaid-reader';
+  for(const line of text.split('\n')){
+    const row=document.createElement('span');
+    row.className='reader-line';
+    row.textContent=line;
+    body.append(row);
+  }
+  openReader(title,DATA.graph.name,body);
+}
 readerSearch.addEventListener('input',clearReaderMatch);
 $('readerSearchForm').addEventListener('submit',event=>{
   event.preventDefault();
   const query=readerSearch.value.trim().toLowerCase();
   if(!query)return;
   readerContent.querySelector('.reader-match')?.classList.remove('reader-match');
-  const blocks=[...readerContent.querySelectorAll('p,li,summary,pre,.meta-list > div,.rich-preview > div')];
+  const blocks=[...readerContent.querySelectorAll('p,li,summary,pre:not(.mermaid-reader),.reader-line,.meta-list > div,.rich-preview > div')];
   const matches=blocks.filter(block=>block.textContent.toLowerCase().includes(query));
   if(!matches.length){$('readerMatches').textContent='未找到匹配内容';return;}
   readerMatchIndex=(readerMatchIndex+1)%matches.length;
@@ -2224,7 +2271,7 @@ function showArtifactCenter(nodeId='',opener=null) {
   $('artifactCenterBtn').classList.add('active');
   $('mobileArtifactBtn').classList.add('active');
   $('acSubtitle').textContent=DATA.runView?'当前运行的授权产物版本。':'连接宿主后，在此查看当前工作流的授权产物和生效版本。';
-  $('acScope').textContent=DATA.runView?'运行修订 '+DATA.runView.revision:'未绑定运行';
+  $('acScope').textContent=isStandardTrace?'单次调用':DATA.runView?'运行修订 '+DATA.runView.revision:'未绑定运行';
   $('acContext').textContent=nodeId?'当前节点 · '+nodes.get(nodeId).label:'全部节点';
   $('acSearch').value='';
   $('acStatus').value='all';
@@ -2274,13 +2321,15 @@ inspectorBody.addEventListener('click',event=>{
   const read=event.target.closest('[data-read-section]');
   if(read){
     const key=read.dataset.readSection;
-    $('readerTitle').textContent=readingTitles[key];
-    $('readerSub').textContent=nodes.get(selectedNode).label;
     const content=read.closest('.panel-section').querySelector('[data-reading-content]');
-    readerContent.replaceChildren(content.cloneNode(true));
-    readerSearch.value='';
-    clearReaderMatch();
-    reader.showModal();
+    openReader(readingTitles[key],nodes.get(selectedNode).label,content.cloneNode(true));
+  }
+  if(event.target.closest('[data-read-mermaid]')){
+    openTextReader('Mermaid 流程定义',DATA.mermaid);
+  }
+  if(event.target.closest('[data-read-root-contract]')){
+    const {input,output}=DATA.graph.contract;
+    openTextReader('根输入输出契约',JSON.stringify({input,output},null,2));
   }
   const opener=event.target.closest('[data-open-artifact-center]');
   if(opener)showArtifactCenter(opener.dataset.openArtifactCenter,opener);
@@ -2347,7 +2396,7 @@ renderStages();
 renderEdges();
 renderNodes();
 if (DATA.runView) {
-  $('workflowStats').querySelector('.demo-tag').textContent='运行 · 只读';
+  $('workflowStats').querySelector('.demo-tag').textContent=isStandardTrace?'Standard · 单次记录':'运行 · 只读';
   const pending=new Set(DATA.runView.pending.map(task=>task.nodeId));
   for (const node of DATA.nodes) {
     const card=nodeElements.get(node.id);

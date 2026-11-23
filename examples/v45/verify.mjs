@@ -181,6 +181,9 @@ for(const suite of suites.filter(item=>!selected.length||selected.includes(item.
       await assert.rejects(complete({...submission,bundleHash:prior.bundleHash},{},{...binding,auth:reviewer}),{code:'FK_I_STALE_RECEIPT'});
     }
     const after=await complete(submission,{},{...binding,auth:reviewer});
+    const repeated=await complete(submission,{},{...binding,auth:reviewer});
+    assert.equal(repeated.acknowledgement.repeated,true);
+    assert.equal(repeated.revision,after.revision);
     evidence.prepare('INSERT INTO review VALUES (?,?,?,?)').run(requestId,pending.nodeId,JSON.stringify(statement),signature.toString('base64url'));
     record(pending,{outcome:'succeeded',evidence:{decision,bundleHash:statement.bundleHash}});
     return after;
@@ -220,7 +223,13 @@ for(const suite of suites.filter(item=>!selected.length||selected.includes(item.
         const passed=await handlers.verifiers[nodeId](pending);
         assert.equal(typeof passed,'boolean',nodeId);
         record(pending,{outcome:'succeeded',evidence:{passed}});
-        frame=await complete({runId,requestId,kind,outcome:'succeeded',result:{passed}},{},binding);
+        const receipt={runId,requestId,kind,outcome:'succeeded',result:{passed}};
+        frame=await complete(receipt,{},binding);
+        if (nodeId==='unit') {
+          const repeated=await complete(receipt,{},binding);
+          assert.equal(repeated.acknowledgement.repeated,true);
+          assert.equal(repeated.revision,frame.revision);
+        }
         continue;
       }
       assert.equal(kind,'action');
@@ -235,6 +244,7 @@ for(const suite of suites.filter(item=>!selected.length||selected.includes(item.
         const failed={runId,requestId,kind,operationKey,outcome:'failed',error:output.failure};
         await assert.rejects(complete({...failed,error:{...output.failure,sideEffectStatus:'unknown'}},{},binding),{code:'FK_I_INVALID_OPERATION'});
         frame=await reopen(nodeId+'-unsettled-reopen',frame);
+        assert.equal(Object.hasOwn(await observer.readRunView(rootRef,binding),'publicOutput'),false);
         const effect=output.failure.sideEffectStatus==='known'?'applied':'no-effect';
         await binding.operationController.settle({runId,operationKey,inputHash,effect,evidenceHash:hash(detail),result:output.failure},worker);
         record(pending,{outcome:'failed',evidence:detail,error:output.failure,operationKey});
@@ -249,6 +259,10 @@ for(const suite of suites.filter(item=>!selected.length||selected.includes(item.
     assert.equal(frame.terminal?.nodeId,suite.terminal,JSON.stringify(frame));
     const final=await worker.readTerminalResult(frame.resultRef,binding);
     const view=await observer.readRunView(rootRef,binding);
+    if (frame.status!=='succeeded') {
+      assert.equal(Object.hasOwn(final,'publicOutput'),false);
+      assert.equal(Object.hasOwn(view,'publicOutput'),false);
+    }
     assert.equal(view.status,frame.status);
     assert.equal(JSON.stringify(view).includes('host-only-reference-marker'),false);
     const artifacts=await observer.readRunArtifacts({ref:rootRef},binding);

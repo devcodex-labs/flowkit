@@ -15,15 +15,22 @@ import { createInteractiveHostContext, createSqliteInteractivePersistence, loadI
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canonicalBytes } from '../src/interactive/canonical.mjs';
 import { checkCandidate, prepareStandardSkill } from '../src/author/standard-artifact.mjs';
+import { authorContractCases, verifyAuthorContractExport } from './test-author-contract-cases.mjs';
 
 const token = randomBytes(32).toString('hex');
 const live = process.argv.includes('--live');
 const interactive=process.argv.includes('--interactive');
 const readOnly = process.argv.includes('--p0b');
 const referenceMode = process.argv.includes('--reference');
+const domainIndex = process.argv.indexOf('--contract-domain');
+const domain = domainIndex < 0 ? null : process.argv[domainIndex + 1];
+if (domainIndex >= 0 && (!Object.hasOwn(authorContractCases, domain) || !live || interactive || readOnly || referenceMode)) {
+  throw new Error('Use --live --contract-domain software|media|data');
+}
+const contractCase = domain && authorContractCases[domain];
 const sourceKey = referenceMode ? newExportKey() : null;
 if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
-const goal = readOnly ?
+const goal = contractCase ? contractCase.goal : readOnly ?
   '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
   '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。Host 的 check-input 只读校验 employeeId、month、hours，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点，调用方从 Standard runArtifact 的 state.copyRef 读取结果。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
@@ -226,17 +233,20 @@ try {
       saved = await testReferenceDelivery(tool);
       return;
     }
-    const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'monthly-cli-start',
-      goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive ? { executionMode: 'interactive-p2' } : {}) });
-    const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'monthly-cli-plan',
-      expectedStateVersion: draft.stateVersion, input: goal, target: { name: readOnly ? 'ticket-review' : 'monthly-timesheet' } } });
+    const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'cli-start',
+      goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive || contractCase ? { executionMode: 'interactive-p2' } : {}) });
+    const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-plan',
+      expectedStateVersion: draft.stateVersion, input: goal, target: { name: contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
     assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
     assert.equal(Object.hasOwn(candidate.candidate, 'files'), false);
     const identity = { draftId: draft.id, candidateHash: candidate.candidate.candidateHash };
     assert.equal((await tool('flowkit_review_candidate', { ...identity, previousHash: candidate.previousHash })).qualified, true);
+    await tool('flowkit_export_workflow', identity, true);
     const cookie = await browserIdentity(service);
-    await confirmInTestBrowser(candidate.candidate.previewUrl, cookie);
     const preview = readWorkflowPageData(await (await fetch(candidate.candidate.previewUrl)).text());
+    assert.equal(preview.candidateHash, identity.candidateHash);
+    assert.equal((await confirmInTestBrowser(candidate.candidate.previewUrl, cookie)).status, 200);
+    await tool('flowkit_export_workflow', {...identity, candidateHash: 'sha256:' + '0'.repeat(64)}, true);
     const exported = await tool('flowkit_export_workflow', identity);
     assert.deepEqual((await readdir(exported.directory)).sort(), ['workflow.html','workflow.js','workflow.mmd']);
     assert.match(await readFile(path.join(exported.directory, 'workflow.mmd'), 'utf8'),
@@ -246,6 +256,10 @@ try {
     assert.deepEqual(offline, preview);
     assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
     if (interactive || readOnly) await runExport(exported.directory);
+    if (contractCase) {
+      console.log(JSON.stringify({path:'real-author-contract',...(await verifyAuthorContractExport(root,exported.directory,domain,offline.graph)),
+        candidateHash: identity.candidateHash, directory: exported.directory, preapprovalRejected:true, wrongVersionRejected:true}));
+    }
     const add = { requestId: 'monthly-cli-add', sourceRef: draft.id, candidateHash: identity.candidateHash };
     const waiting = await tool('flowkit_add_workflow', add);
     saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();

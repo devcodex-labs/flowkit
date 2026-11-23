@@ -1526,7 +1526,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         if (stepKind==='human' && already.humanProof?.subjectId!==humanProof.subjectId) {
           throw failure('FK_I_HOST_DENIED','Human receipt belongs to a different authorized subject');
         }
-        const current=await drive(runId);
+        // The versioned SDK authorizes receipt submission and execution recovery separately.
+        // Interrupted execution and expired work must be recovered separately.
+        const needsRecovery=cp.status==='running'||cp.status==='waiting'&&runDeadlineExpired(cp);
+        const current=versioned?asPublicFrame(needsRecovery?{...cp,status:'paused'}:cp):await drive(runId);
         return {acceptedRevision:already.acceptedRevision,...current,duplicate:true};
       }
       if (runDeadlineExpired(cp)) {

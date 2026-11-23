@@ -20,9 +20,15 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
    每个 Interactive Action 都必须明确声明外部效果。只读回调使用 `effect: 'read-only'`，仍可将结果写入工作流 state。经授权的外部写入使用 `effect: 'write'`。效果尚未确定时先澄清。复审用编译证据中的 `actionEffects` 逐个核对。
    新建草稿的模型输出无效或不完整时，AuthorHost 在同一轮预算内至多再解析一次，已有答案保留。修复预算耗尽时，以新 turnId 在原草稿继续即可。原样重发一条补答只计入一次，不把模型的早期理解当作用户基线。
    补答后，模型报告的待确认事项必须指向仍未决定的业务选项。已经选定的方案、已知 Host 事实和技术诊断留在 Plan 校验路径。独立复审未通过时，展示 `reviewRejection.findings` 及绑定同一 `candidateHash` 的两个动作。用户可选 `review-only` 重审原候选，或用 `authoring` 按意见修订。修订沿用同草稿的原始授权对话，审查意见作为证据随 Plan 提供。
-5. 用 `reviewCandidate` 展示准确 Diff、真实 ReviewReceipt 或 `rejection`。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。使用 `candidateDiff.compilerEvidence` 区分声明节点、声明终点、Mermaid 渲染标记和 Parallel 实际后继。
+5. 用 `reviewCandidate` 展示准确 Diff、真实 ReviewReceipt 或 `rejection`。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。使用 `candidateDiff.compilerEvidence` 区分声明节点、声明终点、Mermaid 渲染标记和 Parallel 实际后继。复核根输入输出与用户目标、实际来源和失败路径。编译通过但遗漏必填业务输出时，复审不得通过。
 6. 用户审阅精确候选后，Host 核验批准引用，通过 `recordApproval` 或在 `publish` 中原子登记批准并保存。绑定 contentHash、candidateHash、previousHash 和最新 stateVersion。模型声称“已批准”不能授予发布权。publicationId 重试读回原保存操作，不反激活旧版本；saved/discovery-pending 必须如实显示。
 7. stdio/HTTP 使用同一服务的 `createMcpOptions(currentRequestContext, bindings)`，每次请求传当前身份和 Host 解析的 inputRef。八个既有 MCP 工具不增加名称；连接关闭不关闭共享 AuthorHost。仅服务所有者调用 `close`。取消后未知结果先用 SDK `settleTurn` 对账；一次性 retryRef 不重置原回合预算，不能自动重发未知写。
+
+## 候选评审和用户交付
+
+本机 MCP 返回候选时，先展示工具返回的候选预览链接，让用户查看交互流程图、节点详情和各分支。使用该候选的 `candidateHash` 发起复审。修改业务流程、根契约或依赖后，重新取得候选、图及复审结果，请用户确认更新后的具体版本。只有当前候选得到 Host 确认后才调用导出。
+
+向用户提供导出工具真实返回的三个文件链接，分别为可运行的 `workflow.js`、Mermaid 文件 `workflow.mmd` 和可离线打开的交互图 `workflow.html`。保留候选标识及工具返回的文件 SHA-256。源码 DSL 与内部清单留在 AuthorHost。旧预览、未确认和复审不通过的版本按照工具返回的状态处理。执行导出结果使用相应 SDK 或受信 Host。
 
 ## 首次接入与恢复
 
@@ -42,15 +48,21 @@ Host 必须显式配置有限的 `capacity`：`maxPhysicalExecutions`、`maxDraf
 
 | 构造器 | 关键字段 |
 |---|---|
-| defineWorkflow | id、SemVer version、name、nodes；第一节点为入口 |
+| defineWorkflow | id、SemVer version、name、nodes；第一节点为入口。需要业务边界时使用根 `contract.input` 和 `contract.output` |
 | node | Agent：name、description、inputs、output JSON Schema、retries、next；requiredSkills 需准确版本 pin |
 | action | name、action、writes、next；Interactive 还可声明 reads 和 effect；实际操作由 Host 执行 |
 | condition | name、branches: [{when, next}]；兜底使用 when: 'true' |
 | parallel | name、branches: [节点 ID]、join: {strategy: 'all_succeeded' 或 'any', next}；Interactive P1/P2 可用 branchMode: 'subflow' |
 | loop | name、maxIterations、body、onSuccess、onMaxExceeded；修复区域遵循实际编译器检查 |
 | verification | name、verifier、onSuccess、onFailure；返回布尔 |
-| human | name、onApprove、onReject、有限 maxRevisions；拒绝路径必须合法 |
+| human | name、onApprove、onReject、有限 maxRevisions；Interactive 可用独立 onDecline 区分拒绝终止和要求修订 |
 | terminal | name、status: 'succeeded' 或 'failed' |
+
+### 根输入和业务输出
+
+在 Plan 的顶层 `contract` 使用与 `defineWorkflow` 相同的 JSON 对象。按已授权请求填写根 `input` 和 `output` 的对象 Schema，分别核对字段名、类型及必填性。必填输出必须来自已声明的根输入或成功路径上确实产出该键的节点。例如成功返回 `receipt` 时，由对应 Action 的 `writes: ["receipt"]` 或 Agent 的输出 Schema 声明该字段，并将业务要求映射到实际生产节点。运行时按根输出 Schema 投影结果，供执行过程使用的内部状态留在运行内。验证失败、拒绝、取消和待对账状态按原语义结束或等待。
+
+Interactive Human 的 `onReject` 可进入有界修订再回到原审批，`onDecline` 直接进入独立终止。审批前的产物不得当作已批准结果。外部写入需要 Host 已授权的效果和对账能力。
 
 下面的 Standard 并行示例使用 `all_succeeded` 等待两个分支均正常完成，再进入 `done`。Standard 并行成员的布尔校验返回 `false` 属于正常完成。
 

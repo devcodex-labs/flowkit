@@ -11,6 +11,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
 import { newExportKey, publicDelivery } from '../../scripts/local-mcp-artifacts.mjs';
 import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
+import { readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
 import { runArtifact } from '../../src/runtime/run.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
@@ -243,6 +244,11 @@ test('local MCP imports an intact three-file export only from a trusted origin a
   const add = { requestId: 'trusted', ...trusted };
   const pending = await call(targetClient, 'flowkit_add_workflow', add);
   assert.ok(pending.confirmationUrl, JSON.stringify(pending));
+  const sourceView=readWorkflowPageData(files['workflow.html']);
+  const receiverView=readWorkflowPageData(await (await fetch(pending.confirmationUrl,{headers:{cookie}})).text());
+  assert.notEqual(receiverView.candidateHash,sourceView.candidateHash);
+  assert.deepEqual(receiverView.graph,sourceView.graph);
+  assert.equal(receiverView.mermaid,sourceView.mermaid);
   assert.equal((await call(targetClient, 'flowkit_collection')).skills.length, 0);
   const accepted = await (await confirmInTestBrowser(pending.confirmationUrl, cookie)).json();
   assert.equal(accepted.status, 'added');

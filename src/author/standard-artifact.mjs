@@ -3,7 +3,7 @@ import { definitionDigest, graphContentHash, verifyGraphSnapshot } from '../comp
 import { STANDARD_ARTIFACT_HEADER, artifactDigest, standardIdentity } from '../shared/artifact-identity.mjs';
 import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName,workflowReference } from './skill-document.mjs';
-import { assertReadyStandardPlan } from './workflow-plan.mjs';
+import { assertReadyStandardPlan, missingRootOutputSources } from './workflow-plan.mjs';
 import { compileInteractiveDraft } from '../interactive/compile.mjs';
 import { interactiveStageForMode,workflowExecutionModes } from '../interactive/protocol.mjs';
 
@@ -89,6 +89,12 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   if (!artifact.artifactHash) return { candidate: null, diagnostics: artifact.diagnostics };
   if (plan && plan.contractDigest!==artifact.graphSnapshot.contract?.digest) {
     throw Object.assign(new Error('Compiled root contract differs from the WorkflowPlan.'),{code:'FKA_PLAN_MISMATCH'});
+  }
+  if (plan) {
+    const missingOutputs=missingRootOutputSources(definition.contract,graph.writeSets);
+    if (missingOutputs.length) throw Object.assign(new Error('Required root outputs have no declared input or node writer.'),{
+      code:'FKA_PLAN_MISMATCH',detail:{missingOutputs}
+    });
   }
   if (plan?.sourceHash !== undefined && plan.sourceHash !== `sha256:${snapshot.sourceHash}`) {
     throw Object.assign(new Error('Compiled source bytes differ from the WorkflowPlan.'), {

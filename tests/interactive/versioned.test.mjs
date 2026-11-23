@@ -604,10 +604,15 @@ terminal('done',{name:'Done',status:'succeeded'})
     await assert.rejects(cfg.operationController.claim({runId:next.runId,requestId:action.requestId,
       operationKey:action.task.operationKey,inputHash:sha256Bytes(canonicalBytes(action.task))},cfg.auth),
     {code:'FK_I_STALE_RECEIPT'});
-    const confirmed=await complete(firstReceipt,callbacks,cfg);
+    const confirmed=await complete(firstReceipt,callbacks,{...cfg,
+      auth:context({authorize:({action})=>action!=='run:resume',authorizeTask:()=>true})});
     assert.equal(confirmed.acknowledgement.repeated,true);
-    assert.equal(confirmed.status,'errored');
-    assert.equal((await cfg.auth.readTerminalResult(confirmed.resultRef,cfg)).causeCode,'FK_R004');
+    assert.equal(confirmed.status,'paused');
+    assert.deepEqual(confirmed.pending,[]);
+    assert.equal(confirmed.revision,next.revision);
+    const expired=await resume(next.runId,callbacks,cfg);
+    assert.equal(expired.status,'errored');
+    assert.equal((await cfg.auth.readTerminalResult(expired.resultRef,cfg)).causeCode,'FK_R004');
   } finally {time.mock.restore();}
 });
 
@@ -1044,6 +1049,25 @@ test('R5 CAS recovers from a lost response only with durable transition evidence
     {code:'FK_I_STORE_UNCERTAIN'});
   assert.equal(attempted,1);
   assert.deepEqual(await f.options.store.load(second.runId),stale);
+});
+
+test('an accepted receipt does not advance a durable budget pause',async t=>{
+  const f=await fixture(t);
+  const waiting=await start(f.program,runtime,{message:'paused receipt'},f.options);
+  const accepted=await complete(submission(waiting),runtime,{...f.options,maxStagesPerCall:1});
+  assert.equal(accepted.status,'paused');
+  const checkpoint=await f.options.store.load(waiting.runId);
+  assert.equal(checkpoint.status,'paused');
+  assert.equal(checkpoint.revision,accepted.revision);
+  const before=f.raw.listJournal(waiting.runId);
+  const replay=await complete(submission(waiting),runtime,f.options);
+  assert.equal(replay.status,'paused');
+  assert.equal(replay.revision,accepted.revision);
+  assert.equal(replay.acknowledgement.acceptedRevision,accepted.acknowledgement.acceptedRevision);
+  assert.equal(replay.acknowledgement.repeated,true);
+  assert.deepEqual(await f.options.store.load(waiting.runId),checkpoint);
+  assert.deepEqual(f.raw.listJournal(waiting.runId),before);
+  assert.equal((await resume(waiting.runId,runtime,f.options)).status,'succeeded');
 });
 
 test('R5 errored result reads return the persisted cause without changing execution data',async t=>{

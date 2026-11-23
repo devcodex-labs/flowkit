@@ -27,16 +27,16 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
   const auth=createInteractiveHostContext({namespace,subjectId:'reviewer',authorize:()=>true,authorizeTask:()=>true,
     authorizeHuman:({bundle})=>({proofId:'approved-material',evidenceHash:bundle.bundleHash})});
   let ref,latest;
-  const initial=createSqliteInteractivePersistence(db,{namespace});
+  let initial=createSqliteInteractivePersistence(db,{namespace});
   try {
-    const options={...initial,auth,policy,startKey:'artifact-probe',graphSnapshot};
+    let options={...initial,auth,policy,startKey:'artifact-probe',graphSnapshot};
     let frame=await start(filename,{},{},options);
     ref={namespace,runId:frame.runId,artifactHash:graphSnapshot.artifactHash,graphDigest:graphSnapshot.graphDigest};
     const records=[];
     for(const number of [1,2]) {
       const pending=frame.pending[0];
       const storageRef=path.join(dir,`evidence-v${number}.txt`);
-      await writeFile(storageRef,`Business evidence version ${number}`);
+      await writeFile(storageRef,`Business evidence version ${number}\n`+'x'.repeat(1024*1024));
       const bytes=await readFile(storageRef);
       const contentHash=sha256Bytes(bytes);
       const op={runId:frame.runId,operationKey:pending.task.operationKey,inputHash:sha256Bytes(canonicalBytes(pending.task))};
@@ -64,6 +64,19 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
     const revised=await initial.artifactController.freezeBundle({...request,versionIds:[latest.versionId],expiresAt,
       expectedBundleHash:previous.bundleHash},auth);
     assert.notEqual(revised.bundleHash,previous.bundleHash);
+    initial.close();
+    initial=createSqliteInteractivePersistence(db,{namespace});
+    options={...options,...initial};
+    const pendingHtml=await workflowRunPage({auth,ref,options});
+    const pendingView=readWorkflowPageData(pendingHtml).runView;
+    assert.equal(pendingView.status,'waiting');
+    assert.deepEqual(pendingView.pending.map(({nodeId,kind})=>[nodeId,kind]),[['review','human']]);
+    assert.deepEqual(pendingView.artifacts.map(({sizeBytes,contentHash})=>({sizeBytes,contentHash})),
+      records.map(({sizeBytes,contentHash})=>({sizeBytes,contentHash})));
+    assert.doesNotMatch(pendingHtml,/storageRef|Business evidence version/);
+    const otherTenant=createInteractiveHostContext({namespace:'other-tenant',subjectId:'other-reviewer',
+      authorize:()=>true,authorizeTask:()=>true});
+    await assert.rejects(workflowRunPage({auth:otherTenant,ref,options}),{code:'FK_I_HOST_DENIED'});
     await assert.rejects(complete({...approval,bundleHash:revised.bundleHash,result:{decision:'approve',approved:true}},{},options),
       {code:'FK_I_INVALID_RECEIPT'});
     const finished=await complete({...approval,bundleHash:revised.bundleHash},{},options);

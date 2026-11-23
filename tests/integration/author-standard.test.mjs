@@ -20,6 +20,7 @@ import { startAuthorDraft } from '../../src/author/draft.mjs';
 import { createWorkflowPlan, materializePlan } from '../../src/author/workflow-plan.mjs';
 import { checkCandidate, prepareStandardSkill, publishStandardSkill,reviewStandardCandidate } from '../../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
+import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
 
 const source = `import { defineWorkflow, action, terminal } from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({ id: 'example', version: '1.0.0', name: 'Example', nodes: [
@@ -64,6 +65,46 @@ async function fixture(t, text = source, close = () => {}) {
   return { dir, options: { file, collectionId: 'team-id', skillId: 'example-id', name: 'example',
     description: 'Workflow: "Inspect"\n---', version: '1.0.0', hostProfile, buildId: 'test-build' } };
 }
+
+test('an authored workflow cannot promise a required root output without a declared source', async t => {
+  const draft={id:'contract-draft',choices:{executionMode:'interactive-p2'},
+    target:{name:'export-contract',version:'1.0.0'},goal:'Produce a business receipt'};
+  const intent={intentRef:{effectiveIntentHash:artifactDigest(draft.goal)},goals:[{id:'receipt'}],
+    constraints:[],issues:[],unresolved:[],coverage:'complete'};
+  const contract={
+    input:{type:'object',properties:{request:{type:'string'}},required:['request']},
+    output:{type:'object',properties:{receipt:{type:'string'}},required:['receipt']},
+  };
+  const proposal={contract,entryNodeId:'work',edges:[],coverage:{receipt:['work']},nodes:[
+    {id:'work',name:'Work',kind:'action',options:{action:'inspect',effect:'read-only',writes:['privateResult'],next:'done'}},
+    {id:'done',name:'Done',kind:'terminal',options:{status:'succeeded'}},
+  ]};
+  const unavailable=await materializePlan(draft,proposal,{filename:'export-contract.workflow.js'});
+  assert.equal(unavailable.diagnostics[0].code,'FKA_PLAN_OUTPUT_SOURCE_REQUIRED');
+  proposal.nodes[0].options.writes=['receipt'];
+  const material=await materializePlan(draft,proposal,{filename:'export-contract.workflow.js'});
+  const plan=createWorkflowPlan(draft,intent,material.proposal,undefined,material.sourceHash);
+  const { options }=await fixture(t,material.source);
+  const {candidate}=await prepareStandardSkill({...options,plan});
+  assert.equal(checkCandidate(candidate).contract.digest,plan.contractDigest);
+  assert.deepEqual(candidate.manifest.workflowDefinition.contract,contract);
+  const key=newExportKey(), trust=exportTrust([key.publicKey]);
+  const originalFiles=publicDelivery(candidate,key);
+  assert.equal(readPortableExport(originalFiles,trust).candidate.hash,candidate.hash);
+  proposal.contract.output.properties.receipt.minLength=2;
+  const revised=await materializePlan(draft,proposal,{filename:'export-contract.workflow.js'});
+  const nextPlan=createWorkflowPlan(draft,intent,revised.proposal,plan,revised.sourceHash);
+  await writeFile(options.file,revised.source);
+  await assert.rejects(prepareStandardSkill({...options,plan}),{code:'FKA_PLAN_MISMATCH'});
+  const changed=await prepareStandardSkill({...options,plan:nextPlan});
+  const before=checkCandidate(candidate), after=checkCandidate(changed.candidate);
+  assert.notEqual(before.contract.digest,after.contract.digest);
+  assert.notEqual(before.artifactHash,after.artifactHash);
+  assert.notEqual(before.graphDigest,after.graphDigest);
+  const newFiles=publicDelivery(changed.candidate,key);
+  assert.equal(readPortableExport(newFiles,trust).candidate.hash,changed.candidate.hash);
+  assert.deepEqual(readPortableExport({...newFiles,'workflow.html':originalFiles['workflow.html']},trust),{invalid:true});
+});
 
 test('Standard candidate uses real Compiler output, has three files, and runs twice without the source', async t => {
   const { dir, options } = await fixture(t);
@@ -216,6 +257,10 @@ test('workflow-specific references and actual read document provenance remain bo
   assert.deepEqual(candidate.manifest.documents,[evidence]);assert.match(candidate.files['SKILL.md'],/Reviewed documentation/);
   assert.equal(candidate.files['references/decision.md'],refs['references/decision.md']);
   assert.equal(candidate.manifest.files['references/decision.md'],artifactDigest(refs['references/decision.md']));
+  const key=newExportKey();
+  const delivery=publicDelivery(candidate,key);
+  assert.deepEqual(Object.keys(delivery).sort(),['workflow.html','workflow.js','workflow.mmd']);
+  assert.deepEqual(readPortableExport(delivery,exportTrust([key.publicKey])),{});
   content=Buffer.from('changed');await assert.rejects(author.prepare(plan,options),/content differs/);content=bytes;
   revision='revision-2';await assert.rejects(author.prepare(plan,options),/revision differs/);
   await assert.rejects(prepareStandardSkill({...options,references:{'references/skills/other/SKILL.md':'nested'}}),/workflow-specific/);

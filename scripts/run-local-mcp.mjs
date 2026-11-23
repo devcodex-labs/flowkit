@@ -15,7 +15,7 @@ import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
-import { viewerHash, workflowPage, workflowRunPage } from './workflow-viewer.mjs';
+import { viewerHash, workflowPage, workflowRunPage, workflowTracePage } from './workflow-viewer.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
 const exact = (left, right) => typeof left === 'string' && typeof right === 'string' &&
@@ -463,7 +463,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         const binding = await dependencies.resolveRunViewer({ runId, requestContext: context });
         if (!binding || binding.ref?.runId !== runId) return json(res, 404, { error: '找不到可查看的运行。' });
         try {
-          return html(res, await workflowRunPage({ ...binding, afterRevision, artifactAfter }));
+          if (binding.standardTrace) {
+            if (afterRevision!==-1 || artifactAfter!==0) return json(res,400,{error:'单次调用记录没有持久分页。'});
+            return html(res,await workflowTracePage({...binding,requestContext:context}));
+          }
+          return html(res, await workflowRunPage({ ...binding, requestContext:context, afterRevision, artifactAfter }));
         } catch (error) {
           if (error.code === 'FK_I_HOST_DENIED' || error.code === 'FK_I_PROGRAM_MISMATCH') {
             return json(res, 404, { error: '找不到可查看的运行。' });
@@ -516,7 +520,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
           const graph = checkCandidate(draft.candidate);
-          return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls }));
+          return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls,
+            mermaid: draft.candidate.files['workflow.mmd'] }));
         }
         if (req.method === 'POST' && action === 'confirm' && operator(req) && req.headers.origin === origin) {
           const challenge = unseal('confirm', new URLSearchParams(await readBody(req, 8192)).get('challenge'));

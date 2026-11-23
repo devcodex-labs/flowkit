@@ -45,7 +45,7 @@ export function canExportPortable({ files, manifest }) {
 
 export function publicDelivery(candidate, key) {
   const graph = checkCandidate(candidate);
-  let html = workflowPage({ graph, candidateHash: candidate.hash });
+  let html = workflowPage({ graph, candidateHash: candidate.hash, mermaid: candidate.files['workflow.mmd'] });
   if (key && canExportPortable(candidate)) {
     const payload = JSON.stringify({ type: portableType, htmlHash: artifactDigest(html), manifest: candidate.manifest,
       candidateHash: candidate.hash, skill: candidate.files['SKILL.md'] });
@@ -85,7 +85,7 @@ export function readPortableExport(files, trust) {
       files: { 'SKILL.md': data.skill, 'workflow.js': files['workflow.js'], 'workflow.mmd': files['workflow.mmd'] } };
     const graph = checkCandidate(candidate);
     const viewer = readWorkflowPageData(html);
-    if (!canExportPortable(candidate) || viewer.candidateHash !== candidate.hash ||
+    if (!canExportPortable(candidate) || viewer.candidateHash !== candidate.hash || viewer.mermaid !== files['workflow.mmd'] ||
         JSON.stringify(viewer.graph) !== JSON.stringify(graph)) return { invalid: true };
     return trust.has(publicKey) ? { candidate, publicKey } : { untrusted: true };
   } catch { return { invalid: true }; }

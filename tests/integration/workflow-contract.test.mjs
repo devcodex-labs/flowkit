@@ -69,6 +69,13 @@ test('the same root contract validates Standard source, exact artifact bytes and
     assert.deepEqual((await auth.readTerminalResult(recovered.resultRef,options)).publicOutput,expected);
     const viewOptions={...options,graphSnapshot};
     const ref={namespace,runId:recovered.runId,artifactHash:graphSnapshot.artifactHash,graphDigest:graphSnapshot.graphDigest};
+    assert.equal(artifact.graphSnapshot.sourceHash,graphSnapshot.sourceHash);
+    assert.notEqual(artifact.graphSnapshot.artifactHash,graphSnapshot.artifactHash);
+    assert.notEqual(artifact.graphSnapshot.graphDigest,graphSnapshot.graphDigest);
+    await assert.rejects(auth.readRunView({...ref,graphDigest:artifact.graphSnapshot.graphDigest},
+      {...viewOptions,graphSnapshot:artifact.graphSnapshot}),{code:'FK_I_HOST_DENIED'});
+    await assert.rejects(auth.readRunView(ref,{...viewOptions,graphSnapshot:artifact.graphSnapshot}),
+      {code:'FK_I_PROGRAM_MISMATCH'});
     const view=await auth.readRunView(ref,viewOptions);
     assert.deepEqual(view.publicOutput,expected);
     assert.equal(Object.hasOwn(view,'state'),false);

@@ -8,6 +8,14 @@ import { workflowContract } from '../shared/workflow-contract.mjs';
 const NODE_KINDS = new Set(['agent', 'action', 'verification', 'condition', 'parallel', 'loop', 'human', 'terminal']);
 const EDGE_KINDS = new Set(['control', 'data', 'capability', 'resource']);
 
+/** Reject a promised root output with no declared producer anywhere in the compiled graph. */
+export function missingRootOutputSources(contract, writeSets) {
+  const { input, output } = contract ?? {};
+  const availableKeys = new Set(Object.keys(input?.properties ?? {}));
+  for (const keys of writeSets.values()) for (const key of keys) availableKeys.add(key);
+  return (output?.required ?? []).filter(key => !availableKeys.has(key));
+}
+
 /** Derive the Plan's control edges from the same literal source used by the compiler. */
 export async function materializePlan(draft, proposal, compilerOptions) {
   const { nodes, entryNodeId } = proposal;
@@ -35,6 +43,11 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   const analysis = await analyzeSource(source, { ...compilerOptions, skillCheck: false },
     {interactiveStage:stage});
   if (analysis.diagnostics.some(item => item.severity === 'error')) return { diagnostics: analysis.diagnostics };
+  const missingOutputs = missingRootOutputSources(analysis.literal.definition.contract, analysis.graph.writeSets);
+  if (missingOutputs.length) return { diagnostics: missingOutputs.map(key => ({
+    code: 'FKA_PLAN_OUTPUT_SOURCE_REQUIRED',
+    message: `Required root output ${JSON.stringify(key)} has no declared root input or node writer.`
+  })) };
   const control = new Map();
   for (const { from, to } of [...analysis.graph.referenceEdges, ...analysis.graph.executionEdges]) {
     control.set(JSON.stringify([from, to]), { from, to, kind: 'control' });
