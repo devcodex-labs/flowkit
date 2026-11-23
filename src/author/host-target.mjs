@@ -5,6 +5,34 @@ import { artifactDigest } from '../shared/artifact-identity.mjs';
 export const authorIdentity = value => artifactDigest(JSON.stringify(value, (_key, item) => item && typeof item === 'object' &&
   !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item));
 
+/** Compare already validated SemVer values, ignoring build metadata. */
+export function isNewerWorkflowVersion(next, previous) {
+  const parts = version => {
+    const [, core, prerelease] = version.match(/^([^-+]+)(?:-([^+]+))?/);
+    return [core.split('.').map(BigInt), prerelease?.split('.')];
+  };
+  const [nextCore, nextPre] = parts(next);
+  const [previousCore, previousPre] = parts(previous);
+  for (const [i, number] of nextCore.entries()) {
+    if (number !== previousCore[i]) return number > previousCore[i];
+  }
+  if (!nextPre || !previousPre) return !nextPre && !!previousPre;
+  for (const [i, value] of nextPre.entries()) {
+    const base = previousPre[i];
+    if (base === undefined) return true;
+    if (value === base) continue;
+    const numeric = /^\d+$/.test(value), baseNumeric = /^\d+$/.test(base);
+    if (numeric !== baseNumeric) return baseNumeric;
+    return numeric ? BigInt(value) > BigInt(base) : value > base;
+  }
+  return false;
+}
+
+export function sameSignedWorkflowOrigin(left, right) {
+  return !!left?.issuer && left.issuer === right?.issuer &&
+    left.collectionId === right.collectionId && left.skillId === right.skillId;
+}
+
 /** Snapshot data without invoking accessors. SDK and MCP consumers share this JSON boundary. */
 export function authorInput(value, maxBytes) {
   let members = 0;
@@ -33,7 +61,10 @@ export function authorInput(value, maxBytes) {
 export function authorTarget(input, store) {
   const operation = input.operation ?? 'create';
   if (!['create', 'update', 'import'].includes(operation)) throw authorError('author-target', 'Choose create, update or import');
-  if (operation !== 'update') {
+  if (operation === 'import' && input.targetRef && input.importSource?.mode !== 'new-collection') {
+    throw authorError('author-target', 'Only a cross-collection import can pin an existing Workflow version');
+  }
+  if (operation !== 'update' && !(operation === 'import' && input.targetRef)) {
     if (operation === 'create' && input.targetRef) throw authorError('author-target', 'Create cannot replace a pinned previous version');
     if (operation === 'create' && input.target?.skillId && store.readActive(input.collectionId, input.target.skillId)) {
       throw authorError('author-target', 'New Skill ID is already occupied');

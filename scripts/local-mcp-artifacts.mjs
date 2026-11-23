@@ -109,7 +109,7 @@ export function readPortableExport(files, trust) {
       files: { 'SKILL.md': data.skill, 'workflow.js': files['workflow.js'], 'workflow.mmd': files['workflow.mmd'] } };
     checkCandidate(candidate);
     if (!canExportPortable(candidate)) return { invalid: true };
-    return trust.has(publicKey) ? { candidate } : { untrusted: true };
+    return trust.has(publicKey) ? { candidate, publicKey } : { untrusted: true };
   } catch { return { invalid: true }; }
 }
 

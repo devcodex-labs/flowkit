@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { lstat, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
+import { newExportKey, publicDelivery } from '../../scripts/local-mcp-artifacts.mjs';
 import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
 import { runArtifact } from '../../src/runtime/run.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
@@ -252,6 +253,114 @@ test('local MCP imports an intact three-file export only from a trusted origin a
   assert.deepEqual(await call(targetClient, 'flowkit_add_workflow', add), accepted);
   const repeated = await upload(files, cookie);
   assert.equal((await call(targetClient, 'flowkit_add_workflow', { requestId: 'again', ...repeated })).status, 'already_added');
+});
+
+test('local MCP rechecks revoked imports and saves a reviewed same-origin update without reactivating history', async t => {
+  let service, client, cookie;
+  const stop = async () => {
+    await client?.close(); client = null;
+    if (service) assert.equal((await service.close()).closed, true);
+    service = null;
+  };
+  t.after(stop);
+  const root = await ownedDirectory(t);
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'exports') };
+  const credential = 'fixture-test-credential-for-flowkit-mcp';
+  const renderer = 'var mermaid = {initialize(){},async render(){return {svg:"<svg></svg>"}}};';
+  const signer = newExportKey(), otherSigner = newExportKey();
+  const hostProfile = { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') };
+  const original = await readFile(new URL('../../examples/docs/conditional-routing/sample.workflow.js', import.meta.url), 'utf8');
+  const createFiles = async (version, identifier, key = signer) => {
+    const file = path.join(root, identifier + '.workflow.js');
+    await writeFile(file, original.replace("version: '1.0.0'", "version: '" + version + "'"));
+    const { candidate, diagnostics } = await prepareStandardSkill({ file, collectionId: 'upstream', skillId: 'transferred',
+      name: 'transferred', description: 'Transfer routing', version, hostProfile, buildId: identifier,
+      compilerOptions: { skillCheck: false } });
+    assert.ok(candidate, JSON.stringify(diagnostics));
+    return publicDelivery(candidate, renderer, key);
+  };
+  const v1 = await createFiles('1.0.0', 'initial');
+  const v2 = await createFiles('1.1.0', 'revision');
+  const start = async trustedExportKeys => {
+    service = await startLocalMcp({ ...config, trustedExportKeys }, { credential, renderer, modelBinding: monthlyTimesheetModel() });
+    client = new Client({ name: 'flowkit-import-lifecycle', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url),
+      { requestInit: { headers: { authorization: 'Bearer ' + credential } } }));
+    cookie = await browserIdentity(service);
+  };
+  const tool = async (name, args = {}) => {
+    const r = await client.callTool({ name, arguments: args });
+    assert.notEqual(r.isError, true, JSON.stringify(r));
+    return JSON.parse(r.content[0].text);
+  };
+  const register = async files => {
+    const origin = new URL(service.url).origin;
+    const response = await fetch(origin + '/sources', { method: 'POST', headers: { origin, cookie },
+      body: new URLSearchParams({ source: JSON.stringify(files) }) });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const add = async (requestId, files) => {
+    const args = { requestId, ...await register(files) };
+    return { args, result: await tool('flowkit_add_workflow', args) };
+  };
+  const confirmation = async result => {
+    assert.ok(result.confirmationUrl, JSON.stringify(result));
+    const url = new URL(result.confirmationUrl);
+    const html = await (await fetch(url, { headers: { cookie } })).text();
+    const challenge = html.match(/name="challenge" value="([^"]+)"/)?.[1];
+    assert.ok(challenge);
+    return { url, html, challenge };
+  };
+  const submitChallenge = ({ url, challenge }) => {
+    const origin = new URL(service.url).origin;
+    return fetch(origin + url.pathname + '/confirm',
+      { method: 'POST', headers: { origin, cookie }, body: new URLSearchParams({ challenge }) });
+  };
+
+  await start([signer.publicKey]);
+  const unused = await register(v1);
+  const pending = await add('before-revoke', v1);
+  const oldLink = await confirmation(pending.result);
+  const { value: { draftId, candidateHash } } = JSON.parse(Buffer.from(oldLink.url.pathname.split('/').at(-1).split('.')[0], 'base64url'));
+  await stop();
+  await start([]);
+  assert.equal((await tool('flowkit_add_workflow', { requestId: 'unused-after-revoke', ...unused })).status, 'rejected');
+  assert.equal((await tool('flowkit_add_workflow', pending.args)).status, 'rejected');
+  assert.equal((await tool('flowkit_add_workflow', { requestId: 'draft-after-revoke', sourceRef: draftId, candidateHash })).status, 'rejected');
+  assert.equal((await submitChallenge(oldLink)).status, 403);
+  assert.equal((await tool('flowkit_collection')).skills.length, 0);
+  await stop();
+
+  await start([signer.publicKey, otherSigner.publicKey]);
+  const first = await add('install-initial', v1);
+  const firstSaved = await (await confirmInTestBrowser(first.result.confirmationUrl, cookie)).json();
+  assert.equal(firstSaved.status, 'added');
+  const next = await add('install-revision', v2);
+  const update = await confirmation(next.result);
+  assert.match(update.html, /当前版本 1\.0\.0，更新到 1\.1\.0/);
+  assert.equal((await tool('flowkit_collection')).skills[0].candidateHash, firstSaved.candidateHash);
+  const nextSaved = await (await submitChallenge(update)).json();
+  assert.equal(nextSaved.status, 'added');
+  assert.equal(nextSaved.version, '1.1.0');
+  assert.equal(nextSaved.workflowId, firstSaved.workflowId);
+  assert.equal((await add('historical-files', v1)).result.status, 'already_added');
+  assert.deepEqual(await tool('flowkit_add_workflow', first.args), firstSaved);
+  assert.equal((await tool('flowkit_collection')).skills[0].candidateHash, nextSaved.candidateHash);
+  assert.equal((await add('same-version-other-content', await createFiles('1.1.0', 'replacement'))).result.status, 'conflict');
+  assert.equal((await add('older-version', await createFiles('1.0.1', 'downgrade'))).result.status, 'conflict');
+  assert.match((await add('wrong-signer', await createFiles('1.2.0', 'wrong-signer', otherSigner))).result.reason, /同一签名来源/);
+
+  const stale = await confirmation((await add('earlier-revision', await createFiles('1.2.0', 'earlier'))).result);
+  const later = await add('later-revision', await createFiles('1.3.0', 'later'));
+  const latest = await (await confirmInTestBrowser(later.result.confirmationUrl, cookie)).json();
+  assert.equal(latest.version, '1.3.0');
+  assert.equal((await submitChallenge(stale)).status, 409);
+  await stop();
+  await start([]);
+  assert.deepEqual(await tool('flowkit_add_workflow', later.args), latest);
+  const { skills } = await tool('flowkit_collection');
+  assert.deepEqual(skills.map(({ skillId, version }) => [skillId, version]), [[firstSaved.workflowId, '1.3.0']]);
 });
 
 async function verifyLocalRecovery(t, interruptedEffect) {

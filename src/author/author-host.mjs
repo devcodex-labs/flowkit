@@ -6,7 +6,7 @@ import { during } from '../runtime/tasks.mjs';
 import { openLocalSkillStore } from './local-skill-store.mjs';
 import { startAuthorDraft } from './draft.mjs';
 import { checkCandidate, reviewStandardCandidate, prepareImportedStandardSkill } from './standard-artifact.mjs';
-import { authorInput, authorTarget, authorIdentity as hash } from './host-target.mjs';
+import { authorInput, authorTarget, authorIdentity as hash, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from './host-target.mjs';
 import { executeAuthorCore, rejectedReview } from './host-core.mjs';
 import { discoverPublication, cleanupPublicationGeneration } from './host-discovery.mjs';
 import { authorError, budgetPolicy, newTurnBudget, positive, createTurnPorts, jsonBytes } from './host-budget.mjs';
@@ -211,9 +211,10 @@ export async function createWorkflowAuthorHost(supplied) {
         const source = await options.resolveImportSource?.(input.importSource, { requestContext: currentRequestContext, signal });
         if (!source?.candidate || !source.sourceRef) throw authorError('author-target', 'A trusted approved import source is required');
         imported = await prepareImportedStandardSkill(source.candidate, { mode: input.importSource.mode, collectionId: input.collectionId,
-          skillId: input.importSource.mode === 'migration' ? source.candidate.manifest.skillId : input.target?.skillId ?? randomUUID(), sourceRef: source.sourceRef },
+          skillId: input.importSource.mode === 'migration' ? source.candidate.manifest.skillId :
+            input.targetRef?.skillId ?? input.target?.skillId ?? randomUUID(), sourceRef: source.sourceRef, issuer: source.issuer },
         { verifyImport: binding => options.authorization.verifyImport?.({ ...binding, requestContext: currentRequestContext, signal }) });
-        fingerprint = hash({ ...input, currentRequestContext, sourceHash: source.candidate.hash });
+        fingerprint = hash({ ...input, currentRequestContext, sourceHash: source.candidate.hash, issuer: source.issuer });
       }
       return store.authorTransaction(state => {
         const drafts = state.activeDrafts(capacity.maxDrafts + 1);
@@ -227,6 +228,10 @@ export async function createWorkflowAuthorHost(supplied) {
         const collection = store.readCollectionMetadata(input.collectionId, { limit: 1 })?.collection;
         const initial = startAuthorDraft(input.goal, { ...options.defaults, ...(collection ? { collectionName: collection.name } : {}), ...input.choices });
         const { previous, operation } = authorTarget(input, store);
+        if (imported && previous && (!sameSignedWorkflowOrigin(imported.manifest.importedFrom, previous.manifest.importedFrom) ||
+            !isNewerWorkflowVersion(imported.manifest.version, previous.manifest.version))) {
+          throw authorError('author-conflict', 'Import update requires the same signed origin and a newer version');
+        }
         const importedTarget = imported && { skillId: imported.manifest.skillId, name: imported.manifest.name,
           description: input.goal, version: imported.manifest.version };
         const draft = { ...initial, namespace: options.namespace, collectionId: input.collectionId,

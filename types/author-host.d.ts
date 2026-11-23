@@ -79,7 +79,7 @@ export interface AuthorHostOptions {
   };
   capabilityGraph?: object | ((context: { requestContext: AuthorRequestContext; signal: AbortSignal }) => object | Promise<object>); initialDocuments?: object[];
   initialCapabilityIds?: string[];
-  resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string }>;
+  resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string; issuer?: string }>;
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
   resolveProfessionalSkill?(pin: object, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ id: string; version: string; digest: string; approved: boolean } | null>;
   resolveAuthoringInput?: FlowkitMcpOptions['resolveAuthoringInput'];

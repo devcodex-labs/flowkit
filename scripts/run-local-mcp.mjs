@@ -9,8 +9,8 @@ import { spawnSync } from 'node:child_process';
 import { createWorkflowAuthorHost } from '../dist/host.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
-import { authorIdentity } from '../src/author/host-target.mjs';
-import { checkCandidate } from '../src/author/standard-artifact.mjs';
+import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
+import { checkCandidate, rebindImportedCandidate } from '../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, graphPage, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
@@ -156,6 +156,19 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
 
   const operator = req => unseal('operator', req.headers.cookie?.match(operatorCookiePattern)?.[1]) === workspaceId;
   const approval = ref => get('approval:' + ref);
+  const sourceIssuer = source => source.exporterKey === null ? undefined : artifactDigest(source.exporterKey);
+  function trustedImport(sourceRef) {
+    const source = get('import:' + sourceRef);
+    if (!source?.candidate || source.exporterKey !== null && !trustedExports.has(source.exporterKey)) return undefined;
+    return source;
+  }
+  function trustedDraft(draft) {
+    if (draft.operation !== 'import') return true;
+    const source = trustedImport(draft.plan?.importSource?.sourceRef);
+    const imported = draft.candidate?.manifest.importedFrom;
+    return !!source && source.candidate.hash === imported?.hash && sourceIssuer(source) === imported.issuer;
+  }
+  const untrustedReason = '接收实例尚未信任或无法核对该导出公钥。请核对公钥后重新登记文件。';
   const storeFile = path.join(dataDir, 'author.sqlite');
   let authorHost, server, modelWorkspace;
   let storageClosed = false;
@@ -178,17 +191,19 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
       budgetPolicy: { durationMs: 240000, maxRequests: 8 }, execution: model.execution,
       resolveImportSource({ sourceRef }) {
-        const source = get('import:' + sourceRef);
-        return source && { candidate: source, sourceRef };
+        const source = trustedImport(sourceRef);
+        return source && { candidate: source.candidate, sourceRef, issuer: sourceIssuer(source) };
       },
       authorization: {
         observeReview: model.observeReview,
-        authorize({ action, collectionId: target, requestContext, approvalRef, publicationId }) {
+        async authorize({ action, collectionId: target, requestContext, approvalRef, publicationId, draftId, signal }) {
           if (target !== collectionId || authorIdentity(requestContext) !== authorIdentity(context)) return false;
           if (action === 'collection-plan') return approvalRef === bootstrap;
           if (action !== 'publish') return true;
           const record = approval(approvalRef);
-          return record?.confirmed === true && record.publicationId === publicationId;
+          if (record?.confirmed !== true || record.publicationId !== publicationId || record.draftId !== draftId) return false;
+          const draft = await authorHost.readDraft({ draftId }, requestContext, signal);
+          return draft.savedReceipt?.publicationId === publicationId || trustedDraft(draft);
         },
         verifyApproval({ approvalRef, draftId, candidateHash, reviewRef, previousHash, contentHash }) {
           const record = approval(approvalRef);
@@ -204,8 +219,9 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           if (decision === 'confirm-no-effect' && !noEffect) return;
           return { verified: true, physicalDone: true, noEffect, draftId, turnId, attemptId, evidenceRef, resultHash };
         },
-        verifyImport({ sourceRef, sourceHash }) {
-          return get('import:' + sourceRef)?.hash === sourceHash;
+        verifyImport({ sourceRef, sourceHash, issuer }) {
+          const source = trustedImport(sourceRef);
+          return !!source && source.candidate.hash === sourceHash && sourceIssuer(source) === issuer;
         }
       }
     });
@@ -247,6 +263,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
 
     async function exportCandidate({ draftId, candidateHash }, _context, signal) {
       const draft = await readDraft(draftId, candidateHash, signal);
+      if (!draft.savedReceipt && !trustedDraft(draft)) throw new Error(untrustedReason);
       if (draft.approvalReceipt?.candidateHash !== candidateHash || !draft.reviewReceipt?.qualified ||
           !approval(draft.approvalReceipt.approvalRef)?.confirmed) throw new Error('请先在预览页确认当前候选。');
       const portable = canExportPortable(draft.candidate);
@@ -263,10 +280,12 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       return { candidateHash, directory, files: deliveryNames.map(name => ({ name, url: origin + '/exports/' + ref + '/' + name, sha256: hashes[name] })) };
     }
 
-    const resultFor = (status, draft, extra = {}) => ({
-      status, collectionId, collectionName, workflowId: draft.candidate.manifest.skillId,
-      version: draft.candidate.manifest.version, candidateHash: draft.candidate.hash, ...extra
+    const resultFor = (status, candidate, extra = {}) => ({
+      status, collectionId, collectionName, workflowId: candidate.manifest.skillId,
+      version: candidate.manifest.version, candidateHash: candidate.hash, ...extra
     });
+    const activeHash = draft => binding.store.readActive(collectionId, draft.candidate.manifest.skillId)?.hash ?? null;
+    const changedTargetReason = '接收端当前版本已变更，请重新发起添加并复审。';
 
     function compatible(candidate) {
       if (!candidate) return false;
@@ -285,7 +304,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         return { requestId, status: 'conflict', reason: '导出文件与 FlowKit 来源记录不符。' };
       }
       const selector = uploaded?.codexSelector;
-      const external = !firstParty && uploaded?.candidate;
+      const untrusted = uploaded?.untrusted || uploaded?.portable && !trustedExports.has(uploaded.exporterKey);
+      const external = !firstParty && !untrusted && uploaded?.candidate;
       async function withOptions() {
         return [
           { destination: 'flowkit', label: '加入 FlowKit', available: compatible(external) },
@@ -293,48 +313,80 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         ];
       }
       if (!firstParty && !uploaded?.portable && !destination) return { requestId, status: 'choice_required', options: await withOptions(),
-        ...(uploaded?.untrusted ? { reason: '来源签名有效，但接收实例尚未信任该导出公钥。' } : {}),
+        ...(untrusted ? { reason: untrustedReason } : {}),
         ...(uploaded ? {} : { sourceUrl: origin + '/' }) };
       if (destination === 'codex') {
         return (await withOptions())[1].available ?
           { requestId, status: 'install_required', destination, selector, command: ['codex','plugin','add',selector] } :
           { requestId, status: 'rejected', reason: '缺少当前 Codex 可安装的外部插件包。' };
       }
-      if (!firstParty && !compatible(external)) return { requestId, status: 'rejected', reason: uploaded?.untrusted ?
-        '接收实例尚未信任该导出公钥。' : '缺少当前 Host 可核验的兼容工作流候选。' };
       const material = authorIdentity({ sourceRef, candidateHash: candidateHash ?? null, destination: 'flowkit', collectionId });
       const operationKey = 'add:' + requestId;
-      const operation = insert(operationKey, { material, publicationId: 'flowkit-local-' + artifactDigest(requestId).slice(7),
+      const prior = get(operationKey);
+      if (prior && prior.material !== material) return { requestId, status: 'conflict', reason: '该请求 ID 已关联其他来源或版本。' };
+      if (prior?.result) return prior.result;
+      if (!prior?.draftId && !firstParty && !compatible(external)) return { requestId, status: 'rejected', reason: untrusted ?
+        untrustedReason : '缺少当前 Host 可核验的兼容工作流候选。' };
+      const operation = prior ?? insert(operationKey, { material, publicationId: 'flowkit-local-' + artifactDigest(requestId).slice(7),
         input: { ...input, destination: 'flowkit' } });
-      if (operation.material !== material) return { requestId, status: 'conflict', reason: '该请求 ID 已关联其他来源或版本。' };
-      if (operation.result) return operation.result;
 
       let draft;
-      if (firstParty) draft = await readDraft(firstParty.draftId, firstParty.candidateHash, signal);
+      if (operation.draftId) draft = await readDraft(operation.draftId, operation.candidateHash, signal);
+      else if (firstParty) draft = await readDraft(firstParty.draftId, firstParty.candidateHash, signal);
       else {
-        const verifiedSourceRef = 'verified-' + external.hash.slice(7);
-        insert('import:' + verifiedSourceRef, external);
+        const source = { candidate: external, exporterKey: uploaded.exporterKey ?? null };
+        const issuer = sourceIssuer(source);
+        const verifiedSourceRef = 'verified-' + authorIdentity([external.hash, issuer ?? null]).slice(7);
         const identity = authorIdentity([external.manifest.collectionId, external.manifest.skillId, collectionId]);
-        let imported = await authorHost.start({ operation: 'import', collectionId, requestId: 'local-import-' + identity.slice(7) + '-' + external.hash.slice(7),
-          goal: external.manifest.name, importSource: { sourceRef: verifiedSourceRef, mode: 'new-collection' },
-          target: { skillId: 'imported-' + identity.slice(7, 39) } }, context, signal);
-        if (imported.status === 'needs-review' && imported.stateVersion === 1) {
-          imported = await authorHost.advanceTurn({ draftId: imported.id, expectedStateVersion: imported.stateVersion,
-            turnId: 'review-' + imported.candidate.hash.slice(7), input: '核对外部候选定义与来源。', kind: 'review-only',
-            candidateHash: imported.candidate.hash }, context);
+        const skillId = 'imported-' + identity.slice(7, 39);
+        const incoming = rebindImportedCandidate(external, { collectionId, skillId, issuer });
+        const installed = binding.store.readVersion(collectionId, skillId, incoming.hash) ??
+          (issuer && binding.store.readVersion(collectionId, skillId, rebindImportedCandidate(external, { collectionId, skillId }).hash));
+        if (installed) {
+          const result = resultFor('already_added', installed, { requestId, destination: 'flowkit' });
+          put(operationKey, { ...operation, result });
+          return result;
         }
-        draft = imported;
+        const previous = binding.store.readActive(collectionId, skillId);
+        if (previous && !sameSignedWorkflowOrigin(incoming.manifest.importedFrom, previous.manifest.importedFrom)) {
+          return { requestId, status: 'conflict', reason: '无法核对当前版本与待添加版本来自同一签名来源。' };
+        }
+        if (previous && !isNewerWorkflowVersion(incoming.manifest.version, previous.manifest.version)) {
+          return { requestId, status: 'conflict', reason: '同源更新必须使用比当前生效版本更高的新版本号。' };
+        }
+        insert('import:' + verifiedSourceRef, source);
+        try {
+          draft = await authorHost.start({ operation: 'import', collectionId,
+            requestId: 'local-import-' + authorIdentity([collectionId, verifiedSourceRef, previous?.hash ?? null]).slice(7),
+            goal: external.manifest.name, importSource: { sourceRef: verifiedSourceRef, mode: 'new-collection' }, target: { skillId },
+            ...(previous ? { targetRef: { collectionId, skillId, baseVersion: previous.manifest.version,
+              baseArtifactHash: previous.manifest.artifactHash } } : {}) }, context, signal);
+        } catch (error) {
+          if (/conflict|author-target/.test(error.code + ' ' + error.reasonCode)) return { requestId, status: 'conflict', reason: changedTargetReason };
+          throw error;
+        }
       }
-      const bound = { ...get(operationKey), draftId: draft.id, candidateHash: draft.candidate.hash };
-      if (bound.result) return bound.result;
+      const current = get(operationKey);
+      if (current.result) return current.result;
+      if (current.draftId && (current.draftId !== draft.id || current.candidateHash !== draft.candidate.hash)) {
+        return { requestId, status: 'conflict', reason: '添加请求已绑定其他候选，请使用新的请求 ID。' };
+      }
+      const bound = { ...current, draftId: draft.id, candidateHash: draft.candidate.hash };
       put(operationKey, bound);
       const existing = binding.store.readVersion(collectionId, draft.candidate.manifest.skillId, draft.candidate.hash);
       if (existing) {
         const original = draft.savedReceipt?.publicationId === operation.publicationId;
-        const result = resultFor(original ? 'added' : 'already_added', draft, { requestId, destination: 'flowkit',
+        const result = resultFor(original ? 'added' : 'already_added', draft.candidate, { requestId, destination: 'flowkit',
           ...(original ? { publicationId: operation.publicationId } : {}) });
         put(operationKey, { ...bound, result });
         return result;
+      }
+      if (!trustedDraft(draft)) return { requestId, status: 'rejected', reason: untrustedReason };
+      if (activeHash(draft) !== draft.previousHash) return { requestId, status: 'conflict', reason: changedTargetReason };
+      if (draft.operation === 'import' && draft.status === 'needs-review' && draft.stateVersion === 1) {
+        draft = await authorHost.advanceTurn({ draftId: draft.id, expectedStateVersion: draft.stateVersion,
+          turnId: 'review-' + draft.candidate.hash.slice(7), input: '核对外部候选定义、来源与接收端原版本。', kind: 'review-only',
+          candidateHash: draft.candidate.hash }, context);
       }
       const approvalRef = draft.approvalReceipt?.approvalRef;
       const proof = approval(approvalRef);
@@ -355,7 +407,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         throw error;
       }
       const visible = binding.store.readVersion(collectionId, draft.candidate.manifest.skillId, receipt.candidateHash);
-      const result = resultFor(visible ? 'added' : 'saved_pending_discovery', draft, { requestId, destination: 'flowkit', publicationId: receipt.publicationId });
+      const result = resultFor(visible ? 'added' : 'saved_pending_discovery', draft.candidate, { requestId, destination: 'flowkit', publicationId: receipt.publicationId });
       if (visible) put(operationKey, { ...bound, result });
       return result;
     }
@@ -411,7 +463,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         const sourceRef = randomUUID();
         insert('upload:' + sourceRef, { candidate: portable.candidate ?? (compatible(source) ? source : null), provenance,
           changed: changed || portable.invalid === true, portable: !!portable.candidate, untrusted: portable.untrusted === true,
-          codexSelector: form.get('codex') });
+          exporterKey: portable.publicKey ?? null, codexSelector: form.get('codex') });
         return json(res, 200, { sourceRef });
       }
       if (route === 'exports' && req.method === 'GET' && deliveryNames.includes(action)) {
@@ -430,9 +482,16 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         if (req.method === 'GET' && !action) {
           const challenge = seal('confirm', { ...preview, stateVersion: draft.stateVersion });
           const current = operator(req);
-          const controls = draft.reviewReceipt?.qualified && current ?
+          const pinned = preview.operation && draft.previousHash &&
+            binding.store.readVersion(collectionId, draft.candidate.manifest.skillId, draft.previousHash);
+          const controls = !draft.savedReceipt && !trustedDraft(draft) ? '<p>' + escapeHtml(untrustedReason) + '</p>' :
+            preview.operation && draft.savedReceipt ? '<p>该版本已保存。</p>' :
+            preview.operation && activeHash(draft) !== draft.previousHash ? '<p>' + escapeHtml(changedTargetReason) + '</p>' :
+            draft.reviewReceipt?.qualified && current ?
+            (pinned ? '<p>当前版本 ' + escapeHtml(pinned.manifest.version) + '，更新到 ' + escapeHtml(draft.candidate.manifest.version) + '。</p>' : '') +
             '<form method="post" action="/preview/' + ref + '/confirm"><input type="hidden" name="challenge" value="' + challenge +
-            '"><button type="submit" disabled>' + (preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
+            '"><button type="submit" disabled>' + (pinned ? '确认并更新 FlowKit 工作流' :
+              preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
           return html(res, graphPage({ title: label, source: draft.candidate.files['workflow.mmd'], renderer, controls }));
         }
@@ -445,6 +504,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           const operation = preview.operation && get('add:' + preview.operation);
           if (preview.operation && (!operation || operation.draftId !== draft.id || operation.candidateHash !== draft.candidate.hash)) {
             return json(res, 409, { error: '添加请求已变更。' });
+          }
+          if (!draft.savedReceipt && !trustedDraft(draft)) return json(res, 403, { error: untrustedReason });
+          if (operation && draft.savedReceipt) return json(res, 409, { error: '该版本已保存。请在 Codex 读取添加结果。' });
+          if (operation && !draft.savedReceipt && activeHash(draft) !== draft.previousHash) {
+            return json(res, 409, { error: changedTargetReason });
           }
           const approvalRef = randomUUID();
           const record = { draftId: draft.id, candidateHash: draft.candidate.hash, previousHash: draft.previousHash,

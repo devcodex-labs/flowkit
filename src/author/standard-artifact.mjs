@@ -261,23 +261,30 @@ export function publishStandardSkill(candidate, receipts, host) {
   return publishReviewedCandidate(candidate, receipts, host, checkCandidate);
 }
 
+/** Bind already validated bytes to the recipient's identity without changing the workflow. */
+export function rebindImportedCandidate(source, { collectionId, skillId, issuer }) {
+  const current = source.manifest;
+  const manifest = { ...current, collectionId, skillId,
+    importedFrom: { collectionId: current.collectionId, skillId: current.skillId, hash: source.hash,
+      ...(issuer === undefined ? {} : { issuer }) } };
+  return { files: source.files, manifest, hash: artifactDigest(JSON.stringify(manifest)) };
+}
+
 /** Restore a vouched-for source. A new collection gets its own candidate and approval. */
-export async function prepareImportedStandardSkill(candidate, { mode, collectionId, skillId, sourceRef }, host) {
+export async function prepareImportedStandardSkill(candidate, { mode, collectionId, skillId, sourceRef, issuer }, host) {
   const source = structuredClone(candidate);
   checkCandidate(source);
   const current = source.manifest;
   if (!identifier(collectionId) || !identifier(skillId) || !identifier(sourceRef) ||
-    !['new-collection', 'migration'].includes(mode) ||
+    !['new-collection', 'migration'].includes(mode) || issuer !== undefined && !digest(issuer) ||
     mode === 'migration' && (current.collectionId !== collectionId || current.skillId !== skillId) ||
     mode === 'new-collection' && current.collectionId === collectionId) {
     throw new TypeError('Import requires a distinct new collection or an explicit identity-preserving migration');
   }
   if (typeof host?.verifyImport !== 'function' || await host.verifyImport({ mode, sourceRef, collectionId, skillId,
-    approvedSource: structuredClone(current), sourceHash: source.hash }) !== true) {
+    approvedSource: structuredClone(current), sourceHash: source.hash, ...(issuer === undefined ? {} : { issuer }) }) !== true) {
     throw new Error('Host could not verify the source approval or destination prerequisites for this Workflow Skill');
   }
   if (mode === 'migration') return source;
-  const manifest = { ...current, collectionId, skillId,
-    importedFrom: { collectionId: current.collectionId, skillId: current.skillId, hash: source.hash } };
-  return { files: source.files, manifest, hash: artifactDigest(JSON.stringify(manifest)) };
+  return rebindImportedCandidate(source, { collectionId, skillId, issuer });
 }
