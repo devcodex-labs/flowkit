@@ -1033,6 +1033,10 @@ html,body,button,input,textarea,.node,.stage,.tooltip,.inspector,.reader-dialog,
 .artifact-center[hidden],#inspectorNav[hidden] {display:none!important}
 .reader-overlay:not([open]) {display:none}
 dialog.reader-overlay {width:100%;height:100%;max-width:none;max-height:none;margin:0;border:0;color:inherit}
+.reader-tools {display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid #e8eef7}
+.reader-tools input {min-width:0;max-width:100%;padding:6px 8px;border:1px solid #dce5f3;border-radius:6px}
+#readerContent[data-reader-size="large"] :is(p,li,pre,.contract-name,.contract-type,.meta-list) {font-size:1.15em}
+#readerContent .reader-match {outline:2px solid #eab548;outline-offset:2px}
 .contract-card[open] {border-color:#aec6f6}
 summary.contract-trigger::-webkit-details-marker {display:none}
 .contract-card[open] .contract-toggle-icon {transform:rotate(180deg)}
@@ -1141,8 +1145,8 @@ summary.contract-trigger::-webkit-details-marker {display:none}
     </header>
     <div class="ac-stats" id="acStats"></div>
     <div class="ac-controls">
-      <label class="ac-search"><span>⌕</span><input type="search" autocomplete="off" id="acSearch" placeholder="搜索文件、来源节点或描述" aria-label="搜索产物"/></label>
-      <label>状态 <select id="acStatus"><option value="all">全部正式产物</option><option value="pending">待确认</option><option value="confirmed">已确认</option><option value="auto">自动验收通过</option></select></label>
+      <label class="ac-search"><span>⌕</span><input type="search" autocomplete="off" id="acSearch" placeholder="搜索产物、来源节点或版本" aria-label="搜索产物"/></label>
+      <label>状态 <select id="acStatus"><option value="all">全部版本</option><option value="effective">生效版本</option><option value="latest">最新版本</option><option value="history">历史版本</option></select></label>
       <label>类型 <select id="acType"><option value="all">所有类型</option></select></label>
       <label>分组 <select id="acGroup"><option value="phase">按阶段</option><option value="node">按节点</option><option value="type">按产物类型</option></select></label>
     </div>
@@ -1173,6 +1177,12 @@ summary.contract-trigger::-webkit-details-marker {display:none}
       <div><div class="reader-eyebrow">FLOWKIT · NODE DETAILS</div><div class="reader-title" id="readerTitle"></div><div class="reader-sub" id="readerSub"></div></div>
       <button type="button" class="reader-action" id="readerClose" aria-label="关闭阅读视图">✕ 关闭</button>
     </div>
+    <form class="reader-tools" id="readerSearchForm" role="search">
+      <input type="search" id="readerSearch" aria-label="查找详情" placeholder="查找详情">
+      <button type="submit" class="reader-action">查找下一处</button>
+      <button type="button" class="reader-action" id="readerSize" aria-pressed="false">放大文字</button>
+      <span id="readerMatches" role="status"></span>
+    </form>
     <div id="readerContent" class="reader-content"></div>
     <div class="reader-foot">按 Esc 关闭并返回原节点</div>
   </div>
@@ -1852,29 +1862,53 @@ const runLabels={running:'运行中',waiting:'等待处理',paused:'已暂停',s
 const eventLabels={'run.started':'开始运行','run.finished':'运行结束','receipt.accepted':'已接收回执','transition.committed':'状态已提交'};
 const runSummary = () => [['运行状态',runLabels[DATA.runView.status]??DATA.runView.status],['修订',DATA.runView.revision],
   ...(DATA.runView.pauseReason?[['暂停原因',DATA.runView.pauseReason]]:[])];
+const activationLabel = ({activation,attempt}) => activation===undefined?'':` · 激活 ${activation} · 尝试 ${attempt}`;
 function runDetails(node) {
   const run=DATA.runView;
   if(!run)return `<div class="runtime-empty">${esc(modeNote)}</div>`;
   const pending=run.pending.filter(task=>task.nodeId===node.nodeId);
-  const events=run.events?.filter(event=>event.nodeId===node.nodeId).slice(-5);
+  const events=run.events?.filter(event=>event.nodeId===node.nodeId);
   return facts(runSummary())+
-    (pending.length?list(pending.map(task=>'待处理 · '+(types[task.kind]??task.kind)+' · 尝试 '+task.attempt)):'')+
+    (pending.length?list(pending.map(task=>'待处理 · '+(types[task.kind]??task.kind)+activationLabel(task))):'')+
     (events?.length?list(events.map(event=>'#'+event.revision+' · '+(eventLabels[event.kind]??event.kind)+
-      (event.receiptOutcome?' · '+(runLabels[event.receiptOutcome]??event.receiptOutcome):''))):
+      activationLabel(event)+(event.receiptOutcome?' · '+(runLabels[event.receiptOutcome]??event.receiptOutcome):''))):
       note(events?'本页没有该节点的事件。':'当前授权未提供事件。'));
+}
+const artifactLabels={effective:'生效版本',latest:'最新版本',history:'历史版本'};
+const cardsByNode=new Map(DATA.nodes.map(card=>[card.nodeId,card]));
+const artifactSource=item=>actualNodes.get(item.nodeId)?.name??item.nodeId;
+function renderArtifactItem(item) {
+  const card=cardsByNode.get(item.nodeId);
+  const labels=[];
+  if(item.effectiveVersionId===item.versionId)labels.push(artifactLabels.effective);
+  if(item.latestVersionId===item.versionId)labels.push(artifactLabels.latest);
+  return `<div class="ac-item"><div class="ac-item-main">
+    <strong>${esc(item.artifactId)}</strong><small>${esc(artifactSource(item))} · ${esc(item.mimeType)} · ${esc(item.sizeBytes)} B</small>
+    <p>版本 ${esc(item.versionId)} · ${esc(item.contentHash)}</p></div>
+    <div class="ac-item-side"><span class="ac-version">${labels.join(' · ')||artifactLabels.history}</span></div>
+    ${card?`<div class="ac-item-actions"><button type="button" data-artifact-source="${esc(card.id)}">定位来源节点</button></div>`:''}</div>`;
 }
 function artifactContent(nodeId) {
   const run=DATA.runView;
   if(!run)return '<div class="ac-empty"><strong>未绑定运行</strong><span>'+offlineArtifact+'</span></div>';
   if(!run.artifacts)return '<div class="ac-empty">当前授权未提供产物索引。</div>';
-  const node=nodes.get(nodeId);
-  const items=run.artifacts.filter(item=>!node||item.nodeId===node.nodeId);
-  if(!items.length)return '<div class="ac-empty">本页没有可查看的产物版本。</div>';
-  return items.map(item=>`<div class="ac-item"><div class="ac-item-main">
-    <strong>${esc(item.artifactId)}</strong><small>${esc(actualNodes.get(item.nodeId)?.name??item.nodeId)} · ${esc(item.mimeType)} · ${esc(item.sizeBytes)} B</small>
-    <p>版本 ${esc(item.versionId)} · ${esc(item.contentHash)}</p></div>
-    <div class="ac-item-side"><span class="ac-version">${item.effectiveVersionId===item.versionId?'生效版本':
-      item.latestVersionId===item.versionId?'最新版本':'历史版本'}</span></div></div>`).join('');
+  const node=nodes.get(nodeId), query=$('acSearch').value.trim().toLowerCase();
+  const status=$('acStatus').value, type=$('acType').value, group=$('acGroup').value;
+  const items=run.artifacts.filter(item=>{
+    const effective=item.effectiveVersionId===item.versionId, latest=item.latestVersionId===item.versionId;
+    return (!node||item.nodeId===node.nodeId)&&(type==='all'||type===item.mimeType)&&
+      (status==='all'||(status==='effective'&&effective)||(status==='latest'&&latest)||
+       (status==='history'&&!effective&&!latest))&&
+      (!query||[item.artifactId,item.nodeId,item.versionId,artifactSource(item)].some(value=>value.toLowerCase().includes(query)));
+  });
+  if(!items.length)return '<div class="ac-empty">本页没有匹配的产物版本。</div>';
+  const groups=new Map();
+  for(const item of items){
+    const key=group==='type'?item.mimeType:group==='node'?artifactSource(item):phaseTitle(cardsByNode.get(item.nodeId)?.phase);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(item);
+  }
+  return [...groups].map(([title,entries])=>`<section class="ac-group"><div class="ac-group-head"><strong>${esc(title)}</strong></div>${entries.map(renderArtifactItem).join('')}</section>`).join('');
 }
 const readingTitles={description:'节点描述',inputs:'输入契约',outputs:'输出契约',
   constraints:'执行约束',checks:'校验规则',completionCriteria:'完成条件'};
@@ -2093,9 +2127,60 @@ $('acReturn').onclick=showStructure;
 const artifactCenter=$('artifactCenter');
 const reader=$('detailReader');
 $('readerClose').onclick=()=>reader.close();
+reader.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){
+    event.preventDefault();
+    event.stopPropagation();
+    reader.close();
+  }
+});
+const readerContent=$('readerContent');
+const readerSearch=$('readerSearch');
+let readerMatchIndex=-1;
+function clearReaderMatch() {
+  readerContent.querySelector('.reader-match')?.classList.remove('reader-match');
+  $('readerMatches').textContent='';
+  readerMatchIndex=-1;
+}
+readerSearch.addEventListener('input',clearReaderMatch);
+$('readerSearchForm').addEventListener('submit',event=>{
+  event.preventDefault();
+  const query=readerSearch.value.trim().toLowerCase();
+  if(!query)return;
+  readerContent.querySelector('.reader-match')?.classList.remove('reader-match');
+  const blocks=[...readerContent.querySelectorAll('p,li,summary,pre,.meta-list > div,.rich-preview > div')];
+  const matches=blocks.filter(block=>block.textContent.toLowerCase().includes(query));
+  if(!matches.length){$('readerMatches').textContent='未找到匹配内容';return;}
+  readerMatchIndex=(readerMatchIndex+1)%matches.length;
+  const match=matches[readerMatchIndex];
+  for(let detail=match.closest('details');detail;detail=detail.parentElement.closest('details'))detail.open=true;
+  match.classList.add('reader-match');
+  match.scrollIntoView({block:'nearest'});
+  $('readerMatches').textContent=`${readerMatchIndex+1} / ${matches.length}`;
+});
+$('readerSize').onclick=event=>{
+  const enlarged=readerContent.dataset.readerSize!=='large';
+  readerContent.dataset.readerSize=enlarged?'large':'normal';
+  event.currentTarget.setAttribute('aria-pressed',String(enlarged));
+  event.currentTarget.textContent=enlarged?'还原文字':'放大文字';
+};
 let artifactOpener=null;
+let artifactNode='';
+function updateArtifactList() {
+  $('acList').innerHTML=artifactContent(artifactNode);
+}
+$('acSearch').addEventListener('input',updateArtifactList);
+for(const id of ['acStatus','acType','acGroup'])$(id).addEventListener('change',updateArtifactList);
+$('acList').addEventListener('click',event=>{
+  const source=event.target.closest('[data-artifact-source]');
+  if(!source)return;
+  showStructure();
+  selectNode(source.dataset.artifactSource,true);
+  $('closeInspector').focus();
+});
 function showArtifactCenter(nodeId='',opener=null) {
   artifactOpener=opener;
+  artifactNode=nodeId;
   artifactCenter.hidden=false;
   $('structureTab').classList.remove('active');
   $('mobileStructureBtn').classList.remove('active');
@@ -2104,8 +2189,13 @@ function showArtifactCenter(nodeId='',opener=null) {
   $('acSubtitle').textContent=DATA.runView?'当前运行的授权产物版本。':'连接宿主后，在此查看当前工作流的授权产物和生效版本。';
   $('acScope').textContent=DATA.runView?'运行修订 '+DATA.runView.revision:'未绑定运行';
   $('acContext').textContent=nodeId?'当前节点 · '+nodes.get(nodeId).label:'全部节点';
-  $('acList').innerHTML=artifactContent(nodeId);
-  artifactCenter.querySelectorAll('input,select').forEach(control=>{control.disabled=true;});
+  $('acSearch').value='';
+  $('acStatus').value='all';
+  $('acType').replaceChildren(new Option('所有类型','all'));
+  const types=new Set((DATA.runView?.artifacts??[]).filter(item=>!nodeId||item.nodeId===nodes.get(nodeId).nodeId).map(item=>item.mimeType));
+  for(const type of [...types].sort())$('acType').add(new Option(type,type));
+  artifactCenter.querySelectorAll('input,select').forEach(control=>{control.disabled=!DATA.runView?.artifacts?.length;});
+  updateArtifactList();
   $('acReturn').focus();
 }
 function showStructure() {
@@ -2150,7 +2240,9 @@ inspectorBody.addEventListener('click',event=>{
     $('readerTitle').textContent=readingTitles[key];
     $('readerSub').textContent=nodes.get(selectedNode).label;
     const content=read.closest('.panel-section').querySelector('[data-reading-content]');
-    $('readerContent').replaceChildren(content.cloneNode(true));
+    readerContent.replaceChildren(content.cloneNode(true));
+    readerSearch.value='';
+    clearReaderMatch();
     reader.showModal();
   }
   const opener=event.target.closest('[data-open-artifact-center]');
@@ -2191,7 +2283,7 @@ window.addEventListener('resize',() => {
 });
 let ambientLayer;
 function syncMotionPlayback() {
-  motionPaused=document.hidden;
+  motionPaused=document.hidden||reducedMotion.matches;
   if (!motionPaused) {
     ambientLayer??=initAmbientMotion();
     ambientLayer.style.display='';
@@ -2207,6 +2299,7 @@ function syncMotionPlayback() {
   refreshEdgeMotion();
 }
 document.addEventListener('visibilitychange',syncMotionPlayback);
+reducedMotion.addEventListener('change',syncMotionPlayback);
 document.title=DATA.graph.name+' · FlowKit';
 $('workflowTitle').textContent=DATA.graph.name+' · '+DATA.graph.workflowVersion;
 $('statNodes').textContent=DATA.graph.nodes.length;

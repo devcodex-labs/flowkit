@@ -98,6 +98,7 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
       assert.equal(data.graph.graphDigest,ref.graphDigest);
       assert.equal(data.runView.status,'succeeded');
       assert.ok(data.runView.events.length>0);
+      assert.ok(data.runView.events.some(event=>Number.isSafeInteger(event.activation)&&Number.isSafeInteger(event.attempt)));
       assert.deepEqual(data.runView.artifacts.map(item=>item.effectiveVersionId),[latest.versionId,latest.versionId]);
       assert.doesNotMatch(html,/storageRef|Business evidence version/);
       const refresh=readWorkflowPageData(await (await fetch(runUrl+'?afterRevision=0',{headers})).text());

@@ -121,8 +121,9 @@ export async function workflowRunPage({ auth, ref, options, afterRevision = -1, 
   }
   return workflowPage({ graph: options.graphSnapshot, candidateHash: ref.candidateHash, controls: links.join(' '), runView: {
     revision: snapshot.revision, status: snapshot.status, pauseReason: snapshot.pauseReason,
-    pending: snapshot.pending.map(({ nodeId, kind, attempt }) => ({ nodeId, kind, attempt })),
-    events: events?.events.map(({ revision, nodeId, kind, receiptOutcome }) => ({ revision, nodeId, kind, receiptOutcome })) ?? null,
+    pending: snapshot.pending.map(({ nodeId, kind, activation, attempt }) => ({ nodeId, kind, activation, attempt })),
+    events: events?.events.map(({ revision, nodeId, kind, activation, attempt, receiptOutcome }) =>
+      ({ revision, nodeId, kind, activation, attempt, receiptOutcome })) ?? null,
     artifacts: artifacts?.items.map(({ artifactId, versionId, nodeId, contentHash, mimeType,
       sizeBytes, latestVersionId, effectiveVersionId }) =>
       ({ artifactId, versionId, nodeId, contentHash, mimeType, sizeBytes, latestVersionId, effectiveVersionId })) ?? null,
