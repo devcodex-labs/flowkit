@@ -1,8 +1,9 @@
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rename, lstat, readdir, unlink, rmdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { checkCandidate } from '../src/author/standard-artifact.mjs';
+import { readWorkflowPageData, workflowPage } from './workflow-viewer.mjs';
 
 export const deliveryNames = Object.freeze(['workflow.js', 'workflow.mmd', 'workflow.html']);
 const portableMarker = '<script type="application/json" id="flowkit-export-provenance">';
@@ -14,29 +15,6 @@ const encodeEnvelope = ({ publicKey, payload, signature }) =>
 
 export const escapeHtml = text => String(text).replace(/[&<>"']/g, char =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-
-const scriptHash = script => "'sha256-" + createHash('sha256').update(script).digest('base64') + "'";
-
-export function graphPage({ title, source, renderer, controls = '' }) {
-  const library = renderer.replace(/\r\n?/g, '\n').replace(/<\/script/gi, '<\\/script');
-  const graph = JSON.stringify(source).replace(/</g, '\\u003c');
-  const run = [
-    "const out = document.getElementById('diagram');",
-    "mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', flowchart: { useMaxWidth: false } });",
-    "mermaid.render('flowkit-diagram', JSON.parse(document.getElementById('flowkit-source').textContent))",
-    ".then(({ svg }) => { out.innerHTML = svg; document.querySelectorAll('button:disabled').forEach(button => { button.disabled = false; }); })",
-    ".catch(() => { out.textContent = '流程图未能渲染，请刷新预览重试。'; out.dataset.status = 'failed'; });"
-  ].join('\n');
-  return '<!doctype html>\n<html lang="zh-CN"><meta charset="UTF-8">' +
-    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src ' + scriptHash(library) + ' ' +
-    scriptHash(run) + '; style-src \'unsafe-inline\'; img-src data:; base-uri \'none\'; form-action \'self\'">' +
-    '<title>' + escapeHtml(title) + '</title><style>body{max-width:1100px;margin:32px auto;padding:0 22px;font:16px system-ui}' +
-    'h1{font-size:1.5rem}#diagram{border:1px solid #bec9d4;padding:16px;overflow:auto}button{margin:12px 0;padding:8px 16px}' +
-    'a{color:#164e9b}</style><main><h1>' + escapeHtml(title) + '</h1><section id="diagram" aria-live="polite">正在渲染流程图</section>' +
-    controls + '</main><script type="application/json" id="flowkit-source">' + graph + '</script><script>' +
-    library + '</script><script>' + run + '</script></html>\n';
-}
 
 export function newExportKey() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -65,11 +43,9 @@ export function canExportPortable({ files, manifest }) {
     !manifest.professionalSkills?.length && !manifest.documents?.length && !manifest.safetyPolicies?.length;
 }
 
-export function publicDelivery(candidate, renderer, key) {
-  const source = candidate.files['workflow.mmd'];
-  const script = candidate.files['workflow.js'];
-  if (typeof source !== 'string' || typeof script !== 'string') throw new Error('Candidate does not contain a compiled workflow and diagram');
-  let html = graphPage({ title: candidate.manifest.name + ' ' + candidate.manifest.version, source, renderer });
+export function publicDelivery(candidate, key) {
+  const graph = checkCandidate(candidate);
+  let html = workflowPage({ graph, candidateHash: candidate.hash });
   if (key && canExportPortable(candidate)) {
     const payload = JSON.stringify({ type: portableType, htmlHash: artifactDigest(html), manifest: candidate.manifest,
       candidateHash: candidate.hash, skill: candidate.files['SKILL.md'] });
@@ -79,8 +55,8 @@ export function publicDelivery(candidate, renderer, key) {
     html = html.slice(0, -htmlEnd.length) + portableMarker + envelope + '</script>' + htmlEnd;
   }
   return {
-    'workflow.js': script,
-    'workflow.mmd': source,
+    'workflow.js': candidate.files['workflow.js'],
+    'workflow.mmd': candidate.files['workflow.mmd'],
     'workflow.html': html
   };
 }
@@ -107,8 +83,10 @@ export function readPortableExport(files, trust) {
     if (data.type !== portableType || data.htmlHash !== artifactDigest(html.slice(0, start) + htmlEnd)) return { invalid: true };
     const candidate = { manifest: data.manifest, hash: data.candidateHash,
       files: { 'SKILL.md': data.skill, 'workflow.js': files['workflow.js'], 'workflow.mmd': files['workflow.mmd'] } };
-    checkCandidate(candidate);
-    if (!canExportPortable(candidate)) return { invalid: true };
+    const graph = checkCandidate(candidate);
+    const viewer = readWorkflowPageData(html);
+    if (!canExportPortable(candidate) || viewer.candidateHash !== candidate.hash ||
+        JSON.stringify(viewer.graph) !== JSON.stringify(graph)) return { invalid: true };
     return trust.has(publicKey) ? { candidate, publicKey } : { untrusted: true };
   } catch { return { invalid: true }; }
 }

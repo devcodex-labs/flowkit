@@ -4,18 +4,24 @@ import { createInterface } from 'node:readline';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { buildCodexMarketplace } from './build-codex-plugin.mjs';
 import { startLocalMcp } from './run-local-mcp.mjs';
+import { newExportKey, publicDelivery } from './local-mcp-artifacts.mjs';
+import { readWorkflowPageData } from './workflow-viewer.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from '../tests/integrations/local-mcp-fixture.mjs';
 import { createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
   start, complete } from '@devcodex-labs/flowkit/interactive';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canonicalBytes } from '../src/interactive/canonical.mjs';
+import { checkCandidate, prepareStandardSkill } from '../src/author/standard-artifact.mjs';
 
 const token = randomBytes(32).toString('hex');
 const live = process.argv.includes('--live');
 const interactive=process.argv.includes('--interactive');
 const readOnly = process.argv.includes('--p0b');
+const referenceMode = process.argv.includes('--reference');
+const sourceKey = referenceMode ? newExportKey() : null;
 if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
 const goal = readOnly ?
   '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
@@ -27,8 +33,46 @@ const root = await mkdtemp(path.join(base, 'flowkit-codex-e2e-'));
 const cwd = path.join(root, 'workspace');
 await mkdir(cwd);
 const service = await startLocalMcp({
-  listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports')
+  listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
+  ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
 }, { credential: token, ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
+
+async function testReferenceDelivery(tool) {
+  const { candidate } = await prepareStandardSkill({
+    file: 'examples/v45/software-delivery.workflow.js', collectionId: 'v45-reference', skillId: 'software-delivery',
+    name: 'software-delivery', description: 'V4.5 software delivery reference', version: '1.0.0',
+    hostProfile: { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') },
+    buildId: 'v45-reference', executionMode: 'interactive-p2',
+  });
+  assert.equal(checkCandidate(candidate).nodes.length, 140);
+  const cookie = await browserIdentity(service);
+  const origin = new URL(service.url).origin;
+  const upload = await fetch(origin + '/sources', { method: 'POST', headers: { cookie, origin },
+    body: new URLSearchParams({ source: JSON.stringify(publicDelivery(candidate, sourceKey)) }) });
+  assert.equal(upload.status, 200);
+  const { sourceRef } = await upload.json();
+  const requestId = 'v45-cli-add';
+  const waiting = await tool('flowkit_add_workflow', { requestId, sourceRef, candidateHash: candidate.hash, destination: 'flowkit' });
+  assert.ok(waiting.confirmationUrl, JSON.stringify(waiting));
+  const preview = readWorkflowPageData(await (await fetch(waiting.confirmationUrl, { headers: { cookie } })).text());
+  const saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();
+  assert.equal(saved.status, 'added');
+  const db = new DatabaseSync(path.join(root, 'state', 'local-mcp.sqlite'), { readOnly: true });
+  let binding;
+  try { binding = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get('add:' + requestId).value); }
+  finally { db.close(); }
+  assert.equal(binding.candidateHash, saved.candidateHash);
+  const { draftId, candidateHash } = binding;
+  await tool('flowkit_export_workflow', { draftId, candidateHash: candidate.hash }, true);
+  const exported = await tool('flowkit_export_workflow', { draftId, candidateHash });
+  assert.deepEqual((await readdir(exported.directory)).sort(), ['workflow.html', 'workflow.js', 'workflow.mmd']);
+  const offline = readWorkflowPageData(await readFile(path.join(exported.directory, 'workflow.html'), 'utf8'));
+  assert.deepEqual(offline, preview);
+  assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
+  console.log(JSON.stringify({ path: 'v45-codex-mcp', candidateHash, directory: exported.directory,
+    graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, staleCandidateRejected: true }));
+  return saved;
+}
 
 async function runExport(directory) {
   const bytes=await readFile(path.join(directory,'workflow.js'));
@@ -153,10 +197,10 @@ async function withAppServer(env, test) {
       const { thread } = await call('thread/start', { cwd, ephemeral: true });
       const { data } = await call('mcpServerStatus/list', { threadId: thread.id });
       const flowkit = data.find(item => Object.hasOwn(item.tools ?? {}, 'flowkit_collection'));
-      const tool = async (name, args = {}) => {
+      const tool = async (name, args = {}, expectError = false) => {
         const out = await call('mcpServer/tool/call', { threadId: thread.id, server: flowkit.name, tool: name, arguments: args });
-        assert.equal(out.isError === true, false, JSON.stringify(out));
-        return JSON.parse(out.content[0].text);
+        assert.equal(out.isError === true, expectError, JSON.stringify(out));
+        if (!expectError) return JSON.parse(out.content[0].text);
       };
       await test({ data, flowkit, tool });
     })()]);
@@ -178,6 +222,10 @@ try {
     assert.ok(flowkit);
     assert.equal(Boolean(flowkit.pluginId), false);
     assert.equal((await tool('flowkit_collection')).collection.id, service.collectionId);
+    if (referenceMode) {
+      saved = await testReferenceDelivery(tool);
+      return;
+    }
     const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'monthly-cli-start',
       goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive ? { executionMode: 'interactive-p2' } : {}) });
     const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'monthly-cli-plan',
@@ -188,10 +236,15 @@ try {
     assert.equal((await tool('flowkit_review_candidate', { ...identity, previousHash: candidate.previousHash })).qualified, true);
     const cookie = await browserIdentity(service);
     await confirmInTestBrowser(candidate.candidate.previewUrl, cookie);
+    const preview = readWorkflowPageData(await (await fetch(candidate.candidate.previewUrl)).text());
     const exported = await tool('flowkit_export_workflow', identity);
     assert.deepEqual((await readdir(exported.directory)).sort(), ['workflow.html','workflow.js','workflow.mmd']);
     assert.match(await readFile(path.join(exported.directory, 'workflow.mmd'), 'utf8'),
       live ? /flowchart/ : interactive ? /Review alternatives/ : /Verify copy/);
+    const offline = readWorkflowPageData(await readFile(path.join(exported.directory, 'workflow.html'), 'utf8'));
+    assert.equal(offline.candidateHash, identity.candidateHash);
+    assert.deepEqual(offline, preview);
+    assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
     if (interactive || readOnly) await runExport(exported.directory);
     const add = { requestId: 'monthly-cli-add', sourceRef: draft.id, candidateHash: identity.candidateHash };
     const waiting = await tool('flowkit_add_workflow', add);

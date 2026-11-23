@@ -1,4 +1,5 @@
 import { compileArtifactDraft } from '../compiler/api.mjs';
+import { definitionDigest, graphContentHash, verifyGraphSnapshot } from '../compiler/graph-snapshot.mjs';
 import { STANDARD_ARTIFACT_HEADER, artifactDigest, standardIdentity } from '../shared/artifact-identity.mjs';
 import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName,workflowReference } from './skill-document.mjs';
@@ -163,6 +164,7 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     workflowDefinition:structuredClone(definition),
     workflowId: definition.id, workflowVersion: definition.version,
     sourceHash: `sha256:${snapshot.sourceHash}`, ...(executionMode === 'standard' ? standardIdentity(artifact.code) : artifact.programIdentity), hostProfile: profile,
+    graphSnapshotJson: JSON.stringify(artifact.graphSnapshot),
     professionalSkills: resolveSkillPins(definition, professionalSkills), buildId, builtAt: new Date().toISOString(),
     ...(documentEvidence.length?{documents:documentEvidence}:{}),
     ...(approvedSafety.length?{safetyPolicies:approvedSafety}:{}),
@@ -197,6 +199,26 @@ export function checkCandidate({ files, manifest, hash }) {
     Object.hasOwn(files, SOURCE_PATH) && manifest.sourceHash !== manifest.files[SOURCE_PATH]) {
     throw new TypeError('Workflow Skill candidate bytes or manifest differ');
   }
+  const { graphSnapshotJson, workflowDefinition } = manifest;
+  if (typeof graphSnapshotJson !== 'string' || Buffer.byteLength(graphSnapshotJson) > 8 * 1024 * 1024) {
+    throw new TypeError('Missing or oversized Workflow Skill graph');
+  }
+  const graphSnapshot = JSON.parse(graphSnapshotJson);
+  if (!graphSnapshot || graphSnapshot.definitionDigest !== definitionDigest(workflowDefinition)) {
+    throw new TypeError('Workflow Skill graph differs from the compiled definition');
+  }
+  if (stage) verifyGraphSnapshot(graphSnapshot, manifest);
+  else {
+    const { graphDigest, ...graph } = graphSnapshot;
+    const { artifactHash, ...structure } = graph;
+    if (graph.schemaVersion !== 1 || graph.mode !== 'standard' || graphDigest !== graphContentHash(graph) ||
+        files['workflow.js'].split('\n', 4)[3] !== '// graph: ' + graphContentHash(structure) ||
+        artifactHash !== manifest.artifactHash ||
+        ['compilerVersion', 'sourceHash', 'workflowId', 'workflowVersion'].some(key => graph[key] !== manifest[key])) {
+      throw new TypeError('Workflow Skill graph differs from the compiled Standard artifact');
+    }
+  }
+  return graphSnapshot;
 }
 
 /** Describe compiler facts separately from the rendered Mermaid view. */

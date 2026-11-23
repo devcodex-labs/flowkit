@@ -14,13 +14,17 @@ const source = fileURLToPath(new URL('./software-delivery.workflow.js',import.me
 const compiled = await compileInteractive(source,{output:'memory',featureStage:'P2'});
 assert.deepEqual(compiled.diagnostics,[]);
 assert.equal(compiled.graphSnapshot.nodes.length,140);
+const exportedProgram = process.env.FLOWKIT_V45_EXPORT_FILE;
+const programBytes = exportedProgram ? await readFile(exportedProgram) : Buffer.from(compiled.code);
+assert.equal(sha256Bytes(programBytes),compiled.programIdentity.artifactHash);
 const base=path.join(flowKitRoot,'.tmp','v45-reference');
 await mkdir(base,{recursive:true});
 const bundleOut=await mkdtemp(path.join(base,'verification-'));
-await writeFile(path.join(bundleOut,'workflow.js'),compiled.code);
+await writeFile(path.join(bundleOut,'workflow.js'),programBytes);
 await writeFile(path.join(bundleOut,'workflow.graph.json'),JSON.stringify(compiled.graphSnapshot,null,2));
 await writeFile(path.join(bundleOut,'workflow.mmd'),compiled.mermaid);
-console.log(JSON.stringify({evidence:bundleOut,program:compiled.programIdentity.artifactHash,graph:compiled.graphSnapshot.graphDigest}));
+console.log(JSON.stringify({evidence:bundleOut,program:compiled.programIdentity.artifactHash,graph:compiled.graphSnapshot.graphDigest,
+  ...(exportedProgram?{exportedProgram:path.resolve(exportedProgram)}:{})}));
 
 let npm;
 for(const candidate of [process.env.FLOWKIT_V45_NPM_CLI,path.join(path.dirname(process.execPath),'node_modules/npm/bin/npm-cli.js'),
@@ -183,7 +187,8 @@ for(const suite of suites.filter(item=>!selected.length||selected.includes(item.
   }
 
   try {
-    frame=await start(source,{}, {request,privateMarker:'host-only-reference-marker'},binding);
+    const program=await binding.programRegistry.putImmutable(programBytes,compiled.programIdentity);
+    frame=await start(program,{}, {request,privateMarker:'host-only-reference-marker'},binding);
     rootRef={namespace,runId:frame.runId,artifactHash:graph.artifactHash,graphDigest:graph.graphDigest};
     let iterations=0;
     while(frame.status==='waiting'||frame.status==='paused') {

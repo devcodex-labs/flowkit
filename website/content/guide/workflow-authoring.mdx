@@ -12,12 +12,11 @@
 
 <a id="flowkit-doc-codex-plugin"></a>
 
-首次从源码使用时，在仓库根目录安装依赖并构建。文档站依赖提供固定版本的 Mermaid 渲染器。默认模型使用本机已登录的 Codex CLI。
+首次从源码使用时，在仓库根目录安装依赖并构建。候选预览与 HTML 导出使用仓库自带的流程图模板。默认模型使用本机已登录的 Codex CLI。
 
 ```powershell
 npm ci
 npm run build
-npm --prefix website ci
 codex login status
 ```
 
@@ -59,8 +58,10 @@ codex plugin list --marketplace flowkit-local
 ### 从第一份草稿开始
 
 1. 在 Codex 输入「用 FlowKit 起草一个核对导入文件的工作流。文件可读时核对字段，核对通过才返回结果。读取或核对失败时结束并返回原因。请复审候选并给我流程图预览」。有待决定的分支时，在原草稿补答。
-2. 打开候选的预览链接。页面用这个候选的 `workflow.mmd` 渲染图，核对步骤、分支和终点后确认候选。改稿后按新候选重新预览和确认。
-3. 要求导出选中的候选。打开 `workflow.html` 即可离线查看流程图，`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、下载链接及每个文件的 SHA-256。
+2. 打开候选的预览链接。页面使用同次编译的 GraphSnapshot，核对步骤、分支和终点后确认候选。改稿后按新候选重新预览和确认。
+3. 要求导出选中的候选。打开 `workflow.html` 即可离线查看与预览相同的流程图，`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、下载链接及每个文件的 SHA-256。
+
+已有 Interactive 运行绑定的宿主可以在调用 `startLocalMcp` 时提供 `resolveRunViewer`。解析器接收运行 ID 与当前操作员的服务端请求上下文，返回该次运行的 `{ auth, ref, options }`。其中 `auth` 为请求范围内的受信 Host 能力，`ref` 绑定实际运行及其 Program 和 GraphSnapshot，`options` 提供原运行的策略、Store、Program registry 和同一 GraphSnapshot。操作员可打开 `/runs/<runId>` 查阅状态、按修订翻页查看事件，以及阅读授权的产物版本索引。刷新与翻页都只读取运行。文件正文仍由宿主的授权存储接口提供。
 4. 在同一个 Codex 会话说「把这个工作流添加到 FlowKit」。Codex 使用当前候选发起添加。打开返回的链接，核对候选名称和版本，再点「确认并加入 FlowKit」。回到 Codex 查看保存结果，或让 FlowKit 列出默认集合中的工作流。
 
 起草时可以明确选择 Standard、Interactive P0-A、P0-B、P1 或 P2。需要持久 Action、人工确认及循环时选 P0-B，需要持久并行时选 P1，需要首个合格分支选胜时选 P2。MCP 用同一次编译的图供复审并导出三文件。执行方用可信的产物 SHA-256 校验工作流，再通过 [Standard SDK](/reference/sdk#runArtifact) 或 [版本化 Interactive Host](/reference/interactive#start) 运行。

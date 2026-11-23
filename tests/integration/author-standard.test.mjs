@@ -7,6 +7,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { compileArtifact, compileSource, evalWhen, isControlSignal, runArtifact } from '../../src/index.mjs';
+import { graphContentHash } from '../../src/compiler/graph-snapshot.mjs';
 import { createWorkflowAuthor } from '../../src/author/author.mjs';
 import { runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs';
 import { createOpenAINativeSkillPort } from '../../src/author/openai-native-skills.mjs';
@@ -17,7 +18,7 @@ import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
 import { planProfessionalSkills, prepareProfessionalSkill, publishProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { startAuthorDraft } from '../../src/author/draft.mjs';
 import { createWorkflowPlan, materializePlan } from '../../src/author/workflow-plan.mjs';
-import { prepareStandardSkill, publishStandardSkill,reviewStandardCandidate } from '../../src/author/standard-artifact.mjs';
+import { checkCandidate, prepareStandardSkill, publishStandardSkill,reviewStandardCandidate } from '../../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 
 const source = `import { defineWorkflow, action, terminal } from '@devcodex-labs/flowkit/dsl';
@@ -77,6 +78,11 @@ test('Standard candidate uses real Compiler output, has three files, and runs tw
   assert.match(candidate.files['SKILL.md'], /name: example\ndescription: "Workflow:/);
   assert.doesNotMatch(candidate.files['SKILL.md'], /flowkit-workflow-author/);
   assert.equal(candidate.manifest.artifactHash, compiled.artifactHash);
+  assert.deepEqual(checkCandidate(candidate), compiled.graphSnapshot);
+  const {graphDigest:_digest,...changedGraph}=JSON.parse(candidate.manifest.graphSnapshotJson);
+  changedGraph.nodes[0].name='Changed preview';
+  const manifest={...candidate.manifest,graphSnapshotJson:JSON.stringify({...changedGraph,graphDigest:graphContentHash(changedGraph)})};
+  assert.throws(()=>checkCandidate({...candidate,manifest,hash:artifactDigest(JSON.stringify(manifest))}),/compiled Standard artifact/);
   assert.equal(candidate.manifest.sourceHash, artifactDigest(source));
   assert.deepEqual(candidate.manifest.hostProfile, hostProfile);
   for (const [file, bytes] of Object.entries(candidate.files)) await writeFile(path.join(dir, file), bytes);

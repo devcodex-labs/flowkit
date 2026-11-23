@@ -12,4 +12,6 @@ node examples/v45/verify.mjs
 
 验收在 `.tmp/v45-reference/` 新建 Git 源仓库、分离的工作区和 SQLite 发布目标。工作流执行实际源码变更、单测及覆盖率、集成检查、类型检查、SBOM 和依赖审计。受信 Host 用隔离的需求审核与发布审核主体签收文件版本。SQLite 目标记录预发、切流、放量和独立的回滚写入。包含故障注入的场景保留实际文件、操作账本与终止证据。
 
-同一次运行编译一份 Program，通过交付成功、回滚成功、回滚资格失败、恢复写入失败、归档失败、用户拒绝和需求澄清覆盖全部声明。`verification.json` 提供每个 Run 的终点和节点覆盖，运行目录内的 `trace.json` 提供受权回放、待办恢复、文件版本和 SQLite 目标写入。用户界面和技能在后续批次接入同源 `workflow.graph.json`。
+同一次运行编译一份 Program，通过交付成功、回滚成功、回滚资格失败、恢复写入失败、归档失败、用户拒绝和需求澄清覆盖全部声明。`verification.json` 提供每个 Run 的终点和节点覆盖，运行目录内的 `trace.json` 提供受权回放、待办恢复、文件版本和 SQLite 目标写入。
+
+在仓库根目录先构建，再运行 `node scripts/test-local-mcp-codex.mjs --reference`。该用例从实际 V4.5 源码编译候选，通过 Codex CLI 调用本机 MCP，并使用隔离复审绑定验证候选确认、旧候选拒绝和三文件导出。将 `FLOWKIT_V45_EXPORT_FILE` 指向测试返回的导出目录中的 `workflow.js`，即可让本页验证脚本直接执行这些字节。验证会先将其摘要与同源编译结果对账。

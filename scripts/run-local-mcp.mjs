@@ -12,11 +12,11 @@ import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
 import { checkCandidate, rebindImportedCandidate } from '../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
-import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, graphPage, newExportKey, publicDelivery,
+import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
+import { viewerHash, workflowPage, workflowRunPage } from './workflow-viewer.mjs';
 
-const interpreter = new URL('../website/node_modules/mermaid/dist/mermaid.min.js', import.meta.url);
 const token = () => randomBytes(32).toString('base64url');
 const exact = (left, right) => typeof left === 'string' && typeof right === 'string' &&
   Buffer.byteLength(left) === Buffer.byteLength(right) && timingSafeEqual(Buffer.from(left), Buffer.from(right));
@@ -98,12 +98,11 @@ export async function startLocalMcp(config, dependencies = {}) {
       !/^\/[a-z][a-z0-9-]*$/.test(mcpPath) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
       typeof credential !== 'string' || credential.length < 24) throw new Error('Configure a loopback address and a FlowKit MCP token of at least 24 characters');
   await mkdir(dataDir, { recursive: true });
-  const renderer = dependencies.renderer ?? await readFile(interpreter, 'utf8');
   const trustedExports = exportTrust(config.trustedExportKeys);
   const releaseLease = acquireServiceLease(dataDir);
   try {
     return await bindLocalMcp({ config, dependencies, host, port, mcpPath, namespace, workspaceId, dataDir,
-      exportDir, credential, collectionName, renderer, releaseLease, trustedExports });
+      exportDir, credential, collectionName, releaseLease, trustedExports });
   } catch (error) {
     releaseLease();
     throw error;
@@ -111,8 +110,7 @@ export async function startLocalMcp(config, dependencies = {}) {
 }
 
 async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespace, workspaceId, dataDir,
-  exportDir, credential, collectionName, renderer, releaseLease, trustedExports }) {
-  const rendererHash = artifactDigest(renderer);
+  exportDir, credential, collectionName, releaseLease, trustedExports }) {
   const data = new DatabaseSync(path.join(dataDir, 'local-mcp.sqlite'));
   data.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS local_mcp (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;');
   const get = key => {
@@ -269,10 +267,12 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const portable = canExportPortable(draft.candidate);
       const receiptId = portable ? artifactDigest(JSON.stringify(['portable-v1', candidateHash, exportKey.publicKey])).slice(7) : candidateHash.slice(7);
       const directory = path.join(exportDir, receiptId);
-      const files = publicDelivery(draft.candidate, renderer, portable ? exportKey : undefined);
+      const files = publicDelivery(draft.candidate, portable ? exportKey : undefined);
       const hashes = Object.fromEntries(deliveryNames.map(name => [name, artifactDigest(files[name])]));
-      const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, rendererHash });
-      if (authorIdentity(record.hashes) !== authorIdentity(hashes) || record.directory !== directory) throw new Error('Export configuration or renderer changed for this candidate');
+      const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, viewerHash });
+      if (record.viewerHash !== viewerHash || authorIdentity(record.hashes) !== authorIdentity(hashes) || record.directory !== directory) {
+        throw new Error('Export configuration or renderer changed for this candidate');
+      }
       await commitDelivery(exportDir, directory, files, hashes);
       put('export-source:' + authorIdentity(hashes), { draftId, candidateHash });
       for (const name of deliveryNames) insert('export-member:' + name + ':' + hashes[name], receiptId);
@@ -450,6 +450,28 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       if (url.pathname === '/' && req.method === 'GET' && operator(req)) {
         return html(res, sourcePanel);
       }
+      if (route === 'runs' && ref && !action && req.method === 'GET' && dependencies.resolveRunViewer) {
+        if (!operator(req)) return json(res, 403, { error: '请先建立本机操作员会话。' });
+        const runId = decodeURIComponent(ref);
+        const afterRevision = Number(url.searchParams.get('afterRevision') ?? -1);
+        const artifactAfter = Number(url.searchParams.get('artifactAfter') ?? 0);
+        if (url.pathname !== '/runs/' + ref || !runId || runId.length > 256 ||
+            !Number.isSafeInteger(afterRevision) || afterRevision < -1 ||
+            !Number.isSafeInteger(artifactAfter) || artifactAfter < 0) {
+          return json(res, 400, { error: '运行标识或分页位置不合法。' });
+        }
+        const binding = await dependencies.resolveRunViewer({ runId, requestContext: context });
+        if (!binding || binding.ref?.runId !== runId) return json(res, 404, { error: '找不到可查看的运行。' });
+        try {
+          return html(res, await workflowRunPage({ ...binding, afterRevision, artifactAfter }));
+        } catch (error) {
+          if (error.code === 'FK_I_HOST_DENIED' || error.code === 'FK_I_PROGRAM_MISMATCH') {
+            return json(res, 404, { error: '找不到可查看的运行。' });
+          }
+          if (error.code === 'FK_I_INVALID_TRANSITION') return json(res, 400, { error: '运行分页位置不合法。' });
+          throw error;
+        }
+      }
       if (route === 'sources' && req.method === 'POST' && operator(req) && req.headers.origin === origin) {
         const form = new URLSearchParams(await readBody(req, 16 * 1024 * 1024));
         const source = JSON.parse(form.get('source'));
@@ -493,7 +515,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             '"><button type="submit" disabled>' + (pinned ? '确认并更新 FlowKit 工作流' :
               preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
-          return html(res, graphPage({ title: label, source: draft.candidate.files['workflow.mmd'], renderer, controls }));
+          const graph = checkCandidate(draft.candidate);
+          return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls }));
         }
         if (req.method === 'POST' && action === 'confirm' && operator(req) && req.headers.origin === origin) {
           const challenge = unseal('confirm', new URLSearchParams(await readBody(req, 8192)).get('challenge'));

@@ -50,8 +50,7 @@ test('local MCP previews and confirms an exact candidate, exports three files an
   const root = await ownedDirectory(t);
   const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'output') };
   const credential = 'fixture-test-credential-for-flowkit-mcp';
-  const renderer = 'var mermaid = {initialize(){}, async render(){return {svg:"<svg></svg>"}}};';
-  const options = { credential, renderer, canInstall: selector => selector === 'fixture@market', modelBinding: monthlyTimesheetModel() };
+  const options = { credential, canInstall: selector => selector === 'fixture@market', modelBinding: monthlyTimesheetModel() };
   service = await startLocalMcp(config, options);
   const connect = async () => {
     client = new Client({ name: 'flowkit-local-integration', version: '1.0.0' });
@@ -186,8 +185,7 @@ test('local MCP imports an intact three-file export only from a trusted origin a
   const root = await ownedDirectory(t);
   const serviceConfig = name => ({ listen: { port: 0 }, dataDir: path.join(root, name), exportDir: path.join(root, name, 'exports') });
   const credential = 'fixture-test-credential-for-flowkit-mcp';
-  const renderer = 'var mermaid = {initialize(){},async render(){return {svg:"<svg></svg>"}}};';
-  const options = { credential, renderer, modelBinding: monthlyTimesheetModel() };
+  const options = { credential, modelBinding: monthlyTimesheetModel() };
   const connect = async service => {
     const client = new Client({ name: 'flowkit-portable-test', version: '1.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + credential } } }));
@@ -266,7 +264,6 @@ test('local MCP rechecks revoked imports and saves a reviewed same-origin update
   const root = await ownedDirectory(t);
   const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'exports') };
   const credential = 'fixture-test-credential-for-flowkit-mcp';
-  const renderer = 'var mermaid = {initialize(){},async render(){return {svg:"<svg></svg>"}}};';
   const signer = newExportKey(), otherSigner = newExportKey();
   const hostProfile = { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') };
   const original = await readFile(new URL('../../examples/docs/conditional-routing/sample.workflow.js', import.meta.url), 'utf8');
@@ -277,12 +274,12 @@ test('local MCP rechecks revoked imports and saves a reviewed same-origin update
       name: 'transferred', description: 'Transfer routing', version, hostProfile, buildId: identifier,
       compilerOptions: { skillCheck: false } });
     assert.ok(candidate, JSON.stringify(diagnostics));
-    return publicDelivery(candidate, renderer, key);
+    return publicDelivery(candidate, key);
   };
   const v1 = await createFiles('1.0.0', 'initial');
   const v2 = await createFiles('1.1.0', 'revision');
   const start = async trustedExportKeys => {
-    service = await startLocalMcp({ ...config, trustedExportKeys }, { credential, renderer, modelBinding: monthlyTimesheetModel() });
+    service = await startLocalMcp({ ...config, trustedExportKeys }, { credential, modelBinding: monthlyTimesheetModel() });
     client = new Client({ name: 'flowkit-import-lifecycle', version: '1.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(service.url),
       { requestInit: { headers: { authorization: 'Bearer ' + credential } } }));
@@ -374,9 +371,8 @@ async function verifyLocalRecovery(t, interruptedEffect) {
   const root = await ownedDirectory(t);
   const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'exports') };
   const credential = 'fixture-test-credential-for-flowkit-mcp';
-  const renderer = 'var mermaid = {initialize(){},async render(){return {svg:"<svg></svg>"}}};';
   worker = spawn(process.execPath, ['--input-type=module', '-e', [
-    'const [serverUrl, fixtureUrl, rawConfig, credential, renderer, effect] = process.argv.slice(1);',
+    'const [serverUrl, fixtureUrl, rawConfig, credential, effect] = process.argv.slice(1);',
     'const { startLocalMcp } = await import(serverUrl);',
     'const { monthlyTimesheetModel } = await import(fixtureUrl);',
     'const modelBinding = monthlyTimesheetModel();',
@@ -392,10 +388,10 @@ async function verifyLocalRecovery(t, interruptedEffect) {
     '    return session;',
     '  };',
     '}',
-    'const service = await startLocalMcp(JSON.parse(rawConfig), { credential, renderer, modelBinding });',
+    'const service = await startLocalMcp(JSON.parse(rawConfig), { credential, modelBinding });',
     'console.log(service.url);'
   ].join('\n'), new URL('../../scripts/run-local-mcp.mjs', import.meta.url).href, new URL('./local-mcp-fixture.mjs', import.meta.url).href,
-    JSON.stringify(config), credential, renderer, interruptedEffect], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    JSON.stringify(config), credential, interruptedEffect], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   closed = once(worker, 'close');
   const ready = Promise.withResolvers();
   const reserved = Promise.withResolvers();
@@ -415,7 +411,7 @@ async function verifyLocalRecovery(t, interruptedEffect) {
     assert.equal(result.isError === true, !success, JSON.stringify(result));
     return JSON.parse(result.content[0].text);
   };
-  const options = { credential, renderer, modelBinding: monthlyTimesheetModel() };
+  const options = { credential, modelBinding: monthlyTimesheetModel() };
   await connect(await ready.promise);
   await assert.rejects(startLocalMcp(config, options), /无法获取写锁/);
   const goal = '核对工时后验证副本。';

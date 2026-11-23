@@ -5,6 +5,9 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {compileInteractive,complete,createInteractiveHostContext,createSqliteInteractivePersistence,start} from '../../src/interactive/index.mjs';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
+import {startLocalMcp} from '../../scripts/run-local-mcp.mjs';
+import {readWorkflowPageData,workflowRunPage} from '../../scripts/workflow-viewer.mjs';
+import {browserIdentity} from '../integrations/local-mcp-fixture.mjs';
 
 test('an authorized bundle decision makes only its fixed version effective across a SQLite restart',async t=>{
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-bundle-'));
@@ -69,9 +72,44 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
   } finally {initial.close();}
   const reopened=createSqliteInteractivePersistence(db,{namespace});
   try {
-    const index=await auth.readRunArtifacts({ref},{...reopened,policy,graphSnapshot});
+    const options={...reopened,policy,graphSnapshot};
+    const index=await auth.readRunArtifacts({ref},options);
     assert.equal(index.items.length,2);
     assert.ok(index.items.every(v=>v.latestVersionId===latest.versionId&&v.effectiveVersionId===latest.versionId));
     assert.equal(JSON.stringify(index).includes('storageRef'),false);
+    const browserHost=createInteractiveHostContext({namespace,subjectId:'observer',authorizeTask:()=>true,
+      authorize:({action})=>['viewer:read','viewer:artifacts','viewer:events'].includes(action)});
+    const service=await startLocalMcp({listen:{port:0},dataDir:path.join(dir,'mcp'),exportDir:path.join(dir,'exports')},{
+      credential:'isolated-viewer-test-credential',
+      resolveRunViewer:({runId})=>runId===ref.runId?{auth:browserHost,ref,options}:null,
+    });
+    try {
+      const root=new URL(service.url).origin;
+      const runUrl=root+'/runs/'+ref.runId;
+      assert.equal((await fetch(runUrl)).status,403);
+      const cookie=await browserIdentity(service);
+      const headers={cookie};
+      assert.equal((await fetch(root+'/runs/unknown',{headers})).status,404);
+      assert.equal((await fetch(runUrl+'?afterRevision=9999',{headers})).status,400);
+      const response=await fetch(runUrl,{headers});
+      assert.equal(response.status,200);
+      const html=await response.text();
+      const data=readWorkflowPageData(html);
+      assert.equal(data.graph.graphDigest,ref.graphDigest);
+      assert.equal(data.runView.status,'succeeded');
+      assert.ok(data.runView.events.length>0);
+      assert.deepEqual(data.runView.artifacts.map(item=>item.effectiveVersionId),[latest.versionId,latest.versionId]);
+      assert.doesNotMatch(html,/storageRef|Business evidence version/);
+      const refresh=readWorkflowPageData(await (await fetch(runUrl+'?afterRevision=0',{headers})).text());
+      assert.equal(refresh.runView.revision,data.runView.revision);
+      assert.ok(refresh.runView.events.every(event=>event.revision>0));
+      const limited=createInteractiveHostContext({namespace,subjectId:'limited',authorizeTask:()=>false,
+        authorize:({action})=>action==='viewer:read'});
+      const limitedView=readWorkflowPageData(await workflowRunPage({auth:limited,ref,options})).runView;
+      assert.equal(limitedView.events,null);
+      assert.equal(limitedView.artifacts,null);
+      await assert.rejects(workflowRunPage({auth:browserHost,ref:{...ref,graphDigest:'sha256:'+'0'.repeat(64)},options}),
+        {code:'FK_I_PROGRAM_MISMATCH'});
+    } finally {await service.close();}
   } finally {reopened.close();}
 });

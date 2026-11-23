@@ -5,7 +5,7 @@ import { createSourceSnapshot, normalizeOptions, diagnostic, resolveProjectRoot 
 import { compilationPaths } from './paths.mjs';
 import { writeArtifacts } from './output.mjs';
 import { STANDARD_ARTIFACT_HEADER, artifactDigest } from '../shared/artifact-identity.mjs';
-import { projectGraph, sealGraphSnapshot } from './graph-snapshot.mjs';
+import { graphContentHash, projectGraph, sealGraphSnapshot } from './graph-snapshot.mjs';
 
 function sourceFilename(file, cwd) {
   if (typeof file !== 'string' || !/\.workflow\.(?:ts|js)$/.test(file)) throw new TypeError('file must end in .workflow.ts or .workflow.js');
@@ -67,14 +67,15 @@ export async function compileArtifactDraft(file, suppliedOptions) {
   const result = await compileToText(snapshot, options);
   if (!result.code) return { snapshot, artifact: { code: '', mermaid: '', diagnostics: result.diagnostics, artifactHash: null } };
   const lines = result.code.split('\n');
+  const graphStructure = projectGraph(result.analysis, 'standard');
   lines[0] = STANDARD_ARTIFACT_HEADER;
   lines[2] = '// source: not included in this artifact';
-  lines[3] = '// Verify the approved artifact SHA-256 before executing.';
+  lines[3] = '// graph: ' + graphContentHash(graphStructure);
   const code = lines.join('\n');
   const artifactHash=artifactDigest(code);
   return { snapshot, definition: result.analysis.literal.definition, graph: result.analysis.graph,
     artifact: { code, mermaid: result.mermaid, artifactHash, diagnostics: result.diagnostics,
-      graphSnapshot:sealGraphSnapshot(projectGraph(result.analysis,'standard'),artifactHash) } };
+      graphSnapshot:sealGraphSnapshot(graphStructure,artifactHash) } };
 }
 
 /** Recompile on every call and compare only an existing compiled JS artifact, without writing. */
