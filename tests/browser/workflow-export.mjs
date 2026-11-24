@@ -8,7 +8,7 @@ import { chromium } from 'playwright';
 import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
-import { readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
+import { readWorkflowPageData, workflowPage } from '../../scripts/workflow-viewer.mjs';
 
 async function movingDots(page, selector) {
   await page.waitForFunction(target=>document.querySelector(target)?.hasAttribute('cx'),selector,{timeout:5000});
@@ -61,6 +61,28 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
   const browser=await chromium.launch(process.env.FLOWKIT_BROWSER_CHANNEL?{channel:process.env.FLOWKIT_BROWSER_CHANNEL}:{});
   evidence.browser=browser.version();
   try {
+    const roleSource = path.join(temporary, 'role.workflow.js');
+    await writeFile(roleSource, `import { defineWorkflow, node, terminal } from '@devcodex-labs/flowkit/dsl';
+      export default defineWorkflow({ id:'role-review', name:'Role review', version:'1.0.0', nodes:[
+        node('review',{ name:'Review record', description:'Review the approved record.', inputs:[], output:{type:'object'}, next:'done' }),
+        terminal('done',{ name:'Done', status:'succeeded' })
+      ] });`);
+    const { candidate: roleCandidate } = await prepareStandardSkill({ ...candidateOptions, file: roleSource, name:'role-review',
+      skillId:'role-review', executionMode:'standard', compilerOptions:{ projectRoot:temporary } });
+    const roleDiagram = readWorkflowPageData(publicDelivery(roleCandidate,key)['workflow.html']);
+    const agent = roleDiagram.graph.nodes.find(node => node.type === 'agent');
+    const rolePage = await browser.newPage({ offline: true });
+    try {
+      await rolePage.setContent(workflowPage({ graph:roleDiagram.graph, viewLayout:roleDiagram.layout, executionManifest: {
+        nodeRoles: [{ nodeId: agent.id, id: 'reviewer', label: '业务复核员' }],
+        professionalSkills: [{ nodeId: agent.id, id: 'record-check', version: '1.0.0', digest: artifactDigest('record-check'), source: 'test-catalog' }]
+      } }));
+      const card = roleDiagram.layout.nodes.find(node => node.nodeId === agent.id);
+      await rolePage.locator(`#nodeLayer [data-node-id="${card.id}"]`).press('Enter');
+      const panel = await rolePage.locator('#inspectorBody').innerText();
+      assert.match(panel, /业务复核员/);
+      assert.match(panel, /record-check · 1\.0\.0 · 已固定/);
+    } finally { await rolePage.close(); }
     for(const reducedMotion of ['no-preference','reduce'])for(const width of [390,800,1024,1440]){
       const page=await browser.newPage({offline:true,reducedMotion,viewport:{width,height:950}});
       const exceptions=[], externalRequests=[];

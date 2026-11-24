@@ -1,7 +1,30 @@
-import type { AgentTaskV2, PreparedAgentTask, AgentExecutionResult, HostPreparationContext, TaskJsonObject } from './index.js';
-import type { InteractiveOperationController, TrustedHostContextV1 } from './interactive.js';
+import type { AgentTaskV2, PreparedAgentTask, AgentExecutionResult, HostPreparationContext, TaskJsonObject, FlowkitOptions, Runtime, RunResult } from './index.js';
+import type { InteractiveFrameV1, InteractiveOperationController, InteractiveOptionsV1, InteractiveRuntimeV1, TrustedHostContextV1 } from './interactive.js';
+import type { AuthorCandidate, AuthorProfessionalSkill } from './author-host.js';
 export { createWorkflowAuthorHost } from './author-host.js';
 export type { AuthorHostOptions, WorkflowAuthorHost, AuthorRequestContext, AuthorDraftView, AuthorTurnInput, AuthorCandidate, AuthorBudgetPolicy, AuthorReviewRejection } from './author-host.js';
+
+export interface ApprovedWorkflowTarget { collectionId: string; skillId: string; candidateHash: string; skillDirectory: string; executionRef: string }
+export interface ApprovedWorkflowScope {
+  collectionId: string; skillId: string; candidateHash: string; executionRef: string; workflowFile: string; artifactHash: string;
+}
+export interface ApprovedWorkflowStore {
+  readVersion(collectionId: string, skillId: string, hash: string): Pick<AuthorCandidate, 'hash' | 'files'> &
+    { manifest: Pick<AuthorCandidate['manifest'], 'collectionId' | 'skillId' | 'version'> } | null;
+  readProfessionalVersion?(collectionId: string, skillId: string, version: string): AuthorProfessionalSkill | null;
+}
+export interface ApprovedWorkflowHostAuthority {
+  hostProfile: { id: string; digest: string };
+  authorizeExecution(scope: ApprovedWorkflowScope): boolean | Promise<boolean>;
+  resolveRunProfessionalSkill?(pin: { nodeId: string; id: string; version: string; digest: string; source: string },
+    scope: ApprovedWorkflowScope & { signal?: AbortSignal }): { authorized: boolean; source: string; candidate: AuthorProfessionalSkill } | null |
+    Promise<{ authorized: boolean; source: string; candidate: AuthorProfessionalSkill } | null>;
+}
+export function runApprovedCollectionWorkflow(store: ApprovedWorkflowStore, target: ApprovedWorkflowTarget,
+  host: ApprovedWorkflowHostAuthority & { runtime: Runtime }, state?: Record<string, unknown>, options?: FlowkitOptions): Promise<RunResult>;
+export function runApprovedCollectionWorkflow(store: ApprovedWorkflowStore, target: ApprovedWorkflowTarget,
+  host: ApprovedWorkflowHostAuthority & { runtime: InteractiveRuntimeV1; interactive: InteractiveOptionsV1 & { startKey: string } },
+  state?: Record<string, unknown>, options?: FlowkitOptions): Promise<InteractiveFrameV1>;
 export interface CompilationCacheLimits {maxEntries:number;maxBytes:number;ttlMs:number;maxModuleIdentities:number;maxModuleBytes:number}
 export interface CompilationCacheStatus extends CompilationCacheLimits {
   entries:number;bytes:number;residentModuleIdentities:number;residentModuleBytes:number;hits:number;misses:number;evictions:number;

@@ -1267,7 +1267,8 @@ function prepare(config) {
     return {...place, spec};
   });
   if (sets.size !== actualNodes.size || graph.referenceEdges.some(edge=>!mapped.has(edge.edgeId))) throw new Error('流程结构的展示映射不完整。');
-  return { graph, runView:config.runView, mermaid:config.mermaid, groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
+  return { graph, runView:config.runView, mermaid:config.mermaid, executionBindings:config.executionBindings,
+    groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
     count:visualNodes.filter(node => node.phase===phase.id && !node.helper).length +
       new Set(visualNodes.filter(node => node.phase===phase.id && node.helper && node.spec).map(node => node.nodeId)).size,
   })), nodes:visualNodes, edges:visualEdges };
@@ -2073,7 +2074,7 @@ function renderNodePanel(node) {
       ['运行权限','由宿主核验'],
     ]))] : []),
     ...(spec?.capabilityId?[section('执行能力',`<div class="role-card"><span class="capability-name">${esc(spec.capabilityId)}</span><small>${esc(readableTypes(spec))} · 由宿主绑定</small></div>`)]:[]),
-    ...(spec?.type==='agent' ? [section('关联 Skills',binding?.skills.length?list(binding.skills.map(skill=>
+    ...(spec?.type==='agent' ? [section('关联 Skills',binding?.skills?.length?list(binding.skills.map(skill=>
       `${skill.id} · ${skill.version} · ${skill.pendingApproval?'草稿待批准':'已固定'}`)):note('此节点无固定 Skill。'))] : []),
     ...(parentRegions.length ? [section('所属结构',list(parentRegions))] : []),
     ...(region ? [section('分支与汇合',regionDetails(region),'branches')] : []),

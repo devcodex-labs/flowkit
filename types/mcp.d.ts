@@ -1,9 +1,10 @@
-import type { AuthorDraftView, AuthorRequestContext, AuthorTurnInput, WorkflowAuthorHost } from './author-host.js';
+import type { AuthorDraftView, AuthorProfessionalSkill, AuthorRequestContext, AuthorTurnInput, WorkflowAuthorHost } from './author-host.js';
 /** A Host-owned approved artifact store. */
 interface Store {
   readCollectionMetadata?(collectionId:string,options?:{limit:number}):{collection:{name:string};skills:Array<Omit<Candidate,'files'>>}|null;
   readCollection(collectionId: string): { collection: { name: string }; skills: Candidate[] } | null;
   readVersion(collectionId: string, skillId: string, hash: string): Candidate | null;
+  readProfessionalVersion?(collectionId: string, skillId: string, version: string): AuthorProfessionalSkill | null;
   applyCollectionPlan(plan: { destination: { id: string } }, approvalRef: string): unknown;
 }
 interface Candidate {

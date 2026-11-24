@@ -51,6 +51,22 @@ export function publishProfessionalSkill(candidate, receipts, host) {
   return publishReviewedCandidate(candidate, receipts, host, checkProfessionalSkill);
 }
 
+/** Resolve an exact Skill only from the receiving Host's authorized source. */
+export async function resolveTrustedProfessionalPin(store, pin, { collectionId, resolve, scope }) {
+  const local = pin.source === 'collection:' + collectionId;
+  const readLocal = local && store.readProfessionalVersion;
+  const resolved = resolve ? await resolve(pin, scope) : readLocal && {
+    source: pin.source, authorized: true, candidate: store.readProfessionalVersion(collectionId, pin.id, pin.version)
+  };
+  if (resolved?.authorized !== true || !resolved.candidate || resolved.source !== pin.source) return null;
+  const { candidate } = resolved;
+  const { collectionId: origin, skillId, version, digest } = candidate.manifest;
+  if (skillId !== pin.id || version !== pin.version || digest !== pin.digest ||
+      pin.source.startsWith('collection:') && pin.source !== 'collection:' + origin) return null;
+  try { checkProfessionalSkill(candidate); } catch { return null; }
+  return { logicalId: skillId, resolvedVersion: version, digest, source: pin.source, files: { ...candidate.files } };
+}
+
 /** Search the authorized collection’s second layer. Read a body only after its metadata matched. */
 export async function planProfessionalSkills(collection, node, host, { maxPages, maxBodies }) {
   if (node.professionalNeeds.length === 0) return { reuse: [], unmatched: [], conflicts: [] };

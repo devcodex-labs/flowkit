@@ -40,7 +40,7 @@ export function exportTrust(keys = []) {
 
 export function canExportPortable({ files, manifest }) {
   return Object.keys(files).length === candidateFiles.length && candidateFiles.every(name => Object.hasOwn(files, name)) &&
-    !manifest.professionalSkills?.length && !manifest.documents?.length && !manifest.safetyPolicies?.length;
+    manifest.professionalSkills.every(pin => !!pin.source) && !manifest.documents?.length && !manifest.safetyPolicies?.length;
 }
 
 export function publicDelivery(candidate, key, viewLayout) {

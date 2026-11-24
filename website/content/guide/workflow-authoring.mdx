@@ -136,6 +136,10 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 ## 从业务目的到可执行交付
 
+候选节点详情显示执行者类型、业务角色和关联 Skill。Agent 步骤确实需要可复用指令时，Author 先查询当前集合和 Host 授权的目录。找到一个适用版本时预选原版本。多个匹配或目录不完整时保留待处理项。完整搜索确认没有匹配时才起草。候选预览可复审草稿，确认加入集合后保存工作流及准确的 Skill 版本。执行权限仍由 Host 按实际身份核验。
+
+签名三文件可携带 Professional Skill 的逻辑来源、ID、精确版本和摘要。接收端可以先查看和复审。缺少授权依赖时预览给出原因，`@devcodex-labs/flowkit/host` 的 `runApprovedCollectionWorkflow` 拒绝运行。同一集合使用批准仓库的精确版本。跨宿主通过 `resolveRunProfessionalSkill` 返回经授权的准确源候选，由 FlowKit 重验实物和版本后才派发。私有 Skill 正文留在授权仓库。带本地文档或 Host 安全策略的候选仍需接收方通过原 Host 安装与核验。
+
 以“根据topic写草稿，经检查和审批再交付”为主线，先明确输入、结构化输出、审批必须由谁作出、失败/修订出口及终态判据。对应[完整Host例](/guide/host-integration)已有DSL/Skill/Runtime；[直接Host例](/examples/direct-host)继续关联编译JS、trace和最终state。
 
 作者应先列业务验收，再选择 Standard 或适用的 Interactive 阶段，准备相应文件与 Host 方法。Standard 使用 `compile`、`compileSource` 或 CLI 编译检查，Interactive 使用 `compileInteractive`。执行者按选定 Host 路径核对输出、分支、副作用和失败处理。编译结果与业务验收分别记录。
@@ -209,4 +213,3 @@ Host已有能力、缺少的绑定/Skill/人工服务及处理方式：
 ```
 
 作者已经看过源码时标作专家或 AI 走读。固定响应验证接口和控制流。真实模型任务记录实际模型、提示及候选的复审和运行结果，真实读者另记参与者和任务结果。文档变化时重新验证受影响的场景。
-候选节点详情会显示执行者类型、已明确的业务角色和关联 Skill。Agent 步骤确实需要可复用指令时，Author 先查询当前集合和 Host 授权的目录。找到一个适用版本时预选原版本。多个匹配或目录不完整会停在需要选择或补齐权限的状态。完整搜索确认没有匹配时才起草，用户可在候选预览复审草稿，同意加入集合后保存工作流与准确的 Skill 版本。角色由流程声明，实际准入由 Host 按执行身份和依赖校验。

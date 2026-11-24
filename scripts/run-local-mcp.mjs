@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createWorkflowAuthorHost } from '../dist/host.mjs';
-import { checkProfessionalSkill, planProfessionalSkills } from '../src/author/professional-skills.mjs';
+import { checkProfessionalSkill, planProfessionalSkills, resolveTrustedProfessionalPin } from '../src/author/professional-skills.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
@@ -587,6 +587,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         ...(draft.candidate ? { candidate: { name: draft.candidate.manifest.name, version: draft.candidate.manifest.version,
           candidateHash: draft.candidate.hash, previewUrl: previewUrl(draft), layoutRevision: layoutRevisionOf(draft.candidate.hash),
           layoutSource: get(selectedLayoutKey(draft.candidate.hash))?.source ?? 'pending',
+          ...(draft.candidate.manifest.professionalSkills.length ? { requiredProfessionalSkills: draft.candidate.manifest.professionalSkills } : {}),
           requiredCapabilities: draft.candidate.manifest.workflowDefinition?.nodes?.flatMap(node => [node.action ?? node.verifier].filter(Boolean)) } } : {}) };
     }
 
@@ -678,6 +679,16 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           const current = operator(req);
           const graph = checkCandidate(draft.candidate);
           await preparePreviewLayout(draft.candidate.hash, graph, current && (draft.savedReceipt || trustedDraft(draft)));
+          const unavailable = [];
+          if (current && trustedDraft(draft) && (draft.operation === 'import' || draft.savedReceipt)) {
+            const scope = { collectionId, candidateHash: draft.candidate.hash, requestContext: context,
+              signal: AbortSignal.timeout(config.authorTaskTimeoutMs ?? 90000) };
+            for (const pin of draft.candidate.manifest.professionalSkills.filter(item => item.source)) {
+              const resolved = await resolveTrustedProfessionalPin(binding.store, pin, { collectionId,
+                resolve: dependencies.resolveRunProfessionalSkill, scope }).catch(() => null);
+              if (!resolved) unavailable.push(`${pin.id} ${pin.version} (${pin.source})`);
+            }
+          }
           const viewLayout = selectedLayout(draft.candidate.hash);
           const layoutRevision = layoutRevisionOf(draft.candidate.hash);
           if (preview.layoutRevision && preview.layoutRevision !== layoutRevision) {
@@ -699,7 +710,9 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             '"><button type="submit" disabled>' + (pinned ? '确认并更新 FlowKit 工作流' :
               preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
-          return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls,
+          const dependencyStatus = unavailable.length ? '<p>当前宿主无法核对依赖，运行前需由宿主补齐或重新授权。</p><ul>' +
+            unavailable.map(item => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul>' : '';
+          return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls: dependencyStatus + controls,
             mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition,
             executionManifest: draft.candidate.manifest, pendingSkillDigests: new Set(skillDrafts.map(skill => skill.manifest.digest)), viewLayout }));
         }

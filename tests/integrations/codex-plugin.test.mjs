@@ -18,6 +18,8 @@ import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
 import { bindProfessionalNeeds } from '../../src/author/workflow-professional-bindings.mjs';
 import { prepareProfessionalSkill } from '../../src/author/professional-skills.mjs';
+import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
+import { runApprovedCollectionWorkflow } from '../../src/host.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from './local-mcp-fixture.mjs';
 
 async function ownedDirectory(t) {
@@ -49,8 +51,8 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
 });
 
 test('the local Author drafts only after catalog lookup, publishes the approved Skill with the workflow, and reuses it', async t => {
-  let service, client;
-  t.after(async () => { await client?.close(); await service?.close(); });
+  let service, client, receiver, receiverClient;
+  t.after(async () => { await receiverClient?.close(); await receiver?.close(); await client?.close(); await service?.close(); });
   const root = await ownedDirectory(t);
   const model = monthlyTimesheetModel();
   const request = model.execution.request;
@@ -118,6 +120,72 @@ test('the local Author drafts only after catalog lookup, publishes the approved 
   const [reused] = readWorkflowPageData(reusedHtml).executionBindings;
   const { pendingApproval: _pending, ...pin } = binding.skills[0];
   assert.deepEqual(reused.skills, [pin]);
+
+  const exported = await tool('flowkit_export_workflow', { draftId: first.id, candidateHash: first.candidate.candidateHash });
+  const files = Object.fromEntries(await Promise.all(['workflow.js', 'workflow.mmd', 'workflow.html'].map(async name =>
+    [name, await readFile(path.join(exported.directory, name), 'utf8')])));
+  const trust = exportTrust([service.exportPublicKey]);
+  const portable = readPortableExport(files, trust);
+  assert.equal(portable.candidate.hash, first.candidate.candidateHash);
+  assert.deepEqual(portable.candidate.manifest.professionalSkills[0], { nodeId: 'review', ...pin });
+  assert.equal(readPortableExport({ ...files, 'workflow.mmd': files['workflow.mmd'] + '\n' }, trust).invalid, true);
+  assert.equal(readPortableExport(files, exportTrust()).untrusted, true);
+  for (const content of Object.values(files)) assert.doesNotMatch(content, /Use the confirmed input/);
+
+  const receiverState = path.join(root, 'receiver');
+  receiver = await startLocalMcp({ listen: { port: 0 }, dataDir: receiverState, exportDir: path.join(root, 'received'),
+    trustedExportKeys: [service.exportPublicKey] }, { credential: token, modelBinding: monthlyTimesheetModel() });
+  receiverClient = new Client({ name: 'professional-skill-receiver', version: '1.0.0' });
+  await receiverClient.connect(new StreamableHTTPClientTransport(new URL(receiver.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+  const receiverOrigin = new URL(receiver.url).origin;
+  const receiverCookie = await browserIdentity(receiver);
+  const uploaded = await fetch(receiverOrigin + '/sources', { method: 'POST', headers: { cookie: receiverCookie, origin: receiverOrigin },
+    body: new URLSearchParams({ source: JSON.stringify(files) }) });
+  assert.equal(uploaded.status, 200);
+  const { sourceRef } = await uploaded.json();
+  const added = await receiverClient.callTool({ name: 'flowkit_add_workflow', arguments: { requestId: 'receive-bound', sourceRef,
+    candidateHash: portable.candidate.hash, destination: 'flowkit' } });
+  assert.equal(added.isError === true, false, JSON.stringify(added));
+  const waiting = JSON.parse(added.content[0].text);
+  const missingHtml = await (await fetch(waiting.confirmationUrl, { headers: { cookie: receiverCookie } })).text();
+  assert.match(missingHtml, /当前宿主无法核对依赖/);
+  const received = await (await confirmInTestBrowser(waiting.confirmationUrl, receiverCookie)).json();
+  assert.equal(received.status, 'added');
+
+  const store = openLocalSkillStore(path.join(receiverState, 'author.sqlite'), () => false, () => false, { namespace: 'flowkit-local' });
+  try {
+    const request = { collectionId: receiver.collectionId, skillId: received.workflowId, candidateHash: received.candidateHash,
+      skillDirectory: exported.directory, executionRef: 'authorized-source-run' };
+    let dispatched = 0;
+    const runtime = { taskPolicy: { projectRoot: root, hostProfile: { schemaVersion: 1, hostId: 'receiver', hostVersion: '1.0.0',
+      adapterId: 'local', adapterVersion: '1.0.0', executionModes: ['standard'], capabilities: { skillResourceLoading: 'supported' } } },
+      isControlSignal: () => false, validateResult: () => [], async runAgentTask(prepared) {
+        dispatched++;
+        const [resource] = prepared.skills;
+        assert.equal(resource.source, pin.source);
+        assert.equal(resource.digest, pin.digest);
+        assert.match(resource.files['SKILL.md'], /Use the confirmed input/);
+        return { status: 'succeeded', result: {}, events: [] };
+      } };
+    const options = { hostProfile: portable.candidate.manifest.hostProfile, authorizeExecution: () => true, runtime };
+    await assert.rejects(runApprovedCollectionWorkflow(store, request, options, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
+    await assert.rejects(runApprovedCollectionWorkflow(store, request, { ...options, resolveRunProfessionalSkill: () =>
+      ({ authorized: false, source: pin.source, candidate: skill }) }, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
+    await assert.rejects(runApprovedCollectionWorkflow(store, request, { ...options, resolveRunProfessionalSkill: () =>
+      ({ authorized: true, source: pin.source, candidate: { ...skill, manifest: { ...skill.manifest, version: '2.0.0' } } }) }, {}),
+    { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
+    const altered = { ...skill, files: { ...skill.files, 'SKILL.md': skill.files['SKILL.md'] + '\nChanged.' } };
+    await assert.rejects(runApprovedCollectionWorkflow(store, request, { ...options, resolveRunProfessionalSkill: () =>
+      ({ authorized: true, source: pin.source, candidate: altered }) }, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
+    assert.equal(dispatched, 0);
+    const resolution = async requested => {
+      assert.equal(requested.id, pin.id);
+      return { authorized: true, source: pin.source, candidate: skill };
+    };
+    const run = await runApprovedCollectionWorkflow(store, request, { ...options, resolveRunProfessionalSkill: resolution }, {});
+    assert.equal(run.status, 'succeeded');
+    assert.equal(dispatched, 1);
+  } finally { store.close(); }
 });
 
 test('incomplete and denied Professional Skill discovery never starts a Skill draft', async () => {

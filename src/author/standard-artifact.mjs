@@ -29,7 +29,7 @@ function resolveSkillPins(definition, pins) {
   for (const { nodeId, id, version, digest: contentDigest, source } of pins) {
     const key = bindingKey(nodeId, id);
     if (!identifier(nodeId) || !identifier(id) || !isSemVer(version) || !digest(contentDigest) || bindings.has(key) ||
-        source !== undefined && (!identifier(source) || source.length > 160)) {
+        source !== undefined && (typeof source !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,159}$/.test(source))) {
       throw new TypeError('Each Professional Skill pin needs a unique node, logical ID, exact version and digest');
     }
     bindings.set(key, Object.freeze({ nodeId, id, version, digest: contentDigest, ...(source === undefined ? {} : { source }) }));

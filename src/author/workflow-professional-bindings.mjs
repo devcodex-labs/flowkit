@@ -38,7 +38,7 @@ export async function bindProfessionalNeeds(proposal, { catalog, collection, req
       }
       const matches = result.matches.map(match => {
         const { candidate, source, approved } = match;
-        if (approved !== true || typeof source !== 'string' || !source.length || source.length > 160 || /\s/.test(source)) {
+        if (approved !== true || typeof source !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,159}$/.test(source)) {
           throw new TypeError('Catalog matches must identify an approved Skill and authorized source');
         }
         checkProfessionalSkill(candidate);
