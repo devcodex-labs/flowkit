@@ -1205,7 +1205,7 @@ summary.contract-trigger::-webkit-details-marker {display:none}
 const $ = id => document.getElementById(id);
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const types = { action:'执行', verification:'校验', condition:'条件', human:'人工确认',
-  parallel:'并行', loop:'循环', agent:'Agent', terminal:'终点', end:'终点' };
+  parallel:'并行', loop:'循环', agent:'Agent', terminal:'终点', end:'终点', design:'设计步骤' };
 const roles = { next:'继续', 'action-error':'技术失败', 'verification-success':'校验通过',
   'verification-failure':'校验失败', 'human-approve':'批准', 'human-reject':'要求修订',
   'human-decline':'拒绝', 'parallel-member':'进入并行分支', 'parallel-join':'并行汇合',
@@ -1267,7 +1267,7 @@ function prepare(config) {
     return {...place, spec};
   });
   if (sets.size !== actualNodes.size || graph.referenceEdges.some(edge=>!mapped.has(edge.edgeId))) throw new Error('流程结构的展示映射不完整。');
-  return { graph, runView:config.runView, mermaid:config.mermaid, executionBindings:config.executionBindings,
+  return { graph, runView:config.runView, mermaid:config.mermaid, executionBindings:config.executionBindings, design:config.design,
     groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
     count:visualNodes.filter(node => node.phase===phase.id && !node.helper).length +
       new Set(visualNodes.filter(node => node.phase===phase.id && node.helper && node.spec).map(node => node.nodeId)).size,
@@ -2008,6 +2008,15 @@ function contractCards(fields,direction) {
 }
 function renderOverview() {
   const g = DATA.graph;
+  if (DATA.design) {
+    setPanelHeader('DESIGN DIAGRAM','设计图概览',g.name);
+    const sourceName = id => DATA.design.sources.find(source=>source.id===id)?.title??id;
+    const gaps = DATA.design.unresolved.map(item=>`${item.question}（${item.sources.map(sourceName).join('、')}）`);
+    insertPanel(section('材料依据',list(DATA.design.sources.map(source=>source.title+' · '+source.digest)))+
+      section('待确认',gaps.length?list(gaps):note('暂无待确认项。'))+
+      section('流程关系','<button class="panel-btn" type="button" data-read-mermaid>阅读 Mermaid</button>'));
+    return;
+  }
   setPanelHeader('WORKFLOW OVERVIEW','工作流概览',g.name+' · '+g.workflowVersion);
   const counts=[['声明节点',g.nodes.length],['编译关系',g.referenceEdges.length],['阶段',DATA.phases.length],['可视连线',edges.length]];
   insertPanel('<div class="overview-number">'+esc(g.name)+'</div><div class="overview-grid">'+
@@ -2041,6 +2050,17 @@ function regionDetails(region) {
 }
 function renderNodePanel(node) {
   const spec = node.spec;
+  if (DATA.design) {
+    setPanelHeader('DESIGN STEP',node.label,node.slug);
+    const sources = (DATA.design.nodeSources.find(item=>item.id===spec?.id)?.sources??[])
+      .map(id=>DATA.design.sources.find(source=>source.id===id)?.title??id);
+    const related = edges.filter(edge=>edge.source===node.id||edge.target===node.id);
+    insertPanel(section('设计说明',`<div class="rich-text"><p>${esc(node.description)}</p></div>`)+
+      section('材料依据',list(sources))+
+      (related.length?section('相关步骤',wrapRows(related.map(edge=>edgeButton(edge)))):'')+
+      '<div class="panel-actions"><button class="panel-btn" data-back-overview>返回设计图概览</button></div>');
+    return;
+  }
   const binding = DATA.executionBindings?.find(item => item.nodeId === spec?.id);
   setPanelHeader('NODE DETAILS', node.label, node.slug);
   const attributes = spec ? [

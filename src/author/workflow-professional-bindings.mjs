@@ -61,7 +61,8 @@ export async function bindProfessionalNeeds(proposal, { catalog, collection, req
           continue;
         }
         if (!candidate) {
-          const body = await draftSkill({ id, description });
+          const body = await draftSkill({ id, description, lookup: { complete: true, matches: 0 },
+            node: { inputs: node.options?.inputs ?? [], output: node.options?.output } });
           if (!body) { issues.push(question(node, { id }, 'No matching Skill exists and the Host did not produce a draft')); continue; }
           candidate = prepareProfessionalSkill(collection, { id, name: id, version: '1.0.0', description, body });
           drafts.set(id, candidate);
@@ -78,7 +79,8 @@ export async function bindProfessionalNeeds(proposal, { catalog, collection, req
       }
       requiredSkills.push({ id: skillId, version });
       requirements.push({ kind: 'professional-skill', nodeId: node.id, needId: id, id: skillId, version, digest, source: matched.source,
-        required: true, ...(selection === undefined ? {} : { selection }) });
+        required: true, lookup: { complete: true, matches: matches.length, resolution: matched.approved ? 'reuse-approved' : 'draft-after-no-match' },
+        ...(selection === undefined ? {} : { selection }) });
     }
     nodes.push({ ...node, options: { ...node.options, requiredSkills } });
   }

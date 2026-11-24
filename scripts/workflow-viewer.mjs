@@ -128,7 +128,7 @@ export function readWorkflowPageData(html) {
 }
 
 /** Assemble the confirmed offline viewer. The caller owns the same-origin confirmation form. */
-export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout, executionManifest, pendingSkillDigests }) {
+export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout, executionManifest, pendingSkillDigests, design }) {
   if (!graph?.nodes?.length || typeof graph.graphDigest !== 'string') throw new TypeError('Missing compiled workflow graph');
   const executionBindings = new Map();
   for (const { nodeId, id, label } of executionManifest?.nodeRoles ?? []) executionBindings.set(nodeId, { nodeId, role: { id, label }, skills: [] });
@@ -140,6 +140,7 @@ export function workflowPage({ graph, candidateHash, mermaid, definition, contro
   }
   const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest,definition,viewLayout),
     ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}),
+    ...(design ? { design } : {}),
     ...(executionBindings.size ? { executionBindings: [...executionBindings.values()] } : {}) });
   const html = controls ? shell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : shell.replace(controlsSlot, '');

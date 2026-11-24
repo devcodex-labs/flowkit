@@ -92,12 +92,12 @@ export function readPortableExport(files, trust) {
   } catch { return { invalid: true }; }
 }
 
-export async function deliveryMatches(directory, hashes) {
+export async function deliveryMatches(directory, hashes, names = deliveryNames) {
   try {
     if (!(await lstat(directory)).isDirectory()) return false;
     const members = (await readdir(directory)).sort();
-    if (JSON.stringify(members) !== JSON.stringify([...deliveryNames].sort())) return false;
-    const matches = await Promise.all(deliveryNames.map(async name =>
+    if (JSON.stringify(members) !== JSON.stringify([...names].sort())) return false;
+    const matches = await Promise.all(names.map(async name =>
       (await lstat(path.join(directory, name))).isFile() && artifactDigest(await readFile(path.join(directory, name))) === hashes[name]));
     return matches.every(Boolean);
   } catch (error) {
@@ -106,18 +106,18 @@ export async function deliveryMatches(directory, hashes) {
   }
 }
 
-export async function commitDelivery(root, directory, files, hashes) {
+export async function commitDelivery(root, directory, files, hashes, names = deliveryNames) {
   await mkdir(root, { recursive: true });
-  if (await deliveryMatches(directory, hashes)) return;
+  if (await deliveryMatches(directory, hashes, names)) return;
   try { await lstat(directory); throw new Error('Export directory conflicts with existing files'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const stage = await mkdtemp(path.join(root, '.flowkit-export-'));
   try {
-    for (const name of deliveryNames) await writeFile(path.join(stage, name), files[name], { flag: 'wx' });
+    for (const name of names) await writeFile(path.join(stage, name), files[name], { flag: 'wx' });
     try { await rename(stage, directory); }
-    catch (error) { if (!(await deliveryMatches(directory, hashes))) throw error; }
+    catch (error) { if (!(await deliveryMatches(directory, hashes, names))) throw error; }
   } finally {
-    for (const name of deliveryNames) await unlink(path.join(stage, name)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    for (const name of names) await unlink(path.join(stage, name)).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await rmdir(stage).catch(error => { if (error.code !== 'ENOENT') throw error; });
   }
 }

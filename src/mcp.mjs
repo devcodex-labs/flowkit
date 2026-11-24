@@ -155,6 +155,10 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   if (workflowUi) {
+    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Summarize authorized project or feature materials as an offline design diagram and Mermaid file.',
+      { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(z.object({
+        id, title: z.string().trim().min(1).max(160), content: z.string().min(1).max(12000)
+      }).strict()).min(1).max(6) }, (input, ctx) => workflowUi.design(input, requestContext, ctx.signal));
     tool('flowkit_get_workflow_draft', 'Read the current candidate and its preview after a user decision.',
       { collectionId: id, draftId: id }, async ({ collectionId, draftId }, ctx) =>
         draftView(await exactDraft(collectionId, draftId, ctx.signal)), true);

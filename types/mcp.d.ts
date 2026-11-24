@@ -30,6 +30,8 @@ export interface FlowkitMcpOptions {
     present(draft: AuthorDraftView, context?: AuthorRequestContext): unknown;
     recover?(input: { draftId: string; expectedStateVersion: number }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
     review(result: Awaited<ReturnType<WorkflowAuthorHost['reviewCandidate']>>): unknown;
+    design?(input: { collectionId: string; requestId: string; title: string; materials: Array<{ id: string; title: string; content: string }> },
+      context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     relayout?(input: { collectionId: string; draftId: string; candidateHash: string; expectedLayoutRevision: string; requestId: string },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     export(input: { collectionId: string; draftId: string; candidateHash: string; layoutRevision?: string },

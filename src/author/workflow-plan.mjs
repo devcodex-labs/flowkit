@@ -108,8 +108,9 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   const annotations = suppliedEdges.filter(edge => edge?.kind !== 'control' &&
     (EDGE_KINDS.has(edge?.kind) || !control.has(JSON.stringify([edge?.from, edge?.to]))));
   const edges = [...control.values(), ...annotations];
-  const plannedNodes = nodes.map(({ id, kind, name, options, requiredRole }) => ({ id, kind, name, options,
+  const plannedNodes = nodes.map(({ id, kind, name, options, requiredRole, professionalNeeds }) => ({ id, kind, name, options,
     ...(requiredRole !== undefined ? { requiredRole } : {}),
+    ...(professionalNeeds !== undefined ? { professionalNeeds } : {}),
     ...(kind === 'loop' ? { onSuccess: options.onSuccess, onMaxExceeded: options.onMaxExceeded } : {}) }));
   return { source, proposal: { ...proposal, nodes: plannedNodes, edges }, sourceHash: artifactDigest(source) };
 }

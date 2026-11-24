@@ -256,6 +256,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         if (draft.plan?.intentRef?.effectiveIntentHash === planningIntent.intentRef.effectiveIntentHash &&
           draft.plan.intentRef.changeSetHash === planningIntent.intentRef.changeSetHash) planningIntent.intentRef = draft.plan.intentRef;
         const confirmedSource = ctx.state.confirmedPlan && draft.plan.sourceHash;
+        if (!ctx.state.confirmedPlan && Array.isArray(proposal.resourceRequirements)) {
+          proposal.resourceRequirements = proposal.resourceRequirements.map(({ lookup: _lookup, needId: _needId, selection: _selection, ...pin }) => pin);
+        }
         const declaredDecisions = (proposal.unresolvedIssues ?? []).filter(item => item.blocking);
         const assumedDecision = (proposal.assumptions ?? []).some(item => item.requiresConfirmation);
         if (continuation && !ctx.state.confirmedPlan &&
@@ -340,8 +343,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           manifest.version === pin.version && manifest.digest === pin.digest);
         if (draftSkill) {
           pending.set(draftSkill.hash, draftSkill);
-          const { nodeId, id, version, digest, source } = pin;
-          selected.push({ nodeId, id, version, digest, source, draft: true });
+          const { nodeId, id, version, digest, source, lookup } = pin;
+          selected.push({ nodeId, id, version, digest, source, draft: true, lookup });
           continue;
         }
         const skill = await ports.read({ professionalSkill: pin }, () => options.resolveProfessionalSkill?.(pin, { requestContext, signal }));
@@ -351,7 +354,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           ctx.state.resourceSnapshot = { ready: false, gap: pin, options: ['create', 'review', 'approve-existing'] };
           ctx.state.questions = [question('missing-professional-skill', `Select an approved exact Professional Skill for ${pin.id}`, ['create-review-approve', 'select-existing'])]; return;
         }
-        selected.push({ ...skill, nodeId: pin.nodeId });
+        selected.push({ ...skill, nodeId: pin.nodeId, ...(pin.lookup ? { lookup: pin.lookup } : {}) });
       }
       ctx.state.resourceSnapshot = { ready: capabilities.supported, capabilities, documents,
         catalogIdentity: authorIdentity(ctx.state.catalogSnapshot),

@@ -2,6 +2,7 @@ import { diagnostic } from './source.mjs';
 
 export const pascalCase = id => id.split('-').map(segment => segment[0].toUpperCase() + segment.slice(1)).join('');
 const label = text => `"${String(text).replace(/[&"<>\[\]{}|#]/g, character => `#${character.codePointAt(0)};`)}"`;
+export { label as mermaidLabel };
 
 /** Diagnose user ids independently from private anchors used inside subgraphs. */
 export function checkMermaidIds(analysis) {

@@ -16,6 +16,9 @@ import { createInteractiveHostContext, createSqliteInteractivePersistence, loadI
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canonicalBytes } from '../src/interactive/canonical.mjs';
 import { checkCandidate, prepareStandardSkill } from '../src/author/standard-artifact.mjs';
+import { openLocalSkillStore } from '../src/author/local-skill-store.mjs';
+import { createApiAgentAdapter, runApprovedCollectionWorkflow } from '../dist/host.mjs';
+import { localModel } from './local-mcp-model.mjs';
 import { authorContractCases, verifyAuthorContractExport } from './test-author-contract-cases.mjs';
 
 const token = randomBytes(32).toString('hex');
@@ -26,6 +29,7 @@ const fixtureIndex = process.argv.indexOf('--layout-fixture');
 const fixtureDirectory = fixtureIndex < 0 ? null : process.argv[fixtureIndex + 1];
 const layoutValidation = process.argv.includes('--verify-model-layout');
 const relayoutValidation = process.argv.includes('--verify-relayout');
+const professional = process.argv.includes('--verify-professional');
 const openai = process.argv.includes('--openai');
 const referenceMode = process.argv.includes('--reference') || !!fixtureDirectory;
 const longTurnMs = 660000;
@@ -42,15 +46,23 @@ if (v45Spec && (!live || interactive || readOnly || referenceMode || contractCas
 }
 const v45Input = v45Spec ? await readFile(process.argv[specIndex + 1], 'utf8') : null;
 if (fixtureIndex >= 0 && !fixtureDirectory || layoutValidation && (!live || !referenceMode) ||
-    (openai || relayoutValidation) && !layoutValidation) {
-  throw new Error('Use --live --verify-model-layout --reference or --layout-fixture <signed export directory>, with optional --openai');
+    relayoutValidation && !layoutValidation || openai && !layoutValidation && !professional ||
+    professional && (!live || referenceMode || readOnly || interactive || v45Spec || contractCase)) {
+  throw new Error('Use --live --verify-professional or --live --verify-model-layout with a signed fixture; add --openai for Responses');
 }
 const importedFiles = fixtureDirectory && Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
   [name, await readFile(path.join(fixtureDirectory, name), 'utf8')])));
 const sourceKey = referenceMode ? importedFiles ? JSON.parse(importedFiles['workflow.html']
   .match(/<script type="application\/json" id="flowkit-export-provenance">([^<]+)<\/script>/)[1]) : newExportKey() : null;
 if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
-const goal = v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
+const professionalGoal = [
+  '起草 Standard 工作流，根据一条 FlowKit 候选交付记录判断能否导出。',
+  '根输入必须有字符串 evidence，根输出必须有字符串 decision。只用一个 Agent 步骤评估并产出 decision，之后直接到成功终点。',
+  'Agent 的业务角色为交付复核员。该步骤需要可复用的 Professional Skill，稳定 ID 为 delivery-review，写清下列判断规则，先查已授权目录。',
+  '复审未通过时返回「等待复审」，复审通过但用户尚未确认时返回「等待确认」，复审和用户确认都完成时返回「可以导出」。',
+  'Agent 从工作流调用方获得 evidence，只读评估，不执行导出或调用外部工具。Agent 返回的 JSON 只含 decision。'
+].join('\n');
+const goal = professional ? professionalGoal : v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
   contractCase ? contractCase.goal : readOnly ?
   '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
@@ -62,10 +74,55 @@ const cwd = path.join(root, 'workspace');
 await mkdir(cwd);
 const service = await startLocalMcp({
   listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
-  ...(v45Spec || layoutValidation ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: longTurnMs } : {}),
+  ...(v45Spec || layoutValidation || professional ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: longTurnMs } : {}),
   ...(openai ? { authorProvider: 'openai' } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
 }, { credential: token, ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
+
+async function verifyApprovedSkillRun(exported, saved) {
+  const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
+    [name, await readFile(path.join(exported.directory, name), 'utf8')])));
+  const { candidate } = readPortableExport(files, exportTrust([service.exportPublicKey]));
+  assert.equal(candidate.hash, saved.candidateHash);
+  const [pin] = candidate.manifest.professionalSkills;
+  assert.equal(pin.id, 'delivery-review');
+  assert.equal(candidate.manifest.nodeRoles.find(role => role.nodeId === pin.nodeId).label, '交付复核员');
+  const provider = openai ? 'openai' : 'codex';
+  const model = process.env.FLOWKIT_AUTHOR_MODEL;
+  const transport = localModel({ provider, model, apiKey: process.env.OPENAI_API_KEY, workspace: cwd, timeoutMs: 150000 });
+  const calls = [];
+  const adapter = createApiAgentAdapter({ scope: 'flowkit-delivery-acceptance', model: model ?? 'codex-default', supportsTools: false,
+    limits: { timeoutMs: 150000, maxTotalTokens: 64000 }, async request(body, context) {
+      const response = await transport.requestForExecution(body, context);
+      const data = await response.clone().json();
+      calls.push({ status: response.status, model: data.model ?? model ?? 'codex-default', requestId: response.headers.get('x-request-id') ?? data.id });
+      return response;
+    } });
+  const store = openLocalSkillStore(path.join(root, 'state', 'author.sqlite'), () => false, () => false, { namespace: 'flowkit-local' });
+  try {
+    const taskPolicy = { projectRoot: cwd, maxDurationMs: 150000, hostProfile: { schemaVersion: 1, hostId: provider, hostVersion: '1.0.0',
+      adapterId: 'responses', adapterVersion: '1.0.0', executionModes: ['standard'], capabilities: { skillResourceLoading: 'supported' } } };
+    const runtime = { isControlSignal: () => false, validateResult: () => [], taskPolicy,
+      async runAgentTask(prepared, context) {
+        const [skill] = prepared.skills;
+        assert.equal(skill.logicalId, pin.id);
+        assert.equal(skill.resolvedVersion, pin.version);
+        assert.equal(skill.digest, pin.digest);
+        assert.match(skill.files['SKILL.md'], /等待确认/);
+        return adapter.runAgentTask(prepared, context);
+      } };
+    const run = await runApprovedCollectionWorkflow(store, { collectionId: service.collectionId, skillId: saved.workflowId,
+      candidateHash: candidate.hash, skillDirectory: exported.directory, executionRef: 'live-approved-delivery' },
+    { hostProfile: candidate.manifest.hostProfile, authorizeExecution: ({ candidateHash }) => candidateHash === candidate.hash, runtime },
+    { evidence: '候选已经通过独立复审。用户尚未确认当前候选版本。' }, { projectRoot: cwd });
+    assert.equal(run.status, 'succeeded', JSON.stringify(run));
+    assert.equal(run.publicOutput.decision, '等待确认');
+    assert.ok(calls.length && calls.every(call => call.status === 200 && call.requestId));
+    await writeFile(path.join(root, 'export-public-key.txt'), service.exportPublicKey + '\n');
+    console.log(JSON.stringify({ path: 'live-approved-professional-workflow', provider, candidateHash: candidate.hash,
+      artifactHash: candidate.manifest.artifactHash, directory: exported.directory, pin, calls, result: run.publicOutput }));
+  } finally { store.close(); }
+}
 
 async function testReferenceDelivery(tool) {
   const { candidate } = importedFiles ? readPortableExport(importedFiles, exportTrust([sourceKey.publicKey])) : await prepareStandardSkill({
@@ -278,7 +335,7 @@ async function withAppServer(env, test) {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(method + ' timed out'));
-    }, live && method === 'mcpServer/tool/call' ? (v45Spec ? 700000 : 250000) : 25000);
+    }, live && method === 'mcpServer/tool/call' ? (v45Spec || professional ? 700000 : 250000) : 25000);
     pending.set(id, response => {
       pending.delete(id);
       clearTimeout(timer);
@@ -316,7 +373,7 @@ try {
   await mkdir(directEnv.CODEX_HOME);
   await writeFile(path.join(directEnv.CODEX_HOME,'config.toml'), '[mcp_servers.flowkit]\nurl = ' +
     JSON.stringify(service.url) + '\nbearer_token_env_var = "FLOWKIT_MCP_TOKEN"\nrequired = true\n' +
-    (v45Spec || layoutValidation ? 'tool_timeout_sec = 690\n' : ''));
+    (v45Spec || layoutValidation || professional ? 'tool_timeout_sec = 690\n' : ''));
   let saved;
   await withAppServer(directEnv, async ({ flowkit, tool }) => {
     assert.ok(flowkit);
@@ -328,9 +385,16 @@ try {
     }
     const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'cli-start',
       goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive || contractCase || v45Spec ? { executionMode: 'interactive-p2' } : {}) });
-    const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-plan',
+    let candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-plan',
       expectedStateVersion: draft.stateVersion, input: v45Input ?? goal,
-      target: { name: v45Spec ? 'v45-software-delivery' : contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
+      target: { name: professional ? 'flowkit-delivery-review' : v45Spec ? 'v45-software-delivery' : contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
+    if (professional && candidate.status === 'needs-revision' && candidate.review.findings.length) {
+      console.log(JSON.stringify({ path: 'live-professional-review-rejected', candidateHash: candidate.candidate?.candidateHash,
+        findings: candidate.review.findings }));
+      candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-revise',
+        expectedStateVersion: candidate.stateVersion,
+        input: '按本轮复审发现修订，保留发起时已给定的三条规则、输入输出契约和业务角色。只修改复审指出的问题。' } });
+    }
     assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
     assert.equal(Object.hasOwn(candidate.candidate, 'files'), false);
     const identity = { draftId: draft.id, candidateHash: candidate.candidate.candidateHash };
@@ -347,7 +411,11 @@ try {
       live ? /flowchart/ : interactive ? /Review alternatives/ : /Verify copy/);
     const offline = readWorkflowPageData(await readFile(path.join(exported.directory, 'workflow.html'), 'utf8'));
     assert.equal(offline.candidateHash, identity.candidateHash);
-    assert.deepEqual(offline, preview);
+    if (professional) {
+      assert.deepEqual(offline.graph, preview.graph);
+      assert.deepEqual(offline.layout, preview.layout);
+      assert.equal(preview.executionBindings[0].skills[0].pendingApproval, true);
+    } else assert.deepEqual(offline, preview);
     assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
     if (v45Spec) {
       assert.equal(offline.graph.nodes.length, 140);
@@ -373,6 +441,24 @@ try {
     saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();
     assert.equal(saved.status, 'added');
     assert.deepEqual(await tool('flowkit_add_workflow', add), saved);
+    if (professional) {
+      await verifyApprovedSkillRun(exported, saved);
+      const material = (await readFile('website/content/guide/workflow-authoring.mdx', 'utf8')).split('\n## 用 Author 准备 Workflow Skill')[0].slice(0, 12000);
+      const source = { id: 'flowkit-guide', title: 'FlowKit 工作流编写指南', content: material };
+      const design = await tool('flowkit_create_design_diagram', { requestId: 'real-guide-map',
+        title: 'FlowKit 本机起草、复审与交付', materials: [source] });
+      assert.ok(design.requestId);
+      assert.deepEqual((await readdir(design.directory)).sort(), ['design.html', 'design.mmd']);
+      const view = readWorkflowPageData(await readFile(path.join(design.directory, 'design.html'), 'utf8'));
+      assert.equal(view.graph.mode, 'design');
+      assert.ok(view.graph.nodes.length >= 3 && view.graph.referenceEdges.length >= 2);
+      assert.deepEqual(view.design.sources, [{ id: source.id, title: source.title, digest: artifactDigest(material) }]);
+      assert.ok(view.design.nodeSources.every(node => node.sources.includes(source.id)));
+      for (const file of design.files) assert.equal(artifactDigest(Buffer.from(await (await fetch(file.url)).arrayBuffer())), file.sha256);
+      console.log(JSON.stringify({ path: 'live-project-design', provider: design.provider, model: design.model, requestId: design.requestId,
+        directory: design.directory, nodes: view.graph.nodes.length, edges: view.graph.referenceEdges.length,
+        unresolved: view.design.unresolved.length, source: view.design.sources[0], graphDigest: view.graph.graphDigest, layout: design.layoutSource }));
+    }
     console.log(JSON.stringify({ path: 'direct', collectionId: service.collectionId, candidateHash: saved.candidateHash, directory: exported.directory }));
   });
 
@@ -384,7 +470,8 @@ try {
   await withAppServer(pluginEnv, async ({ flowkit, tool }) => {
     assert.equal(flowkit?.pluginId, selector);
     const data = await tool('flowkit_collection');
-    assert.deepEqual(data.skills.map(({ candidateHash }) => candidateHash), [saved.candidateHash]);
+    if (professional) assert.ok(data.skills.some(item => item.candidateHash === saved.candidateHash));
+    else assert.deepEqual(data.skills.map(({ candidateHash }) => candidateHash), [saved.candidateHash]);
     console.log(JSON.stringify({ path: 'plugin-only', pluginId: selector, candidateHash: saved.candidateHash }));
   });
   for (const [name, badEnv] of [['wrong-token', { ...pluginEnv, FLOWKIT_MCP_TOKEN:'incorrect' }],

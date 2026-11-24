@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createWorkflowAuthorHost } from '../dist/host.mjs';
 import { checkProfessionalSkill, planProfessionalSkills, resolveTrustedProfessionalPin } from '../src/author/professional-skills.mjs';
+import { designDiagram } from './workflow-viewer/design.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
 import { checkCandidate, rebindImportedCandidate } from '../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
-import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
+import { canExportPortable, commitDelivery, deliveryMatches, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
 import { defaultLayout, viewerHash, workflowPage, workflowRunPage, workflowTracePage } from './workflow-viewer.mjs';
@@ -179,6 +180,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
   const recoveryProofs = new Map();
   const layoutAbort = new AbortController();
   const layoutRequests = new Map();
+  const designRequests = new Map();
+  const designNames = ['design.html', 'design.mmd'];
   const closeStorage = async () => {
     if (storageClosed) return;
     storageClosed = true;
@@ -209,6 +212,51 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     function selectedLayout(hash) {
       const selected = get(selectedLayoutKey(hash));
       return selected?.source === 'model' ? get(selected.key)?.layout : undefined;
+    }
+    async function createDesign({ requestId, title, materials }, _context, signal) {
+      const materialHash = artifactDigest(JSON.stringify([title, materials]));
+      if (new Set(materials.map(material => material.id)).size !== materials.length) throw new TypeError('Design material IDs must be unique');
+      const key = 'design:' + artifactDigest(requestId).slice(7);
+      const record = insert(key, { materialHash });
+      if (record.materialHash !== materialHash) throw new Error('Design request ID already belongs to different source material');
+      let result = record.result;
+      if (!result) {
+        if (!designRequests.has(key)) {
+          if (designRequests.size >= capacity.maxPhysicalExecutions) throw new Error('Design Author capacity is busy');
+          const deadline = AbortSignal.timeout(config.authorTurnDurationMs ?? 240000);
+          const workSignal = AbortSignal.any([deadline, layoutAbort.signal]);
+          const pending = Promise.resolve().then(async () => {
+            let prepared = get(key).prepared;
+            if (!prepared) {
+              const output = await model.planDesign({ title, materials, signal: workSignal });
+              const { identity, graph, design, mermaid, viewManifest } = designDiagram(title, materials, output.proposal);
+              const arrangement = model.planLayout && await layoutRequest('design-layout:' + viewerHash + ':' + graph.graphDigest, graph);
+              workSignal.throwIfAborted();
+              const files = { 'design.html': workflowPage({ graph, mermaid, design, viewManifest, viewLayout: arrangement?.layout }),
+                'design.mmd': mermaid };
+              const hashes = Object.fromEntries(designNames.map(name => [name, artifactDigest(files[name])]));
+              const directory = path.join(exportDir, key.replace(':', '-'));
+              const value = { designHash: identity, graphDigest: graph.graphDigest, directory, hashes,
+                layoutSource: arrangement?.layout ? 'model' : 'fallback', provider: output.provider, model: output.model,
+                requestId: output.requestId, sources: design.sources };
+              prepared = { files, value };
+              put(key, { materialHash, prepared });
+            }
+            const { files, value } = prepared;
+            await commitDelivery(exportDir, value.directory, files, value.hashes, designNames);
+            put(key, { materialHash, result: value });
+            return value;
+          }).finally(() => designRequests.delete(key));
+          designRequests.set(key, pending);
+        }
+        result = await designRequests.get(key);
+      }
+      signal?.throwIfAborted();
+      if (!(await deliveryMatches(result.directory, result.hashes, designNames))) throw new Error('Design files changed after delivery');
+      const ref = seal('design', key);
+      const files = designNames.map(name => ({ name, sha256: result.hashes[name], url: origin + '/designs/' + ref + '/' + name }));
+      const { hashes: _hashes, ...rest } = result;
+      return { ...rest, files };
     }
     function layoutRequest(key, graph) {
       const cached = get(key);
@@ -593,6 +641,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
 
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
       { ...binding, workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present,
+        ...(model.planDesign ? { design: createDesign } : {}),
         ...(model.planLayout ? { relayout: relayoutCandidate } : {}) } } : null);
 
     async function web(req, res) {
@@ -666,6 +715,16 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         const contents = await readFile(path.join(entry.directory, action));
         if (artifactDigest(contents) !== entry.hashes[action]) return json(res, 409, { error: 'Export file changed' });
         res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="' + action + '"' });
+        return res.end(contents);
+      }
+      if (route === 'designs' && req.method === 'GET' && designNames.includes(action)) {
+        const key = unseal('design', ref);
+        const entry = key && get(key)?.result;
+        if (!entry) return json(res, 403, { error: 'Invalid design link' });
+        const contents = await readFile(path.join(entry.directory, action));
+        if (artifactDigest(contents) !== entry.hashes[action]) return json(res, 409, { error: 'Design file changed' });
+        if (action === 'design.html') return html(res, contents);
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'attachment; filename="design.mmd"' });
         return res.end(contents);
       }
       const preview = route === 'preview' && unseal('preview', ref);
@@ -769,7 +828,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           server.closeAllConnections();
           await new Promise(resolve => server.close(resolve));
         }
-        await Promise.allSettled(layoutRequests.values());
+        await Promise.allSettled([...designRequests.values(), ...layoutRequests.values()]);
         const outcome = await authorHost.close({ mode: 'cancel' });
         if (outcome.closed) await closeStorage();
         return outcome;

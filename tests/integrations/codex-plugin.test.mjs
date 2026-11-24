@@ -214,6 +214,45 @@ test('incomplete and denied Professional Skill discovery never starts a Skill dr
   assert.equal(selected.resourceRequirements[0].source, 'source-b');
 });
 
+test('project design uses known source IDs, commits two offline files and replays an exact request', async t => {
+  let service, client;
+  t.after(async () => { await client?.close(); await service?.close(); });
+  const root = await ownedDirectory(t);
+  const model = monthlyTimesheetModel();
+  let calls = 0;
+  model.planDesign = async ({ materials }) => {
+    calls++;
+    return { provider: 'test', model: 'test', requestId: 'design-test-observation', proposal: { schemaVersion: 1,
+      nodes: [{ id: 'review', name: '复审工作流', description: '核对候选', sources: [materials[0].id] },
+        { id: 'confirm', name: '确认候选', description: '由用户确认', sources: [materials[0].id] }],
+      edges: [{ from: 'review', to: 'confirm', description: '复审完成' }],
+      unresolved: [{ question: '谁依照仓库制度执行复审？', sources: [materials[0].id] }] } };
+  };
+  const token = 'test-design-diagram-credential';
+  service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') },
+    { credential: token, modelBinding: model });
+  client = new Client({ name: 'flowkit-design-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+  const material = { id: 'guide', title: '交付指南', content: '先复审，后由用户确认。' };
+  const input = { requestId: 'delivery-design', title: '交付流程设计', materials: [material] };
+  const create = args => client.callTool({ name: 'flowkit_create_design_diagram', arguments: args });
+  const first = await create(input);
+  assert.ok(!first.isError, JSON.stringify(first));
+  const result = JSON.parse(first.content[0].text);
+  assert.deepEqual((await readdir(result.directory)).sort(), ['design.html', 'design.mmd']);
+  const html = await readFile(path.join(result.directory, 'design.html'), 'utf8');
+  const view = readWorkflowPageData(html);
+  assert.equal(view.graph.mode, 'design');
+  assert.deepEqual(view.design.sources, [{ id: material.id, title: material.title, digest: artifactDigest(material.content) }]);
+  assert.equal(view.design.unresolved.length, 1);
+  assert.equal(JSON.parse((await create(input)).content[0].text).designHash, result.designHash);
+  assert.equal((await create({ ...input, title: '不同请求' })).isError, true);
+  assert.equal(calls, 1);
+  await writeFile(path.join(result.directory, 'design.mmd'), 'tampered');
+  assert.equal((await fetch(result.files.find(file => file.name.endsWith('.mmd')).url)).status, 409);
+  assert.equal((await create(input)).isError, true);
+});
+
 test('invalid placement and partition replies receive exact feedback before tightly scoped arrangement', async () => {
   for (const count of [52, 62]) {
     const nodes = Array.from({ length: count }, (_, index) => ({ id: 'node' + index, name: 'Step ' + index,
