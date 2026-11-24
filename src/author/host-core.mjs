@@ -268,7 +268,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           compiledPlan = await materializePlan(draft, proposal, { filename: path.join(workspace, 'candidate.workflow.js'), projectRoot: workspace });
           if (confirmedSource && compiledPlan.sourceHash !== confirmedSource) throw authorError('author-conflict', 'Confirmed Plan source changed');
           if (compiledPlan.diagnostics) {
-            ctx.state.planDiagnostics = compiledPlan.diagnostics.map(({ code, message, nodeId }) => ({ code, message, nodeId }));
+            ctx.state.planDiagnostics = compiledPlan.diagnostics.map(({ code, message, nodeId }) => ({
+              code, message, ...(typeof nodeId === 'string' ? { nodeId } : {})
+            }));
             return;
           }
           proposal = compiledPlan.proposal;

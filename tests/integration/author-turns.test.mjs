@@ -447,6 +447,37 @@ test('Plan repair receives a specific diagnostic when the proposal omits a termi
   assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'plan-repair').length, 1);
 });
 
+test('P2 Plan repair receives both workflow-level and node-level compiler diagnostics', async t => {
+  const f = await setup(t, { useNodeOptionsForNewDrafts: true });
+  const request = f.options.execution.request;
+  const validPlan = structuredClone(executableProposal);
+  validPlan.nodes[0].options.effect = 'read-only';
+  const invalidPlan = structuredClone(validPlan);
+  invalidPlan.contract = { input: { type: 'object', properties: { code: { type: 'string', pattern: '^[0-9]+$' } } } };
+  invalidPlan.nodes[1].options.output = {};
+
+  let diagnostics;
+  f.options.execution.request = async input => {
+    const task = input.prepared?.task;
+    if (task?.node.id === 'proposal' || task?.node.id === 'plan-repair') {
+      f.calls.push(input);
+      if (task.node.id === 'plan-repair') diagnostics = task.input.planDiagnostics;
+      return agentResult({ rawText: JSON.stringify(task.node.id === 'proposal' ? invalidPlan : validPlan) });
+    }
+    return request(input);
+  };
+
+  const ready = await advance(f, await f.start(), { choices: { executionMode: 'interactive-p2' } });
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.equal(ready.candidate.manifest.implementedStage, 'P2');
+  assert.deepEqual(diagnostics, [
+    { code: 'FK_C008', message: 'Unsupported workflow schema keyword: pattern' },
+    { code: 'FK_C018', message: 'Unknown terminal field: output', nodeId: 'done' }
+  ]);
+  assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id),
+    ['proposal', 'plan-repair', 'semantic-review']);
+});
+
 test('P2 derives subflow controls from bundled node options and validates supplementary edges', async t => {
   const f = await setup(t, { useNodeOptionsForNewDrafts: true });
   const request = f.options.execution.request;
