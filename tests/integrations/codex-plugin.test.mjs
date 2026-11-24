@@ -45,13 +45,28 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
   assert.deepEqual(mcp.mcpServers.flowkit, { type: 'http', url, bearer_token_env_var: 'FLOWKIT_MCP_TOKEN' });
 });
 
-test('local MCP previews and confirms an exact candidate, exports three files and replays additions after restart', async t => {
+test('local MCP pins a validated model layout, confirms the candidate and replays the three-file export after restart', async t => {
   let service, client;
   t.after(async () => { await client?.close(); await service?.close(); });
   const root = await ownedDirectory(t);
   const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'output') };
   const credential = 'fixture-test-credential-for-flowkit-mcp';
-  const options = { credential, canInstall: selector => selector === 'fixture@market', modelBinding: monthlyTimesheetModel() };
+  const modelBinding = monthlyTimesheetModel();
+  let layoutRequests = 0;
+  modelBinding.planLayout = async ({ guide, input }) => {
+    assert.match(guide, /flowkit-workflow-layout/);
+    assert.equal(input.task, 'placement');
+    layoutRequests++;
+    if (layoutRequests === 1) return { text: '{"schemaVersion":1}', provider: 'fixture', model: 'fixture' };
+    if (layoutRequests > 2) throw new Error('fixture model unavailable');
+    assert.match(input.feedback, /graph digest/);
+    const text = JSON.stringify({ schemaVersion: input.schemaVersion, graphDigest: input.graphDigest,
+      phases: [{ id: 'review', title: '工时复核', direction: 'TB' }],
+      placements: input.nodes.map(({ id }, row) => ({ id, phase: 'review', col: row === 4 ? 1 : 0, row })),
+      routes: [] });
+    return { text, provider: 'fixture', model: 'fixture' };
+  };
+  const options = { credential, canInstall: selector => selector === 'fixture@market', modelBinding };
   service = await startLocalMcp(config, options);
   const connect = async () => {
     client = new Client({ name: 'flowkit-local-integration', version: '1.0.0' });
@@ -87,12 +102,21 @@ test('local MCP previews and confirms an exact candidate, exports three files an
   await tool('flowkit_export_workflow', args, false);
   const preview = candidate.candidate.previewUrl;
   assert.match(await (await fetch(preview)).text(), /Check input/);
+  assert.equal(layoutRequests, 0);
   assert.equal((await fetch(preview + '/confirm', { method: 'POST' })).status, 404);
   const cookie = await browserIdentity(service);
+  const openPreview = () => fetch(preview, { headers: { cookie } }).then(response => response.text()).then(readWorkflowPageData);
+  const [first, second] = await Promise.all([openPreview(), openPreview()]);
+  assert.equal(layoutRequests, 2);
+  assert.deepEqual(first.layout, second.layout);
+  assert.equal(first.layout.phases[0].title, '工时复核');
+  assert.ok(first.layout.edges.every(edge => edge.route.length >= 2));
   await confirmInTestBrowser(preview, cookie);
   const approved = await tool('flowkit_get_workflow_draft', { draftId: draft.id });
   assert.ok(approved.stateVersion > candidate.stateVersion);
   const exported = await tool('flowkit_export_workflow', args);
+  const offline = readWorkflowPageData(await readFile(path.join(exported.directory, 'workflow.html'), 'utf8'));
+  assert.deepEqual(offline, first);
   assert.deepEqual((await readdir(exported.directory)).sort(), ['workflow.html','workflow.js','workflow.mmd']);
   for (const file of exported.files) {
     const contents = await readFile(path.join(exported.directory, file.name));
@@ -136,6 +160,7 @@ test('local MCP previews and confirms an exact candidate, exports three files an
   const recoveredExport = await tool('flowkit_export_workflow', args);
   assert.equal(recoveredExport.directory, exported.directory);
   assert.deepEqual(recoveredExport.files.map(file => file.sha256), exported.files.map(file => file.sha256));
+  assert.equal(layoutRequests, 2);
   assert.equal((await tool('flowkit_add_workflow', { ...addRequest, requestId: 'another-add' })).status, 'already_added');
   assert.equal((await tool('flowkit_add_workflow', { ...addRequest, sourceRef: 'other-candidate' })).status, 'conflict');
   const restoredOrigin = new URL(service.url).origin;
@@ -169,8 +194,12 @@ test('local MCP previews and confirms an exact candidate, exports three files an
   assert.deepEqual(optionsForCandidate.options.map(option => option.available), [true, true]);
   const externalRequest = { requestId: 'add-external', destination: 'flowkit', ...source };
   const confirmExternal = await tool('flowkit_add_workflow', externalRequest);
+  const fallback = readWorkflowPageData(await (await fetch(confirmExternal.confirmationUrl, { headers: { cookie: newCookie } })).text());
+  assert.equal(layoutRequests, 4);
+  assert.ok(fallback.layout.edges.every(edge => !edge.route));
   const imported = await (await confirmInTestBrowser(confirmExternal.confirmationUrl, newCookie)).json();
   assert.equal(imported.status, 'added');
+  assert.equal(layoutRequests, 4);
   assert.equal((await tool('flowkit_collection', {})).skills.length, 2);
   assert.deepEqual(await tool('flowkit_add_workflow', externalRequest), imported);
 });

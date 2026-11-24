@@ -21,7 +21,11 @@ const token = randomBytes(32).toString('hex');
 const live = process.argv.includes('--live');
 const interactive=process.argv.includes('--interactive');
 const readOnly = process.argv.includes('--p0b');
-const referenceMode = process.argv.includes('--reference');
+const fixtureIndex = process.argv.indexOf('--layout-fixture');
+const fixtureDirectory = fixtureIndex < 0 ? null : process.argv[fixtureIndex + 1];
+const layoutValidation = process.argv.includes('--verify-model-layout');
+const openai = process.argv.includes('--openai');
+const referenceMode = process.argv.includes('--reference') || !!fixtureDirectory;
 const specIndex = process.argv.indexOf('--v45-spec');
 const v45Spec = specIndex !== -1;
 const domainIndex = process.argv.indexOf('--contract-domain');
@@ -34,7 +38,13 @@ if (v45Spec && (!live || interactive || readOnly || referenceMode || contractCas
   throw new Error('Use --live --v45-spec <approved-business-spec.txt>');
 }
 const v45Input = v45Spec ? await readFile(process.argv[specIndex + 1], 'utf8') : null;
-const sourceKey = referenceMode ? newExportKey() : null;
+if (fixtureIndex >= 0 && !fixtureDirectory || layoutValidation && (!live || !referenceMode) || openai && !layoutValidation) {
+  throw new Error('Use --live --verify-model-layout --reference or --layout-fixture <signed export directory>, with optional --openai');
+}
+const importedFiles = fixtureDirectory && Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
+  [name, await readFile(path.join(fixtureDirectory, name), 'utf8')])));
+const sourceKey = referenceMode ? importedFiles ? JSON.parse(importedFiles['workflow.html']
+  .match(/<script type="application\/json" id="flowkit-export-provenance">([^<]+)<\/script>/)[1]) : newExportKey() : null;
 if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
 const goal = v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
   contractCase ? contractCase.goal : readOnly ?
@@ -48,33 +58,51 @@ const cwd = path.join(root, 'workspace');
 await mkdir(cwd);
 const service = await startLocalMcp({
   listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
-  ...(v45Spec ? { authorTaskTimeoutMs: 240000, authorTurnDurationMs: 660000 } : {}),
+  ...(v45Spec || layoutValidation ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: 660000 } : {}),
+  ...(openai ? { authorProvider: 'openai' } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
 }, { credential: token, ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
 
 async function testReferenceDelivery(tool) {
-  const { candidate } = await prepareStandardSkill({
+  const { candidate } = importedFiles ? readPortableExport(importedFiles, exportTrust([sourceKey.publicKey])) : await prepareStandardSkill({
     file: 'examples/v45/software-delivery.workflow.js', collectionId: 'v45-reference', skillId: 'software-delivery',
     name: 'software-delivery', description: 'V4.5 software delivery reference', version: '1.0.0',
     hostProfile: { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') },
     buildId: 'v45-reference', executionMode: 'interactive-p2',
   });
-  assert.equal(checkCandidate(candidate).nodes.length, 140);
+  const sourceGraph = checkCandidate(candidate);
+  if (!importedFiles) assert.equal(sourceGraph.nodes.length, 140);
   const cookie = await browserIdentity(service);
   const origin = new URL(service.url).origin;
   const upload = await fetch(origin + '/sources', { method: 'POST', headers: { cookie, origin },
-    body: new URLSearchParams({ source: JSON.stringify(publicDelivery(candidate, sourceKey)) }) });
+    body: new URLSearchParams({ source: JSON.stringify(importedFiles ?? publicDelivery(candidate, sourceKey)) }) });
   assert.equal(upload.status, 200);
   const { sourceRef } = await upload.json();
   const requestId = 'v45-cli-add';
   const waiting = await tool('flowkit_add_workflow', { requestId, sourceRef, candidateHash: candidate.hash, destination: 'flowkit' });
   assert.ok(waiting.confirmationUrl, JSON.stringify(waiting));
   const preview = readWorkflowPageData(await (await fetch(waiting.confirmationUrl, { headers: { cookie } })).text());
+  if (layoutValidation) assert.deepEqual(preview.graph, sourceGraph);
   const saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();
   assert.equal(saved.status, 'added');
   const db = new DatabaseSync(path.join(root, 'state', 'local-mcp.sqlite'), { readOnly: true });
   let binding;
-  try { binding = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get('add:' + requestId).value); }
+  let layoutProof;
+  try {
+    binding = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get('add:' + requestId).value);
+    if (layoutValidation) {
+      const row = db.prepare("SELECT value FROM local_mcp WHERE key LIKE 'preview-layout-selection:%' AND key LIKE ?")
+        .get('%:' + binding.candidateHash);
+      const selection = JSON.parse(row.value);
+      assert.equal(selection.source, 'model', JSON.stringify(selection));
+      assert.ok(preview.layout.edges.every(edge => edge.route?.length >= 2), 'The preview must use accepted model geometry');
+      const layout = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get(selection.key).value);
+      assert.ok(layout.receipts.some(r => r.accepted && r.provider === (openai ? 'openai' : 'codex')));
+      if (sourceGraph.nodes.length > 60) assert.ok(layout.receipts.some(r => r.task === 'partition' && r.accepted));
+      layoutProof = { nodes: sourceGraph.nodes.length, regions: sourceGraph.regions.length,
+        visibleEdges: preview.layout.edges.length, layoutHash: layout.layoutHash, skillContract: layout.layoutContractHash, requests: layout.receipts };
+    }
+  }
   finally { db.close(); }
   assert.equal(binding.candidateHash, saved.candidateHash);
   const { draftId, candidateHash } = binding;
@@ -84,8 +112,16 @@ async function testReferenceDelivery(tool) {
   const offline = readWorkflowPageData(await readFile(path.join(exported.directory, 'workflow.html'), 'utf8'));
   assert.deepEqual(offline, preview);
   assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
-  console.log(JSON.stringify({ path: 'v45-codex-mcp', candidateHash, directory: exported.directory,
-    graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, staleCandidateRejected: true }));
+  if (layoutValidation) {
+    const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
+      [name, await readFile(path.join(exported.directory, name), 'utf8')])));
+    assert.equal(readPortableExport(files, exportTrust([service.exportPublicKey])).candidate.hash, candidateHash);
+    assert.equal(files['workflow.js'], importedFiles?.['workflow.js'] ?? candidate.files['workflow.js']);
+    assert.equal(files['workflow.mmd'], importedFiles?.['workflow.mmd'] ?? candidate.files['workflow.mmd']);
+  }
+  console.log(JSON.stringify({ path: layoutValidation ? (openai ? 'layout-openai-mcp' : 'layout-codex-mcp') : 'v45-codex-mcp',
+    candidateHash, directory: exported.directory,
+    graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, staleCandidateRejected: true, layoutProof }));
   return saved;
 }
 
@@ -232,7 +268,7 @@ try {
   await mkdir(directEnv.CODEX_HOME);
   await writeFile(path.join(directEnv.CODEX_HOME,'config.toml'), '[mcp_servers.flowkit]\nurl = ' +
     JSON.stringify(service.url) + '\nbearer_token_env_var = "FLOWKIT_MCP_TOKEN"\nrequired = true\n' +
-    (v45Spec ? 'tool_timeout_sec = 690\n' : ''));
+    (v45Spec || layoutValidation ? 'tool_timeout_sec = 690\n' : ''));
   let saved;
   await withAppServer(directEnv, async ({ flowkit, tool }) => {
     assert.ok(flowkit);
@@ -253,7 +289,7 @@ try {
     assert.equal((await tool('flowkit_review_candidate', { ...identity, previousHash: candidate.previousHash })).qualified, true);
     await tool('flowkit_export_workflow', identity, true);
     const cookie = await browserIdentity(service);
-    const preview = readWorkflowPageData(await (await fetch(candidate.candidate.previewUrl)).text());
+    const preview = readWorkflowPageData(await (await fetch(candidate.candidate.previewUrl, { headers: { cookie } })).text());
     assert.equal(preview.candidateHash, identity.candidateHash);
     assert.equal((await confirmInTestBrowser(candidate.candidate.previewUrl, cookie)).status, 200);
     await tool('flowkit_export_workflow', {...identity, candidateHash: 'sha256:' + '0'.repeat(64)}, true);

@@ -1224,7 +1224,8 @@ function prepare(config) {
   const {graph, layout} = config;
   if (config.schemaVersion!==1 || graph.schemaVersion!==1) throw new Error('无法读取该工作流配置版本。');
   const actualNodes = records(graph.nodes);
-  const actualEdges = new Map(graph.referenceEdges.map(edge => [edge.edgeId, edge]));
+  const actualEdges = new Map([...graph.referenceEdges,...graph.executionEdges.filter(edge=>edge.origin==='derived')]
+    .map(edge => [edge.edgeId, edge]));
   const phaseMap = records(layout.phases);
   const visualNodes = layout.nodes.map(place => {
     const spec = actualNodes.get(place.nodeId);
@@ -1265,7 +1266,7 @@ function prepare(config) {
     if (spec) mapped.add(spec.edgeId);
     return {...place, spec};
   });
-  if (sets.size !== actualNodes.size || mapped.size !== actualEdges.size) throw new Error('流程结构的展示映射不完整。');
+  if (sets.size !== actualNodes.size || graph.referenceEdges.some(edge=>!mapped.has(edge.edgeId))) throw new Error('流程结构的展示映射不完整。');
   return { graph, runView:config.runView, mermaid:config.mermaid, groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
     count:visualNodes.filter(node => node.phase===phase.id && !node.helper).length +
       new Set(visualNodes.filter(node => node.phase===phase.id && node.helper && node.spec).map(node => node.nodeId)).size,
@@ -1285,8 +1286,11 @@ const inspector=$('inspector'),tooltip=$('tooltip'),miniWorld=$('minimapWorld'),
 const nodes=records(DATA.nodes), edges=DATA.edges, phaseMap=records(DATA.phases);
 const regions = new Map(DATA.graph.regions.map(region => [region.ownerId,region]));
 const actualNodes = records(DATA.graph.nodes);
-const WORLD_W = Math.ceil(Math.max(...DATA.nodes.map(node => node.x+node.w), ...DATA.phases.map(phase => phase.x+phase.w))+70);
-const WORLD_H = Math.ceil(Math.max(...DATA.nodes.map(node => node.y+node.h), ...DATA.phases.map(phase => phase.y+phase.h))+90);
+const displayedGroups = DATA.edges.some(edge=>edge.route) ? DATA.groups : [];
+const WORLD_W = Math.ceil(Math.max(...DATA.nodes.map(node => node.x+node.w), ...DATA.phases.map(phase => phase.x+phase.w),
+  ...displayedGroups.map(group => group.x+group.w))+70);
+const WORLD_H = Math.ceil(Math.max(...DATA.nodes.map(node => node.y+node.h), ...DATA.phases.map(phase => phase.y+phase.h),
+  ...displayedGroups.map(group => group.y+group.h))+90);
 const MINI_SCALE_X=184/WORLD_W, MINI_SCALE_Y=96/WORLD_H;
 for (const element of [world,edgeLayer,miniWorld]) {
   element.style.width = WORLD_W+'px';
@@ -1394,6 +1398,10 @@ function anchor(n,side,offset=0){
  return{x:x+w/2+offset,y:y+h};
 }
 function geometry(e){
+ if(e.route){
+   const path=e.route, a=path[Math.floor((path.length-1)/2)], b=path[Math.ceil((path.length-1)/2)];
+   return {d:path.map(([x,y],i)=>(i?'L ':'M ')+x+' '+y).join(' '),mx:(a[0]+b[0])/2,my:(a[1]+b[1])/2};
+ }
  const s=nodes.get(e.source),t=nodes.get(e.target);
  const sx=s.x+s.w/2,sy=s.y+s.h/2,tx2=t.x+t.w/2,ty2=t.y+t.h/2;
  const dx=tx2-sx,dy=ty2-sy;

@@ -43,13 +43,13 @@ function parseIntent(value) {
   return result;
 }
 
-function runCodex(input, { model, workspace, signal }) {
+function runCodex(input, { model, workspace, signal, captureTrace }) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const args = ['exec', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check',
       '--sandbox', 'read-only', '-C', workspace, '-c', 'mcp_servers={}', ...(model ? ['--model', model] : []), '-'];
     const child = spawn('codex', args, { windowsHide: true, signal, stdio: ['pipe', 'pipe', 'pipe'] });
-    let output = '', usage = {}, unexpected = false;
+    let output = '', usage = {}, unexpected = false, threadId;
     child.stderr.resume();
     child.stdin.on('error', () => {});
     const lines = createInterface({ input: child.stdout });
@@ -57,6 +57,7 @@ function runCodex(input, { model, workspace, signal }) {
       if (Buffer.byteLength(line) > 512 * 1024) { unexpected = true; child.kill(); return; }
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      if (captureTrace && event.type === 'thread.started') threadId = event.thread_id;
       if (event.item && ['mcp_tool_call', 'command_execution', 'web_search', 'file_change'].includes(event.item.type)) {
         unexpected = true;
         child.kill();
@@ -67,7 +68,8 @@ function runCodex(input, { model, workspace, signal }) {
     child.once('error', reject);
     child.once('close', code => {
       if (code || !output || unexpected) reject(new Error('Codex model did not return a bounded JSON response without tools'));
-      else resolve({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: jsonText(output) }] }], usage });
+      else resolve({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: jsonText(output) }] }],
+        usage, ...(threadId ? { id: 'codex:' + threadId } : {}) });
     });
     child.stdin.end(input);
   });
@@ -79,17 +81,22 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
   const selectedModel = model || 'codex-default';
   const observed = new Map();
 
+  async function complete(input, options, signal, captureTrace = false) {
+    if (provider === 'codex') {
+      return Response.json(await runCodex(input.map(item => item.content).join('\n'), { model, workspace, signal, captureTrace }));
+    }
+    return fetcher('https://api.openai.com/v1/responses', {
+      method: 'POST', signal, headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...options, input, model: selectedModel, store: false })
+    });
+  }
+
   async function request(body, { signal } = {}) {
     const intent = body.flowkitIntent;
     const input = intent ? [{ role: 'user', content: intentInstructions + '\n' + JSON.stringify(intent) }] :
       [{ role: 'developer', content: localTaskInstructions }, ...body.input];
-    const response = provider === 'codex' ?
-      Response.json(await runCodex(input.map(item => item.content).join('\n'), { model, workspace, signal })) :
-      await fetcher('https://api.openai.com/v1/responses', {
-        method: 'POST', signal, headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
-        body: JSON.stringify(intent ? { model: selectedModel, input, text: { format: { type: 'json_object' } }, max_output_tokens: 4096, store: false } :
-          { ...body, input, model: selectedModel, store: false })
-      });
+    const response = await complete(input,
+      intent ? { text: { format: { type: 'json_object' } }, max_output_tokens: 4096 } : body, signal);
     if (!intent) return response;
     if (!response.ok) throw new Error('Intent provider returned HTTP ' + response.status);
     const json = await response.json();
@@ -100,6 +107,21 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
   }
 
   return {
+    async planLayout({ guide, input, signal }) {
+      const deadline = AbortSignal.timeout(timeoutMs);
+      const response = await complete([{ role: 'developer', content: guide },
+        { role: 'user', content: JSON.stringify(input) }],
+      { text: { format: { type: 'json_object' } }, max_output_tokens: 8192 },
+      signal ? AbortSignal.any([signal, deadline]) : deadline, true);
+      if (!response.ok) throw new Error('Layout provider returned HTTP ' + response.status);
+      const result = await response.json();
+      if (result.status !== 'completed') throw new Error('Layout provider did not complete');
+      const text = result.output?.flatMap(part => part.type === 'message' ? part.content ?? [] : [])
+        .filter(part => part.type === 'output_text').map(part => part.text).join('');
+      if (!text || Buffer.byteLength(text) > 192 * 1024) throw new Error('No bounded layout provider result');
+      return { text, provider, model: result.model ?? selectedModel,
+        requestId: response.headers.get('x-request-id') ?? result.id };
+    },
     execution: {
       request,
       async createSession(ports) {

@@ -50,6 +50,10 @@ function layoutFor(graph, definition) {
     // GraphSnapshot redacts predicate literals. Curated descriptions also depend on the exact predicates.
     definition && graphContentHash(definition.nodes.filter(node => node.type === 'condition')
       .map(({ id, branches }) => [id, branches]).sort()) === reference.conditionDigest) return reference.layout;
+  return defaultLayout(graph);
+}
+
+export function defaultLayout(graph) {
   const placements = new Map();
   const nodes = [];
   function place(node, helper) {
@@ -96,8 +100,8 @@ function scriptData(value) {
     '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
 }
 
-function annotatedLayout(graph,manifest,definition) {
-  const layout=layoutFor(graph,definition);
+function annotatedLayout(graph,manifest,definition,viewLayout) {
+  const layout=viewLayout??layoutFor(graph,definition);
   if(manifest?.schemaVersion!==1||manifest.graphDigest!==graph.graphDigest||
       !Array.isArray(manifest.nodeDescriptions)||manifest.nodeDescriptions.length>graph.nodes.length)return layout;
   const nodeIds=new Set(graph.nodes.map(node=>node.id));
@@ -124,9 +128,9 @@ export function readWorkflowPageData(html) {
 }
 
 /** Assemble the confirmed offline viewer. The caller owns the same-origin confirmation form. */
-export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest }) {
+export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout }) {
   if (!graph?.nodes?.length || typeof graph.graphDigest !== 'string') throw new TypeError('Missing compiled workflow graph');
-  const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest,definition),
+  const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest,definition,viewLayout),
     ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}) });
   const html = controls ? shell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : shell.replace(controlsSlot, '');

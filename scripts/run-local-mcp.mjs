@@ -15,7 +15,8 @@ import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canExportPortable, commitDelivery, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
-import { viewerHash, workflowPage, workflowRunPage, workflowTracePage } from './workflow-viewer.mjs';
+import { defaultLayout, viewerHash, workflowPage, workflowRunPage, workflowTracePage } from './workflow-viewer.mjs';
+import { generateLayout, layoutContractHash } from './workflow-viewer/auto-layout.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
 const exact = (left, right) => typeof left === 'string' && typeof right === 'string' &&
@@ -175,6 +176,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
   let authorHost, server, modelWorkspace;
   let storageClosed = false;
   const recoveryProofs = new Map();
+  const layoutAbort = new AbortController();
+  const layoutRequests = new Map();
   const closeStorage = async () => {
     if (storageClosed) return;
     storageClosed = true;
@@ -189,6 +192,38 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
     const model = dependencies.modelBinding ?? localModel({ provider, timeoutMs: config.authorTaskTimeoutMs,
       model: process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'], apiKey: process.env.OPENAI_API_KEY, workspace: modelWorkspace });
+    const selectedLayoutKey = hash => 'preview-layout-selection:' + viewerHash + ':' + hash;
+    function selectedLayout(hash) {
+      const selected = get(selectedLayoutKey(hash));
+      return selected?.source === 'model' ? get(selected.key)?.layout : undefined;
+    }
+    async function preparePreviewLayout(hash, graph, authorized) {
+      const selectionKey = selectedLayoutKey(hash);
+      if (get(selectionKey) || !authorized || !model.planLayout || layoutAbort.signal.aborted) return selectedLayout(hash);
+      const key = 'preview-layout:' + viewerHash + ':' + layoutContractHash + ':' + graph.graphDigest;
+      let cached = get(key), reason;
+      if (!cached) {
+        let pending = layoutRequests.get(key);
+        if (!pending && layoutRequests.size < capacity.maxPhysicalExecutions) {
+          const deadline = AbortSignal.timeout(config.authorTurnDurationMs ?? 240_000);
+          const signal = AbortSignal.any([layoutAbort.signal, deadline]);
+          pending = Promise.resolve().then(async () => {
+            const result = await generateLayout(graph, defaultLayout(graph), model.planLayout, signal);
+            if (!result.layout || layoutAbort.signal.aborted) return result;
+            return insert(key, { ...result, graphDigest: graph.graphDigest, layoutContractHash,
+              layoutHash: artifactDigest(JSON.stringify(result.layout)) });
+          }).catch(() => ({ reason: deadline.aborted ? 'layout-deadline' : 'layout-unavailable' }))
+            .finally(() => layoutRequests.delete(key));
+          layoutRequests.set(key, pending);
+        }
+        cached = pending && await pending;
+        reason = cached?.reason ?? 'layout-busy';
+      }
+      if (layoutAbort.signal.aborted) return undefined;
+      insert(selectionKey, cached?.layout ? { source: 'model', key } :
+        { source: 'fallback', reason, receipts: cached?.receipts ?? [] });
+      return selectedLayout(hash);
+    }
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
       budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
@@ -273,7 +308,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const portable = canExportPortable(draft.candidate);
       const receiptId = portable ? artifactDigest(JSON.stringify(['portable-v1', candidateHash, exportKey.publicKey])).slice(7) : candidateHash.slice(7);
       const directory = path.join(exportDir, receiptId);
-      const files = publicDelivery(draft.candidate, portable ? exportKey : undefined);
+      const files = publicDelivery(draft.candidate, portable ? exportKey : undefined, selectedLayout(candidateHash));
       const hashes = Object.fromEntries(deliveryNames.map(name => [name, artifactDigest(files[name])]));
       const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, viewerHash });
       if (record.viewerHash !== viewerHash || authorIdentity(record.hashes) !== authorIdentity(hashes) || record.directory !== directory) {
@@ -526,8 +561,10 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
           const graph = checkCandidate(draft.candidate);
+          const viewLayout = await preparePreviewLayout(draft.candidate.hash, graph,
+            current && (draft.savedReceipt || trustedDraft(draft)));
           return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls,
-            mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition }));
+            mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition, viewLayout }));
         }
         if (req.method === 'POST' && action === 'confirm' && operator(req) && req.headers.origin === origin) {
           const challenge = unseal('confirm', new URLSearchParams(await readBody(req, 8192)).get('challenge'));
@@ -576,10 +613,12 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     return {
       url: origin + mcpPath, collectionId, operatorUrl: origin + '/operator/' + bootstrap, exportPublicKey: exportKey.publicKey,
       async close() {
+        layoutAbort.abort();
         if (server.listening) {
           server.closeAllConnections();
           await new Promise(resolve => server.close(resolve));
         }
+        await Promise.allSettled(layoutRequests.values());
         const outcome = await authorHost.close({ mode: 'cancel' });
         if (outcome.closed) await closeStorage();
         return outcome;
