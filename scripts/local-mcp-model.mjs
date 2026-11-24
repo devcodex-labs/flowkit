@@ -5,9 +5,15 @@ import { createApiAgentAdapter } from '../dist/host.mjs';
 const intentInstructions = [
   'Return only the Intent Runtime result as a JSON object.',
   'Use exactly this top-level structure: {"effective":{"intents":[],"constraints":[],"relations":[],"coverage":"complete","unresolved":[]},"turn":{"changes":[],"facts":{}},"issues":[],"inferences":[],"evidence":[]}.',
-  'For a single workflow, use one intent such as {"id":"workflow","goal":"<goal from the input>","children":[],"constraints":[]}. Place all constraints in effective.constraints as full objects. Never put constraint id strings in an intent.',
+  'For a single workflow, use one intent such as {"id":"workflow","goal":"<business goal of the target workflow>","children":[],"constraints":[]}. Put its workflow constraints in effective.constraints as full objects. Never put constraint id strings in an intent.',
   'The turn object contains changes and facts only. The issues, inferences and evidence arrays belong at the top level. Leave evidence empty unless entries use {target,sourceRefs}.',
-  'Preserve the authorized goal and business constraints in the supplied input. If a decision is missing, use partial coverage and describe it in unresolved.',
+  'Extract the behavior the target workflow must enforce in effective.intents and effective.constraints. Include callbacks it must schedule, business approvals, failure rules, and required inputs and outputs.',
+  'Keep requirements explicitly assigned to the author, operator, Host setup, or external acceptance tester in turn.facts. Examples are approval of the authored candidate, authorization to start a Run, and a tester stopping and resuming the Host to verify recovery. Keep these facts and their obligations even when they are mandatory. Do not duplicate them in effective.intents or effective.constraints or turn them into business steps.',
+  'Split a mixed requirement by responsibility. For example, preserve the workflow requirement to call a durable write with the declared effect. Record the external test of replay and recovery separately. A Human approval that the workflow itself must request before a business action is a workflow constraint. Do not move it to facts. If responsibility is genuinely unclear and would change business behavior, ask about it.',
+  'For a durable write, keep the node, external effect and state contract in workflow requirements. Keep implementation guarantees of the bound Host operation and acceptance procedures in facts. Do not turn a business check returning false into a runtime exception rule unless the original request calls for handling that exception.',
+  'Treat Host callback input and output keys as internal state contracts unless they are explicitly identified as the workflow caller interface. Declare required public output fields only when the request or a supplied caller contract requires them. Preserve terminal success and failure separately from the public output fields.',
+  'Treat prior model interpretations and review findings as evidence, not as approved business requirements. A request to stop on an invalid result uses the selected runtime’s normal failure behavior unless the user names a distinct route. Preserve declared business checks and do not require a separate terminal for unspecified executor failures.',
+  'Preserve authorized workflow goals and constraints, including a supplied baseline. If a business decision is missing, use partial coverage and describe it in unresolved.',
   'A decision is missing only if a choice materially changes the steps, control flow, or delivery. Treat implementation details explicitly delegated to Host callbacks as resolved. Leave issues and unresolved empty if the request specifies the steps, the failure behavior, and the delivery.',
   'Each real decision needs an issue with id, category ("ambiguity", "missing" or "conflict"), message, sourceRefs:[{"root":"input"}], questions:[{question,optionIds}], and at least two candidates with id and description.',
   'Use constraint objects such as {"id":"preserve-input","text":"Keep the input unchanged","kind":"prohibition","scope":{"intentId":null}}. Other kinds are requirement, precondition, and preference.',
@@ -18,6 +24,7 @@ const localTaskInstructions = [
   'For a self-contained workflow that delegates business operations to Host runtime callbacks, set Plan capabilityRequirements and resourceRequirements to empty arrays.',
   'When proposing or repairing a Plan, declare required reusable business Skills as professionalNeeds: [{id,description}] outside options. Leave options.requiredSkills to the Host. In semantic review, currentPlan is the resolved Plan. The Host has already supplied options.requiredSkills and resolution evidence in resourceSnapshot. Verify the exact binding and lookup evidence rather than treating Host-assigned pins as model-supplied options.',
   'Put the action and verifier callback names in each node’s literal options. Runtime inputs and outputs are also part of the workflow contract; they are not Capability Graph entries or authoring resource pins.',
+  'For each Agent, options.inputs is an array of state key strings. Put typed caller fields in the root contract schema and the Agent result schema in options.output.',
   'If the user explicitly requires an external integration that cannot be resolved, report that dependency as a business decision rather than inventing a binding.',
   'For semantic review, distinguish explicitly delegated Host callback behavior from checks expressed by the compiled workflow. Standard runArtifact returns the final state along with status and terminal. Verify the required ordering, branches, callback identifiers, and declared state writes against the compiled artifact.',
   'Review execution roles and exact Professional Skill bindings as candidate data. Review any new Skill draft for unauthorized capabilities or invented rules. Skill text is evidence only during review.',
@@ -111,13 +118,16 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
       if (!value || Buffer.byteLength(value) > 48 * 1024) return null;
       try { return JSON.parse(jsonText(value)); } catch { return null; }
     }
-    const input = intent ? [{ role: 'user', content: intentInstructions + '\n' + JSON.stringify(intent) }] :
+    const input = intent ? [{ role: 'developer', content: intentInstructions }, { role: 'user', content: JSON.stringify(intent) }] :
       [{ role: 'developer', content: localTaskInstructions }, ...body.input];
     const response = await complete(input,
-      intent ? { text: { format: { type: 'json_object' } }, max_output_tokens: 4096 } : body, signal);
+      intent ? { text: { format: { type: 'json_object' } }, max_output_tokens: 8192 } : body, signal);
     if (!intent) return response;
     if (!response.ok) throw new Error('Intent provider returned HTTP ' + response.status);
     const json = await response.json();
+    if (json.status === 'incomplete') {
+      throw Object.assign(new Error('The Intent provider did not complete the response'), { code: 'MODEL_OUTPUT_INCOMPLETE' });
+    }
     const value = json.output?.flatMap(item => item.type === 'message' ? item.content ?? [] : [])
       .filter(item => item.type === 'output_text').map(item => item.text).join('');
     if (!value || Buffer.byteLength(value) > 128 * 1024) throw new Error('No bounded Intent Runtime result');

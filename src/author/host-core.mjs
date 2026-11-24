@@ -120,10 +120,13 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const skillDrafts = new Map();
   function setReviewCandidate(state, candidate, previous) {
     const diff = reviewStandardCandidate(candidate, previous);
-    const { mode, artifactHash, workflowDefinition } = candidate.manifest;
+    const { mode, artifactHash, workflowDefinition, graphSnapshotJson } = candidate.manifest;
     state.candidate = candidate;
     state.candidateDiff = diff;
-    // The compiler evidence and semantic diff describe the reviewed bytes; the model does not need the bundled files or the serialized graph.
+    // reviewStandardCandidate has checked this graph against the exact candidate.
+    diff.compilerEvidence.actionRoutes = JSON.parse(graphSnapshotJson).executionEdges
+      .filter(({ role }) => role === 'action-failure' || role === 'action-error')
+      .map(({ from, to, role }) => ({ from, to, role }));
     state.reviewTarget = { hash: candidate.hash, mode, artifactHash, contract: workflowDefinition?.contract ?? null };
   }
   function authoringManifest({ graphSnapshotJson: _graph, ...manifest }) {
@@ -167,7 +170,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.authorizedRequest = structuredClone(authorization);
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
       ctx.state.authorizedRequest.choices = draft.choices;
-      if (supportsNodeOptions && options.useNodeOptionsForNewDrafts && draft.operation === 'create' && !draft.candidate) {
+      if (supportsNodeOptions && options.useNodeOptionsForNewDrafts && draft.operation !== 'import' && !draft.candidate) {
         ctx.state.authorizedRequest.planSource = 'node-options';
       }
       let input = turn.request.input;
@@ -217,7 +220,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         }
       }
       ctx.state.intentChanges = ctx.state.effectiveIntent.changes;
-      ctx.state.baselineEvidence = { ...(draft.intent ? { intent: draft.intent } : {}),
+      ctx.state.baselineEvidence = { ...(draft.intent ? { priorModelInterpretation: draft.intent } : {}),
         plan: draft.plan ?? null, candidateHash: draft.candidate?.hash ?? null,
         workflow: draft.previousCandidate ? { manifest: authoringManifest(draft.previousCandidate.manifest) } : null,
         materials: context ?? null };
@@ -471,6 +474,11 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     // The generated workflow routes action failures through its needs-info
     // terminal. Preserve the explicit technical recovery state in the Host.
     if (result.error?.outcome === 'needs-revision') throw result.error;
+    const diff = result.state?.candidateDiff;
+    if (diff) {
+      const { actionRoutes: _reviewOnlyRoutes, ...compilerEvidence } = diff.compilerEvidence;
+      result.state.candidateDiff = { ...diff, compilerEvidence };
+    }
     return { outcome: result.terminal === 'candidate-ready' ? 'candidate-ready' : result.terminal === 'needs-info' ?
       'needs-clarification' : 'needs-revision', state: result.state, coreIdentity: identity, intentBaseline };
   } finally {

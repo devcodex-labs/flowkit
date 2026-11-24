@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createPrivateKey, generateKeyPairSync } from 'node:crypto';
 import { once } from 'node:events';
-import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -11,6 +12,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
 import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
 import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
+import { localModel } from '../../scripts/local-mcp-model.mjs';
 import { defaultLayout, readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
 import { generateLayout } from '../../scripts/workflow-viewer/auto-layout.mjs';
 import { runArtifact } from '../../src/runtime/run.mjs';
@@ -19,7 +21,7 @@ import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
 import { bindProfessionalNeeds } from '../../src/author/workflow-professional-bindings.mjs';
 import { prepareProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
-import { runApprovedCollectionWorkflow } from '../../src/host.mjs';
+import { openOfflineWorkflowDependencies, runApprovedCollectionWorkflow, sealOfflineWorkflowDependencies } from '../../src/host.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from './local-mcp-fixture.mjs';
 
 async function ownedDirectory(t) {
@@ -48,6 +50,29 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
   assert.equal(Object.hasOwn(manifest, 'skills'), false);
   const mcp = JSON.parse(await readFile(path.join(plugin, manifest.mcpServers), 'utf8'));
   assert.deepEqual(mcp.mcpServers.flowkit, { type: 'http', url, bearer_token_env_var: 'FLOWKIT_MCP_TOKEN' });
+});
+
+test('local Intent sends workflow scope guidance separately from raw materials and preserves acceptance facts', async () => {
+  const input = { input: 'The workflow must ask for business approval. The tester will validate recovery.', context: { revision: '30' } };
+  const intent = { effective: { intents: [{ id: 'work', goal: 'Perform the change', children: [], constraints: [] }],
+    constraints: [{ id: 'approval', text: 'Ask for business approval', kind: 'requirement', scope: { intentId: 'work' } }],
+    relations: [], unresolved: [], coverage: 'complete' },
+  turn: { changes: [], facts: { externalAcceptance: ['The tester will validate recovery'] } }, issues: [], inferences: [], evidence: [] };
+  let status = 'completed';
+  const model = localModel({ provider: 'openai', model: 'fixture', apiKey: 'fixture',
+    async fetcher(_url, options) {
+      const request = JSON.parse(options.body);
+      const [instructions, material] = request.input;
+      assert.equal(request.max_output_tokens, 8192);
+      assert.equal(instructions.role, 'developer');
+      assert.match(instructions.content, /Keep requirements explicitly assigned.*external acceptance tester in turn\.facts/);
+      assert.match(instructions.content, /A Human approval that the workflow itself must request.*workflow constraint/);
+      assert.deepEqual(material, { role: 'user', content: JSON.stringify(input) });
+      return Response.json({ status, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(intent) }] }] });
+    } });
+  assert.deepEqual(await model.execution.request({ flowkitIntent: input }), intent);
+  status = 'incomplete';
+  await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INCOMPLETE' });
 });
 
 test('the local Author drafts only after catalog lookup, publishes the approved Skill with the workflow, and reuses it', async t => {
@@ -211,6 +236,45 @@ test('the local Author drafts only after catalog lookup, publishes the approved 
     const run = await runApprovedCollectionWorkflow(store, request, { ...options, resolveRunProfessionalSkill: resolution }, {});
     assert.equal(run.status, 'succeeded');
     assert.equal(dispatched, 1);
+
+    const keyDb = new DatabaseSync(path.join(stateDir, 'local-mcp.sqlite'), { readOnly: true });
+    let signer;
+    try {
+      const key = JSON.parse(keyDb.prepare('SELECT value FROM local_mcp WHERE key = ?').get('export-key-v1').value);
+      signer = createPrivateKey({ key: Buffer.from(key.privateKey, 'base64url'), format: 'der', type: 'pkcs8' });
+    } finally { keyDb.close(); }
+    const recipient = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const origin = openLocalSkillStore(path.join(stateDir, 'author.sqlite'), () => false, () => false, { namespace: 'flowkit-local' });
+    let encoded;
+    try {
+      const original = portable.candidate;
+      const bundleOptions = { store: origin, target: { collectionId: original.manifest.collectionId,
+        skillId: original.manifest.skillId, candidateHash: original.hash }, signerPrivateKey: signer,
+      recipientPublicKey: recipient.publicKey, resolveProfessionalSkill: resolution };
+      await assert.rejects(sealOfflineWorkflowDependencies({ ...bundleOptions, authorize: () => false }), /denied/);
+      encoded = await sealOfflineWorkflowDependencies({ ...bundleOptions, authorize: scope => scope.action === 'export' });
+    } finally { origin.close(); }
+    assert.doesNotMatch(encoded, /Use the confirmed input/);
+    let activeTrust = true, activeGrant = true;
+    const recipientOptions = { recipientPrivateKey: recipient.privateKey,
+      isTrustedSigner: value => activeTrust && value === service.exportPublicKey,
+      authorize: scope => activeGrant && (scope.action !== 'read-skill' || scope.execution.executionRef === request.executionRef) };
+    await assert.rejects(openOfflineWorkflowDependencies(encoded, { ...recipientOptions,
+      recipientPrivateKey: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey }), /recipient/);
+    const edited = JSON.parse(encoded);
+    edited.ciphertext = (edited.ciphertext[0] === 'a' ? 'b' : 'a') + edited.ciphertext.slice(1);
+    await assert.rejects(openOfflineWorkflowDependencies(JSON.stringify(edited), recipientOptions), /verify/);
+    await assert.rejects(openOfflineWorkflowDependencies(encoded, { ...recipientOptions, authorize: () => false }), /authorize/);
+    const offline = await openOfflineWorkflowDependencies(encoded, recipientOptions);
+    const installed = store.readVersion(request.collectionId, request.skillId, request.candidateHash);
+    const offlineOptions = { ...options, resolveRunProfessionalSkill: offline.resolverFor(installed) };
+    assert.equal((await runApprovedCollectionWorkflow(store, request, offlineOptions, {})).status, 'succeeded');
+    assert.equal(dispatched, 2);
+    activeGrant = false;
+    await assert.rejects(runApprovedCollectionWorkflow(store, request, offlineOptions, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
+    activeGrant = true; activeTrust = false;
+    await assert.rejects(runApprovedCollectionWorkflow(store, request, offlineOptions, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
+    assert.equal(dispatched, 2);
   } finally { store.close(); }
 });
 
@@ -245,6 +309,14 @@ test('project design uses known source IDs, commits two offline files and replay
   t.after(async () => { await client?.close(); await service?.close(); });
   const root = await ownedDirectory(t);
   const model = monthlyTimesheetModel();
+  const material = { id: 'guide', title: '交付指南', content: '先复审，后由用户确认。' };
+  const materialRef = { kind: 'material', id: material.id, sha256: artifactDigest(material.content) };
+  let activeSource = true, changedSource = false, authorInputs = [], acceptedRuns = 0;
+  const physical = model.execution.request;
+  model.execution.request = async input => {
+    if (input.flowkitIntent) authorInputs.push(input.flowkitIntent);
+    return physical(input);
+  };
   let calls = 0;
   model.planDesign = async ({ materials }) => {
     calls++;
@@ -256,10 +328,24 @@ test('project design uses known source IDs, commits two offline files and replay
   };
   const token = 'test-design-diagram-credential';
   service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') },
-    { credential: token, modelBinding: model });
+    { credential: token, modelBinding: model,
+      readAuthoringMaterial({ id, requestContext }) {
+        assert.equal(requestContext.principalId, 'flowkit-local-owner');
+        return activeSource && id === material.id
+          ? { authorized: true, ...material, content: changedSource ? material.content + '变更' : material.content } : null;
+      },
+      async runWorkflow(scope, { candidate, store }) {
+        if (scope.executionRef !== 'authorized-design-run') throw new Error('Host denied this execution reference');
+        const skillDirectory = path.join(root, 'runtime');
+        await writeFile(path.join(skillDirectory, 'workflow.js'), candidate.files['workflow.js']);
+        return runApprovedCollectionWorkflow(store, { ...scope, skillDirectory }, {
+          hostProfile: candidate.manifest.hostProfile, authorizeExecution: ({ executionRef }) => executionRef === 'authorized-design-run',
+          runtime: { isControlSignal: () => false, runVerification: () => true, runAction: async () => { acceptedRuns++; } }
+        }, {});
+      }
+    });
   client = new Client({ name: 'flowkit-design-test', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
-  const material = { id: 'guide', title: '交付指南', content: '先复审，后由用户确认。' };
   const input = { requestId: 'delivery-design', title: '交付流程设计', materials: [material] };
   const create = args => client.callTool({ name: 'flowkit_create_design_diagram', arguments: args });
   const first = await create(input);
@@ -274,6 +360,45 @@ test('project design uses known source IDs, commits two offline files and replay
   assert.equal(JSON.parse((await create(input)).content[0].text).designHash, result.designHash);
   assert.equal((await create({ ...input, title: '不同请求' })).isError, true);
   assert.equal(calls, 1);
+  const call = async (name, args) => {
+    const response = await client.callTool({ name, arguments: args });
+    return { ...JSON.parse(response.content[0].text), isError: response.isError === true };
+  };
+  const pinned = await call('flowkit_create_design_diagram', { requestId: 'pinned-design', title: input.title, sources: [materialRef] });
+  assert.equal((await fetch(pinned.files[0].url)).status, 200);
+  const draft = await call('flowkit_start_workflow', { requestId: 'design-to-workflow', operation: 'create',
+    goal: '基于交付指南起草工作流', executionMode: 'standard' });
+  const turn = { draftId: draft.id, turnId: 'from-design', expectedStateVersion: draft.stateVersion,
+    input: '结合交付指南和需求起草流程', target: { name: 'monthly-timesheet' } };
+  const designSource = { kind: 'design', ref: pinned.designRef, sha256: pinned.designHash };
+  const requirement = { kind: 'text', id: 'requirement', title: '交付需求', content: '副本校验通过后交付。' };
+  const wrong = await call('flowkit_prepare_workflow', { turn, sources: [{ ...designSource, sha256: artifactDigest('wrong') }] });
+  assert.equal(wrong.error.code, 'FKA_MATERIAL_UNAVAILABLE');
+  assert.equal(authorInputs.length, 0);
+  const candidate = await call('flowkit_prepare_workflow', { turn, sources: [designSource, requirement] });
+  assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
+  assert.deepEqual(authorInputs[0].context.materials.map(item => item.id), [material.id, requirement.id]);
+  assert.equal(authorInputs[0].context.designs[0].sha256, pinned.designHash);
+  const follow = { ...turn, turnId: 'continued', expectedStateVersion: candidate.stateVersion, input: '继续复审' };
+  activeSource = false;
+  assert.equal((await call('flowkit_prepare_workflow', { turn: follow })).error.code, 'FKA_MATERIAL_UNAVAILABLE');
+  for (const file of pinned.files) assert.equal((await fetch(file.url)).status, 403);
+  activeSource = true; changedSource = true;
+  assert.equal((await call('flowkit_prepare_workflow', { turn: follow })).error.code, 'FKA_MATERIAL_CHANGED');
+  assert.equal((await fetch(pinned.files[0].url)).status, 403);
+  changedSource = false;
+  assert.equal((await fetch(pinned.files[0].url)).status, 200);
+  assert.equal(authorInputs.length, 1);
+  await mkdir(path.join(root, 'runtime'));
+  const execution = { skillId: 'unapproved', candidateHash: candidate.candidate.candidateHash, executionRef: 'authorized-design-run' };
+  assert.equal((await call('flowkit_run_workflow', execution)).isError, true);
+  const accepted = await call('flowkit_add_workflow', { requestId: 'approve-design-run',
+    sourceRef: draft.id, candidateHash: candidate.candidate.candidateHash });
+  const cookie = await browserIdentity(service);
+  const saved = await (await confirmInTestBrowser(accepted.confirmationUrl, cookie)).json();
+  assert.equal((await call('flowkit_run_workflow', { ...execution, skillId: saved.workflowId, executionRef: 'denied' })).isError, true);
+  assert.equal((await call('flowkit_run_workflow', { ...execution, skillId: saved.workflowId })).status, 'succeeded');
+  assert.equal(acceptedRuns, 1);
   await writeFile(path.join(result.directory, 'design.mmd'), 'tampered');
   assert.equal((await fetch(result.files.find(file => file.name.endsWith('.mmd')).url)).status, 409);
   assert.equal((await create(input)).isError, true);

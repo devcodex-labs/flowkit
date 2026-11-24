@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -10,6 +11,7 @@ import { compileArtifact, compileSource, evalWhen, isControlSignal, runArtifact 
 import { graphContentHash } from '../../src/compiler/graph-snapshot.mjs';
 import { createWorkflowAuthor } from '../../src/author/author.mjs';
 import { runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs';
+import { openOfflineWorkflowDependencies, sealOfflineWorkflowDependencies } from '../../src/author/offline-dependencies.mjs';
 import { createOpenAINativeSkillPort } from '../../src/author/openai-native-skills.mjs';
 import { stageCollectionForDiscovery,removeCollectionGeneration } from '../../src/author/collection-layout.mjs';
 import { collectionSkill, planCollectionRename, planNewCollection, verifiedCollectionPlan } from '../../src/author/collections.mjs';
@@ -312,6 +314,23 @@ test('workflow-specific references and actual read document provenance remain bo
   const delivery=publicDelivery(candidate,key);
   assert.deepEqual(Object.keys(delivery).sort(),['workflow.html','workflow.js','workflow.mmd']);
   assert.deepEqual(readPortableExport(delivery,exportTrust([key.publicKey])),{});
+  const signer = generateKeyPairSync('ed25519');
+  const receiver = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const target = { collectionId: candidate.manifest.collectionId, skillId: candidate.manifest.skillId, candidateHash: candidate.hash };
+  const optionsForBundle = { store: { readVersion: () => candidate }, target, signerPrivateKey: signer.privateKey,
+    recipientPublicKey: receiver.publicKey, authorize: () => true,
+    readDocument: requested => ({ authorized: requested.contentHash === evidence.contentHash, bytes: content }) };
+  const sealed = await sealOfflineWorkflowDependencies(optionsForBundle);
+  assert.doesNotMatch(sealed, /Reviewed compiler contract|Workflow-specific decision/);
+  let documentGrant = true;
+  const opened = await openOfflineWorkflowDependencies(sealed, { recipientPrivateKey: receiver.privateKey,
+    isTrustedSigner: issuer => issuer === signer.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'),
+    authorize: ({ action }) => action === 'import' || action === 'read-document' && documentGrant });
+  assert.deepEqual(await opened.readDocument(evidence), { bytes, evidence });
+  assert.equal(await opened.readDocument({ ...evidence, revision: 'revision-2' }), null);
+  documentGrant = false;
+  assert.equal(await opened.readDocument(evidence), null);
+  assert.deepEqual(opened.workflow.files, candidate.files);
   content=Buffer.from('changed');await assert.rejects(author.prepare(plan,options),/content differs/);content=bytes;
   revision='revision-2';await assert.rejects(author.prepare(plan,options),/revision differs/);
   await assert.rejects(prepareStandardSkill({...options,references:{'references/skills/other/SKILL.md':'nested'}}),/workflow-specific/);

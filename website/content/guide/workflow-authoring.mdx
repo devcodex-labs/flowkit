@@ -98,6 +98,8 @@ Standard 宿主可以通过同一解析器显示一次真实调用的 trace。�
 
 起草 Interactive Action 时说明它是否会写入外部系统。只读回调可以把结果保存到工作流状态。Author 会核对计划与编译产物中声明的外部效果，复审时也会检查这一点。只读回调的 Host 回执使用无外部副作用结算。
 
+同一请求可以同时提供业务流程和验收要求。工作流应在执行业务操作前等待人工确认时，请把确认条件和拒绝后的去向写进业务要求。候选发布批准、宿主运行授权，以及故障注入和跨进程恢复实测，仍由指定的宿主或验收者执行。Author 保留这些要求供复审参考，计划覆盖只标注对应节点实际负责的业务要求。
+
 如果起草中服务意外退出，用原数据目录重启。在 Codex 说「继续这份草稿」。草稿如显示需要对账，Codex 可调用 `flowkit_recover_workflow`，取回已持久保存的结果，或在核实旧 Author 执行权已失效且无外部效果后继续原草稿。存在未确认的外部写入时，需要 Host 先对账。一个数据目录同时只由一个本机 MCP 服务使用。
 
 ### 已有文件的备用导入
@@ -159,6 +161,12 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 签名三文件可携带 Professional Skill 的逻辑来源、ID、精确版本和摘要。接收端可以先查看和复审。缺少授权依赖时预览给出原因，`@devcodex-labs/flowkit/host` 的 `runApprovedCollectionWorkflow` 拒绝运行。同一集合使用批准仓库的精确版本。跨宿主通过 `resolveRunProfessionalSkill` 返回经授权的准确源候选，由 FlowKit 重验实物和版本后才派发。私有 Skill 正文留在授权仓库。带本地文档或 Host 安全策略的候选仍需接收方通过原 Host 安装与核验。
 
 用项目或功能材料梳理流程时，可以请宿主调用 `flowkit_create_design_diagram`，只提供本次允许模型读取的文字材料。返回 `design.html` 与 `design.mmd`。点击节点可查依据，概览汇总材料摘要和待确认项。设计图不包含运行程序。需要推进任务时，从该设计起草可执行工作流、检查实际契约并完成候选复审。
+
+本机 MCP 的设计与 Author 可以共用材料选择。普通材料用 `{kind:"text", id, title, content}`。宿主能重新授权读取的版本用 `{kind:"material", id, sha256}`，其中摘要是原始文字的 SHA-256。创建设计后，将结果里的 `designRef` 与 `designHash` 分别作为 `{kind:"design", ref, sha256}` 的两项引用，连同额外需求或方案在 `flowkit_prepare_workflow` 的 `sources` 传入。同一草稿沿用第一次选择的版本。每次起草以及通过本机链接下载设计时，服务会重新核对所需来源。读取权限被撤销、材料内容变更或设计交付版本不一致时，请先处理来源。选择其他材料版本可新建草稿。
+
+本机服务嵌入应用时，宿主通过 `readAuthoringMaterial` 绑定其材料目录和读取许可，确认后用 `runWorkflow` 绑定实际 SDK 执行能力。调用 `flowkit_run_workflow` 时提供已批准候选摘要和由宿主批准的 `executionRef`。普通本机配置仍可用既有 SDK 在独立宿主运行。设计引用不代表运行授权。
+
+跨宿主需要携带获准的私有依赖时，可在 SDK 的 `/host` 调用 `sealOfflineWorkflowDependencies`。来源端从批准库读取精确版本，用 Ed25519 签名，并通过 RSA-OAEP SHA-256 和 AES-256-GCM 为指定接收端加密。接收端使用 `openOfflineWorkflowDependencies` 核对发布者和授权，随后按原导入流程批准候选，并将包的 `resolverFor(approved)` 绑定为 `resolveRunProfessionalSkill`。文档通过包的 `readDocument(pin)` 按精确版本读取。两种读路径都重新核对信任和许可。普通三文件继续单独交付。接收端宿主负责执行批准与安全策略。
 
 真实验收从仓库根目录执行。第一条使用已登录的 Codex CLI。第二条在已配置 Responses 凭证和模型的环境运行。两条路线都会从自然语言起草，验证精确角色与 Skill，完成确认、签名三文件导出和实际 SDK 运行，并从本指南生成设计图。
 

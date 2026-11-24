@@ -4,3 +4,4 @@ export {configureCompilationCache,clearCompilationCache,compilationCacheStatus} 
 export {releaseToolReceipts} from './host/tool-receipts.mjs';
 export { createWorkflowAuthorHost } from './author/author-host.mjs';
 export { bindApprovedInteractiveWorkflow, runApprovedCollectionWorkflow } from './author/approved-run.mjs';
+export { sealOfflineWorkflowDependencies, openOfflineWorkflowDependencies } from './author/offline-dependencies.mjs';

@@ -148,6 +148,9 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
     }
     return { intentId: constraintId, ...mapping };
   });
+  if (coverage.some(({ intentId }) => !requirementIds.has(intentId))) {
+    throw new TypeError('Plan coverage entries require exact authorized requirement IDs. Keep Host facts and external acceptance outside coverage.');
+  }
   const ids = new Set(nodes.map(node => node.id));
   const namedNodes = nodes.filter(node => node.name !== undefined);
   const invalidName = namedNodes.find(node => !isWorkflowNodeName(node.name));

@@ -12,6 +12,9 @@ interface Candidate {
   files: Record<string, string>;
   manifest: { collectionId: string; skillId: string; name: string; version: string; kind?: string };
 }
+export interface FlowkitAuthoringMaterial { id: string; title: string; content: string }
+export type FlowkitMaterialSource = (FlowkitAuthoringMaterial & { kind: 'text' }) |
+  { kind: 'material'; id: string; sha256: string } | { kind: 'design'; ref: string; sha256: string };
 /** Per-connection Host bindings. Runtime values remain owned by the Host. */
 export interface FlowkitMcpOptions {
   namespace: string;
@@ -30,7 +33,10 @@ export interface FlowkitMcpOptions {
     present(draft: AuthorDraftView, context?: AuthorRequestContext): unknown;
     recover?(input: { draftId: string; expectedStateVersion: number }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
     review(result: Awaited<ReturnType<WorkflowAuthorHost['reviewCandidate']>>): unknown;
-    design?(input: { collectionId: string; requestId: string; title: string; materials: Array<{ id: string; title: string; content: string }> },
+    authoringMaterials?(scope: { input: AuthorTurnInput; sources?: FlowkitMaterialSource[]; draft: AuthorDraftView },
+      context: AuthorRequestContext, signal: AbortSignal): Promise<AuthorTurnInput>;
+    design?(input: { collectionId: string; requestId: string; title: string } &
+      ({ materials: FlowkitAuthoringMaterial[]; sources?: never } | { sources: FlowkitMaterialSource[]; materials?: never }),
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     relayout?(input: { collectionId: string; draftId: string; candidateHash: string; expectedLayoutRevision: string; requestId: string },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;

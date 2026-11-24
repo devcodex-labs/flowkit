@@ -29,6 +29,36 @@ export function runApprovedCollectionWorkflow(store: ApprovedWorkflowStore, targ
 export function bindApprovedInteractiveWorkflow(store: ApprovedWorkflowStore, target: ApprovedWorkflowTarget,
   host: ApprovedWorkflowHostAuthority & { runtime: InteractiveRuntimeV1; interactive: InteractiveOptionsV1 }):
   Promise<{ runtime: InteractiveRuntimeV1; options: InteractiveOptionsV1 }>;
+/** A Node crypto KeyObject. The functions verify its asymmetric algorithm and role. */
+export interface OfflineDependencyKey { readonly type: string; readonly asymmetricKeyType?: string }
+export interface OfflineDocumentPin {
+  capabilityId: string; documentId: string; revision: string; contentHash: string;
+  source: { type: 'file'; path: string } | { type: 'url'; url: string };
+}
+type OfflineSkillResolver = NonNullable<ApprovedWorkflowHostAuthority['resolveRunProfessionalSkill']>;
+type OfflineSkillPin = Parameters<OfflineSkillResolver>[0];
+type OfflineTarget = Pick<ApprovedWorkflowTarget, 'collectionId' | 'skillId' | 'candidateHash'>;
+export interface OfflineDependencyGrant {
+  action: 'export' | 'import' | 'read-skill' | 'read-document'; issuer: string; recipient: string; candidateHash: string;
+  collectionId?: string; skillId?: string; pin?: OfflineSkillPin | OfflineDocumentPin;
+  execution?: OfflineTarget & { executionRef: string };
+}
+type OfflineDependencyAuthorizer = (scope: OfflineDependencyGrant) => boolean | Promise<boolean>;
+export function sealOfflineWorkflowDependencies(options: {
+  store: ApprovedWorkflowStore; target: OfflineTarget;
+  signerPrivateKey: OfflineDependencyKey; recipientPublicKey: OfflineDependencyKey; authorize: OfflineDependencyAuthorizer;
+  resolveProfessionalSkill?(pin: OfflineSkillPin, scope: OfflineTarget & { issuer: string; recipient: string }): ReturnType<OfflineSkillResolver>;
+  readDocument?(pin: OfflineDocumentPin, scope: OfflineTarget & { issuer: string; recipient: string }):
+    { authorized: boolean; bytes: Uint8Array } | null | Promise<{ authorized: boolean; bytes: Uint8Array } | null>;
+}): Promise<string>;
+export function openOfflineWorkflowDependencies(encoded: string, options: {
+  recipientPrivateKey: OfflineDependencyKey; isTrustedSigner(issuer: string): boolean | Promise<boolean>;
+  authorize: OfflineDependencyAuthorizer;
+}): Promise<{
+  issuer: string; workflow: AuthorCandidate;
+  resolverFor(approved: AuthorCandidate): OfflineSkillResolver;
+  readDocument(pin: OfflineDocumentPin): Promise<{ bytes: Uint8Array; evidence: OfflineDocumentPin } | null>;
+}>;
 export interface CompilationCacheLimits {maxEntries:number;maxBytes:number;ttlMs:number;maxModuleIdentities:number;maxModuleBytes:number}
 export interface CompilationCacheStatus extends CompilationCacheLimits {
   entries:number;bytes:number;residentModuleIdentities:number;residentModuleBytes:number;hits:number;misses:number;evictions:number;

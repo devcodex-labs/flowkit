@@ -107,12 +107,21 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     choices: z.object({ executionMode: z.enum(workflowExecutionModes).optional() }).strict().optional(),
     target: z.object({ name: id.optional(), version: id.optional() }).strict().optional()
   }).strict();
+  const material = z.object({ id, title: z.string().trim().min(1).max(160), content: z.string().min(1).max(12000) });
+  const materialSources = z.array(z.discriminatedUnion('kind', [
+    material.extend({ kind: z.literal('text') }).strict(),
+    z.object({ kind: z.literal('material'), id, sha256: hash }).strict(),
+    z.object({ kind: z.literal('design'), ref: id, sha256: hash }).strict()
+  ])).min(1).max(6);
+  const sourceOptions = workflowUi?.authoringMaterials ? { sources: materialSources.optional() } : {};
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
-    { collectionId: id, ...(workflowUi ? { inputRef: id.optional(), turn: turn.optional() } : { inputRef: id }) }, async ({ collectionId, inputRef, turn }, ctx) => {
+    { collectionId: id, ...(workflowUi ? { inputRef: id.optional(), turn: turn.optional() } : { inputRef: id }), ...sourceOptions },
+    async ({ collectionId, inputRef, turn, sources }, ctx) => {
       if (Boolean(inputRef) === Boolean(turn)) throw new Error('Provide exactly one inputRef or turn');
       if (inputRef && typeof resolveAuthoringInput !== 'function') throw new Error('Host AuthoringInput resolver is unavailable');
-      const input = turn ?? await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal: ctx.signal });
-      await exactDraft(collectionId, input.draftId, ctx.signal);
+      let input = turn ?? await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal: ctx.signal });
+      const draft = await exactDraft(collectionId, input.draftId, ctx.signal);
+      if (workflowUi?.authoringMaterials) input = await workflowUi.authoringMaterials({ input, sources, draft }, requestContext, ctx.signal);
       // An HTTP disconnect stops waiting. Only explicit SDK cancellation fences this shared turn.
       return draftView(await author().advanceTurn(input, requestContext));
     });
@@ -156,9 +165,11 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
 
   if (workflowUi) {
     if (workflowUi.design) tool('flowkit_create_design_diagram', 'Summarize authorized project or feature materials as an offline design diagram and Mermaid file.',
-      { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(z.object({
-        id, title: z.string().trim().min(1).max(160), content: z.string().min(1).max(12000)
-      }).strict()).min(1).max(6) }, (input, ctx) => workflowUi.design(input, requestContext, ctx.signal));
+      { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(material.strict()).min(1).max(6).optional(),
+        ...sourceOptions }, (input, ctx) => {
+        if (Boolean(input.materials) === Boolean(input.sources)) throw new Error('Provide exactly one materials or sources selection');
+        return workflowUi.design(input, requestContext, ctx.signal);
+      });
     tool('flowkit_get_workflow_draft', 'Read the current candidate and its preview after a user decision.',
       { collectionId: id, draftId: id }, async ({ collectionId, draftId }, ctx) =>
         draftView(await exactDraft(collectionId, draftId, ctx.signal)), true);

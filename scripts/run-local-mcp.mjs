@@ -213,12 +213,79 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const selected = get(selectedLayoutKey(hash));
       return selected?.source === 'model' ? get(selected.key)?.layout : undefined;
     }
-    async function createDesign({ requestId, title, materials }, _context, signal) {
+    const materialError = (code, message) => Object.assign(new Error(message), { code });
+    async function resolveSources(sources, requestContext, signal, allowDesign = true) {
+      const materials = [], designs = [];
+      for (const source of sources) {
+        signal?.throwIfAborted();
+        if (source.kind === 'text') {
+          const { id, title, content } = source;
+          materials.push({ id, title, content });
+        } else if (source.kind === 'material') {
+          const value = await dependencies.readAuthoringMaterial?.({ id: source.id, sha256: source.sha256, collectionId, requestContext, signal });
+          if (value?.authorized !== true || value.id !== source.id || typeof value.title !== 'string' ||
+              !value.title.trim() || value.title.length > 160 || typeof value.content !== 'string' ||
+              !value.content.length || value.content.length > 12000) {
+            throw materialError('FKA_MATERIAL_UNAVAILABLE', 'The Host could not authorize the selected material: ' + source.id);
+          }
+          if (artifactDigest(value.content) !== source.sha256) {
+            throw materialError('FKA_MATERIAL_CHANGED', 'The selected material version changed: ' + source.id);
+          }
+          materials.push({ id: value.id, title: value.title, content: value.content });
+        } else {
+          if (!allowDesign) throw materialError('FKA_MATERIAL_UNAVAILABLE', 'A design must select its original text or Host material references');
+          const key = unseal('design', source.ref);
+          const record = key && get(key);
+          const result = record?.result;
+          if (result?.designHash !== source.sha256 || !record?.selection || !record.summary ||
+              !(await deliveryMatches(result.directory, result.hashes, designNames))) {
+            throw materialError('FKA_MATERIAL_UNAVAILABLE', 'The selected design version is unavailable or differs from the delivered version');
+          }
+          materials.push(...await resolveDesignMaterials(record, requestContext, signal));
+          designs.push({ sha256: result.designHash, summary: record.summary });
+        }
+      }
+      if (materials.length > 6 || new Set(materials.map(item => item.id)).size !== materials.length ||
+          Buffer.byteLength(JSON.stringify([materials, designs])) > 262144) {
+        throw materialError('FKA_MATERIAL_LIMIT', 'Choose up to six unique materials within the Author input budget');
+      }
+      return { materials, designs };
+    }
+
+    async function resolveDesignMaterials(record, requestContext, signal) {
+      const { materials } = await resolveSources(record.selection, requestContext, signal, false);
+      if (artifactDigest(JSON.stringify([record.title, materials])) !== record.materialHash) {
+        throw materialError('FKA_MATERIAL_CHANGED', 'The selected design material no longer matches its reviewed version');
+      }
+      return materials;
+    }
+
+    async function authoringMaterials({ input, sources, draft }, requestContext, signal) {
+      const key = 'authoring-materials:' + draft.id;
+      const previous = get(key);
+      const selected = sources ?? previous;
+      if (!selected) return input;
+      if (previous && authorIdentity(selected) !== authorIdentity(previous)) {
+        throw materialError('FKA_MATERIAL_CHANGED', 'Choose a new draft to replace its exact material selection');
+      }
+      const snapshot = await resolveSources(selected, requestContext, signal);
+      if (!previous) {
+        if (input.expectedStateVersion !== draft.stateVersion) throw new Error('The draft state version changed');
+        const saved = insert(key, selected);
+        if (authorIdentity(saved) !== authorIdentity(selected)) throw materialError('FKA_MATERIAL_CHANGED', 'The draft already has another material selection');
+      }
+      return { ...input, contextSnapshot: { hostContext: input.contextSnapshot ?? null, ...snapshot } };
+    }
+
+    async function createDesign({ requestId, title, materials, sources }, requestContext, signal) {
+      const selection = sources ?? materials.map(item => ({ kind: 'text', ...item }));
+      materials = (await resolveSources(selection, requestContext, signal, false)).materials;
       const materialHash = artifactDigest(JSON.stringify([title, materials]));
-      if (new Set(materials.map(material => material.id)).size !== materials.length) throw new TypeError('Design material IDs must be unique');
       const key = 'design:' + artifactDigest(requestId).slice(7);
-      const record = insert(key, { materialHash });
-      if (record.materialHash !== materialHash) throw new Error('Design request ID already belongs to different source material');
+      const record = insert(key, { materialHash, title, selection });
+      if (record.materialHash !== materialHash || record.selection && authorIdentity(record.selection) !== authorIdentity(selection)) {
+        throw new Error('Design request ID already belongs to different source material');
+      }
       let result = record.result;
       if (!result) {
         if (!designRequests.has(key)) {
@@ -239,12 +306,12 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               const value = { designHash: identity, graphDigest: graph.graphDigest, directory, hashes,
                 layoutSource: arrangement?.layout ? 'model' : 'fallback', provider: output.provider, model: output.model,
                 requestId: output.requestId, sources: design.sources };
-              prepared = { files, value };
-              put(key, { materialHash, prepared });
+              prepared = { files, value, summary: design };
+              put(key, { materialHash, title, selection, prepared });
             }
-            const { files, value } = prepared;
+            const { files, value, summary } = prepared;
             await commitDelivery(exportDir, value.directory, files, value.hashes, designNames);
-            put(key, { materialHash, result: value });
+            put(key, { materialHash, title, selection, summary, result: value });
             return value;
           }).finally(() => designRequests.delete(key));
           designRequests.set(key, pending);
@@ -252,11 +319,14 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         result = await designRequests.get(key);
       }
       signal?.throwIfAborted();
+      if (selection.some(source => source.kind === 'material')) {
+        await resolveDesignMaterials({ title, selection, materialHash }, requestContext, signal);
+      }
       if (!(await deliveryMatches(result.directory, result.hashes, designNames))) throw new Error('Design files changed after delivery');
       const ref = seal('design', key);
       const files = designNames.map(name => ({ name, sha256: result.hashes[name], url: origin + '/designs/' + ref + '/' + name }));
       const { hashes: _hashes, ...rest } = result;
-      return { ...rest, files };
+      return { ...rest, designRef: ref, files };
     }
     function layoutRequest(key, graph) {
       const cached = get(key);
@@ -403,7 +473,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         }
       }
     });
-    const binding = authorHost.createMcpOptions(context);
+    const binding = authorHost.createMcpOptions(context, { resolveAuthoringInput: dependencies.resolveAuthoringInput });
     if (!binding.store.readCollectionMetadata(collectionId)) {
       try { await binding.applyCollectionPlan(collectionPlan, bootstrap, context); }
       catch (error) { if (!binding.store.readCollectionMetadata(collectionId)) throw error; }
@@ -690,8 +760,14 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           requiredCapabilities: draft.candidate.manifest.workflowDefinition?.nodes?.flatMap(node => [node.action ?? node.verifier].filter(Boolean)) } } : {}) };
     }
 
+    const runWorkflow = typeof dependencies.runWorkflow === 'function' && (async scope => {
+      const candidate = binding.store.readVersion(scope.collectionId, scope.skillId, scope.candidateHash);
+      if (!candidate) throw new Error('No approved Workflow Skill at the requested identity');
+      checkCandidate(candidate);
+      return dependencies.runWorkflow(scope, { candidate, store: binding.store });
+    });
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
-      { ...binding, workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present,
+      { ...binding, ...(runWorkflow ? { runWorkflow } : {}), workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present, authoringMaterials,
         ...(model.planDesign ? { design: createDesign } : {}),
         ...(model.planLayout ? { relayout: relayoutCandidate } : {}) } } : null);
 
@@ -770,8 +846,14 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       }
       if (route === 'designs' && req.method === 'GET' && designNames.includes(action)) {
         const key = unseal('design', ref);
-        const entry = key && get(key)?.result;
+        const record = key && get(key);
+        const entry = record?.result;
         if (!entry) return json(res, 403, { error: 'Invalid design link' });
+        if (record.selection?.some(source => source.kind === 'material')) {
+          const signal = AbortSignal.timeout(config.authorTaskTimeoutMs ?? 90000);
+          try { await resolveDesignMaterials(record, context, signal); }
+          catch { return json(res, 403, { error: 'Design materials are unavailable' }); }
+        }
         const contents = await readFile(path.join(entry.directory, action));
         if (artifactDigest(contents) !== entry.hashes[action]) return json(res, 409, { error: 'Design file changed' });
         if (action === 'design.html') return html(res, contents);

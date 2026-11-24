@@ -258,7 +258,7 @@ test('Revising a rejected candidate preserves authorized dialogue and treats the
 });
 
 test('I2 S06/S07/S56/S57/S58/S81: update pins an exact no-DSL baseline and preserves old approved Run bytes', async t => {
-  const f = await setup(t); await f.register(); const first = await advance(f, await f.start());
+  const f = await setup(t, { useNodeOptionsForNewDrafts: true }); await f.register(); const first = await advance(f, await f.start());
   await save(f, await approve(f, first));
   assert.equal(first.candidate.files['source/workflow.dsl.js'], undefined);
   await assert.rejects(f.start({ requestId: 'ambiguous', operation: 'update', target: { name: 'inspect', version: '2.0.0' } }), /TargetRef/);
@@ -266,9 +266,13 @@ test('I2 S06/S07/S56/S57/S58/S81: update pins an exact no-DSL baseline and prese
   await assert.rejects(f.start({ requestId: 'wrong', operation: 'update', targetRef: { ...targetRef, baseArtifactHash: 'sha256:' + 'b'.repeat(64) } }), /baseline/);
   await assert.rejects(f.start({ requestId: 'same', operation: 'update', targetRef, target: { version: '1.0.0' } }), /unused version/);
   const update = await f.start({ requestId: 'update', operation: 'update', targetRef, target: { name: 'inspect', description: 'Updated', version: '2.0.0' } });
+  const beforeUpdate = f.calls.length;
   const ready = await advance(f, update, { input: 'Inspect with the existing API retained' });
   assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics)); assert.equal(ready.target.skillId, first.target.skillId);
   assert.equal(ready.previousHash, first.candidate.hash); assert.equal(ready.candidate.manifest.version, '2.0.0');
+  const updateNodes = f.calls.slice(beforeUpdate).flatMap(call => call.prepared?.task.node.id ?? []);
+  assert.ok(updateNodes.includes('proposal'));
+  assert.ok(!updateNodes.includes('dsl-source'));
   const review = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').at(-1).prepared.task.input;
   assert.deepEqual(Object.keys(review).sort(), ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'currentPlan', 'reviewTarget', 'candidateDiff', 'resourceSnapshot'].sort());
   assert.deepEqual(review.reviewTarget, { hash: ready.candidate.hash, mode: ready.candidate.manifest.mode,
@@ -546,6 +550,26 @@ test('P2 derives subflow controls from bundled node options and validates supple
     group.branchBoundary === 'continuation-or-local-terminal'));
   assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id),
     ['proposal', 'plan-repair', 'semantic-review']);
+});
+
+test('P0-B semantic review sees the emitted Action failure route in addition to the declared verification', async t => {
+  const f = await setup(t, { useNodeOptionsForNewDrafts: true });
+  replacePlan(f, () => ({
+    ...executableProposal,
+    nodes: [
+      { id: 'work', kind: 'action', name: 'Work', options: { action: 'inspect', effect: 'read-only', next: 'check' } },
+      { id: 'check', kind: 'verification', name: 'Check', options: { verifier: 'inspect-result', onSuccess: 'done', onFailure: 'failed' } },
+      executableProposal.nodes[1],
+      { id: 'failed', kind: 'terminal', name: 'Failed', options: { status: 'failed' } }
+    ]
+  }));
+  const ready = await advance(f, await f.start(), { choices: { executionMode: 'interactive-p0-b' } });
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  const calls = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].prepared.task.input.candidateDiff.compilerEvidence.actionRoutes,
+    [{ from: 'work', to: 'failed', role: 'action-failure' }]);
+  assert.equal(Object.hasOwn(ready.diff.compilerEvidence, 'actionRoutes'), false);
 });
 
 test('Repair exhaustion returns the last compiler error after two Plan repairs', async t => {

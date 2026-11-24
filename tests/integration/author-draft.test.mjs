@@ -91,6 +91,28 @@ test('WorkflowPlan blocks unresolved mode and P0-A gaps, and preserves a no-chan
   assert.equal(limited.status, 'needs-clarification');
 });
 
+test('WorkflowPlan rejects coverage claims for Host facts and keeps explicit workflow approval required', () => {
+  const draft = startAuthorDraft('Authorize and perform a business change', { executionMode: 'interactive-p0-b' });
+  const intent = { coverage: 'complete', issues: [], unresolved: [], goals: [{ id: 'change' }],
+    constraints: [{ id: 'approve-change', statement: 'Require business approval before applying the change' }],
+    facts: { externalAcceptance: ['The Host validates crash recovery after candidate approval'] } };
+  const proposal = { entryNodeId: 'approve', nodes: [{ id: 'approve', kind: 'human' },
+    { id: 'apply', kind: 'action', effect: 'write' }, { id: 'done', kind: 'terminal' }],
+    edges: [{ from: 'approve', to: 'apply', kind: 'control' }, { from: 'apply', to: 'done', kind: 'control' }],
+    coverage: [{ intentId: 'change', status: 'covered', coveredBy: ['apply'] }] };
+  const approval = { constraintId: 'approve-change', status: 'covered', coveredBy: ['approve'] };
+  const plan = createWorkflowPlan(draft, intent, proposal);
+  assert.deepEqual(plan.unresolvedIssues.map(issue => issue.intentId), ['approve-change']);
+  const covered = { ...proposal, coverage: [...proposal.coverage, approval] };
+  assert.equal(createWorkflowPlan(draft, intent, covered).status, 'ready-for-dsl');
+  const unrelated = { intentId: 'external-acceptance', status: 'covered', coveredBy: ['apply'] };
+  assert.throws(() => createWorkflowPlan(draft, intent,
+    { ...covered, coverage: [...covered.coverage, unrelated] }), /exact authorized requirement IDs/);
+  assert.throws(() => createWorkflowPlan(draft, intent,
+    { ...proposal, coverage: { change: ['apply'], 'approve-change': ['approve'], 'external-acceptance': ['apply'] } }),
+  /exact authorized requirement IDs/);
+});
+
 test('Author reads only a selected Graph-pinned document and rejects revision or HTTPS content drift', async () => {
   const capabilityId = 'flowkit::compile-workflow';
   const url = 'https://example.invalid/docs/compile.md';
