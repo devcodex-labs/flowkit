@@ -452,8 +452,18 @@ test('relayout is versioned and idempotent and preserves old signed downloads on
   }
   assert.equal(calls, count);
   await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt, layoutRevision: winning.layoutRevision }, false);
-  await writeFile(path.join(old.directory, 'workflow.html'), original['workflow.html'] + '\n');
-  await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt }, false);
+  const member = path.join(old.directory, 'workflow.html');
+  const rejected = await tool('flowkit_export_workflow', { ...args, exportReceipt: '0'.repeat(64) }, false);
+  assert.equal(rejected.error.code, 'FKA_HOST_OPERATION_FAILED');
+  assert.ok(!rejected.error.message.includes(old.directory));
+  await rm(member);
+  const missing = await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt }, false);
+  assert.equal(missing.error.code, 'FKA_EXPORT_FILES_UNAVAILABLE');
+  assert.ok(!missing.error.message.includes(old.directory));
+  await writeFile(member, original['workflow.html'] + '\n');
+  const changed = await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt }, false);
+  assert.equal(changed.error.code, 'FKA_EXPORT_FILES_UNAVAILABLE');
+  assert.ok(!changed.error.message.includes(old.directory));
   assert.equal((await fetch(renewed.files.find(file => file.name === 'workflow.html').url)).status, 409);
 });
 

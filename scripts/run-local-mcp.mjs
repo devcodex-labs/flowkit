@@ -507,7 +507,10 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       if (exportReceipt !== undefined) {
         if (layoutRevision !== undefined) throw new Error('请指定导出收据或布局版本其中之一。');
         const record = receiptForDraft(exportReceipt);
-        if (!await available(record)) throw new Error('Exact export receipt or its original files are unavailable');
+        if (!record) throw new Error('Exact export receipt or its original files are unavailable');
+        if (!await available(record)) {
+          throw Object.assign(new Error('Export files are unavailable'), { code: 'FKA_EXPORT_FILES_UNAVAILABLE' });
+        }
         return issue(exportReceipt, record);
       }
       if (draft.approvalReceipt?.candidateHash !== candidateHash || !draft.reviewReceipt?.qualified ||
