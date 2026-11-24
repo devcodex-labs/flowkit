@@ -63,6 +63,8 @@ codex plugin list --marketplace flowkit-local
 2. 打开候选的预览链接。页面使用同次编译的 GraphSnapshot，核对步骤、分支和终点后确认候选。改稿后按新候选重新预览和确认。
 3. 确认当前候选后要求导出。打开 `workflow.html` 即可离线查看与预览相同的流程图。概览的「阅读 Mermaid」和「阅读根契约」支持查找及放大文字。`workflow.mmd` 可交给 Mermaid 工具，`workflow.js` 可交给执行方。MCP 导出结果同时给出目录、文件链接及各自的 SHA-256。改稿后，使用新候选的预览链接重新复审和确认。
 
+已经打开过候选但需要重新排版时，可以对 Codex 说「为这个候选重新排版，打开结果」。本机工具 `flowkit_relayout_workflow` 接收候选、当前布局版本和请求 ID，并返回新版预览链接。导出时使用该预览的布局版本。旧导出仍可按各自的摘要和签名核验。模型重排失败时，预览服务保留已选布局。
+
 已有 Interactive 运行绑定的宿主可以在调用 `startLocalMcp` 时提供 `resolveRunViewer`。解析器接收运行 ID 与当前操作员的服务端请求上下文，返回该次运行的 `{ auth, ref, options }`。其中 `auth` 为请求范围内的受信 Host 能力，`ref` 绑定实际运行及其 Program 和 GraphSnapshot，`options` 提供原运行的策略、Store、Program registry 和同一 GraphSnapshot。操作员可打开 `/runs/<runId>` 查阅状态、激活次数和重试记录，并按修订翻页。在产物中心可筛选当前页授权产物的节点、类型、版本或生效状态，点击产物可回到来源节点。刷新与翻页都只读取运行。文件正文仍由宿主的授权存储接口提供。
 
 宿主如需关联接收方的候选，可另外提供 `candidate`，并在 `ref` 中声明 `collectionId`、`candidateHash` 与 `approvalRef`。宿主应按这三项验证接收方的审批。页面还会验证候选文件及图摘要，才展示该候选和 Mermaid。导入可以生成新的候选身份，运行仍绑定原 Program 和 GraphSnapshot。

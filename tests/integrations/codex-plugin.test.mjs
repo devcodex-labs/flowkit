@@ -9,9 +9,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
-import { newExportKey, publicDelivery } from '../../scripts/local-mcp-artifacts.mjs';
+import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
 import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
-import { readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
+import { defaultLayout, readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
+import { generateLayout } from '../../scripts/workflow-viewer/auto-layout.mjs';
 import { runArtifact } from '../../src/runtime/run.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
@@ -43,6 +44,163 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
   assert.equal(Object.hasOwn(manifest, 'skills'), false);
   const mcp = JSON.parse(await readFile(path.join(plugin, manifest.mcpServers), 'utf8'));
   assert.deepEqual(mcp.mcpServers.flowkit, { type: 'http', url, bearer_token_env_var: 'FLOWKIT_MCP_TOKEN' });
+});
+
+test('invalid placement and partition replies receive exact feedback before tightly scoped arrangement', async () => {
+  for (const count of [52, 62]) {
+    const nodes = Array.from({ length: count }, (_, index) => ({ id: 'node' + index, name: 'Step ' + index,
+      type: index + 1 === count ? 'terminal' : 'action' }));
+    const referenceEdges = nodes.slice(0, -1).map(({ id }, index) => ({
+      edgeId: artifactDigest(id), from: id, to: nodes[index + 1].id, role: 'next', origin: 'declared'
+    }));
+    const graph = { graphDigest: artifactDigest(JSON.stringify(nodes)), entryNodeId: nodes[0].id, nodes,
+      regions: [], referenceEdges, executionEdges: [] };
+    const base = defaultLayout(graph);
+    const result = await generateLayout(graph, base, async ({ input }) => {
+      const reply = { schemaVersion: input.schemaVersion, graphDigest: input.graphDigest };
+      if (input.task === 'placement') {
+        if (input.feedback) {
+          assert.ok(input.repair.findings.some(finding => finding.issue === 'occupied-cell'));
+          assert.ok(input.repair.missingIds.length);
+          assert.ok(input.repair.acceptedPlacements.length);
+        }
+        Object.assign(reply, { phases: [{ id: 'phase', title: 'Steps', direction: 'LR' }],
+          placements: input.nodes.slice(0, 2).map(({ id }) => ({ id, phase: 'phase', col: 0, row: 0 })), routes: [] });
+      } else if (input.task === 'partition') {
+        if (input.feedback) assert.deepEqual([input.repair.minRegions, input.repair.actualRegions], [2, 1]);
+        Object.assign(reply, { regions: [{ id: 'all', members: input.units.map(u => u.id) }] });
+      } else {
+        assert.ok(input.units.length <= 12);
+        Object.assign(reply, { title: 'Smaller scope', direction: 'LR', span: Math.min(4, input.units.length),
+          order: input.units.map(u => u.id) });
+      }
+      return { provider:'fixture', model:'fixture', text:JSON.stringify(reply) };
+    });
+    assert.ok(result.layout, result.reason);
+    assert.equal(result.layout.nodes.length, count);
+    assert.equal(result.layout.edges.length, referenceEdges.length);
+    assert.deepEqual(new Set(result.layout.nodes.map(n => n.nodeId)), new Set(nodes.map(n => n.id)));
+    assert.ok(result.receipts.some(r => r.task === 'arrangement' && r.accepted));
+    assert.ok(result.receipts.some(r => r.diagnostics));
+  }
+});
+
+test('automatic layout keeps a parallel repair subtree in its loop without changing graph membership', async () => {
+  const kinds = { entry: 'action', loop: 'loop', check: 'verification', repair: 'parallel',
+    lane: 'action', finish: 'terminal' };
+  const nodes = Object.entries(kinds).map(([id, type]) => ({ id, name: id, type }));
+  const referenceEdges = [
+    ['entry', 'loop', 'next'], ['loop', 'check', 'loop-enter'], ['check', 'repair', 'loop-repair'],
+    ['repair', 'lane', 'parallel-entry'], ['lane', 'finish', 'next'], ['check', 'finish', 'verify-ok']
+  ].map(([from, to, role]) => ({ edgeId: artifactDigest(from + to), from, to, role, origin: 'declared' }));
+  const regions = [
+    { ownerId: 'loop', kind: 'loop', memberIds: ['check', 'repair'], normalExits: ['finish'] },
+    { ownerId: 'repair', kind: 'parallel', memberIds: ['lane'], normalExits: ['finish'] }
+  ];
+  const graph = { graphDigest: artifactDigest(JSON.stringify(nodes)), entryNodeId: 'entry', nodes,
+    regions, referenceEdges, executionEdges: [] };
+  const before = structuredClone(graph);
+  const base = defaultLayout(graph);
+  const { layout, reason } = await generateLayout(graph, base, async ({ input }) => {
+    const loop = input.groups.find(group => group.kind === 'loop');
+    const parallel = input.groups.find(group => group.kind === 'parallel');
+    assert.ok(parallel.members.every(id => loop.members.includes(id)));
+    return { provider: 'fixture', model: 'fixture', text: JSON.stringify({
+      schemaVersion: input.schemaVersion, graphDigest: input.graphDigest,
+      phases: [{ id: 'flow', title: 'Flow', direction: 'LR' }],
+      placements: input.nodes.map(({ id }, col) => ({ id, phase: 'flow', col, row: 0 })), routes: []
+    }) };
+  });
+  assert.ok(layout, reason);
+  assert.deepEqual(graph, before);
+  const frame = layout.groups.find(group => group.ownerId === 'loop');
+  const child = layout.groups.find(group => group.ownerId === 'repair');
+  assert.ok(frame.x < child.x && frame.x + frame.w > child.x + child.w);
+  assert.deepEqual(new Set(layout.edges.map(edge => edge.edgeId)), new Set(referenceEdges.map(edge => edge.edgeId)));
+});
+
+test('relayout is versioned and idempotent and preserves old signed downloads on failure and restart', async t => {
+  let service, client;
+  t.after(async () => { await client?.close(); await service?.close(); });
+  const root = await ownedDirectory(t);
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'data'), exportDir: path.join(root, 'output') };
+  const credential = 'fixture-credential-for-explicit-relayout';
+  const modelBinding = monthlyTimesheetModel();
+  let calls = 0, available = false;
+  modelBinding.planLayout = async ({ input }) => {
+    const generation = ++calls;
+    if (!available) throw new Error('fixture model unavailable');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const text = JSON.stringify({ schemaVersion: input.schemaVersion, graphDigest: input.graphDigest,
+      phases: [{ id: 'p', title: 'Verified layout ' + generation, direction: 'TB' }],
+      placements: input.nodes.map(({ id }, row) => ({ id, phase: 'p', col: 0, row })), routes: [] });
+    return { text, provider: 'fixture', model: 'fixture' };
+  };
+  const start = async () => {
+    service = await startLocalMcp(config, { credential, modelBinding });
+    client = new Client({ name: 'relayout-integration', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url), {
+      requestInit: { headers: { authorization: 'Bearer ' + credential } }
+    }));
+    return browserIdentity(service);
+  };
+  const tool = async (name, args, success = true) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError === true, !success, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  };
+  const cookie = await start();
+  const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'layout-start', goal: '准备工时校验工作流' });
+  const prepared = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'layout-prepare',
+    expectedStateVersion: draft.stateVersion, input: '校验月度工时，写入副本并复核，失败结束。', target: { name: 'monthly-timesheet' } } });
+  const { candidateHash, previewUrl, layoutRevision } = prepared.candidate;
+  const args = { draftId: draft.id, candidateHash };
+  await confirmInTestBrowser(previewUrl, cookie);
+  const old = await tool('flowkit_export_workflow', args);
+  const readDelivery = async dir => Object.fromEntries(await Promise.all(Object.keys(oldFiles).map(async name =>
+    [name, await readFile(path.join(dir, name), 'utf8')])));
+  const oldFiles = Object.fromEntries(old.files.map(file => [file.name, file]));
+  const original = await readDelivery(old.directory);
+  assert.ok(readWorkflowPageData(original['workflow.html']).layout.edges.every(edge => !edge.route));
+  available = true;
+  const request = { ...args, requestId: 'recover-fallback', expectedLayoutRevision: layoutRevision };
+  const replacement = await tool('flowkit_relayout_workflow', request);
+  assert.equal(replacement.status, 'relayout-complete');
+  const reused = calls;
+  assert.equal((await tool('flowkit_relayout_workflow', request)).layoutRevision, replacement.layoutRevision);
+  assert.equal(calls, reused);
+  assert.equal((await tool('flowkit_export_workflow', { ...args, layoutRevision }, false)).error.code, 'FKA_LAYOUT_CONFLICT');
+  const newer = await tool('flowkit_export_workflow', { ...args, layoutRevision: replacement.layoutRevision });
+  const revised = await readDelivery(newer.directory);
+  assert.notEqual(newer.directory, old.directory);
+  assert.equal(revised['workflow.js'], original['workflow.js']);
+  assert.equal(revised['workflow.mmd'], original['workflow.mmd']);
+  for (const file of [original, revised]) {
+    assert.equal(readPortableExport(file, exportTrust([service.exportPublicKey])).candidate.hash, candidateHash);
+  }
+  assert.equal(await (await fetch(oldFiles['workflow.html'].url)).text(), original['workflow.html']);
+  const opened = readWorkflowPageData(await (await fetch(replacement.previewUrl, { headers: { cookie } })).text());
+  assert.deepEqual(opened, readWorkflowPageData(revised['workflow.html']));
+  const concurrent = await Promise.all(['concurrent-first', 'concurrent-second'].map(requestId =>
+    client.callTool({ name: 'flowkit_relayout_workflow', arguments: { ...args, requestId,
+      expectedLayoutRevision: replacement.layoutRevision } })));
+  assert.equal(concurrent.filter(result => result.isError === true).length, 1);
+  const winning = JSON.parse(concurrent.find(result => !result.isError).content[0].text);
+  assert.equal(winning.status, 'relayout-complete');
+  assert.equal((await fetch(replacement.previewUrl, { headers: { cookie } })).status, 409);
+  available = false;
+  const failed = await tool('flowkit_relayout_workflow', { ...args, requestId: 'model-failed',
+    expectedLayoutRevision: winning.layoutRevision });
+  assert.deepEqual([failed.status, failed.layoutRevision], ['relayout-failed', winning.layoutRevision]);
+  await client.close(); client = null;
+  await service.close(); service = null;
+  await start();
+  const count = calls;
+  const current = await tool('flowkit_get_workflow_draft', { draftId: draft.id });
+  assert.equal(current.candidate.layoutRevision, winning.layoutRevision);
+  assert.ok(await tool('flowkit_export_workflow', { ...args, layoutRevision: winning.layoutRevision }));
+  assert.equal(calls, count);
+  assert.deepEqual(await readDelivery(old.directory), original);
 });
 
 test('local MCP pins a validated model layout, confirms the candidate and replays the three-file export after restart', async t => {

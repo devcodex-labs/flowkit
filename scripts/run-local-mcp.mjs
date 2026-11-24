@@ -192,37 +192,49 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
     const model = dependencies.modelBinding ?? localModel({ provider, timeoutMs: config.authorTaskTimeoutMs,
       model: process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'], apiKey: process.env.OPENAI_API_KEY, workspace: modelWorkspace });
+    const modelLayoutCalls = new Set();
+    async function planLayout(input) {
+      while (modelLayoutCalls.size >= capacity.maxPhysicalExecutions) await Promise.race(modelLayoutCalls);
+      input.signal.throwIfAborted();
+      const request = Promise.resolve().then(() => model.planLayout(input));
+      const settled = request.then(() => undefined, () => undefined);
+      modelLayoutCalls.add(settled);
+      try { return await request; }
+      finally { modelLayoutCalls.delete(settled); }
+    }
     const selectedLayoutKey = hash => 'preview-layout-selection:' + viewerHash + ':' + hash;
+    const baseLayoutRevision = hash => artifactDigest(JSON.stringify(['layout-initial', viewerHash, hash]));
+    const layoutRevisionOf = hash => get(selectedLayoutKey(hash))?.revision ?? baseLayoutRevision(hash);
     function selectedLayout(hash) {
       const selected = get(selectedLayoutKey(hash));
       return selected?.source === 'model' ? get(selected.key)?.layout : undefined;
     }
+    function layoutRequest(key, graph) {
+      const cached = get(key);
+      if (cached) return cached;
+      let pending = layoutRequests.get(key);
+      if (!pending && !layoutAbort.signal.aborted && layoutRequests.size < capacity.maxPhysicalExecutions) {
+        const deadline = AbortSignal.timeout(config.authorTurnDurationMs ?? 240_000);
+        const signal = AbortSignal.any([layoutAbort.signal, deadline]);
+        pending = Promise.resolve().then(async () => {
+          const result = await generateLayout(graph, defaultLayout(graph), planLayout, signal);
+          if (!result.layout || layoutAbort.signal.aborted) return result;
+          return insert(key, { ...result, graphDigest: graph.graphDigest, layoutContractHash,
+            layoutHash: artifactDigest(JSON.stringify(result.layout)) });
+        }).catch(() => ({ reason: deadline.aborted ? 'layout-deadline' : 'layout-unavailable' }))
+          .finally(() => layoutRequests.delete(key));
+        layoutRequests.set(key, pending);
+      }
+      return pending ?? { reason: 'layout-busy' };
+    }
     async function preparePreviewLayout(hash, graph, authorized) {
       const selectionKey = selectedLayoutKey(hash);
-      if (get(selectionKey) || !authorized || !model.planLayout || layoutAbort.signal.aborted) return selectedLayout(hash);
+      if (get(selectionKey) || !authorized || !model.planLayout || layoutAbort.signal.aborted) return;
       const key = 'preview-layout:' + viewerHash + ':' + layoutContractHash + ':' + graph.graphDigest;
-      let cached = get(key), reason;
-      if (!cached) {
-        let pending = layoutRequests.get(key);
-        if (!pending && layoutRequests.size < capacity.maxPhysicalExecutions) {
-          const deadline = AbortSignal.timeout(config.authorTurnDurationMs ?? 240_000);
-          const signal = AbortSignal.any([layoutAbort.signal, deadline]);
-          pending = Promise.resolve().then(async () => {
-            const result = await generateLayout(graph, defaultLayout(graph), model.planLayout, signal);
-            if (!result.layout || layoutAbort.signal.aborted) return result;
-            return insert(key, { ...result, graphDigest: graph.graphDigest, layoutContractHash,
-              layoutHash: artifactDigest(JSON.stringify(result.layout)) });
-          }).catch(() => ({ reason: deadline.aborted ? 'layout-deadline' : 'layout-unavailable' }))
-            .finally(() => layoutRequests.delete(key));
-          layoutRequests.set(key, pending);
-        }
-        cached = pending && await pending;
-        reason = cached?.reason ?? 'layout-busy';
-      }
-      if (layoutAbort.signal.aborted) return undefined;
+      const cached = await layoutRequest(key, graph);
+      if (layoutAbort.signal.aborted) return;
       insert(selectionKey, cached?.layout ? { source: 'model', key } :
-        { source: 'fallback', reason, receipts: cached?.receipts ?? [] });
-      return selectedLayout(hash);
+        { source: 'fallback', reason: cached?.reason, receipts: cached?.receipts ?? [] });
     }
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
@@ -294,23 +306,77 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       } finally { recoveryProofs.delete(evidenceRef); }
       return authorHost.readDraft({ draftId }, requestContext, signal);
     }
-    const previewUrl = (draft, operation) => origin + '/preview/' + seal('preview',
-      { draftId: draft.id, candidateHash: draft.candidate.hash, ...(operation ? { operation } : {}) });
+    const previewUrl = (draft, operation, layoutRevision) => origin + '/preview/' + seal('preview',
+      { draftId: draft.id, candidateHash: draft.candidate.hash, ...(operation ? { operation } : {}),
+        ...(layoutRevision ? { layoutRevision } : {}) });
+    const layoutConflict = () => Object.assign(new Error('布局版本已变更，请先打开当前预览。'), { code: 'FKA_LAYOUT_CONFLICT' });
+    async function relayoutCandidate({ draftId, candidateHash, expectedLayoutRevision, requestId }, _context, signal) {
+      let draft = await readDraft(draftId, candidateHash, signal);
+      if (!draft.savedReceipt && !trustedDraft(draft)) throw new Error(untrustedReason);
+      const selectionKey = selectedLayoutKey(candidateHash), operationKey = 'relayout:' + requestId;
+      const target = { draftId, candidateHash, expectedLayoutRevision };
+      const assertBinding = row => {
+        if (row && authorIdentity(row.target) !== authorIdentity(target)) throw layoutConflict();
+      };
+      const presentResult = result => ({ ...result, candidateHash,
+        previewUrl: previewUrl(draft, undefined, result.layoutRevision) });
+      let operation = get(operationKey);
+      assertBinding(operation);
+      if (operation?.result) return presentResult(operation.result);
+      if (!get(selectionKey) || layoutRevisionOf(candidateHash) !== expectedLayoutRevision) throw layoutConflict();
+      operation = insert(operationKey, { target });
+      assertBinding(operation);
+      const graph = checkCandidate(draft.candidate);
+      const key = 'relayout-result:' + viewerHash + ':' + layoutContractHash + ':' + artifactDigest(requestId);
+      const planned = await layoutRequest(key, graph);
+      draft = await readDraft(draftId, candidateHash, signal);
+      if (!draft.savedReceipt && !trustedDraft(draft)) throw new Error(untrustedReason);
+      if (layoutAbort.signal.aborted) throw new Error('布局服务已停止。');
+      data.exec('BEGIN IMMEDIATE');
+      let result;
+      try {
+        operation = get(operationKey);
+        assertBinding(operation);
+        result = operation.result;
+        if (!result) {
+          if (layoutRevisionOf(candidateHash) !== expectedLayoutRevision) throw layoutConflict();
+          if (planned.layout) {
+            const revision = artifactDigest(JSON.stringify(['relayout-v1', target, requestId, planned.layoutHash]));
+            put(selectionKey, { source: 'model', key, revision });
+            result = { status: 'relayout-complete', layoutRevision: revision, layoutHash: planned.layoutHash };
+          } else {
+            result = { status: 'relayout-failed', layoutRevision: expectedLayoutRevision, reason: planned.reason };
+          }
+          put(operationKey, { target, result });
+        }
+        data.exec('COMMIT');
+      } catch (error) {
+        data.exec('ROLLBACK');
+        throw error;
+      }
+      return presentResult(result);
+    }
     const publicReview = review => ({ qualified: review.receipt?.qualified === true,
       findings: review.rejection?.findings?.map(({ message, nodeIds }) => ({ message, nodeIds })) ?? [],
       ...(review.receipt?.reviewRef ? { reviewRef: review.receipt.reviewRef } : {}) });
 
-    async function exportCandidate({ draftId, candidateHash }, _context, signal) {
+    async function exportCandidate({ draftId, candidateHash, layoutRevision }, _context, signal) {
       const draft = await readDraft(draftId, candidateHash, signal);
       if (!draft.savedReceipt && !trustedDraft(draft)) throw new Error(untrustedReason);
       if (draft.approvalReceipt?.candidateHash !== candidateHash || !draft.reviewReceipt?.qualified ||
           !approval(draft.approvalReceipt.approvalRef)?.confirmed) throw new Error('请先在预览页确认当前候选。');
+      const selected = get(selectedLayoutKey(candidateHash));
+      if (layoutRevision === undefined ? !!selected?.revision : layoutRevision !== layoutRevisionOf(candidateHash)) throw layoutConflict();
       const portable = canExportPortable(draft.candidate);
-      const receiptId = portable ? artifactDigest(JSON.stringify(['portable-v1', candidateHash, exportKey.publicKey])).slice(7) : candidateHash.slice(7);
+      const receiptId = selected?.revision ? artifactDigest(JSON.stringify([
+        'layout-export-v1', candidateHash, selected.revision, portable ? exportKey.publicKey : null
+      ])).slice(7) : portable ?
+        artifactDigest(JSON.stringify(['portable-v1', candidateHash, exportKey.publicKey])).slice(7) : candidateHash.slice(7);
       const directory = path.join(exportDir, receiptId);
       const files = publicDelivery(draft.candidate, portable ? exportKey : undefined, selectedLayout(candidateHash));
       const hashes = Object.fromEntries(deliveryNames.map(name => [name, artifactDigest(files[name])]));
-      const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, viewerHash });
+      const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, viewerHash,
+        ...(selected?.revision ? { layoutRevision: selected.revision } : {}) });
       if (record.viewerHash !== viewerHash || authorIdentity(record.hashes) !== authorIdentity(hashes) || record.directory !== directory) {
         throw new Error('Export configuration or renderer changed for this candidate');
       }
@@ -318,7 +384,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       put('export-source:' + authorIdentity(hashes), { draftId, candidateHash });
       for (const name of deliveryNames) insert('export-member:' + name + ':' + hashes[name], receiptId);
       const ref = seal('export', receiptId);
-      return { candidateHash, directory, files: deliveryNames.map(name => ({ name, url: origin + '/exports/' + ref + '/' + name, sha256: hashes[name] })) };
+      return { candidateHash, directory, ...(selected?.revision ? { layoutRevision: selected.revision } : {}),
+        files: deliveryNames.map(name => ({ name, url: origin + '/exports/' + ref + '/' + name, sha256: hashes[name] })) };
     }
 
     const resultFor = (status, candidate, extra = {}) => ({
@@ -462,12 +529,14 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         ...(attempt ? { recovery: { tool: 'flowkit_recover_workflow', turnId: attempt.turnId } } : {}),
         ...(draft.plan?.planHash ? { planHash: draft.plan.planHash } : {}),
         ...(draft.candidate ? { candidate: { name: draft.candidate.manifest.name, version: draft.candidate.manifest.version,
-          candidateHash: draft.candidate.hash, previewUrl: previewUrl(draft),
+          candidateHash: draft.candidate.hash, previewUrl: previewUrl(draft), layoutRevision: layoutRevisionOf(draft.candidate.hash),
+          layoutSource: get(selectedLayoutKey(draft.candidate.hash))?.source ?? 'pending',
           requiredCapabilities: draft.candidate.manifest.workflowDefinition?.nodes?.flatMap(node => [node.action ?? node.verifier].filter(Boolean)) } } : {}) };
     }
 
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
-      { ...binding, workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present } } : null);
+      { ...binding, workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present,
+        ...(model.planLayout ? { relayout: relayoutCandidate } : {}) } } : null);
 
     async function web(req, res) {
       res.setHeader('Cache-Control', 'no-store');
@@ -545,10 +614,20 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const preview = route === 'preview' && unseal('preview', ref);
       if (preview) {
         const draft = await readDraft(preview.draftId, preview.candidateHash);
+        if (preview.layoutRevision && preview.layoutRevision !== layoutRevisionOf(preview.candidateHash)) {
+          return json(res, 409, { error: '布局版本已变更，请打开当前预览。' });
+        }
         const label = draft.candidate.manifest.name + ' ' + draft.candidate.manifest.version;
         if (req.method === 'GET' && !action) {
-          const challenge = seal('confirm', { ...preview, stateVersion: draft.stateVersion });
           const current = operator(req);
+          const graph = checkCandidate(draft.candidate);
+          await preparePreviewLayout(draft.candidate.hash, graph, current && (draft.savedReceipt || trustedDraft(draft)));
+          const viewLayout = selectedLayout(draft.candidate.hash);
+          const layoutRevision = layoutRevisionOf(draft.candidate.hash);
+          if (preview.layoutRevision && preview.layoutRevision !== layoutRevision) {
+            return json(res, 409, { error: '布局版本已变更，请打开当前预览。' });
+          }
+          const challenge = seal('confirm', { ...preview, stateVersion: draft.stateVersion, layoutRevision });
           const pinned = preview.operation && draft.previousHash &&
             binding.store.readVersion(collectionId, draft.candidate.manifest.skillId, draft.previousHash);
           const controls = !draft.savedReceipt && !trustedDraft(draft) ? '<p>' + escapeHtml(untrustedReason) + '</p>' :
@@ -560,16 +639,14 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             '"><button type="submit" disabled>' + (pinned ? '确认并更新 FlowKit 工作流' :
               preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
-          const graph = checkCandidate(draft.candidate);
-          const viewLayout = await preparePreviewLayout(draft.candidate.hash, graph,
-            current && (draft.savedReceipt || trustedDraft(draft)));
           return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls,
             mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition, viewLayout }));
         }
         if (req.method === 'POST' && action === 'confirm' && operator(req) && req.headers.origin === origin) {
           const challenge = unseal('confirm', new URLSearchParams(await readBody(req, 8192)).get('challenge'));
           if (!challenge || challenge.draftId !== draft.id || challenge.candidateHash !== draft.candidate.hash ||
-              challenge.stateVersion !== draft.stateVersion || challenge.operation !== preview.operation || !draft.reviewReceipt?.qualified) {
+              challenge.stateVersion !== draft.stateVersion || challenge.operation !== preview.operation ||
+              challenge.layoutRevision !== layoutRevisionOf(draft.candidate.hash) || !draft.reviewReceipt?.qualified) {
             return json(res, 409, { error: '候选已变更或未通过复审，请刷新。' });
           }
           const operation = preview.operation && get('add:' + preview.operation);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { get } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -24,8 +25,10 @@ const readOnly = process.argv.includes('--p0b');
 const fixtureIndex = process.argv.indexOf('--layout-fixture');
 const fixtureDirectory = fixtureIndex < 0 ? null : process.argv[fixtureIndex + 1];
 const layoutValidation = process.argv.includes('--verify-model-layout');
+const relayoutValidation = process.argv.includes('--verify-relayout');
 const openai = process.argv.includes('--openai');
 const referenceMode = process.argv.includes('--reference') || !!fixtureDirectory;
+const longTurnMs = 660000;
 const specIndex = process.argv.indexOf('--v45-spec');
 const v45Spec = specIndex !== -1;
 const domainIndex = process.argv.indexOf('--contract-domain');
@@ -38,7 +41,8 @@ if (v45Spec && (!live || interactive || readOnly || referenceMode || contractCas
   throw new Error('Use --live --v45-spec <approved-business-spec.txt>');
 }
 const v45Input = v45Spec ? await readFile(process.argv[specIndex + 1], 'utf8') : null;
-if (fixtureIndex >= 0 && !fixtureDirectory || layoutValidation && (!live || !referenceMode) || openai && !layoutValidation) {
+if (fixtureIndex >= 0 && !fixtureDirectory || layoutValidation && (!live || !referenceMode) ||
+    (openai || relayoutValidation) && !layoutValidation) {
   throw new Error('Use --live --verify-model-layout --reference or --layout-fixture <signed export directory>, with optional --openai');
 }
 const importedFiles = fixtureDirectory && Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
@@ -58,7 +62,7 @@ const cwd = path.join(root, 'workspace');
 await mkdir(cwd);
 const service = await startLocalMcp({
   listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
-  ...(v45Spec || layoutValidation ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: 660000 } : {}),
+  ...(v45Spec || layoutValidation ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: longTurnMs } : {}),
   ...(openai ? { authorProvider: 'openai' } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
 }, { credential: token, ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
@@ -81,7 +85,22 @@ async function testReferenceDelivery(tool) {
   const requestId = 'v45-cli-add';
   const waiting = await tool('flowkit_add_workflow', { requestId, sourceRef, candidateHash: candidate.hash, destination: 'flowkit' });
   assert.ok(waiting.confirmationUrl, JSON.stringify(waiting));
-  const preview = readWorkflowPageData(await (await fetch(waiting.confirmationUrl, { headers: { cookie } })).text());
+  // The default fetch headers timeout can expire before the configured live layout deadline.
+  const page = await new Promise((resolve, reject) => {
+    get(waiting.confirmationUrl, { headers: { cookie }, signal: AbortSignal.timeout(longTurnMs + 10000) }, response => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error('Reference preview returned HTTP ' + response.statusCode));
+        return;
+      }
+      const chunks = [];
+      response.setEncoding('utf8');
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve(chunks.join('')));
+      response.on('error', reject);
+    }).on('error', reject);
+  });
+  const preview = readWorkflowPageData(page);
   if (layoutValidation) assert.deepEqual(preview.graph, sourceGraph);
   const saved = await (await confirmInTestBrowser(waiting.confirmationUrl, cookie)).json();
   assert.equal(saved.status, 'added');
@@ -98,7 +117,8 @@ async function testReferenceDelivery(tool) {
       assert.ok(preview.layout.edges.every(edge => edge.route?.length >= 2), 'The preview must use accepted model geometry');
       const layout = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get(selection.key).value);
       assert.ok(layout.receipts.some(r => r.accepted && r.provider === (openai ? 'openai' : 'codex')));
-      if (sourceGraph.nodes.length > 60) assert.ok(layout.receipts.some(r => r.task === 'partition' && r.accepted));
+      if (sourceGraph.nodes.length > 60) assert.ok(layout.receipts.some(r =>
+        ['partition', 'arrangement'].includes(r.task) && r.accepted));
       layoutProof = { nodes: sourceGraph.nodes.length, regions: sourceGraph.regions.length,
         visibleEdges: preview.layout.edges.length, layoutHash: layout.layoutHash, skillContract: layout.layoutContractHash, requests: layout.receipts };
     }
@@ -119,9 +139,37 @@ async function testReferenceDelivery(tool) {
     assert.equal(files['workflow.js'], importedFiles?.['workflow.js'] ?? candidate.files['workflow.js']);
     assert.equal(files['workflow.mmd'], importedFiles?.['workflow.mmd'] ?? candidate.files['workflow.mmd']);
   }
+  let relayoutProof;
+  if (relayoutValidation) {
+    const current = await tool('flowkit_get_workflow_draft', { draftId });
+    const input = { requestId: 'reference-relayout', draftId, candidateHash, expectedLayoutRevision: current.candidate.layoutRevision };
+    const changed = await tool('flowkit_relayout_workflow', input);
+    assert.equal(changed.status, 'relayout-complete', JSON.stringify(changed));
+    assert.notEqual(changed.layoutRevision, input.expectedLayoutRevision);
+    const repeated = await tool('flowkit_relayout_workflow', input);
+    assert.equal(repeated.layoutRevision, changed.layoutRevision);
+    await tool('flowkit_export_workflow', { draftId, candidateHash, layoutRevision: input.expectedLayoutRevision }, true);
+    const revised = await tool('flowkit_export_workflow', { draftId, candidateHash, layoutRevision: changed.layoutRevision });
+    assert.notEqual(revised.directory, exported.directory);
+    const byName = delivery => Object.fromEntries(delivery.files.map(file => [file.name, file]));
+    const oldFiles = byName(exported), newFiles = byName(revised);
+    for (const name of ['workflow.js', 'workflow.mmd']) assert.equal(newFiles[name].sha256, oldFiles[name].sha256);
+    const oldHtml = await fetch(oldFiles['workflow.html'].url);
+    assert.ok(oldHtml.ok);
+    assert.equal(artifactDigest(await oldHtml.text()), oldFiles['workflow.html'].sha256);
+    const previewResponse = await fetch(changed.previewUrl, { headers: { cookie } });
+    assert.ok(previewResponse.ok);
+    const html = await readFile(path.join(revised.directory, 'workflow.html'), 'utf8');
+    assert.deepEqual(readWorkflowPageData(html), readWorkflowPageData(await previewResponse.text()));
+    const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
+      [name, await readFile(path.join(revised.directory, name), 'utf8')])));
+    assert.equal(readPortableExport(files, exportTrust([service.exportPublicKey])).candidate.hash, candidateHash);
+    relayoutProof = { requestId: input.requestId, layoutRevision: changed.layoutRevision, layoutHash: changed.layoutHash,
+      directory: revised.directory, originalExport: exported.directory, oldDownloadVerified: true };
+  }
   console.log(JSON.stringify({ path: layoutValidation ? (openai ? 'layout-openai-mcp' : 'layout-codex-mcp') : 'v45-codex-mcp',
     candidateHash, directory: exported.directory,
-    graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, staleCandidateRejected: true, layoutProof }));
+    graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, staleCandidateRejected: true, layoutProof, relayoutProof }));
   return saved;
 }
 
