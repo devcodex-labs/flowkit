@@ -37,6 +37,24 @@ Host 选择动作后，使用同一 `draftId`、当前 `expectedStateVersion`、
 
 Host 展示精确候选和旧 Hash，核验用户批准后 recordApproval，再用新 stateVersion、唯一 publicationId 和同一身份 publish。MCP publish 可原子登记相同可信批准并保存。版本、active CAS、savedReceipt 与全集合快照同一 SQLite 事务。A 后已有 B 时重试 A 仅返回旧回执和 currentActive=B，不反激活 A。保存批准不替代目标业务运行授权。
 
+### 启动与接续已批准的 Interactive 运行
+
+通过 `/host` 的 `runApprovedCollectionWorkflow(store, target, host, initialState)` 启动已安装的候选。宿主提供准确的集合、工作流、候选摘要、安装目录、执行授权引用、运行策略与 `startKey`。FlowKit 从已批准的 `workflow.js` 核对完整 Program 身份，并将候选和精确 Skill 版本绑定到运行策略。
+
+重开持久化 Store 和 Program Registry 后，用同一 `target`、原运行使用的策略和当前宿主权限重建绑定。调用 `/interactive` 的 `resume` 或 `complete` 时使用返回的 `runtime` 和 `options`。
+
+```js
+import { bindApprovedInteractiveWorkflow } from '@devcodex-labs/flowkit/host';
+import { resume, complete } from '@devcodex-labs/flowkit/interactive';
+
+const { runtime, options } = await bindApprovedInteractiveWorkflow(store, target, host);
+const frame = await resume(runId, runtime, options);
+// 宿主执行获准的待办以后，提交对应的结果。
+const next = await complete(submission, runtime, options);
+```
+
+恢复使用 Registry 中已固定的 Program。原策略与当前批准记录仍须可读，执行和待办授权按当前权限复核。若当前 Host 已失去固定 Skill 来源的授权，该节点待办停止公开和派发。若提交的是 Action，仍须按原流程先持久结算操作回执。操作账本接收同一绑定的 `options.auth`。
+
 ### 取消与对账
 
 同 turnId 的指纹含实际材料和当前身份，不同内容冲突。新 turn 获得新期限；同 turn 重试沿用 deadline/已用量且 retryRef 仅一次。可靠 Responses usage 记 observed，其余 unknown，不当作零消耗或精确费用。Runtime 局部预算只是附加上限，不重复累计同一次实际请求。

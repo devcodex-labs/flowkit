@@ -81,6 +81,8 @@ codex plugin list --marketplace flowkit-local
 
 已经打开过候选但需要重新排版时，可以对 Codex 说「为这个候选重新排版，打开结果」。本机工具 `flowkit_relayout_workflow` 接收候选、当前布局版本和请求 ID，并返回新版预览链接。导出时使用该预览的布局版本。旧导出仍可按各自的摘要和签名核验。模型重排失败时，预览服务保留已选布局。
 
+下载链接过期时，让 Codex 用原 `draftId`、`candidateHash` 和返回结果里的 `exportReceipt` 重新调用 `flowkit_export_workflow`。原候选和原文件仍可读取时，FlowKit 核验三个 SHA-256 后签发新链接，保留原 HTML 签名。此调用只传收据。要导出当前渲染版本，打开当前预览并使用它的 `layoutRevision`。原收据的文件内容改变或缺失时，补领会失败。
+
 已有 Interactive 运行绑定的宿主可以在调用 `startLocalMcp` 时提供 `resolveRunViewer`。解析器接收运行 ID 与当前操作员的服务端请求上下文，返回该次运行的 `{ auth, ref, options }`。其中 `auth` 为请求范围内的受信 Host 能力，`ref` 绑定实际运行及其 Program 和 GraphSnapshot，`options` 提供原运行的策略、Store、Program registry 和同一 GraphSnapshot。操作员可打开 `/runs/<runId>` 查阅状态、激活次数和重试记录，并按修订翻页。在产物中心可筛选当前页授权产物的节点、类型、版本或生效状态，点击产物可回到来源节点。刷新与翻页都只读取运行。文件正文仍由宿主的授权存储接口提供。
 
 宿主如需关联接收方的候选，可另外提供 `candidate`，并在 `ref` 中声明 `collectionId`、`candidateHash` 与 `approvalRef`。宿主应按这三项验证接收方的审批。页面还会验证候选文件及图摘要，才展示该候选和 Mermaid。导入可以生成新的候选身份，运行仍绑定原 Program 和 GraphSnapshot。
@@ -152,7 +154,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 ## 从业务目的到可执行交付
 
-候选节点详情显示执行者类型、业务角色和关联 Skill。Agent 步骤确实需要可复用指令时，Author 先查询当前集合和 Host 授权的目录。找到一个适用版本时预选原版本。多个匹配或目录不完整时保留待处理项。完整搜索确认没有匹配时才起草。候选预览可复审草稿，确认加入集合后保存工作流及准确的 Skill 版本。执行权限仍由 Host 按实际身份核验。
+候选节点详情显示执行者类型、业务角色和关联 Skill。Agent 步骤确实需要可复用指令时，Author 先查询当前集合和 Host 授权的目录。本机先按准确 ID 或名称查找，再按用途查找异名 Skill，在预算内检查批准版本的正文是否满足本次需要。找到一个适用版本时预选原版本。多个匹配、正文适用性无法确认或目录查找超出预算时保留待处理项。完整搜索确认没有匹配时才起草。候选预览可复审草稿，确认加入集合后保存工作流及准确的 Skill 版本。执行权限仍由 Host 按实际身份核验。
 
 签名三文件可携带 Professional Skill 的逻辑来源、ID、精确版本和摘要。接收端可以先查看和复审。缺少授权依赖时预览给出原因，`@devcodex-labs/flowkit/host` 的 `runApprovedCollectionWorkflow` 拒绝运行。同一集合使用批准仓库的精确版本。跨宿主通过 `resolveRunProfessionalSkill` 返回经授权的准确源候选，由 FlowKit 重验实物和版本后才派发。私有 Skill 正文留在授权仓库。带本地文档或 Host 安全策略的候选仍需接收方通过原 Host 安装与核验。
 

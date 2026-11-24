@@ -36,6 +36,16 @@ export function createInteractiveHostContext({namespace,subjectId,authorize,auth
   return auth;
 }
 
+/** Intersect an authentic Host's existing permissions with an approved workflow scope. */
+export function restrictInteractiveHostContext(auth, restrictions) {
+  const callbacks=authCallbacks.get(auth);
+  if (!callbacks) throw fail('FK_I_HOST_DENIED','invalid Host capability');
+  return createInteractiveHostContext({namespace:auth.namespace,subjectId:auth.subjectId,
+    authorize:async request=>await callbacks.authorize(request)===true && await restrictions.authorize(request)===true,
+    authorizeTask:async request=>await callbacks.authorizeTask(request)===true && await restrictions.authorizeTask(request)===true,
+    authorizeHuman:callbacks.authorizeHuman});
+}
+
 function genesisFor(checkpoint) {
   const {namespace,runId,artifactHash:programHash,blockId:toBlockId,startIntentHash}=checkpoint;
   const eventDigest=hash(['genesis',startIntentHash]);

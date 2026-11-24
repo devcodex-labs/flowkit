@@ -93,7 +93,7 @@ export interface AuthorHostOptions {
   professionalSkillCatalog?: {
     collection(scope: AuthorProfessionalCatalogScope & { collectionId: string }): AuthorProfessionalCollection | null | Promise<AuthorProfessionalCollection | null>;
     search(scope: AuthorProfessionalCatalogScope & { id: string; description: string; collection: AuthorProfessionalCollection;
-      verifyApplicability(need: { id: string; description: string }, candidate: AuthorProfessionalSkill): Promise<boolean> }): Promise<{
+      verifyApplicability(need: { id: string; description: string }, candidate: AuthorProfessionalSkill): Promise<boolean | null> }): Promise<{
       complete?: boolean; denied?: boolean; occupied?: boolean; matches?: Array<{ candidate: AuthorProfessionalSkill; source: string; approved: true }> }>;
   };
   resolveProfessionalSkill?(pin: object, context: AuthorProfessionalCatalogScope): Promise<{ id: string; version: string; digest: string; source?: string; approved: boolean } | null>;

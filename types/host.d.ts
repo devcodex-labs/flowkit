@@ -25,6 +25,10 @@ export function runApprovedCollectionWorkflow(store: ApprovedWorkflowStore, targ
 export function runApprovedCollectionWorkflow(store: ApprovedWorkflowStore, target: ApprovedWorkflowTarget,
   host: ApprovedWorkflowHostAuthority & { runtime: InteractiveRuntimeV1; interactive: InteractiveOptionsV1 & { startKey: string } },
   state?: Record<string, unknown>, options?: FlowkitOptions): Promise<InteractiveFrameV1>;
+/** Recreate the approved runtime and policy before resuming or completing an Interactive Run. */
+export function bindApprovedInteractiveWorkflow(store: ApprovedWorkflowStore, target: ApprovedWorkflowTarget,
+  host: ApprovedWorkflowHostAuthority & { runtime: InteractiveRuntimeV1; interactive: InteractiveOptionsV1 }):
+  Promise<{ runtime: InteractiveRuntimeV1; options: InteractiveOptionsV1 }>;
 export interface CompilationCacheLimits {maxEntries:number;maxBytes:number;ttlMs:number;maxModuleIdentities:number;maxModuleBytes:number}
 export interface CompilationCacheStatus extends CompilationCacheLimits {
   entries:number;bytes:number;residentModuleIdentities:number;residentModuleBytes:number;hits:number;misses:number;evictions:number;

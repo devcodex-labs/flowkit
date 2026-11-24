@@ -34,7 +34,8 @@ export interface FlowkitMcpOptions {
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     relayout?(input: { collectionId: string; draftId: string; candidateHash: string; expectedLayoutRevision: string; requestId: string },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
-    export(input: { collectionId: string; draftId: string; candidateHash: string; layoutRevision?: string },
+    export(input: { collectionId: string; draftId: string; candidateHash: string } &
+      ({ layoutRevision?: string; exportReceipt?: never } | { layoutRevision?: never; exportReceipt: string }),
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     add(input: { collectionId: string; requestId: string; sourceRef: string; candidateHash?: string; approvalRef?: string; destination?: 'flowkit' | 'codex' },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;

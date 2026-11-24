@@ -280,11 +280,10 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
               return option?.value ?? draft.plan?.resourceRequirements?.find(pin => pin.nodeId === nodeId && pin.needId === needId)?.selection;
             },
             async verifyApplicability(need, candidate) {
-              if (candidate.manifest.description === need.description) return true;
               const text = candidate.files['SKILL.md'];
-              if (text.length > 24000) return false;
+              if (text.length > 24000) return null;
               const result = await ports.request({ flowkitProfessionalSkillReview: { need, text } });
-              return result?.applicable === true;
+              return typeof result?.applicable === 'boolean' ? result.applicable : null;
             },
             async draftSkill(need) {
               const response = await ports.request({ flowkitProfessionalSkill: need });

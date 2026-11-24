@@ -57,16 +57,24 @@ test('the local Author drafts only after catalog lookup, publishes the approved 
   const model = monthlyTimesheetModel();
   const request = model.execution.request;
   let draftCount = 0;
+  let need = { id: 'review-procedure', description: 'Review one provided record.' };
+  const applicabilityChecks = [];
   const skillBody = '# Review procedure\n\nUse the confirmed input and return a note.';
   model.execution.request = async input => {
     if (input.flowkitProfessionalSkill) {
-      assert.equal(input.flowkitProfessionalSkill.id, 'review-procedure');
+      assert.equal(input.flowkitProfessionalSkill.id, need.id);
       draftCount++;
-      return { body: skillBody };
+      return { body: need.id === 'temperature-assessment' ? 'Apply the stated temperature procedure.' : skillBody };
+    }
+    if (input.flowkitProfessionalSkillReview) {
+      const { need, text } = input.flowkitProfessionalSkillReview;
+      applicabilityChecks.push(need.id);
+      assert.ok(text.includes(skillBody));
+      return need.id === 'unknown-fit' ? {} : { applicable: need.id !== 'temperature-assessment' };
     }
     if (input.prepared?.task.node.id !== 'proposal') return request(input);
     const entry = { id: 'review', kind: 'agent', name: 'Review record', requiredRole: { id: 'reviewer', label: '复核员' },
-      professionalNeeds: [{ id: 'review-procedure', description: 'Review one provided record.' }],
+      professionalNeeds: [need],
       options: { description: 'Review the record', inputs: [], output: { type: 'object' }, next: 'finish' } };
     const nodes = [entry, { id: 'finish', kind: 'terminal', name: 'Complete', options: { status: 'succeeded' } }];
     return { status: 'succeeded', result: { rawText: JSON.stringify({ entryNodeId: entry.id, nodes, edges: [], coverage: [
@@ -85,11 +93,11 @@ test('the local Author drafts only after catalog lookup, publishes the approved 
     assert.ok(!response.isError, JSON.stringify(response));
     return JSON.parse(response.content[0].text);
   };
-  const start = async name => {
+  const start = async (name, status = 'candidate-ready') => {
     const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: name, goal: 'Review one provided record.' });
     const prepared = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: name,
       expectedStateVersion: draft.stateVersion, input: 'Review one provided record.', target: { name } } });
-    assert.equal(prepared.status, 'candidate-ready', JSON.stringify(prepared));
+    assert.equal(prepared.status, status, JSON.stringify(prepared));
     return prepared;
   };
   const approvedSkills = () => {
@@ -120,6 +128,24 @@ test('the local Author drafts only after catalog lookup, publishes the approved 
   const [reused] = readWorkflowPageData(reusedHtml).executionBindings;
   const { pendingApproval: _pending, ...pin } = binding.skills[0];
   assert.deepEqual(reused.skills, [pin]);
+  need = { ...need, id: 'review-record-alias' };
+  const alias = await start('review-alias');
+  const aliasHtml = await (await fetch(alias.candidate.previewUrl, { headers: { cookie } })).text();
+  assert.deepEqual(readWorkflowPageData(aliasHtml).executionBindings[0].skills, [pin]);
+  need = { id: 'different-name', description: 'Inspect an individual record.' };
+  const paraphrase = await start('review-paraphrase');
+  const paraphraseHtml = await (await fetch(paraphrase.candidate.previewUrl, { headers: { cookie } })).text();
+  assert.deepEqual(readWorkflowPageData(paraphraseHtml).executionBindings[0].skills, [pin]);
+  need = { ...need, id: 'unknown-fit' };
+  const unclear = await start('review-unclear', 'needs-clarification');
+  assert.ok(unclear.questions.some(question => question.id === 'skill-review-unknown-fit'));
+  assert.deepEqual(applicabilityChecks, ['review-procedure', 'review-record-alias', 'different-name', 'unknown-fit']);
+  assert.equal(draftCount, 1);
+  need = { id: 'temperature-assessment', description: 'Assess a temperature reading.' };
+  const unmatched = await start('temperature-assessment');
+  const unmatchedHtml = await (await fetch(unmatched.candidate.previewUrl, { headers: { cookie } })).text();
+  assert.equal(readWorkflowPageData(unmatchedHtml).executionBindings[0].skills[0].id, need.id);
+  assert.equal(draftCount, 2);
 
   const exported = await tool('flowkit_export_workflow', { draftId: first.id, candidateHash: first.candidate.candidateHash });
   const files = Object.fromEntries(await Promise.all(['workflow.js', 'workflow.mmd', 'workflow.html'].map(async name =>
@@ -401,6 +427,13 @@ test('relayout is versioned and idempotent and preserves old signed downloads on
   assert.deepEqual([failed.status, failed.layoutRevision], ['relayout-failed', winning.layoutRevision]);
   await client.close(); client = null;
   await service.close(); service = null;
+  const database = new DatabaseSync(path.join(config.dataDir, 'local-mcp.sqlite'));
+  try {
+    const key = 'export:' + old.exportReceipt;
+    const record = JSON.parse(database.prepare('SELECT value FROM local_mcp WHERE key=?').get(key).value);
+    database.prepare('UPDATE local_mcp SET value=? WHERE key=?')
+      .run(JSON.stringify({ ...record, viewerHash: artifactDigest('retired renderer') }), key);
+  } finally { database.close(); }
   await start();
   const count = calls;
   const current = await tool('flowkit_get_workflow_draft', { draftId: draft.id });
@@ -408,6 +441,20 @@ test('relayout is versioned and idempotent and preserves old signed downloads on
   assert.ok(await tool('flowkit_export_workflow', { ...args, layoutRevision: winning.layoutRevision }));
   assert.equal(calls, count);
   assert.deepEqual(await readDelivery(old.directory), original);
+  const renewed = await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt });
+  assert.equal(renewed.directory, old.directory);
+  assert.equal(renewed.exportReceipt, old.exportReceipt);
+  assert.deepEqual(renewed.files.map(file => file.sha256), old.files.map(file => file.sha256));
+  for (const file of renewed.files) {
+    const response = await fetch(file.url);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), original[file.name]);
+  }
+  assert.equal(calls, count);
+  await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt, layoutRevision: winning.layoutRevision }, false);
+  await writeFile(path.join(old.directory, 'workflow.html'), original['workflow.html'] + '\n');
+  await tool('flowkit_export_workflow', { ...args, exportReceipt: old.exportReceipt }, false);
+  assert.equal((await fetch(renewed.files.find(file => file.name === 'workflow.html').url)).status, 409);
 });
 
 test('local MCP pins a validated model layout, confirms the candidate and replays the three-file export after restart', async t => {

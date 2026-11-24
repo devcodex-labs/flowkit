@@ -176,8 +176,9 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         await exactDraft(input.collectionId, input.draftId, ctx.signal);
         return workflowUi.relayout(input, requestContext, ctx.signal);
       });
-    tool('flowkit_export_workflow', 'Export the three public files for an exact confirmed candidate.',
-      { collectionId: id, draftId: id, candidateHash: hash, ...(workflowUi.relayout ? { layoutRevision: hash.optional() } : {}) },
+    tool('flowkit_export_workflow', 'Export the three public files for an exact confirmed candidate, or renew download links using its export receipt.',
+      { collectionId: id, draftId: id, candidateHash: hash, exportReceipt: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+        ...(workflowUi.relayout ? { layoutRevision: hash.optional() } : {}) },
       (input, ctx) => workflowUi.export(input, requestContext, ctx.signal));
     tool('flowkit_add_workflow', 'Add a verified candidate or inspect the supported destinations for an external workflow.',
       { collectionId: id, requestId: id, sourceRef: id, candidateHash: hash.optional(), approvalRef: id.optional(),

@@ -187,17 +187,19 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           } finally { authorTransaction = false; }
         });
       },
-      readCollectionMetadata(collectionId,{limit=10001}={}) {
+      readCollectionMetadata(collectionId,{limit=10001,includeProfessionalDescription=false}={}) {
         if(!Number.isSafeInteger(limit)||limit<1)throw new TypeError('Metadata query requires a positive row limit');
         const collection=db.prepare('SELECT payload FROM fk_author_collections WHERE collection_id=?').get(collectionId);
         if(!collection)return null;
         const skills=db.prepare(`SELECT active.collection_id,active.skill_id,active.name,active.candidate_hash,
           versions.version,json_extract(versions.payload,'$.manifest.kind') AS kind,
-          json_extract(versions.payload,'$.manifest.digest') AS digest
+          json_extract(versions.payload,'$.manifest.digest') AS digest${includeProfessionalDescription ?
+            ",json_extract(versions.payload,'$.manifest.description') AS description" : ''}
           FROM fk_author_active AS active JOIN fk_author_versions AS versions USING(collection_id,skill_id,candidate_hash)
           WHERE active.collection_id=? ORDER BY active.name LIMIT ?`).all(collectionId,limit).map(row=>({hash:row.candidate_hash,
             manifest:{collectionId:row.collection_id,skillId:row.skill_id,name:row.name,version:row.version,
-              ...(row.kind?{kind:row.kind}:{}),...(row.digest?{digest:row.digest}:{})}}));
+              ...(row.kind?{kind:row.kind}:{}),...(row.digest?{digest:row.digest}:{}),
+              ...(row.kind==='professional'&&row.description?{description:row.description}:{})}}));
         return {collection:JSON.parse(collection.payload),skills};
       },
       readActive(collectionId, skillId) { return readCandidate(active.get(collectionId, skillId)); },

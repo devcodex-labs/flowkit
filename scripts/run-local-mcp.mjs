@@ -288,34 +288,57 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     const skillSource = 'collection:' + collectionId;
     const localProfessionalSkills = {
       collection: ({ collectionId: scope }) => scope === collectionId ? collectionPlan.destination : null,
-      async search({ id, description, collection, verifyApplicability }) {
+      async search({ id, description, collection, verifyApplicability, signal }) {
         if (collection.id !== collectionId) return { denied: true };
-        const snapshot = binding.store.readCollectionMetadata(collection.id, { limit: 1001 });
+        const snapshot = binding.store.readCollectionMetadata(collection.id, { limit: 1001, includeProfessionalDescription: true });
         if (!snapshot || snapshot.skills.length === 1001) return { complete: false };
-        const relevant = snapshot.skills.filter(({ manifest }) => manifest.kind === 'professional' &&
-          (manifest.skillId === id || manifest.name === id));
+        const skills = snapshot.skills.map(({ manifest }) => manifest).filter(manifest => manifest.kind === 'professional');
+        const exact = [], samePurpose = [], other = [];
+        const normalize = value => value?.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+        const purpose = normalize(description);
+        for (const skill of skills) {
+          if (skill.skillId === id || skill.name === id) exact.push(skill);
+          else if (normalize(skill.description) === purpose) samePurpose.push(skill);
+          else other.push(skill);
+        }
         const candidates = new Map();
-        const result = await planProfessionalSkills(collection, { id, professionalNeeds: [{ id, description }] }, {
-          listProfessionalMetadata: async () => ({ nextCursor: null, items: relevant.map(({ manifest }) => ({
-            ...manifest, id: manifest.skillId, path: `${collection.directory}/skills/${manifest.name}/SKILL.md`
-          })) }),
-          matchesMetadata: () => true,
-          readProfessionalSkill: ({ collectionId: scope, skillId, version, digest }) => {
-            const candidate = binding.store.readProfessionalVersion(scope, skillId, version);
-            if (!candidate || candidate.manifest.digest !== digest) throw new Error('Exact catalog Skill disappeared');
-            checkProfessionalSkill(candidate);
-            return candidate;
-          },
-          async confirmApplicability(need, candidate, item) {
-            const compatible = dependencies.confirmProfessionalSkill ?
-              await dependencies.confirmProfessionalSkill({ need, candidate, item }) === true : await verifyApplicability(need, candidate);
-            if (compatible) candidates.set(item.id, candidate);
-            return compatible;
-          }
-        }, { maxPages: 1, maxBodies: 16 });
-        const matches = result.conflicts[0]?.candidates ?? result.reuse;
-        if (!matches.length && relevant.length) return { complete: true, occupied: true, matches: [] };
-        return { complete: true, matches: matches.map(({ id }) => ({ candidate: candidates.get(id), source: skillSource, approved: true })) };
+        const maxBodies = 4;
+        let checked = 0, uncertain = false;
+        for (const group of [exact, samePurpose, other]) {
+          if (!group.length) continue;
+          checked += group.length;
+          if (checked > maxBodies) return { complete: false };
+          const result = await planProfessionalSkills(collection, { id, professionalNeeds: [{ id, description }] }, {
+            listProfessionalMetadata: async () => ({ nextCursor: null, items: group.map(manifest => ({
+              ...manifest, id: manifest.skillId, path: `${collection.directory}/skills/${manifest.name}/SKILL.md`
+            })) }),
+            matchesMetadata: () => true,
+            readProfessionalSkill: ({ collectionId: scope, skillId, version, digest }) => {
+              const candidate = binding.store.readProfessionalVersion(scope, skillId, version);
+              if (!candidate || candidate.manifest.digest !== digest) throw new Error('Exact catalog Skill disappeared');
+              checkProfessionalSkill(candidate);
+              return candidate;
+            },
+            async confirmApplicability(need, candidate, item) {
+              signal?.throwIfAborted();
+              let compatible;
+              try {
+                compatible = dependencies.confirmProfessionalSkill ? await dependencies.confirmProfessionalSkill({ need, candidate, item }) :
+                  await verifyApplicability(need, candidate);
+              } catch (error) {
+                if (error.code !== 'FKA_BUDGET_EXHAUSTED') throw error;
+              }
+              if (compatible === true) candidates.set(item.id, candidate);
+              if (typeof compatible !== 'boolean') uncertain = true;
+              return compatible === true;
+            }
+          }, { maxPages: 1, maxBodies });
+          if (uncertain) return { complete: false };
+          const matches = result.conflicts[0]?.candidates ?? result.reuse;
+          if (matches.length) return { complete: true,
+            matches: matches.map(({ id }) => ({ candidate: candidates.get(id), source: skillSource, approved: true })) };
+        }
+        return { complete: true, occupied: exact.length > 0, matches: [] };
       }
     };
     const professionalSkillCatalog = {
@@ -464,32 +487,57 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       findings: review.rejection?.findings?.map(({ message, nodeIds }) => ({ message, nodeIds })) ?? [],
       ...(review.receipt?.reviewRef ? { reviewRef: review.receipt.reviewRef } : {}) });
 
-    async function exportCandidate({ draftId, candidateHash, layoutRevision }, _context, signal) {
+    async function exportCandidate({ draftId, candidateHash, layoutRevision, exportReceipt }, _context, signal) {
       const draft = await readDraft(draftId, candidateHash, signal);
       if (!draft.savedReceipt && !trustedDraft(draft)) throw new Error(untrustedReason);
+      function issue(receipt, record) {
+        const { directory, hashes, layoutRevision } = record;
+        put('export-source:' + authorIdentity(hashes), { draftId, candidateHash });
+        for (const name of deliveryNames) insert('export-member:' + name + ':' + hashes[name], receipt);
+        const ref = seal('export', receipt);
+        return { candidateHash, directory, exportReceipt: receipt, ...(layoutRevision ? { layoutRevision } : {}),
+          files: deliveryNames.map(name => ({ name, url: origin + '/exports/' + ref + '/' + name, sha256: hashes[name] })) };
+      }
+      const receiptForDraft = id => {
+        const record = get('export:' + id);
+        return record?.draftId === draftId && record.candidateHash === candidateHash &&
+          record.directory === path.join(exportDir, id) ? record : undefined;
+      };
+      const available = record => record && deliveryMatches(record.directory, record.hashes);
+      if (exportReceipt !== undefined) {
+        if (layoutRevision !== undefined) throw new Error('请指定导出收据或布局版本其中之一。');
+        const record = receiptForDraft(exportReceipt);
+        if (!await available(record)) throw new Error('Exact export receipt or its original files are unavailable');
+        return issue(exportReceipt, record);
+      }
       if (draft.approvalReceipt?.candidateHash !== candidateHash || !draft.reviewReceipt?.qualified ||
           !approval(draft.approvalReceipt.approvalRef)?.confirmed) throw new Error('请先在预览页确认当前候选。');
       const selected = get(selectedLayoutKey(candidateHash));
-      if (layoutRevision === undefined ? !!selected?.revision : layoutRevision !== layoutRevisionOf(candidateHash)) throw layoutConflict();
+      const currentRevision = layoutRevisionOf(candidateHash);
+      if (layoutRevision === undefined ? !!selected?.revision : layoutRevision !== currentRevision) throw layoutConflict();
+      const layout = selectedLayout(candidateHash);
       const portable = canExportPortable(draft.candidate);
-      const receiptId = selected?.revision ? artifactDigest(JSON.stringify([
-        'layout-export-v1', candidateHash, selected.revision, portable ? exportKey.publicKey : null
-      ])).slice(7) : portable ?
-        artifactDigest(JSON.stringify(['portable-v1', candidateHash, exportKey.publicKey])).slice(7) : candidateHash.slice(7);
+      const signer = portable ? exportKey.publicKey : null;
+      const previousId = selected?.revision ? artifactDigest(JSON.stringify([
+        'layout-export-v1', candidateHash, selected.revision, signer
+      ])).slice(7) : signer ? artifactDigest(JSON.stringify(['portable-v1', candidateHash, signer])).slice(7) : candidateHash.slice(7);
+      const previous = receiptForDraft(previousId);
+      if ((layoutRevision === undefined || previous?.viewerHash === viewerHash) && await available(previous)) {
+        return issue(previousId, previous);
+      }
+      const receiptId = artifactDigest(JSON.stringify(['layout-export-v2', draftId, candidateHash, currentRevision, signer])).slice(7);
+      const existing = receiptForDraft(receiptId);
+      if (await available(existing)) return issue(receiptId, existing);
       const directory = path.join(exportDir, receiptId);
-      const files = publicDelivery(draft.candidate, portable ? exportKey : undefined, selectedLayout(candidateHash));
+      const files = publicDelivery(draft.candidate, portable ? exportKey : undefined, layout);
       const hashes = Object.fromEntries(deliveryNames.map(name => [name, artifactDigest(files[name])]));
-      const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, viewerHash,
-        ...(selected?.revision ? { layoutRevision: selected.revision } : {}) });
-      if (record.viewerHash !== viewerHash || authorIdentity(record.hashes) !== authorIdentity(hashes) || record.directory !== directory) {
-        throw new Error('Export configuration or renderer changed for this candidate');
+      const record = insert('export:' + receiptId, { draftId, candidateHash, directory, hashes, viewerHash, layoutRevision: currentRevision });
+      if (record.draftId !== draftId || record.candidateHash !== candidateHash || record.layoutRevision !== currentRevision ||
+          record.viewerHash !== viewerHash || record.directory !== directory || authorIdentity(record.hashes) !== authorIdentity(hashes)) {
+        throw new Error('Export receipt differs from the confirmed candidate and layout');
       }
       await commitDelivery(exportDir, directory, files, hashes);
-      put('export-source:' + authorIdentity(hashes), { draftId, candidateHash });
-      for (const name of deliveryNames) insert('export-member:' + name + ':' + hashes[name], receiptId);
-      const ref = seal('export', receiptId);
-      return { candidateHash, directory, ...(selected?.revision ? { layoutRevision: selected.revision } : {}),
-        files: deliveryNames.map(name => ({ name, url: origin + '/exports/' + ref + '/' + name, sha256: hashes[name] })) };
+      return issue(receiptId, record);
     }
 
     const resultFor = (status, candidate, extra = {}) => ({

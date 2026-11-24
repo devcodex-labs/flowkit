@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {generateKeyPairSync,sign} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {compileInteractive,createInteractiveCoordinator,createSqliteCheckpointStore,
   createSqliteInteractivePersistence,createInteractiveHostContext,createTrustedInteractiveHost,
   createAgentReceiptStatement,encodeAgentReceiptStatement,start,resume,complete} from '../../src/interactive/index.mjs';
@@ -12,6 +13,8 @@ import {prepareStandardSkill,publishStandardSkill} from '../../src/author/standa
 import {artifactDigest} from '../../src/shared/artifact-identity.mjs';
 import {createIndependentAgentAdapter,createApiAgentAdapter} from '../../src/host.mjs';
 import {openLocalSkillStore} from '../../src/author/local-skill-store.mjs';
+import {prepareProfessionalSkill,publishProfessionalSkill} from '../../src/author/professional-skills.mjs';
+import {exportTrust,newExportKey,publicDelivery,readPortableExport} from '../../scripts/local-mcp-artifacts.mjs';
 
 const source=`import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';
 export default defineWorkflow({id:'recover-task',name:'Recover task',version:'1.0.0',nodes:[
@@ -140,6 +143,100 @@ test('Versioned Host exposes pinned Prepared Task with approved callback version
   assert.equal((await complete({kind:'agent',runId:waiting.runId,requestId:waiting.pending[0].requestId,
     outcome:'succeeded',result:{answer:'yes'}},runtime,options)).status,'succeeded');
   } finally {p.close();}
+});
+
+function approvedP2Host(persistence, createAuth, hostProfile, taskPolicy, authorizeExecution, resolveRunProfessionalSkill) {
+  const binding = (id, mode, implementation) => ({ id, version: '1', mode, implementation });
+  const runtime = {
+    validateResult: binding('validate', 'pure-local', (_schema, result) => typeof result.answer === 'string' ? [] : ['answer required']),
+    prepareAgentTask: binding('prepare', 'trusted-read', (task, context) => ({ protocolVersion: 2, task,
+      descriptionResources: context.descriptionResources, skills: [] })),
+    authorizeAgentTask: binding('authorize', 'trusted-read', () => true),
+  };
+  const bindingManifest = Object.fromEntries(Object.entries(runtime).map(([key, { implementation, ...identity }]) => [key, identity]));
+  return { hostProfile, authorizeExecution, resolveRunProfessionalSkill, runtime, interactive: {
+    ...persistence, startKey: 'signed-p2',
+    auth: createAuth({ namespace: 'tasks', subjectId: 'local', authorize: () => true, authorizeTask: () => true }),
+    policy: { id: 'signed-p2', version: '1', bindingManifest, disclosePolicyId: 'local', capabilityStage: 'P2',
+      canonicalizationVersion: 'jcs-rfc8785-v1', taskPolicy },
+  } };
+}
+
+test('public Host starts a signed P2 Program and restores the exact authorized Skill after process exit', async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'flowkit-approved-p2-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'task.workflow.js');
+  await writeFile(file, source.replace("descriptionRefs:[{uri:'notes.md',role:'instruction'}],", ''));
+  const skill = prepareProfessionalSkill({ id: 'team', directory: 'team', name: 'team' }, { id: 'inspect', name: 'inspect',
+    version: '1.0.0', description: 'Inspect the declared message', body: 'Return the inspected message as an answer.' });
+  const profile = { id: 'local', digest: artifactDigest('signed-p2-profile') };
+  const taskPolicy = { projectRoot: dir, hostProfile: { ...hostProfile, executionModes: ['interactive-p2'] },
+    maxDispatches: 3, deadlineMs: Date.now() + 60000 };
+  const compiled = await prepareStandardSkill({ file, collectionId: 'team', skillId: 'workflow', name: 'workflow',
+    description: 'Inspect the message', version: '1.0.0', hostProfile: profile, buildId: 'signed-p2', executionMode: 'interactive-p2',
+    professionalSkills: [{ nodeId: 'worker', id: 'inspect', version: '1.0.0', digest: skill.manifest.digest, source: 'collection:team' }] });
+  assert.ok(compiled.candidate, JSON.stringify(compiled.diagnostics));
+  const key = newExportKey();
+  const files = publicDelivery(compiled.candidate, key);
+  const { candidate } = readPortableExport(files, exportTrust([key.publicKey]));
+  assert.equal(candidate?.hash, compiled.candidate.hash);
+  const { collectionId, skillId } = candidate.manifest;
+  const target = { collectionId, skillId, candidateHash: candidate.hash, skillDirectory: dir, executionRef: 'approved-run' };
+  const approval = { reviewRef: 'review', approvalRef: 'approval', previousHash: null };
+  const catalogFile = path.join(dir, 'catalog.sqlite'), runFile = path.join(dir, 'run.sqlite');
+  const catalog = openLocalSkillStore(catalogFile, () => true);
+  try {
+    await publishProfessionalSkill(skill, approval, catalog);
+    await publishStandardSkill(candidate, approval, catalog);
+  } finally { catalog.close(); }
+  await writeFile(path.join(dir, 'workflow.js'), files['workflow.js']);
+  const startup = `import {runApprovedCollectionWorkflow} from '@devcodex-labs/flowkit/host';
+import {createSqliteInteractivePersistence,createInteractiveHostContext} from '@devcodex-labs/flowkit/interactive';
+import {openLocalSkillStore} from ${JSON.stringify(new URL('../../src/author/local-skill-store.mjs', import.meta.url).href)};
+const host = ${approvedP2Host.toString()};
+const [catalogFile, runFile, target, profile, taskPolicy] = JSON.parse(process.argv[1]);
+const catalog = openLocalSkillStore(catalogFile, () => true);
+const persistence = createSqliteInteractivePersistence(runFile, {namespace:'tasks'});
+try {
+  const frame = await runApprovedCollectionWorkflow(catalog, target,
+    host(persistence, createInteractiveHostContext, profile, taskPolicy, () => true), {message:'pinned'});
+  console.log(JSON.stringify(frame));
+} finally { catalog.close(); persistence.close(); }`;
+  const waiting = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', startup,
+    JSON.stringify([catalogFile, runFile, target, profile, taskPolicy])], { encoding: 'utf8', timeout: 20000 }));
+  assert.equal(waiting.status, 'waiting');
+  const [pending] = waiting.pending;
+  assert.equal(pending.task.preparedTask.skills[0].digest, skill.manifest.digest);
+  assert.equal(pending.task.preparedTask.skills[0].files['SKILL.md'], skill.files['SKILL.md']);
+  await unlink(file);
+  await unlink(path.join(dir, 'workflow.js'));
+
+  const [{ bindApprovedInteractiveWorkflow }, interactive] = await Promise.all([
+    import('@devcodex-labs/flowkit/host'), import('@devcodex-labs/flowkit/interactive'),
+  ]);
+  const reopened = openLocalSkillStore(catalogFile, () => true);
+  const persistence = interactive.createSqliteInteractivePersistence(runFile, { namespace: 'tasks' });
+  try {
+    let executionAllowed = true, skillAllowed = true;
+    const host = approvedP2Host(persistence, interactive.createInteractiveHostContext, profile, taskPolicy, () => executionAllowed,
+      pin => ({ authorized: skillAllowed, source: pin.source, candidate: reopened.readProfessionalVersion(collectionId, pin.id, pin.version) }));
+    const bound = await bindApprovedInteractiveWorkflow(reopened, target, host);
+    const submission = { kind: 'agent', runId: waiting.runId, requestId: pending.requestId, outcome: 'succeeded', result: { answer: 'pinned' } };
+    assert.deepEqual(await interactive.resume(waiting.runId, bound.runtime, bound.options), waiting);
+    executionAllowed = false;
+    await assert.rejects(interactive.resume(waiting.runId, bound.runtime, bound.options), { code: 'FK_I_HOST_DENIED' });
+    executionAllowed = true;
+    skillAllowed = false;
+    await assert.rejects(interactive.resume(waiting.runId, bound.runtime, bound.options), { code: 'FK_I_HOST_DENIED' });
+    await assert.rejects(interactive.reserveInteractiveDispatch({ runId: waiting.runId, requestId: pending.requestId, operationId: 'denied' },
+      bound.runtime, bound.options), { code: 'FK_I_HOST_DENIED' });
+    await assert.rejects(interactive.complete(submission, bound.runtime, bound.options), { code: 'FK_I_HOST_DENIED' });
+    assert.equal(await persistence.store.loadReceipt(waiting.runId, pending.requestId), null);
+    skillAllowed = true;
+    const final = await interactive.complete(submission, bound.runtime, bound.options);
+    assert.equal(final.status, 'succeeded');
+    assert.equal((await interactive.complete(submission, bound.runtime, bound.options)).acknowledgement.repeated, true);
+  } finally { persistence.close(); reopened.close(); }
 });
 
 test('Trusted Host signs Task V2 receipts and rechecks authorization before model disclosure',async t=>{
