@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { DESCRIPTION_MAX_BYTES, isSemVer } from '../shared/task-spec.mjs';
-import { artifactDigest } from '../shared/artifact-identity.mjs';
+import { artifactDigest, professionalSkillFileHashes } from '../shared/artifact-identity.mjs';
 import { createDescriptionResources } from './task-resources.mjs';
 
 const failure = (kind, message, cause) => Object.assign(new Error(`FK_R004 ${message}`, { cause }),
@@ -116,6 +116,15 @@ function writeResult(target, result) {
   }
 }
 
+export function assertPreparedProfessionalSkills(pins, nodeId, skills) {
+  const expected = pins.filter(pin => pin.nodeId === nodeId);
+  if (skills.length !== expected.length || expected.some((pin, index) => {
+    const resolved = skills[index];
+    return resolved.logicalId !== pin.id || resolved.resolvedVersion !== pin.version || resolved.digest !== pin.digest ||
+      pin.source !== undefined && (resolved.source !== pin.source || !resolved.files);
+  })) throw failure('required-skill-changed', 'Prepared Professional Skills differ from the approved Run bindings');
+}
+
 /** Shared Standard/P0-A resource preparation; Host supplies discovery and actual permissions. */
 export async function prepareTaskV2(task, runtime, policy, context, mode = 'standard') {
   const {signal, descriptionResources, budget} = context;
@@ -136,10 +145,14 @@ export async function prepareTaskV2(task, runtime, policy, context, mode = 'stan
     prepared.skills.length !== requiredSkills.length || requiredSkills.some((skill,index) => {
       const bound = prepared.skills[index];
       return !bound || bound.logicalId !== skill.id || !isSemVer(bound.resolvedVersion) ||
-        skill.version && bound.resolvedVersion !== skill.version || !/^sha256:[0-9a-f]{64}$/.test(bound.digest);
+        skill.version && bound.resolvedVersion !== skill.version || !/^sha256:[0-9a-f]{64}$/.test(bound.digest) ||
+        bound.source !== undefined && (typeof bound.source !== 'string' || !bound.source || !bound.files) ||
+        bound.files !== undefined && (!bound.files || Array.isArray(bound.files) ||
+          !Object.hasOwn(bound.files, 'SKILL.md') || Object.values(bound.files).some(content => typeof content !== 'string') ||
+          artifactDigest(JSON.stringify(professionalSkillFileHashes(bound.files))) !== bound.digest);
     })) throw failure('invalid-preparation', 'Prepared task or required Skill identity differs');
   const resources = [...descriptionResources.map(({uri,role,digest,byteLength}) => ({logicalId:uri,role,digest,byteLength})),
-    ...prepared.skills.map(({logicalId,resolvedVersion,digest}) => ({logicalId,resolvedVersion,digest}))];
+    ...prepared.skills.map(({logicalId,resolvedVersion,digest,source}) => ({logicalId,resolvedVersion,digest,...(source ? { source } : {})}))];
   const manifestHash = artifactDigest(JSON.stringify(resources));
   const dispatched = snapshot({...prepared,resourceManifest:{manifestId:manifestHash,manifestHash,resources}});
   validateSize(dispatched, budget.maxTaskBytes, 'Prepared task');

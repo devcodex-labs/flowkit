@@ -1,5 +1,5 @@
 import { collectionSkill } from './collections.mjs';
-import { artifactDigest } from '../shared/artifact-identity.mjs';
+import { artifactDigest, professionalSkillFileHashes } from '../shared/artifact-identity.mjs';
 import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName } from './skill-document.mjs';
 import { publishReviewedCandidate } from './standard-artifact.mjs';
@@ -22,7 +22,7 @@ export function prepareProfessionalSkill(collection, { id, name, version, descri
   }
   const files = Object.freeze({ 'SKILL.md': skillDocument(name, description, body),
     ...Object.fromEntries(Object.entries(resources).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) });
-  const fileHashes = Object.freeze(Object.fromEntries(Object.entries(files).map(([file, content]) => [file, artifactDigest(content)])));
+  const fileHashes = Object.freeze(professionalSkillFileHashes(files));
   const manifest = Object.freeze({ kind: 'professional', collectionId, skillId, name, version,
     description, files: fileHashes, digest: artifactDigest(JSON.stringify(fileHashes)) });
   const candidate = Object.freeze({ files, manifest, hash: artifactDigest(JSON.stringify(manifest)) });

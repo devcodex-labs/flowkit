@@ -639,6 +639,7 @@ export interface InteractiveRuntimeV1 {
 
 export interface InteractivePolicyV1 {
   requiredBundleReviews?:readonly string[];
+  professionalSkillPins?:ReadonlyArray<{nodeId:string;id:string;version:string;digest:string;source?:string}>;
   taskPolicy?: Omit<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'> & {remoteSkillHosts?:string[]};
   id:string;
   version:string;

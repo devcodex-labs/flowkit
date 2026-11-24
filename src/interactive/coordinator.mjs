@@ -5,7 +5,7 @@ import {checkpointPolicy} from './checkpoint.mjs';
 import {stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
 import {hasStepFrame,isHumanProof,publishedInteractivePending,runDeadlineExpired,interactiveModeForStage,
   parallelPendingEntries,laneRequestIds} from './protocol.mjs';
-import {createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
+import {assertPreparedProfessionalSkills, createBudget, during, prepareTaskV2} from '../runtime/tasks.mjs';
 import {createDescriptionResources} from '../runtime/task-resources.mjs';
 import {validateWorkflowInput,projectWorkflowOutput} from '../shared/workflow-contract.mjs';
 
@@ -618,6 +618,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         descriptionResources,projectRoot:policy.projectRoot,hostProfile:policy.hostProfile,
         authorizationContextRef:policy.authorizationContextRef});
       const prepared = await prepareTaskV2(task,execution,policy,context,mode);
+      if (policySnapshot.professionalSkillPins) assertPreparedProfessionalSkills(policySnapshot.professionalSkillPins, task.node.id, prepared.skills);
       if (saved && prepared.resourceManifest.manifestHash !== saved.prepared.resourceManifest.manifestHash) {
         throw failure('FK_I_PROGRAM_MISMATCH','Prepared task resources changed within the activation');
       }

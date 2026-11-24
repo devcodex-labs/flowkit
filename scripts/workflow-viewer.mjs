@@ -128,10 +128,19 @@ export function readWorkflowPageData(html) {
 }
 
 /** Assemble the confirmed offline viewer. The caller owns the same-origin confirmation form. */
-export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout }) {
+export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout, executionManifest, pendingSkillDigests }) {
   if (!graph?.nodes?.length || typeof graph.graphDigest !== 'string') throw new TypeError('Missing compiled workflow graph');
+  const executionBindings = new Map();
+  for (const { nodeId, id, label } of executionManifest?.nodeRoles ?? []) executionBindings.set(nodeId, { nodeId, role: { id, label }, skills: [] });
+  for (const { nodeId, id, version, digest, source } of executionManifest?.professionalSkills ?? []) {
+    const binding = executionBindings.get(nodeId) ?? { nodeId, skills: [] };
+    binding.skills.push({ id, version, digest, ...(source ? { source } : {}),
+      ...(pendingSkillDigests?.has(digest) ? { pendingApproval: true } : {}) });
+    executionBindings.set(nodeId, binding);
+  }
   const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest,definition,viewLayout),
-    ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}) });
+    ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}),
+    ...(executionBindings.size ? { executionBindings: [...executionBindings.values()] } : {}) });
   const html = controls ? shell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : shell.replace(controlsSlot, '');
   return html.replace(embeddedData, () => data);
@@ -164,7 +173,7 @@ export async function workflowTracePage({candidate,ref,standardTrace,authorizeTr
     return {nodeId,kind,...(outcome?{outcome}:{})};
   });
   const manifest=await authorizedManifest({requestContext,ref,viewManifest,authorizeViewManifest});
-  return workflowPage({graph,candidateHash:candidate.hash,mermaid:candidate.files['workflow.mmd'],viewManifest:manifest,
+  return workflowPage({graph,candidateHash:candidate.hash,mermaid:candidate.files['workflow.mmd'],viewManifest:manifest,executionManifest:candidate.manifest,
     runView:{type:'standard-trace',status,events:projected,pending:[],artifacts:null}});
 }
 
@@ -205,7 +214,7 @@ export async function workflowRunPage({ auth, ref, options, candidate, afterRevi
     links.push('<a href="' + runPath + '?afterRevision=' + afterRevision + '&amp;artifactAfter=' + artifacts.next +
       '">更多产物</a>');
   }
-  return workflowPage({ graph, candidateHash, mermaid, definition: candidate?.manifest.workflowDefinition,
+  return workflowPage({ graph, candidateHash, mermaid, definition: candidate?.manifest.workflowDefinition, executionManifest: candidate?.manifest,
     controls: links.join(' '), viewManifest:manifest, runView: {
     type:'interactive-journal', revision: snapshot.revision, status: snapshot.status, pauseReason: snapshot.pauseReason,
     pending: snapshot.pending.map(({ nodeId, kind, activation, attempt }) => ({ nodeId, kind, activation, attempt })),

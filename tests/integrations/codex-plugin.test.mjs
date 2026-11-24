@@ -16,6 +16,8 @@ import { generateLayout } from '../../scripts/workflow-viewer/auto-layout.mjs';
 import { runArtifact } from '../../src/runtime/run.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
+import { bindProfessionalNeeds } from '../../src/author/workflow-professional-bindings.mjs';
+import { prepareProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from './local-mcp-fixture.mjs';
 
 async function ownedDirectory(t) {
@@ -44,6 +46,104 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
   assert.equal(Object.hasOwn(manifest, 'skills'), false);
   const mcp = JSON.parse(await readFile(path.join(plugin, manifest.mcpServers), 'utf8'));
   assert.deepEqual(mcp.mcpServers.flowkit, { type: 'http', url, bearer_token_env_var: 'FLOWKIT_MCP_TOKEN' });
+});
+
+test('the local Author drafts only after catalog lookup, publishes the approved Skill with the workflow, and reuses it', async t => {
+  let service, client;
+  t.after(async () => { await client?.close(); await service?.close(); });
+  const root = await ownedDirectory(t);
+  const model = monthlyTimesheetModel();
+  const request = model.execution.request;
+  let draftCount = 0;
+  const skillBody = '# Review procedure\n\nUse the confirmed input and return a note.';
+  model.execution.request = async input => {
+    if (input.flowkitProfessionalSkill) {
+      assert.equal(input.flowkitProfessionalSkill.id, 'review-procedure');
+      draftCount++;
+      return { body: skillBody };
+    }
+    if (input.prepared?.task.node.id !== 'proposal') return request(input);
+    const entry = { id: 'review', kind: 'agent', name: 'Review record', requiredRole: { id: 'reviewer', label: '复核员' },
+      professionalNeeds: [{ id: 'review-procedure', description: 'Review one provided record.' }],
+      options: { description: 'Review the record', inputs: [], output: { type: 'object' }, next: 'finish' } };
+    const nodes = [entry, { id: 'finish', kind: 'terminal', name: 'Complete', options: { status: 'succeeded' } }];
+    return { status: 'succeeded', result: { rawText: JSON.stringify({ entryNodeId: entry.id, nodes, edges: [], coverage: [
+      { intentId: 'timesheet', status: 'covered', coveredBy: ['review'] },
+      { intentId: 'verify-copy', status: 'covered', coveredBy: ['review'] }
+    ] }) }, events: [] };
+  };
+  const token = 'fixture-professional-skill-credential';
+  const stateDir = path.join(root, 'state');
+  service = await startLocalMcp({ listen: { port: 0 }, dataDir: stateDir, exportDir: path.join(root, 'exports') },
+    { credential: token, modelBinding: model });
+  client = new Client({ name: 'professional-skill-integration', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+  const tool = async (name, args) => {
+    const response = await client.callTool({ name, arguments: args });
+    assert.ok(!response.isError, JSON.stringify(response));
+    return JSON.parse(response.content[0].text);
+  };
+  const start = async name => {
+    const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: name, goal: 'Review one provided record.' });
+    const prepared = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: name,
+      expectedStateVersion: draft.stateVersion, input: 'Review one provided record.', target: { name } } });
+    assert.equal(prepared.status, 'candidate-ready', JSON.stringify(prepared));
+    return prepared;
+  };
+  const approvedSkills = () => {
+    const db = new DatabaseSync(path.join(stateDir, 'author.sqlite'), { readOnly: true });
+    try { return db.prepare("SELECT payload FROM fk_author_versions WHERE json_extract(payload,'$.manifest.kind')='professional'").all()
+      .map(row => JSON.parse(row.payload)); }
+    finally { db.close(); }
+  };
+  const cookie = await browserIdentity(service);
+  const first = await start('review-first');
+  assert.equal(draftCount, 1);
+  assert.equal(approvedSkills().length, 0);
+  const draftHtml = await (await fetch(first.candidate.previewUrl, { headers: { cookie } })).text();
+  assert.match(draftHtml, /Use the confirmed input/);
+  const [binding] = readWorkflowPageData(draftHtml).executionBindings;
+  assert.equal(binding.role.label, '复核员');
+  assert.equal(binding.skills[0].pendingApproval, true);
+  const add = await tool('flowkit_add_workflow', { requestId: 'add-first', sourceRef: first.id, candidateHash: first.candidate.candidateHash });
+  const saved = await (await confirmInTestBrowser(add.confirmationUrl, cookie)).json();
+  assert.equal(saved.status, 'added');
+  const [skill] = approvedSkills();
+  assert.equal(approvedSkills().length, 1);
+  assert.equal(skill.manifest.digest, binding.skills[0].digest);
+  const second = await start('review-second');
+  assert.equal(draftCount, 1);
+  const reusedHtml = await (await fetch(second.candidate.previewUrl, { headers: { cookie } })).text();
+  assert.doesNotMatch(reusedHtml, /Use the confirmed input/);
+  const [reused] = readWorkflowPageData(reusedHtml).executionBindings;
+  const { pendingApproval: _pending, ...pin } = binding.skills[0];
+  assert.deepEqual(reused.skills, [pin]);
+});
+
+test('incomplete and denied Professional Skill discovery never starts a Skill draft', async () => {
+  const proposal = { nodes: [{ id: 'review', kind: 'agent', options: {},
+    professionalNeeds: [{ id: 'review-procedure', description: 'Review the selected record.' }] }] };
+  for (const searchResult of [{ complete: false, matches: [] }, { complete: true, denied: true, matches: [] }]) {
+    const bound = await bindProfessionalNeeds(proposal, {
+      catalog: { search: async () => searchResult }, collection: { id: 'collection' },
+      read: (_request, operation) => operation(), draftSkill: () => { throw new Error('drafting is forbidden'); },
+      drafts: new Map(), selectionFor: () => undefined
+    });
+    assert.equal(bound.unresolvedIssues[0].blocking, true);
+    assert.equal(bound.resourceRequirements.length, 0);
+  }
+  const collection = { id: 'catalog', name: 'catalog', directory: 'catalog' };
+  const candidate = prepareProfessionalSkill(collection, { id: 'review-procedure', name: 'review-procedure',
+    version: '1.0.0', description: 'Review the selected record.', body: 'Review and report the evidence.' });
+  const matches = ['source-a', 'source-b'].map(source => ({ source, candidate, approved: true }));
+  const scope = { collection, catalog: { search: async () => ({ complete: true, matches }) }, read: (_input, run) => run(),
+    drafts: new Map(), draftSkill: () => { throw new Error('drafting is forbidden'); } };
+  const undecided = await bindProfessionalNeeds(proposal, { ...scope, selectionFor: () => undefined });
+  assert.equal(undecided.unresolvedIssues[0].blocking, true);
+  const choice = undecided.unresolvedIssues[0].options.find(option => option.label.endsWith('(source-b)'));
+  const selected = await bindProfessionalNeeds(proposal, { ...scope, selectionFor: () => choice.value });
+  assert.deepEqual(selected.unresolvedIssues, []);
+  assert.equal(selected.resourceRequirements[0].source, 'source-b');
 });
 
 test('invalid placement and partition replies receive exact feedback before tightly scoped arrangement', async () => {

@@ -46,7 +46,7 @@ export function canExportPortable({ files, manifest }) {
 export function publicDelivery(candidate, key, viewLayout) {
   const graph = checkCandidate(candidate);
   let html = workflowPage({ graph, candidateHash: candidate.hash, mermaid: candidate.files['workflow.mmd'],
-    definition: candidate.manifest.workflowDefinition, viewLayout });
+    definition: candidate.manifest.workflowDefinition, executionManifest: candidate.manifest, viewLayout });
   if (key && canExportPortable(candidate)) {
     const payload = JSON.stringify({ type: portableType, htmlHash: artifactDigest(html), manifest: candidate.manifest,
       candidateHash: candidate.hash, skill: candidate.files['SKILL.md'] });

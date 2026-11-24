@@ -10,11 +10,12 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
 1. 使用 Host 装配的 `/host.createWorkflowAuthorHost`。Host 必须提供可独立响应的执行器及实际受预算约束的模型、工具和 I/O 端口；不能让 MCP 等待正在等待工具返回的同一调用者 Agent 来执行核心。
 2. `start` 接受一句目标和 Host 已知的选择，持久化草稿，不调用模型或发布。已有版本须选准确 TargetRef，不能按相似名称覆盖。只解释时读取 `readDraft`，由 Host 有界解释；不重新生成、不使原批准失效。
 3. Host 以当前认证身份、turnId、expectedStateVersion、实际上下文和基线调用 `advanceTurn`。收到 `needs-clarification` 时，展示 `questions` 给出的选项、推荐和自定义入口，沿用已知选择。例如交付或发布目标不明确时，可保留草稿，或请用户明确目标后再推进。共享固定 Standard DSL 核心实际调用 Intent Runtime、初始目录/文档、Plan、最终依赖、DSL 生成、真实编译及语义复审；不要在 Skill 或 MCP 中另写这套流程。保留未生效变更、原始要求及未决问题。
-   只在当前集合内查找确需复用的 Professional Skill。为每个强制依赖固定身份、版本和内容摘要。
+   只在当前集合与 Host 明确授权的目录内查找确需复用的 Professional Skill。Agent 步骤确实需要规范化指令时，在 Plan 节点上填写 `professionalNeeds: [{ id, description }]`。由 Host 核对正文适用性并提供确切来源、ID、版本和摘要。搜索无结果且完整时才起草。目录不可用、拒绝访问或存在多个候选时，保留缺口和待选择项。
    Capability及requires依赖必须全部applicable；unknown/partial不进入可执行声明。Human自动修订必须设置有限maxRevisions。parallel.any存在写入或未知Agent副作用时，先取得Host对精确Artifact的安全策略认可；未认可则阻断，不改变引擎的迟到执行语义。
 4. 内核仅在冻结语义内共享最多两次 Plan/DSL 技术修复。业务歧义、能力缺失、安全政策或语义复审阻断返回明确问题与选项，不通过删除约束来编译。引擎 succeeded 不等于 candidate-ready。同 Plan/资源/候选复用原字节与 builtAt；`advanceTurn(kind=review-only)` 只重新复审既有候选。
    已明确的目标和约束缺少 Plan 节点映射时，先在同一授权范围内做有限修复。编译结果与固定 Plan 的节点或控制边不符时，只修 DSL。真正未决定的业务规则继续在同一草稿询问，沿用已知选择。
    Plan 节点 ID 使用编译器的 kebab-case 规则，最长 64 字符。节点显示名最长 40 字符。每个 Standard Loop 的 Plan 节点固定不同的 `onSuccess` 和 `onMaxExceeded` 目标及对应控制边，生成 DSL 时沿用两者各自的角色。
+   已明确的业务职责写在 Plan 节点的 `requiredRole: { id, label }`。它表达由谁承担职责。执行身份、绑定与访问权限由 Host 在运行时核验。角色与 Skill 需求均留在 `node.options` 之外。
    Standard Parallel 中，每个成员只有一条派生控制边通往汇合后的节点。成员失败由并行运行语义处理。
    无既有候选和外部基线的新建草稿收到补答时，继续沿用草稿 ID 和已知选择。按时间顺序读取该草稿的用户原话。采用 `planSource: node-options` 时，Standard、Interactive P0-B/P1/P2 均以 Plan 节点的 DSL 选项为准。编译器推导控制边，AuthorHost 直接使用经过校验的节点选项生成候选源码。没有附加关系时填写 `edges: []`。附加关系使用 `{from,to,kind}` 和既有节点 ID，`kind` 为 `data`、`capability` 或 `resource`。
    每个 Interactive Action 都必须明确声明外部效果。只读回调使用 `effect: 'read-only'`，仍可将结果写入工作流 state。经授权的外部写入使用 `effect: 'write'`。效果尚未确定时先澄清。复审用编译证据中的 `actionEffects` 逐个核对。

@@ -86,7 +86,7 @@ export interface AgentTaskV2 {
 export interface DescriptionResource { readonly uri: string; readonly role: 'instruction' | 'reference' | 'evidence';
   readonly content: string; readonly byteLength: number; readonly digest: string }
 export interface PreparedSkill { readonly logicalId: string; readonly resolvedVersion: string; readonly digest: string;
-  readonly providerRef?: string }
+  readonly providerRef?: string; readonly source?: string; readonly files?: Readonly<Record<string, string>> }
 export interface TaskPreparation {
   readonly protocolVersion: 2;
   readonly task: AgentTaskV2;
@@ -97,7 +97,7 @@ export interface ResourceManifest {
   readonly manifestId: string;
   readonly manifestHash: string;
   readonly resources: readonly { readonly logicalId: string; readonly digest: string; readonly resolvedVersion?: string;
-    readonly role?: DescriptionResource['role']; readonly byteLength?: number }[];
+    readonly role?: DescriptionResource['role']; readonly byteLength?: number; readonly source?: string }[];
 }
 export interface PreparedAgentTask extends TaskPreparation { readonly resourceManifest: ResourceManifest }
 export type CapabilitySupport = 'supported' | 'unsupported' | 'unknown';

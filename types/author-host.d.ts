@@ -21,6 +21,15 @@ export interface AuthorCandidate {
   files: Record<string, string>; hash: string;
   manifest: { collectionId: string; skillId: string; name: string; version: string; artifactHash: string; [key: string]: unknown };
 }
+export interface AuthorProfessionalSkill {
+  files: Record<string, string>; hash: string;
+  manifest: { kind: 'professional'; collectionId: string; skillId: string; name: string; version: string; description: string;
+    digest: string; files: Record<string, string> };
+}
+export interface AuthorProfessionalCatalogScope {
+  requestContext: AuthorRequestContext; signal: AbortSignal;
+}
+export interface AuthorProfessionalCollection { id: string; name: string; directory: string }
 export interface AuthorReviewRejection {
   candidateHash: string;
   findings: Array<{ message: string; nodeIds: string[]; rule?: string }>;
@@ -81,7 +90,13 @@ export interface AuthorHostOptions {
   initialCapabilityIds?: string[];
   resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string; issuer?: string }>;
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
-  resolveProfessionalSkill?(pin: object, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ id: string; version: string; digest: string; approved: boolean } | null>;
+  professionalSkillCatalog?: {
+    collection(scope: AuthorProfessionalCatalogScope & { collectionId: string }): AuthorProfessionalCollection | null | Promise<AuthorProfessionalCollection | null>;
+    search(scope: AuthorProfessionalCatalogScope & { id: string; description: string; collection: AuthorProfessionalCollection;
+      verifyApplicability(need: { id: string; description: string }, candidate: AuthorProfessionalSkill): Promise<boolean> }): Promise<{
+      complete?: boolean; denied?: boolean; occupied?: boolean; matches?: Array<{ candidate: AuthorProfessionalSkill; source: string; approved: true }> }>;
+  };
+  resolveProfessionalSkill?(pin: object, context: AuthorProfessionalCatalogScope): Promise<{ id: string; version: string; digest: string; source?: string; approved: boolean } | null>;
   resolveAuthoringInput?: FlowkitMcpOptions['resolveAuthoringInput'];
 }
 export interface AuthorDiscoveryMapping {

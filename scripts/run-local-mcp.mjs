@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createWorkflowAuthorHost } from '../dist/host.mjs';
+import { checkProfessionalSkill, planProfessionalSkills } from '../src/author/professional-skills.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
@@ -236,8 +237,63 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       insert(selectionKey, cached?.layout ? { source: 'model', key } :
         { source: 'fallback', reason: cached?.reason, receipts: cached?.receipts ?? [] });
     }
+    const skillSource = 'collection:' + collectionId;
+    const localProfessionalSkills = {
+      collection: ({ collectionId: scope }) => scope === collectionId ? collectionPlan.destination : null,
+      async search({ id, description, collection, verifyApplicability }) {
+        if (collection.id !== collectionId) return { denied: true };
+        const snapshot = binding.store.readCollectionMetadata(collection.id, { limit: 1001 });
+        if (!snapshot || snapshot.skills.length === 1001) return { complete: false };
+        const relevant = snapshot.skills.filter(({ manifest }) => manifest.kind === 'professional' &&
+          (manifest.skillId === id || manifest.name === id));
+        const candidates = new Map();
+        const result = await planProfessionalSkills(collection, { id, professionalNeeds: [{ id, description }] }, {
+          listProfessionalMetadata: async () => ({ nextCursor: null, items: relevant.map(({ manifest }) => ({
+            ...manifest, id: manifest.skillId, path: `${collection.directory}/skills/${manifest.name}/SKILL.md`
+          })) }),
+          matchesMetadata: () => true,
+          readProfessionalSkill: ({ collectionId: scope, skillId, version, digest }) => {
+            const candidate = binding.store.readProfessionalVersion(scope, skillId, version);
+            if (!candidate || candidate.manifest.digest !== digest) throw new Error('Exact catalog Skill disappeared');
+            checkProfessionalSkill(candidate);
+            return candidate;
+          },
+          async confirmApplicability(need, candidate, item) {
+            const compatible = dependencies.confirmProfessionalSkill ?
+              await dependencies.confirmProfessionalSkill({ need, candidate, item }) === true : await verifyApplicability(need, candidate);
+            if (compatible) candidates.set(item.id, candidate);
+            return compatible;
+          }
+        }, { maxPages: 1, maxBodies: 16 });
+        const matches = result.conflicts[0]?.candidates ?? result.reuse;
+        if (!matches.length && relevant.length) return { complete: true, occupied: true, matches: [] };
+        return { complete: true, matches: matches.map(({ id }) => ({ candidate: candidates.get(id), source: skillSource, approved: true })) };
+      }
+    };
+    const professionalSkillCatalog = {
+      collection: localProfessionalSkills.collection,
+      async search(scope) {
+        const local = await localProfessionalSkills.search(scope);
+        const external = await dependencies.professionalSkillCatalog?.search(scope);
+        if (!external) return local;
+        if (local.complete !== true || external.complete !== true || !Array.isArray(external.matches) || external.denied) {
+          return { complete: false, denied: local.denied || external.denied };
+        }
+        const matches = [...local.matches, ...external.matches];
+        return { complete: true, occupied: local.occupied || external.occupied, matches: [...new Map(matches.map(match =>
+          [JSON.stringify([match.source, match.candidate.hash]), match])).values()] };
+      }
+    };
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
+      professionalSkillCatalog,
+      async resolveProfessionalSkill(pin, scope) {
+        if (pin.source !== undefined && pin.source !== skillSource) return dependencies.resolveProfessionalSkill?.(pin, scope);
+        const candidate = binding.store.readProfessionalVersion(collectionId, pin.id, pin.version);
+        if (!candidate || candidate.manifest.digest !== pin.digest) return null;
+        checkProfessionalSkill(candidate);
+        return { id: pin.id, version: pin.version, digest: pin.digest, source: skillSource, approved: true };
+      },
       budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
         // The internal compile port returns a candidate with Program, Mermaid and GraphSnapshot.
         maxResponseBytes: 1024 * 1024 }, execution: model.execution,
@@ -628,19 +684,24 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             return json(res, 409, { error: '布局版本已变更，请打开当前预览。' });
           }
           const challenge = seal('confirm', { ...preview, stateVersion: draft.stateVersion, layoutRevision });
+          const skillDrafts = !draft.savedReceipt && !draft.approvalReceipt ? draft.resources?.skillDrafts ?? [] : [];
+          const skillReview = current ? skillDrafts.map(({ manifest, files }) => '<details><summary>复审关联 Skill ' +
+            escapeHtml(manifest.name + ' ' + manifest.version) + '</summary><pre>' +
+            escapeHtml(files['SKILL.md']) + '</pre></details>').join('') : '';
           const pinned = preview.operation && draft.previousHash &&
             binding.store.readVersion(collectionId, draft.candidate.manifest.skillId, draft.previousHash);
           const controls = !draft.savedReceipt && !trustedDraft(draft) ? '<p>' + escapeHtml(untrustedReason) + '</p>' :
             preview.operation && draft.savedReceipt ? '<p>该版本已保存。</p>' :
             preview.operation && activeHash(draft) !== draft.previousHash ? '<p>' + escapeHtml(changedTargetReason) + '</p>' :
-            draft.reviewReceipt?.qualified && current ?
+            draft.reviewReceipt?.qualified && current ? skillReview +
             (pinned ? '<p>当前版本 ' + escapeHtml(pinned.manifest.version) + '，更新到 ' + escapeHtml(draft.candidate.manifest.version) + '。</p>' : '') +
             '<form method="post" action="/preview/' + ref + '/confirm"><input type="hidden" name="challenge" value="' + challenge +
             '"><button type="submit" disabled>' + (pinned ? '确认并更新 FlowKit 工作流' :
               preview.operation ? '确认并加入 FlowKit' : '确认这个候选') + '</button></form>' :
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
           return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls,
-            mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition, viewLayout }));
+            mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition,
+            executionManifest: draft.candidate.manifest, pendingSkillDigests: new Set(skillDrafts.map(skill => skill.manifest.digest)), viewLayout }));
         }
         if (req.method === 'POST' && action === 'confirm' && operator(req) && req.headers.origin === origin) {
           const challenge = unseal('confirm', new URLSearchParams(await readBody(req, 8192)).get('challenge'));

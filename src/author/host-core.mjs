@@ -5,6 +5,7 @@ import { createWorkflowAuthor } from './author.mjs';
 import { checkPlanCapabilities } from './draft.mjs';
 import { reviewStandardCandidate } from './standard-artifact.mjs';
 import { materializePlan } from './workflow-plan.mjs';
+import { bindProfessionalNeeds } from './workflow-professional-bindings.mjs';
 import { runArtifact } from '../runtime/run.mjs';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { authorError, isIntentModelOutputError } from './host-budget.mjs';
@@ -116,6 +117,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const workspace = await mkdtemp(path.join(options.workRoot, '.flowkit-author-'));
   let reviewObservation;
   const state = { reviewOnly: turn.kind === 'review-only' };
+  const skillDrafts = new Map();
   function setReviewCandidate(state, candidate, previous) {
     const diff = reviewStandardCandidate(candidate, previous);
     const { mode, artifactHash, workflowDefinition } = candidate.manifest;
@@ -262,7 +264,32 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
             message: 'Use known choices and Host facts. For a still-missing business decision, supply a distinct question, concrete options with reasons, and a recommendation. Keep already-answered decisions out of blocking issues.' }];
           return;
         }
-        const awaitingDecision = declaredDecisions.length > 0 || assumedDecision;
+        let awaitingDecision = declaredDecisions.length > 0 || assumedDecision;
+        if (!ctx.state.confirmedPlan && !awaitingDecision && proposal.nodes?.some(node => node.professionalNeeds !== undefined)) {
+          const catalog = options.professionalSkillCatalog;
+          const collection = catalog && await ports.read({ skillCollection: draft.collectionId }, () =>
+            catalog.collection({ collectionId: draft.collectionId, requestContext, signal }));
+          proposal = await bindProfessionalNeeds(proposal, { catalog: collection && catalog, collection,
+            requestContext, signal, read: ports.read, drafts: skillDrafts,
+            selectionFor(nodeId, needId) {
+              const option = draft.questions.find(item => item.id === `skill-${nodeId}-${needId}`)?.options?.find(({ value, label }) =>
+                value.startsWith('[') && (value === turn.request.input.trim() || label === turn.request.input.trim()));
+              return option?.value ?? draft.plan?.resourceRequirements?.find(pin => pin.nodeId === nodeId && pin.needId === needId)?.selection;
+            },
+            async verifyApplicability(need, candidate) {
+              if (candidate.manifest.description === need.description) return true;
+              const text = candidate.files['SKILL.md'];
+              if (text.length > 24000) return false;
+              const result = await ports.request({ flowkitProfessionalSkillReview: { need, text } });
+              return result?.applicable === true;
+            },
+            async draftSkill(need) {
+              const response = await ports.request({ flowkitProfessionalSkill: need });
+              const body = response?.body;
+              return typeof body === 'string' && body.trim() && body.length <= 12000 ? body : null;
+            } });
+          awaitingDecision = proposal.unresolvedIssues.some(issue => issue.blocking);
+        }
         let compiledPlan;
         if (confirmedSource || (ctx.state.authorizedRequest.planSource === 'node-options' && !awaitingDecision)) {
           compiledPlan = await materializePlan(draft, proposal, { filename: path.join(workspace, 'candidate.workflow.js'), projectRoot: workspace });
@@ -306,9 +333,20 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       for (const pin of plan.resourceRequirements.filter(item => item.kind === 'document')) documents.push(await author.readDocument(pin));
       const professionalSkills = plan.resourceRequirements.filter(item => item.kind === 'professional-skill');
       const selected = [];
+      const pending = new Map();
       for (const pin of professionalSkills) {
+        const draftSkill = [...skillDrafts.values(), ...(draft.resources?.skillDrafts ?? [])].find(({ manifest }) =>
+          'collection:' + manifest.collectionId === pin.source && manifest.skillId === pin.id &&
+          manifest.version === pin.version && manifest.digest === pin.digest);
+        if (draftSkill) {
+          pending.set(draftSkill.hash, draftSkill);
+          const { nodeId, id, version, digest, source } = pin;
+          selected.push({ nodeId, id, version, digest, source, draft: true });
+          continue;
+        }
         const skill = await ports.read({ professionalSkill: pin }, () => options.resolveProfessionalSkill?.(pin, { requestContext, signal }));
-        if (!skill || skill.approved !== true || skill.id !== pin.id || skill.version !== pin.version || skill.digest !== pin.digest) {
+        if (!skill || skill.approved !== true || skill.id !== pin.id || skill.version !== pin.version || skill.digest !== pin.digest ||
+            pin.source !== undefined && skill.source !== pin.source) {
           if (pin.required === false) continue;
           ctx.state.resourceSnapshot = { ready: false, gap: pin, options: ['create', 'review', 'approve-existing'] };
           ctx.state.questions = [question('missing-professional-skill', `Select an approved exact Professional Skill for ${pin.id}`, ['create-review-approve', 'select-existing'])]; return;
@@ -317,6 +355,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
       ctx.state.resourceSnapshot = { ready: capabilities.supported, capabilities, documents,
         catalogIdentity: authorIdentity(ctx.state.catalogSnapshot),
+        ...(pending.size ? { skillDrafts: [...pending.values()] } : {}),
         professionalSkills: selected, hostProfile: options.hostProfile, safetyPolicies: turn.request.safetyPolicies ?? [] };
       ctx.state.reuseCandidate = !!draft.candidate && draft.plan?.planHash === plan.planHash &&
         authorIdentity(draft.resources) === authorIdentity(ctx.state.resourceSnapshot);
@@ -341,7 +380,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
               hostProfile: options.hostProfile, buildId: turn.attemptId, includeSource: draft.choices.includeSource,
               executionMode: draft.choices.executionMode, compilerOptions: { projectRoot: workspace, skillCheck: false },
               documents: ctx.state.resourceSnapshot.documents.map(item => item.evidence),
-              professionalSkills: ctx.state.resourceSnapshot.professionalSkills.map(({ nodeId, id, version, digest }) => ({ nodeId, id, version, digest })),
+              professionalSkills: ctx.state.resourceSnapshot.professionalSkills.map(({ nodeId, id, version, digest, source }) =>
+                ({ nodeId, id, version, digest, ...(source === undefined ? {} : { source }) })),
               safetyPolicies: ctx.state.resourceSnapshot.safetyPolicies });
           } catch (error) {
             if (error.code !== 'FKA_PLAN_MISMATCH') throw error;

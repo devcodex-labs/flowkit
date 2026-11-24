@@ -13,3 +13,8 @@ export function standardIdentity(code) {
   return { artifactHash: artifactDigest(code), compilerVersion: compiler[1], programAbiVersion: STANDARD_ABI,
     semanticsVersion: STANDARD_SEMANTICS };
 }
+/** Professional Skill identity covers the actual content of every packaged file. */
+export function professionalSkillFileHashes(files) {
+  return Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([name, contents]) => [name, artifactDigest(contents)]));
+}

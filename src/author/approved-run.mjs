@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {readFile} from 'node:fs/promises';
 import { runVerifiedArtifact } from '../runtime/run.mjs';
+import { assertPreparedProfessionalSkills } from '../runtime/tasks.mjs';
 import {createInteractiveCoordinator} from '../interactive/coordinator.mjs';
 import {artifactDigest} from '../shared/artifact-identity.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
@@ -25,13 +26,8 @@ export async function runApprovedCollectionWorkflow(store, { collectionId, skill
   const authorization = Object.freeze({ collectionId, skillId, candidateHash, executionRef, workflowFile, artifactHash: manifest.artifactHash });
   if (await authorizeExecution(authorization) !== true) throw new Error('Host denied Workflow Skill execution');
   const bindings = manifest.professionalSkills;
-  const checkPreparedSkills = (nodeId, preparedSkills) => {
-    const pins = bindings.filter(pin => pin.nodeId === nodeId);
-    if (preparedSkills.length !== pins.length || pins.some((pin, index) => {
-      const resolved = preparedSkills[index];
-      return resolved.logicalId !== pin.id || resolved.resolvedVersion !== pin.version || resolved.digest !== pin.digest;
-    })) throw new Error('Prepared Professional Skills differ from the approved Run bindings');
-  };
+  const checkPreparedSkills = (nodeId, preparedSkills) => assertPreparedProfessionalSkills(bindings, nodeId, preparedSkills);
+  const policyPins = bindings.length ? { professionalSkillPins: bindings } : {};
   const stage=interactiveStageForMode(manifest.mode);
   if (stage) {
     const bytes = await readFile(workflowFile);
@@ -50,7 +46,7 @@ export async function runApprovedCollectionWorkflow(store, { collectionId, skill
       }}} : runtime;
       const reference=await interactive.programRegistry.putImmutable(bytes,programIdentity);
       return startInteractive(reference,pinnedRuntime,state,{...interactive,
-        policy:{...interactive.policy,approvedSkillHash:candidateHash}});
+        policy:{...interactive.policy,approvedSkillHash:candidateHash,...policyPins}});
     }
     if (!interactive?.store || typeof runtime.authorizeAgentTask !== 'function') {
       throw new Error('Approved Interactive execution requires Host persistence and task authorization');
@@ -60,7 +56,7 @@ export async function runApprovedCollectionWorkflow(store, { collectionId, skill
       return runtime.authorizeAgentTask(prepared,context);
     }};
     const api = createInteractiveCoordinator({store:interactive.store,runtime:pinnedRuntime,
-      policy:{...interactive.policy,approvedSkillHash:candidateHash}});
+      policy:{...interactive.policy,approvedSkillHash:candidateHash,...policyPins}});
     return api.start({programBytes:bytes,programIdentity,state,startKey:interactive.startKey,runId:interactive.runId});
   }
   return runVerifiedArtifact(workflowFile, manifest.artifactHash, runtime, state, options, checkPreparedSkills);

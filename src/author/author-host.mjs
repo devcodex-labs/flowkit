@@ -8,6 +8,7 @@ import { startAuthorDraft } from './draft.mjs';
 import { checkCandidate, reviewStandardCandidate, prepareImportedStandardSkill } from './standard-artifact.mjs';
 import { authorInput, authorTarget, authorIdentity as hash, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from './host-target.mjs';
 import { executeAuthorCore, rejectedReview } from './host-core.mjs';
+import { checkProfessionalSkill } from './professional-skills.mjs';
 import { discoverPublication, cleanupPublicationGeneration } from './host-discovery.mjs';
 import { authorError, budgetPolicy, newTurnBudget, positive, createTurnPorts, jsonBytes } from './host-budget.mjs';
 
@@ -76,7 +77,7 @@ export async function createWorkflowAuthorHost(supplied) {
   }
   let publishing = null, collectionChange = null, closing = false, closed = false, publicHost;
   const store = openLocalSkillStore(storageFile,
-    binding => publishing?.candidateHash === binding.candidateHash && publishing?.reviewRef === binding.reviewRef && publishing?.approvalRef === binding.approvalRef,
+    binding => publishing?.hashes.has(binding.candidateHash) && publishing.reviewRef === binding.reviewRef && publishing.approvalRef === binding.approvalRef,
     binding => collectionChange?.planHash === binding.planHash && collectionChange?.approvalRef === binding.approvalRef,
     { namespace: options.namespace });
   const meta = store.authorTransaction(state => state.meta());
@@ -108,7 +109,8 @@ export async function createWorkflowAuthorHost(supplied) {
     }
     if (draft.resources) result.resources = { ...select(draft.resources, ['ready', 'gap', 'options', 'hostProfile', 'safetyPolicies', 'catalogIdentity']),
       documents: draft.resources.documents?.map(item => item.evidence ?? item) ?? [],
-      professionalSkills: draft.resources.professionalSkills?.map(item => select(item, ['nodeId', 'id', 'version', 'digest', 'approved'])) ?? [] };
+      professionalSkills: draft.resources.professionalSkills?.map(item => select(item, ['nodeId', 'id', 'version', 'digest', 'source', 'approved', 'draft'])) ?? [],
+      skillDrafts: draft.resources.skillDrafts ?? [] };
     if (draft.savedReceipt) result.savedReceipt = publicationView(draft.savedReceipt, store.readActive(draft.collectionId, draft.target.skillId)?.hash ?? null);
     return clone({ ...result, storeId: meta.store_id, namespace: options.namespace });
   }
@@ -551,8 +553,22 @@ export async function createWorkflowAuthorHost(supplied) {
         if (!collection || collection.skills.length > 10000) throw authorError('author-capacity', 'An approved bounded collection is required before saving');
         if (current.collectionBinding && current.collectionBinding !== hash(collection.collection)) throw authorError('author-conflict', 'Collection directory changed after review; rebase the target');
         if ((store.readActive(current.collectionId, current.target.skillId)?.hash ?? null) !== input.previousHash) throw authorError('author-conflict', 'Active workflow changed after review; no original publication receipt exists');
-        publishing = { candidateHash: input.candidateHash, reviewRef: input.reviewRef, approvalRef: input.approvalRef };
-        try { store.publishAtomically({ candidate: current.candidate, ...input }); } finally { publishing = null; }
+        const proposedSkills = current.resources?.skillDrafts ?? [];
+        for (const skill of proposedSkills) {
+          checkProfessionalSkill(skill);
+          const { skillId, collectionId, version, digest } = skill.manifest;
+          if (collectionId !== current.collectionId || !current.candidate.manifest.professionalSkills.some(pin =>
+              pin.id === skillId && pin.version === version && pin.digest === digest && pin.source === 'collection:' + collectionId)) {
+            throw authorError('author-conflict', 'Professional Skill draft differs from the approved workflow bindings');
+          }
+        }
+        publishing = { hashes: new Set([input.candidateHash, ...proposedSkills.map(skill => skill.hash)]), reviewRef: input.reviewRef, approvalRef: input.approvalRef };
+        try {
+          for (const skill of proposedSkills) {
+            store.publishAtomically({ candidate: skill, previousHash: null, reviewRef: input.reviewRef, approvalRef: input.approvalRef });
+          }
+          store.publishAtomically({ candidate: current.candidate, ...input });
+        } finally { publishing = null; }
         const saved = { publicationId: input.publicationId, fingerprint, ...binding, status: 'saved', discovery: 'pending',
           sequence: state.nextPublicationSequence(current.collectionId), operationId: hash([meta.store_id, current.id, input.publicationId]),
           collectionSnapshot: store.readCollectionMetadata(current.collectionId, { limit: 10001 }), savedAt: new Date().toISOString() };

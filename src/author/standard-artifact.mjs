@@ -3,7 +3,7 @@ import { definitionDigest, graphContentHash, verifyGraphSnapshot } from '../comp
 import { STANDARD_ARTIFACT_HEADER, artifactDigest, standardIdentity } from '../shared/artifact-identity.mjs';
 import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName,workflowReference } from './skill-document.mjs';
-import { assertReadyStandardPlan, missingRootOutputSources } from './workflow-plan.mjs';
+import { assertReadyStandardPlan, missingRootOutputSources, roleBearingKinds, validWorkflowRole } from './workflow-plan.mjs';
 import { compileInteractiveDraft } from '../interactive/compile.mjs';
 import { interactiveStageForMode,workflowExecutionModes } from '../interactive/protocol.mjs';
 
@@ -26,12 +26,13 @@ function interactiveIdentity(code,stage) {
 function resolveSkillPins(definition, pins) {
   if (!Array.isArray(pins)) throw new TypeError('Professional Skill pins must be an array');
   const bindings = new Map();
-  for (const { nodeId, id, version, digest: contentDigest } of pins) {
+  for (const { nodeId, id, version, digest: contentDigest, source } of pins) {
     const key = bindingKey(nodeId, id);
-    if (!identifier(nodeId) || !identifier(id) || !isSemVer(version) || !digest(contentDigest) || bindings.has(key)) {
+    if (!identifier(nodeId) || !identifier(id) || !isSemVer(version) || !digest(contentDigest) || bindings.has(key) ||
+        source !== undefined && (!identifier(source) || source.length > 160)) {
       throw new TypeError('Each Professional Skill pin needs a unique node, logical ID, exact version and digest');
     }
-    bindings.set(key, Object.freeze({ nodeId, id, version, digest: contentDigest }));
+    bindings.set(key, Object.freeze({ nodeId, id, version, digest: contentDigest, ...(source === undefined ? {} : { source }) }));
   }
   const required = definition.nodes.flatMap(node => (node.requiredSkills ?? []).map(skill => {
     const key = bindingKey(node.id, skill.id);
@@ -166,12 +167,14 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   }
   const files = Object.freeze({ 'SKILL.md': entry, 'workflow.js': artifact.code, 'workflow.mmd': artifact.mermaid,
     ...(includeSource ? { [SOURCE_PATH]: snapshot.sourceText } : {}),...references });
+  const nodeRoles = plan?.nodes.filter(node => node.requiredRole).map(({ id: nodeId, requiredRole }) => ({ nodeId, ...requiredRole }));
   const manifest = Object.freeze({ mode: executionMode, collectionId, skillId, name, version,
     workflowDefinition:structuredClone(definition),
     workflowId: definition.id, workflowVersion: definition.version,
     sourceHash: `sha256:${snapshot.sourceHash}`, ...(executionMode === 'standard' ? standardIdentity(artifact.code) : artifact.programIdentity), hostProfile: profile,
     graphSnapshotJson: JSON.stringify(artifact.graphSnapshot),
     professionalSkills: resolveSkillPins(definition, professionalSkills), buildId, builtAt: new Date().toISOString(),
+    ...(nodeRoles?.length ? { nodeRoles } : {}),
     ...(documentEvidence.length?{documents:documentEvidence}:{}),
     ...(approvedSafety.length?{safetyPolicies:approvedSafety}:{}),
     ...(plan ? { planRef: Object.freeze({ planId: plan.planId, revision: plan.revision, planHash: plan.planHash,
@@ -206,6 +209,17 @@ export function checkCandidate({ files, manifest, hash }) {
     throw new TypeError('Workflow Skill candidate bytes or manifest differ');
   }
   const { graphSnapshotJson, workflowDefinition } = manifest;
+  if (JSON.stringify(resolveSkillPins(workflowDefinition, manifest.professionalSkills)) !== JSON.stringify(manifest.professionalSkills)) {
+    throw new TypeError('Workflow Skill manifest does not match the compiled Professional Skill requirements');
+  }
+  if (manifest.nodeRoles !== undefined) {
+    const nodeTypes = new Map(workflowDefinition.nodes.map(node => [node.id, node.type]));
+    if (!Array.isArray(manifest.nodeRoles) || new Set(manifest.nodeRoles.map(role => role?.nodeId)).size !== manifest.nodeRoles.length ||
+        manifest.nodeRoles.some(role => {
+          const { nodeId, ...label } = role ?? {};
+          return !roleBearingKinds.has(nodeTypes.get(nodeId)) || !validWorkflowRole(label);
+        })) throw new TypeError('Workflow Skill manifest has invalid execution roles');
+  }
   if (typeof graphSnapshotJson !== 'string' || Buffer.byteLength(graphSnapshotJson) > 8 * 1024 * 1024) {
     throw new TypeError('Missing or oversized Workflow Skill graph');
   }
@@ -269,6 +283,10 @@ export function reviewStandardCandidate(candidate, previous = null) {
   return { collectionId, skillId, previousHash: previous?.hash ?? null, candidateHash: candidate.hash,
     previousVersion: previous?.manifest.version ?? null, candidateVersion: candidate.manifest.version, files,
     compilerEvidence: standardReviewEvidence(candidate),
+    executionBindings: {
+      before: { roles: previous?.manifest.nodeRoles ?? [], skills: previous?.manifest.professionalSkills ?? [] },
+      after: { roles: candidate.manifest.nodeRoles ?? [], skills: candidate.manifest.professionalSkills }
+    },
     semantics:{previousMode:previous?.manifest.mode??null,candidateMode:candidate.manifest.mode,
       previousDefinitionAvailable:!!previous?.manifest.workflowDefinition,
       nodes:[...new Set([...(previous?.manifest.workflowDefinition?.nodes??[]).map(node=>node.id),

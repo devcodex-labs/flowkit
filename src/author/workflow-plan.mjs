@@ -7,6 +7,13 @@ import { workflowContract } from '../shared/workflow-contract.mjs';
 
 const NODE_KINDS = new Set(['agent', 'action', 'verification', 'condition', 'parallel', 'loop', 'human', 'terminal']);
 const EDGE_KINDS = new Set(['control', 'data', 'capability', 'resource']);
+export const roleBearingKinds = new Set(['agent', 'action', 'verification', 'human']);
+
+export function validWorkflowRole(role) {
+  return role && isWorkflowId(role.id) && typeof role.label === 'string' &&
+    role.label.trim() === role.label && role.label.length > 0 && role.label.length <= 80 &&
+    Object.keys(role).length === 2;
+}
 
 /** Find successful exits reachable without a declared producer for a required output. */
 export function missingRootOutputSources(definition, graph) {
@@ -101,7 +108,8 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   const annotations = suppliedEdges.filter(edge => edge?.kind !== 'control' &&
     (EDGE_KINDS.has(edge?.kind) || !control.has(JSON.stringify([edge?.from, edge?.to]))));
   const edges = [...control.values(), ...annotations];
-  const plannedNodes = nodes.map(({ id, kind, name, options }) => ({ id, kind, name, options,
+  const plannedNodes = nodes.map(({ id, kind, name, options, requiredRole }) => ({ id, kind, name, options,
+    ...(requiredRole !== undefined ? { requiredRole } : {}),
     ...(kind === 'loop' ? { onSuccess: options.onSuccess, onMaxExceeded: options.onMaxExceeded } : {}) }));
   return { source, proposal: { ...proposal, nodes: plannedNodes, edges }, sourceHash: artifactDigest(source) };
 }
@@ -152,6 +160,10 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
   if (ids.size !== nodes.length) throw new TypeError('WorkflowPlan node IDs must be unique');
   if (nodes.some(node => !NODE_KINDS.has(node.kind))) {
     throw new TypeError(`WorkflowPlan node kinds must use ${[...NODE_KINDS].join(', ')}. A Parallel join is not a separate node kind.`);
+  }
+  if (nodes.some(node => node.requiredRole !== undefined &&
+      (!roleBearingKinds.has(node.kind) || !validWorkflowRole(node.requiredRole)))) {
+    throw new TypeError('WorkflowPlan roles require an executable node and a valid role ID and label');
   }
   if (!ids.has(entryNodeId)) throw new TypeError('WorkflowPlan entryNodeId must identify an existing node');
   if (!nodes.some(node => node.kind === 'terminal')) {
