@@ -1,5 +1,7 @@
 {
   "graphDigest": "sha256:547f196eb8cc9935504ff8831060d0017e40e794813490ea42e8bb7f0bc27156",
+  "topologyDigest": "sha256:e32881c8a193df598cd714ec5c8a0f3623afb28bb171a2187ebeb351339183d0",
+  "conditionDigest": "sha256:b3fb62622d068e4e439954b6d797ad62953d128e0930e7e4e84b3d0aea27b10a",
   "layout": {
     "phases": [
       {"id":"p1","title":"01 意图识别与分流","x":50,"y":65,"w":1040,"h":1080,"color":"#64748b","desc":"识别用户的开发意图，校验识别结果，并决定进入需求流程还是等待澄清。"},

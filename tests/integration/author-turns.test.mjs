@@ -270,8 +270,12 @@ test('I2 S06/S07/S56/S57/S58/S81: update pins an exact no-DSL baseline and prese
   assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics)); assert.equal(ready.target.skillId, first.target.skillId);
   assert.equal(ready.previousHash, first.candidate.hash); assert.equal(ready.candidate.manifest.version, '2.0.0');
   const review = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').at(-1).prepared.task.input;
-  assert.deepEqual(Object.keys(review).sort(), ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'currentPlan', 'candidate', 'candidateDiff', 'resourceSnapshot'].sort());
+  assert.deepEqual(Object.keys(review).sort(), ['authorizedRequest', 'effectiveIntent', 'intentChanges', 'baselineEvidence', 'currentPlan', 'reviewTarget', 'candidateDiff', 'resourceSnapshot'].sort());
+  assert.deepEqual(review.reviewTarget, { hash: ready.candidate.hash, mode: ready.candidate.manifest.mode,
+    artifactHash: ready.candidate.manifest.artifactHash, contract: null });
   assert.equal(review.baselineEvidence.workflow.manifest.artifactHash, first.candidate.manifest.artifactHash);
+  assert.equal(Object.hasOwn(review.baselineEvidence.workflow.manifest, 'graphSnapshotJson'), false);
+  assert.equal(Object.hasOwn(review.baselineEvidence.workflow, 'files'), false);
   assert.match(review.authorizedRequest.input, /API retained/);
   await save(f, await approve(f, ready, 'approved-update'), 'save-update');
   const old = f.host.createMcpOptions().store.readVersion('team', first.target.skillId, first.candidate.hash);

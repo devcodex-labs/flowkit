@@ -73,7 +73,7 @@ function runCodex(input, { model, workspace, signal }) {
   });
 }
 
-export function localModel({ provider, model, apiKey, workspace, fetcher = fetch }) {
+export function localModel({ provider, model, apiKey, workspace, timeoutMs = 90000, fetcher = fetch }) {
   if (!['codex','openai'].includes(provider)) throw new Error('Choose the codex or openai Author provider');
   if (provider === 'openai' && (!apiKey || !model)) throw new Error('Configure OPENAI_API_KEY and the local Author model');
   const selectedModel = model || 'codex-default';
@@ -104,14 +104,14 @@ export function localModel({ provider, model, apiKey, workspace, fetcher = fetch
       request,
       async createSession(ports) {
         const adapter = createApiAgentAdapter({ scope: 'flowkit-local', model: selectedModel, request: ports.request,
-          supportsTools: false, limits: { maxOutputTokens: 8192, maxTotalTokens: 64000, timeoutMs: 90000 } });
+          supportsTools: false, limits: { maxOutputTokens: 8192, maxTotalTokens: 64000, timeoutMs } });
         return { intentRuntime: { parse: ({ signal: _signal, ...input }) => ports.request({ flowkitIntent: input }) },
           runtime: { validateResult: () => [], async runAgentTask(prepared, context) {
             const result = await adapter.runAgentTask(prepared, context);
             const task = prepared.task;
             if (task.node.id === 'semantic-review' && result.status === 'succeeded' && result.result?.passed === true) {
               if (observed.size >= 64) observed.delete(observed.keys().next().value);
-              observed.set(task.execution.requestId, task.input?.candidate?.hash);
+              observed.set(task.execution.requestId, task.input?.reviewTarget?.hash);
             }
             return result;
           } } };

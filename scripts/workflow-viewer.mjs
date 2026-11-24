@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { checkCandidate } from '../src/author/standard-artifact.mjs';
+import { graphContentHash } from '../src/compiler/graph-snapshot.mjs';
 
 const resource = name => readFileSync(new URL('./workflow-viewer/' + name, import.meta.url), 'utf8');
 const template = resource('viewer.html').replace(/\r\n/g, '\n');
@@ -29,8 +30,26 @@ const edgeStyles = new Map([
   ['parallel-join', ['parallel', '汇合']],
 ]);
 
-function layoutFor(graph) {
-  if (graph.graphDigest === reference.graphDigest) return reference.layout;
+/** Curated placements bind to the projected topology, independent of Program bytes and source locations. */
+export function viewerTopologyDigest(graph) {
+  const ordered = (rows, key) => rows.sort((left, right) => left[key] < right[key] ? -1 : left[key] > right[key] ? 1 : 0);
+  const edges = rows => ordered(rows.map(({ sourcePath: _path, ...edge }) => edge), 'edgeId');
+  return graphContentHash({
+    mode: graph.mode, workflowId: graph.workflowId, entryNodeId: graph.entryNodeId,
+    contractDigest: graph.contract?.digest ?? null,
+    nodes: ordered(graph.nodes.map(({ sourcePath: _path, line: _line, column: _column, ...node }) => node), 'id'),
+    regions: ordered([...graph.regions], 'ownerId'),
+    referenceEdges: edges(graph.referenceEdges), executionEdges: edges(graph.executionEdges)
+  });
+}
+
+function layoutFor(graph, definition) {
+  if (graph.graphDigest === reference.graphDigest ||
+    graph.workflowId === 'v45-software-delivery' && graph.mode === 'interactive-p2' &&
+    viewerTopologyDigest(graph) === reference.topologyDigest &&
+    // GraphSnapshot redacts predicate literals. Curated descriptions also depend on the exact predicates.
+    definition && graphContentHash(definition.nodes.filter(node => node.type === 'condition')
+      .map(({ id, branches }) => [id, branches]).sort()) === reference.conditionDigest) return reference.layout;
   const placements = new Map();
   const nodes = [];
   function place(node, helper) {
@@ -77,8 +96,8 @@ function scriptData(value) {
     '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
 }
 
-function annotatedLayout(graph,manifest) {
-  const layout=layoutFor(graph);
+function annotatedLayout(graph,manifest,definition) {
+  const layout=layoutFor(graph,definition);
   if(manifest?.schemaVersion!==1||manifest.graphDigest!==graph.graphDigest||
       !Array.isArray(manifest.nodeDescriptions)||manifest.nodeDescriptions.length>graph.nodes.length)return layout;
   const nodeIds=new Set(graph.nodes.map(node=>node.id));
@@ -105,9 +124,9 @@ export function readWorkflowPageData(html) {
 }
 
 /** Assemble the confirmed offline viewer. The caller owns the same-origin confirmation form. */
-export function workflowPage({ graph, candidateHash, mermaid, controls = '', runView, viewManifest }) {
+export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest }) {
   if (!graph?.nodes?.length || typeof graph.graphDigest !== 'string') throw new TypeError('Missing compiled workflow graph');
-  const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest),
+  const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest,definition),
     ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}) });
   const html = controls ? shell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : shell.replace(controlsSlot, '');
@@ -182,7 +201,8 @@ export async function workflowRunPage({ auth, ref, options, candidate, afterRevi
     links.push('<a href="' + runPath + '?afterRevision=' + afterRevision + '&amp;artifactAfter=' + artifacts.next +
       '">更多产物</a>');
   }
-  return workflowPage({ graph, candidateHash, mermaid, controls: links.join(' '), viewManifest:manifest, runView: {
+  return workflowPage({ graph, candidateHash, mermaid, definition: candidate?.manifest.workflowDefinition,
+    controls: links.join(' '), viewManifest:manifest, runView: {
     type:'interactive-journal', revision: snapshot.revision, status: snapshot.status, pauseReason: snapshot.pauseReason,
     pending: snapshot.pending.map(({ nodeId, kind, activation, attempt }) => ({ nodeId, kind, activation, attempt })),
     events: page?.map(({ revision, nodeId, kind, activation, attempt, receiptOutcome }) =>

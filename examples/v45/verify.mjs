@@ -5,16 +5,39 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {fileURLToPath} from 'node:url';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
-import {compileInteractive,complete,createInteractiveHostContext,createSqliteInteractivePersistence,resume,start} from '../../src/interactive/index.mjs';
+import {compileInteractive,complete,createInteractiveHostContext,createSqliteInteractivePersistence,
+  loadInteractiveProgram,resume,start} from '../../src/interactive/index.mjs';
+import {deliveryNames,exportTrust,readPortableExport} from '../../scripts/local-mcp-artifacts.mjs';
+import {readWorkflowPageData} from '../../scripts/workflow-viewer.mjs';
 import {createCapabilities} from './capabilities.mjs';
 import {change,createLocalTarget,flowKitRoot} from './local-target.mjs';
 
 const hash = value => sha256Bytes(canonicalBytes(value));
 const source = fileURLToPath(new URL('./software-delivery.workflow.js',import.meta.url));
-const compiled = await compileInteractive(source,{output:'memory',featureStage:'P2'});
-assert.deepEqual(compiled.diagnostics,[]);
+const reference = await compileInteractive(source,{output:'memory',featureStage:'P2'});
+assert.deepEqual(reference.diagnostics,[]);
+let compiled=reference;
+let exportedProgram=process.env.FLOWKIT_V45_EXPORT_FILE;
+const exportDirectory=process.env.FLOWKIT_V45_EXPORT_DIR;
+if (exportDirectory) {
+  assert.ok(!exportedProgram,'Choose one export input');
+  const keyFile=process.env.FLOWKIT_V45_EXPORT_PUBLIC_KEY_FILE;
+  assert.ok(keyFile,'Pin the authoring Host export public key');
+  const publicKey=(await readFile(keyFile,'utf8')).trim();
+  const files=Object.fromEntries(await Promise.all(deliveryNames.map(async name=>
+    [name,await readFile(path.join(exportDirectory,name),'utf8')])));
+  const {candidate}=readPortableExport(files,exportTrust([publicKey]));
+  assert.ok(candidate,'Expected a signed export from the pinned authoring Host');
+  const {graph:graphSnapshot}=readWorkflowPageData(files['workflow.html']);
+  const parsed=await loadInteractiveProgram(Buffer.from(files['workflow.js']),graphSnapshot.artifactHash);
+  const baseline=await loadInteractiveProgram(Buffer.from(reference.code),reference.programIdentity.artifactHash);
+  assert.deepEqual(parsed.programTable.nodes,baseline.programTable.nodes,'The exported Program must implement the approved V4.5 node semantics');
+  assert.equal(graphSnapshot.contract?.digest,reference.graphSnapshot.contract?.digest,'The approved root contract must match');
+  compiled={graphSnapshot,programIdentity:{...parsed.interactiveProgram.identity,artifactHash:graphSnapshot.artifactHash},
+    mermaid:files['workflow.mmd']};
+  exportedProgram=path.join(exportDirectory,'workflow.js');
+}
 assert.equal(compiled.graphSnapshot.nodes.length,140);
-const exportedProgram = process.env.FLOWKIT_V45_EXPORT_FILE;
 const programBytes = exportedProgram ? await readFile(exportedProgram) : Buffer.from(compiled.code);
 assert.equal(sha256Bytes(programBytes),compiled.programIdentity.artifactHash);
 const base=path.join(flowKitRoot,'.tmp','v45-reference');

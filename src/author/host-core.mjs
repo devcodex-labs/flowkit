@@ -116,6 +116,17 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const workspace = await mkdtemp(path.join(options.workRoot, '.flowkit-author-'));
   let reviewObservation;
   const state = { reviewOnly: turn.kind === 'review-only' };
+  function setReviewCandidate(state, candidate, previous) {
+    const diff = reviewStandardCandidate(candidate, previous);
+    const { mode, artifactHash, workflowDefinition } = candidate.manifest;
+    state.candidate = candidate;
+    state.candidateDiff = diff;
+    // The compiler evidence and semantic diff describe the reviewed bytes; the model does not need the bundled files or the serialized graph.
+    state.reviewTarget = { hash: candidate.hash, mode, artifactHash, contract: workflowDefinition?.contract ?? null };
+  }
+  function authoringManifest({ graphSnapshotJson: _graph, ...manifest }) {
+    return manifest;
+  }
   const continuation = turn.clarifyingDraft || !!turn.reviewRevision;
   const supportsNodeOptions = ['standard', 'interactive-p0-b', 'interactive-p1', 'interactive-p2'].includes(draft.choices.executionMode);
   const answered = new Set(turn.answeredQuestionIds);
@@ -137,10 +148,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.authorizedRequest = { ...(draft.authorizedRequest ?? { input: draft.goal }), reviewRequest: turn.request };
       ctx.state.effectiveIntent = draft.intent ?? { importedDefinition: draft.candidate.manifest.workflowDefinition };
       ctx.state.intentChanges = [];
-      ctx.state.baselineEvidence = draft.baselineEvidence ?? { manifest: draft.candidate.manifest, source: draft.operation };
+      ctx.state.baselineEvidence = draft.baselineEvidence ?? { manifest: authoringManifest(draft.candidate.manifest), source: draft.operation };
       ctx.state.currentPlan = draft.plan;
-      ctx.state.candidate = draft.candidate;
-      ctx.state.candidateDiff = reviewStandardCandidate(draft.candidate, draft.previousCandidate);
+      setReviewCandidate(ctx.state, draft.candidate, draft.previousCandidate);
       if (draft.candidate.manifest.planRef && ctx.state.candidateDiff.compilerEvidence.actionEffects.some(item => !item.declaredEffect)) {
         throw clarify('Interactive Action effect was not declared; rebuild before review',
           [question('action-effect', 'Rebuild with explicit external Action effects', ['rebuild', 'cancel'])]);
@@ -207,7 +217,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       ctx.state.intentChanges = ctx.state.effectiveIntent.changes;
       ctx.state.baselineEvidence = { ...(draft.intent ? { intent: draft.intent } : {}),
         plan: draft.plan ?? null, candidateHash: draft.candidate?.hash ?? null,
-        workflow: draft.previousCandidate ? { manifest: draft.previousCandidate.manifest, files: draft.previousCandidate.files } : null,
+        workflow: draft.previousCandidate ? { manifest: authoringManifest(draft.previousCandidate.manifest) } : null,
         materials: context ?? null };
       if (baseline) ctx.state.baselineEvidence.intentBaseline = baseline;
       if (turn.reviewRevision) ctx.state.baselineEvidence.reviewRejection = turn.reviewRevision;
@@ -310,14 +320,14 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         authorIdentity(draft.resources) === authorIdentity(ctx.state.resourceSnapshot);
       ctx.state.reuseReview = false;
       if (ctx.state.reuseCandidate) {
-        ctx.state.candidate = draft.candidate; ctx.state.candidateDiff = reviewStandardCandidate(draft.candidate, draft.previousCandidate);
+        setReviewCandidate(ctx.state, draft.candidate, draft.previousCandidate);
         ctx.state.reuseReview = !!turn.priorReview?.qualified && turn.priorReview.coreHash === authorIdentity(options.coreIdentity) &&
           turn.priorReview.reviewPolicy === (options.authorization.reviewPolicy ?? 'separate-pass') &&
           authorIdentity(draft.authorizedRequest) === authorIdentity(ctx.state.authorizedRequest);
       }
     },
     async prepareCandidate(ctx) {
-      ctx.state.candidate = null; ctx.state.candidateDiff = null; ctx.state.compileDiagnostics = [];
+      ctx.state.candidate = null; ctx.state.candidateDiff = null; ctx.state.reviewTarget = null; ctx.state.compileDiagnostics = [];
       const file = path.join(workspace, 'candidate.workflow.js');
       const source = ctx.state.planSource ?? ctx.state.rawText;
       await ports.read({ writeCandidateSource: artifactDigest(source) }, async () => { await writeFile(file, source); return true; });
@@ -347,8 +357,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
       ctx.state.compileDiagnostics = result.diagnostics;
       if (result.candidate) {
-        ctx.state.candidate = result.candidate;
-        ctx.state.candidateDiff = reviewStandardCandidate(result.candidate, draft.previousCandidate ?? null);
+        setReviewCandidate(ctx.state, result.candidate, draft.previousCandidate ?? null);
       }
     },
     async bindReviewReceipt(ctx) {
@@ -396,7 +405,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         typeof result.result?.passed !== 'boolean' || !Array.isArray(result.result?.findings) || result.result.findings.some(item => !isReviewFinding(item)) :
         typeof result.result?.rawText !== 'string')) throw authorError('author-schema', 'Author TaskV2 result does not satisfy its declared output contract');
       if (id === 'semantic-review') reviewObservation = { task: prepared.task, result: structuredClone(result),
-        attemptId: turn.attemptId, candidateHash: prepared.task.input.candidate.hash };
+        attemptId: turn.attemptId, candidateHash: prepared.task.input.reviewTarget.hash };
       return result;
     },
     async runAction(name, _label, ctx) { ports.check(); await actions[name](ctx); },

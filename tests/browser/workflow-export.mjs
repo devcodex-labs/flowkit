@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,12 +26,13 @@ async function movingDots(page, selector) {
 test('a signed V4.5 export works offline at four widths and two motion settings', {timeout:120000}, async t=>{
   const temporary=await mkdtemp(path.join(tmpdir(),'flowkit-browser-'));
   t.after(()=>rm(temporary,{recursive:true,force:true}));
-  const {candidate}=await prepareStandardSkill({
+  const candidateOptions={
     file:fileURLToPath(new URL('../../examples/v45/software-delivery.workflow.js',import.meta.url)),
     collectionId:'v45-browser',skillId:'software-delivery',name:'software-delivery',
     description:'V4.5 browser test',version:'1.0.0',executionMode:'interactive-p2',
     hostProfile:{id:'v45-browser',digest:artifactDigest('v45-browser')},buildId:'v45-browser',
-  });
+  };
+  const {candidate}=await prepareStandardSkill(candidateOptions);
   assert.ok(candidate);
   const key=newExportKey(), files=publicDelivery(candidate,key);
   assert.deepEqual(Object.keys(files).sort(),['workflow.html','workflow.js','workflow.mmd']);
@@ -44,6 +45,18 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
   assert.equal(graph.artifactHash,artifactDigest(files['workflow.js']));
   assert.equal(graph.nodes.length,140);
   assert.equal(layout.nodes.length,142);
+  const reauthoredFile=path.join(temporary,'reauthored.workflow.js');
+  const originalSource=await readFile(candidateOptions.file,'utf8');
+  await writeFile(reauthoredFile,'\n'+originalSource);
+  const {candidate:reauthored}=await prepareStandardSkill({...candidateOptions,file:reauthoredFile});
+  const regenerated=readWorkflowPageData(publicDelivery(reauthored,key)['workflow.html']);
+  assert.notEqual(regenerated.graph.artifactHash,graph.artifactHash);
+  assert.notEqual(regenerated.graph.graphDigest,graph.graphDigest);
+  assert.deepEqual(regenerated.layout,layout);
+  await writeFile(reauthoredFile,originalSource.replace("intent.status === 'ready'", "intent.status === 'other'"));
+  const {candidate:changedPredicate}=await prepareStandardSkill({...candidateOptions,file:reauthoredFile});
+  const changedLayout=readWorkflowPageData(publicDelivery(changedPredicate,key)['workflow.html']).layout;
+  assert.equal(changedLayout.phases.length,1);
   const evidence={candidateHash,artifactHash:graph.artifactHash,graphDigest:graph.graphDigest,cases:[]};
   const browser=await chromium.launch(process.env.FLOWKIT_BROWSER_CHANNEL?{channel:process.env.FLOWKIT_BROWSER_CHANNEL}:{});
   evidence.browser=browser.version();

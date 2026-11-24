@@ -94,6 +94,10 @@ export async function startLocalMcp(config, dependencies = {}) {
   const exportDir = path.resolve(config.exportDir ?? 'flowkit-exports');
   const credential = dependencies.credential ?? process.env[config.mcpTokenEnv ?? 'FLOWKIT_MCP_TOKEN'];
   const collectionName = config.defaultCollection ?? 'flowkit-workflows';
+  const authorTimeouts = [config.authorTaskTimeoutMs, config.authorTurnDurationMs];
+  if (authorTimeouts.some(value => value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2147483647))) {
+    throw new TypeError('Author task and turn timeouts must be positive integer milliseconds within the timer range');
+  }
   if (host !== '127.0.0.1' || !Number.isInteger(port) || port < 0 || port > 65535 ||
       !/^\/[a-z][a-z0-9-]*$/.test(mcpPath) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
       typeof credential !== 'string' || credential.length < 24) throw new Error('Configure a loopback address and a FlowKit MCP token of at least 24 characters');
@@ -183,11 +187,13 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     const exportKey = get('export-key-v1') ?? insert('export-key-v1', newExportKey());
     const provider = config.authorProvider ?? 'codex';
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
-    const model = dependencies.modelBinding ?? localModel({ provider,
+    const model = dependencies.modelBinding ?? localModel({ provider, timeoutMs: config.authorTaskTimeoutMs,
       model: process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'], apiKey: process.env.OPENAI_API_KEY, workspace: modelWorkspace });
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
-      budgetPolicy: { durationMs: 240000, maxRequests: 8 }, execution: model.execution,
+      budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
+        // The internal compile port returns a candidate with Program, Mermaid and GraphSnapshot.
+        maxResponseBytes: 1024 * 1024 }, execution: model.execution,
       resolveImportSource({ sourceRef }) {
         const source = trustedImport(sourceRef);
         return source && { candidate: source.candidate, sourceRef, issuer: sourceIssuer(source) };
@@ -521,7 +527,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             '<p>' + (current ? '候选需要通过复审。' : '请用本机启动信息建立操作员会话后刷新。') + '</p>';
           const graph = checkCandidate(draft.candidate);
           return html(res, workflowPage({ graph, candidateHash: draft.candidate.hash, controls,
-            mermaid: draft.candidate.files['workflow.mmd'] }));
+            mermaid: draft.candidate.files['workflow.mmd'], definition: draft.candidate.manifest.workflowDefinition }));
         }
         if (req.method === 'POST' && action === 'confirm' && operator(req) && req.headers.origin === origin) {
           const challenge = unseal('confirm', new URLSearchParams(await readBody(req, 8192)).get('challenge'));

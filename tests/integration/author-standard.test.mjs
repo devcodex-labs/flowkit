@@ -106,6 +106,57 @@ test('an authored workflow cannot promise a required root output without a decla
   assert.deepEqual(readPortableExport({...newFiles,'workflow.html':originalFiles['workflow.html']},trust),{invalid:true});
 });
 
+test('Author rejects a successful exit that skips a required output source', async t => {
+  const draft={id:'branch-contract',choices:{executionMode:'interactive-p2'},
+    target:{name:'branch-contract',version:'1.0.0'},goal:'Produce a receipt on success'};
+  const intent={intentRef:{effectiveIntentHash:artifactDigest(draft.goal)},goals:[{id:'receipt'}],
+    constraints:[],issues:[],unresolved:[],coverage:'complete'};
+  const receipt={type:'string'};
+  const output={type:'object',properties:{receipt},required:['receipt']};
+  const proposal={contract:{output},entryNodeId:'select',edges:[],coverage:{receipt:['produce']},nodes:[
+    {id:'select',name:'Select',kind:'verification',options:{verifier:'select',onSuccess:'produce',onFailure:'other'}},
+    {id:'produce',name:'Produce',kind:'action',options:{action:'produce',effect:'read-only',writes:['receipt'],next:'done'}},
+    {id:'done',name:'Done',kind:'terminal',options:{status:'succeeded'}},
+    {id:'other',name:'Other',kind:'terminal',options:{status:'failed'}},
+  ]};
+  const valid=await materializePlan(draft,proposal,{filename:'branch-contract.workflow.js'});
+  assert.ok(valid.source);
+  proposal.nodes.at(-1).options.status='succeeded';
+  const rejected=await materializePlan(draft,proposal,{filename:'branch-contract.workflow.js'});
+  assert.deepEqual(rejected.diagnostics.map(({code,nodeId})=>({code,nodeId})),[
+    {code:'FKA_PLAN_OUTPUT_SOURCE_REQUIRED',nodeId:'other'},
+  ]);
+  const oldPlan=createWorkflowPlan(draft,intent,{...proposal,edges:valid.proposal.edges});
+  const {options}=await fixture(t,valid.source.replace('"name":"Other","status":"failed"','"name":"Other","status":"succeeded"'));
+  await assert.rejects(prepareStandardSkill({...options,plan:oldPlan}),
+    error=>error.code==='FKA_PLAN_MISMATCH'&&error.detail.missingOutputs[0].nodeId==='other');
+  proposal.contract.input={type:'object',properties:{receipt}};
+  assert.equal((await materializePlan(draft,proposal,{filename:'branch-contract.workflow.js'})).diagnostics[0].nodeId,'other');
+  proposal.contract.input.required=['receipt'];
+  assert.ok((await materializePlan(draft,proposal,{filename:'branch-contract.workflow.js'})).source);
+});
+
+test('Author follows Action failures and only counts the branches that a join commits', async () => {
+  const draft={choices:{executionMode:'interactive-p2'},target:{name:'parallel-contract',version:'1.0.0'}};
+  const contract={output:{type:'object',properties:{receipt:{type:'string'}},required:['receipt']}};
+  const producer={id:'produce',name:'Produce',kind:'action',
+    options:{action:'produce',effect:'read-only',writes:['receipt'],next:'done'}};
+  const other={id:'other',name:'Other',kind:'action',options:{action:'other',effect:'read-only',writes:[],next:'done'}};
+  const done={id:'done',name:'Done',kind:'terminal',options:{status:'succeeded'}};
+  const group={id:'both',name:'Both',kind:'parallel',
+    options:{branchMode:'subflow',branches:['produce','other'],join:{strategy:'all_succeeded',next:'done'}}};
+  const filename='parallel-contract.workflow.js';
+  const plan=nodes=>materializePlan(draft,{contract,entryNodeId:nodes[0].id,nodes},{filename});
+  assert.ok((await plan([group,producer,other,done])).source);
+  group.options.join.strategy='any';
+  assert.equal((await plan([group,producer,other,done])).diagnostics[0].code,'FKA_PLAN_OUTPUT_SOURCE_REQUIRED');
+  other.options.writes=['receipt'];
+  assert.ok((await plan([group,producer,other,done])).source);
+  const fallback={...done,id:'recover',name:'Recover'};
+  producer.options.onError='recover';
+  assert.equal((await plan([producer,done,fallback])).diagnostics[0].nodeId,'recover');
+});
+
 test('Standard candidate uses real Compiler output, has three files, and runs twice without the source', async t => {
   const { dir, options } = await fixture(t);
   const { candidate, diagnostics } = await prepareStandardSkill(options);

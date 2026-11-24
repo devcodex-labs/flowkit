@@ -30,6 +30,8 @@ codex login status
 }
 ```
 
+复杂流程可选设 `authorTaskTimeoutMs`（单次模型任务，默认 90000 毫秒）和 `authorTurnDurationMs`（完整起草或复审回合，默认 240000 毫秒）。两项都使用正整数毫秒。宿主与 Codex 客户端各有自己的等待时间，调长宿主预算时也要让客户端的 `tool_timeout_sec` 覆盖整个回合。
+
 ```powershell
 npm run mcp:local -- --config ./flowkit-mcp.local.json
 ```

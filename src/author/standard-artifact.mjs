@@ -91,8 +91,8 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     throw Object.assign(new Error('Compiled root contract differs from the WorkflowPlan.'),{code:'FKA_PLAN_MISMATCH'});
   }
   if (plan) {
-    const missingOutputs=missingRootOutputSources(definition.contract,graph.writeSets);
-    if (missingOutputs.length) throw Object.assign(new Error('Required root outputs have no declared input or node writer.'),{
+    const missingOutputs=missingRootOutputSources(definition,graph);
+    if (missingOutputs.length) throw Object.assign(new Error('A successful route has no declared source for a required root output.'),{
       code:'FKA_PLAN_MISMATCH',detail:{missingOutputs}
     });
   }

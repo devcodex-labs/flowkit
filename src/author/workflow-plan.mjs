@@ -8,12 +8,54 @@ import { workflowContract } from '../shared/workflow-contract.mjs';
 const NODE_KINDS = new Set(['agent', 'action', 'verification', 'condition', 'parallel', 'loop', 'human', 'terminal']);
 const EDGE_KINDS = new Set(['control', 'data', 'capability', 'resource']);
 
-/** Reject a promised root output with no declared producer anywhere in the compiled graph. */
-export function missingRootOutputSources(contract, writeSets) {
-  const { input, output } = contract ?? {};
-  const availableKeys = new Set(Object.keys(input?.properties ?? {}));
-  for (const keys of writeSets.values()) for (const key of keys) availableKeys.add(key);
-  return (output?.required ?? []).filter(key => !availableKeys.has(key));
+/** Find successful exits reachable without a declared producer for a required output. */
+export function missingRootOutputSources(definition, graph) {
+  const { input, output } = definition.contract ?? {};
+  const requiredInputs = new Set(input?.required ?? []);
+  const missing = [];
+  for (const key of output?.required ?? []) {
+    if (requiredInputs.has(key)) continue;
+    const missingAtJoin = new Map();
+
+    function successfulExits(entry, join) {
+      const found = new Set();
+      const visited = new Set();
+      const pending = [entry];
+      while (pending.length) {
+        const id = pending.pop();
+        if (id === join) return [join];
+        if (visited.has(id)) continue;
+        visited.add(id);
+        const node = graph.byId.get(id);
+        if (node.type === 'terminal') {
+          if (node.status === 'succeeded') found.add(id);
+          continue;
+        }
+        if (node.type === 'parallel') {
+          if (!missingAtJoin.has(id)) {
+            const branchCanOmit = branch => node.branchMode === 'subflow'
+              ? successfulExits(branch, node.join.next).length > 0
+              : !graph.writeSets.get(branch).has(key);
+            // An all join applies every successful branch, while any applies only its winner.
+            missingAtJoin.set(id, node.join.strategy === 'any'
+              ? node.branches.some(branchCanOmit)
+              : node.branches.every(branchCanOmit));
+          }
+          if (missingAtJoin.get(id)) pending.push(node.join.next);
+          continue;
+        }
+        const writes = graph.writeSets.get(id).has(key);
+        for (const edge of graph.outgoing.get(id)) {
+          if (node.type === 'condition' && node.branches[Number(edge.path.split('/')[2])].when.trim() === 'false') continue;
+          if (!writes || edge.role === 'action-failure' || edge.path === '/onError') pending.push(edge.to);
+        }
+      }
+      return [...found];
+    }
+
+    for (const nodeId of successfulExits(definition.nodes[0].id)) missing.push({ key, nodeId });
+  }
+  return missing;
 }
 
 /** Derive the Plan's control edges from the same literal source used by the compiler. */
@@ -43,10 +85,11 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   const analysis = await analyzeSource(source, { ...compilerOptions, skillCheck: false },
     {interactiveStage:stage});
   if (analysis.diagnostics.some(item => item.severity === 'error')) return { diagnostics: analysis.diagnostics };
-  const missingOutputs = missingRootOutputSources(analysis.literal.definition.contract, analysis.graph.writeSets);
-  if (missingOutputs.length) return { diagnostics: missingOutputs.map(key => ({
+  const missingOutputs = missingRootOutputSources(analysis.literal.definition, analysis.graph);
+  if (missingOutputs.length) return { diagnostics: missingOutputs.map(({ key, nodeId }) => ({
     code: 'FKA_PLAN_OUTPUT_SOURCE_REQUIRED',
-    message: `Required root output ${JSON.stringify(key)} has no declared root input or node writer.`
+    nodeId,
+    message: `A route to successful terminal ${nodeId} has no declared source for required root output ${JSON.stringify(key)}.`
   })) };
   const control = new Map();
   for (const { from, to } of [...analysis.graph.referenceEdges, ...analysis.graph.executionEdges]) {

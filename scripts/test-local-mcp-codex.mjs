@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { buildCodexMarketplace } from './build-codex-plugin.mjs';
 import { startLocalMcp } from './run-local-mcp.mjs';
-import { newExportKey, publicDelivery } from './local-mcp-artifacts.mjs';
+import { deliveryNames, exportTrust, newExportKey, publicDelivery, readPortableExport } from './local-mcp-artifacts.mjs';
 import { readWorkflowPageData } from './workflow-viewer.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from '../tests/integrations/local-mcp-fixture.mjs';
 import { createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
@@ -22,15 +22,22 @@ const live = process.argv.includes('--live');
 const interactive=process.argv.includes('--interactive');
 const readOnly = process.argv.includes('--p0b');
 const referenceMode = process.argv.includes('--reference');
+const specIndex = process.argv.indexOf('--v45-spec');
+const v45Spec = specIndex !== -1;
 const domainIndex = process.argv.indexOf('--contract-domain');
 const domain = domainIndex < 0 ? null : process.argv[domainIndex + 1];
 if (domainIndex >= 0 && (!Object.hasOwn(authorContractCases, domain) || !live || interactive || readOnly || referenceMode)) {
   throw new Error('Use --live --contract-domain software|media|data');
 }
 const contractCase = domain && authorContractCases[domain];
+if (v45Spec && (!live || interactive || readOnly || referenceMode || contractCase || !process.argv[specIndex + 1])) {
+  throw new Error('Use --live --v45-spec <approved-business-spec.txt>');
+}
+const v45Input = v45Spec ? await readFile(process.argv[specIndex + 1], 'utf8') : null;
 const sourceKey = referenceMode ? newExportKey() : null;
 if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
-const goal = contractCase ? contractCase.goal : readOnly ?
+const goal = v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
+  contractCase ? contractCase.goal : readOnly ?
   '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
   '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。Host 的 check-input 只读校验 employeeId、month、hours，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点，调用方从 Standard runArtifact 的 state.copyRef 读取结果。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
@@ -41,6 +48,7 @@ const cwd = path.join(root, 'workspace');
 await mkdir(cwd);
 const service = await startLocalMcp({
   listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
+  ...(v45Spec ? { authorTaskTimeoutMs: 240000, authorTurnDurationMs: 660000 } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
 }, { credential: token, ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
 
@@ -186,7 +194,7 @@ async function withAppServer(env, test) {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(method + ' timed out'));
-    }, live && method === 'mcpServer/tool/call' ? 250000 : 25000);
+    }, live && method === 'mcpServer/tool/call' ? (v45Spec ? 700000 : 250000) : 25000);
     pending.set(id, response => {
       pending.delete(id);
       clearTimeout(timer);
@@ -223,7 +231,8 @@ try {
   const directEnv = envFor('direct');
   await mkdir(directEnv.CODEX_HOME);
   await writeFile(path.join(directEnv.CODEX_HOME,'config.toml'), '[mcp_servers.flowkit]\nurl = ' +
-    JSON.stringify(service.url) + '\nbearer_token_env_var = "FLOWKIT_MCP_TOKEN"\nrequired = true\n');
+    JSON.stringify(service.url) + '\nbearer_token_env_var = "FLOWKIT_MCP_TOKEN"\nrequired = true\n' +
+    (v45Spec ? 'tool_timeout_sec = 690\n' : ''));
   let saved;
   await withAppServer(directEnv, async ({ flowkit, tool }) => {
     assert.ok(flowkit);
@@ -234,9 +243,10 @@ try {
       return;
     }
     const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'cli-start',
-      goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive || contractCase ? { executionMode: 'interactive-p2' } : {}) });
+      goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive || contractCase || v45Spec ? { executionMode: 'interactive-p2' } : {}) });
     const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-plan',
-      expectedStateVersion: draft.stateVersion, input: goal, target: { name: contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
+      expectedStateVersion: draft.stateVersion, input: v45Input ?? goal,
+      target: { name: v45Spec ? 'v45-software-delivery' : contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
     assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
     assert.equal(Object.hasOwn(candidate.candidate, 'files'), false);
     const identity = { draftId: draft.id, candidateHash: candidate.candidate.candidateHash };
@@ -255,6 +265,20 @@ try {
     assert.equal(offline.candidateHash, identity.candidateHash);
     assert.deepEqual(offline, preview);
     assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
+    if (v45Spec) {
+      assert.equal(offline.graph.nodes.length, 140);
+      const db = new DatabaseSync(path.join(root, 'state', 'local-mcp.sqlite'), { readOnly: true });
+      let publicKey;
+      try { publicKey = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get('export-key-v1').value).publicKey; }
+      finally { db.close(); }
+      const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
+        [name, await readFile(path.join(exported.directory, name), 'utf8')])));
+      assert.equal(readPortableExport(files, exportTrust([publicKey])).candidate.hash, identity.candidateHash);
+      await writeFile(path.join(root, 'export-public-key.txt'), publicKey + '\n');
+      console.log(JSON.stringify({ path: 'real-v45-author', ...identity, directory: exported.directory, nodes: offline.graph.nodes.length,
+        graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, sourceSpecHash: artifactDigest(v45Input),
+        exportPublicKeyFile: path.join(root, 'export-public-key.txt'), preapprovalRejected: true, wrongVersionRejected: true }));
+    }
     if (interactive || readOnly) await runExport(exported.directory);
     if (contractCase) {
       console.log(JSON.stringify({path:'real-author-contract',...(await verifyAuthorContractExport(root,exported.directory,domain,offline.graph)),

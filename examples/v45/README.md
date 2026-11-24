@@ -15,3 +15,5 @@ node examples/v45/verify.mjs
 同一次运行编译一份 Program，通过交付成功、回滚成功、回滚资格失败、恢复写入失败、归档失败、用户拒绝和需求澄清覆盖全部声明。`verification.json` 提供每个 Run 的终点和节点覆盖，运行目录内的 `trace.json` 提供受权回放、待办恢复、文件版本和 SQLite 目标写入。
 
 在仓库根目录先构建，再运行 `node scripts/test-local-mcp-codex.mjs --reference`。该用例从实际 V4.5 源码编译候选，通过 Codex CLI 调用本机 MCP，并使用隔离复审绑定验证候选确认、旧候选拒绝和三文件导出。将 `FLOWKIT_V45_EXPORT_FILE` 指向测试返回的导出目录中的 `workflow.js`，即可让本页验证脚本直接执行这些字节。验证会先将其摘要与同源编译结果对账。
+
+真实模型验收使用 `node scripts/test-local-mcp-codex.mjs --live --v45-spec <已批准的业务规格文本>`。规格包含 140 个节点、宿主回调约定、根契约、Human 决定和完整业务路由。将 `FLOWKIT_V45_EXPORT_DIR` 和 `FLOWKIT_V45_EXPORT_PUBLIC_KEY_FILE` 指向日志返回的导出目录和本机起草宿主公钥文件，再运行 `node examples/v45/verify.mjs`。执行前会验证三文件签名、根契约和批准的 V4.5 节点语义。
