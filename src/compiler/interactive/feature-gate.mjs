@@ -14,9 +14,10 @@ export const supportsInteractiveNodeKind = (stage, kind) => supportsP0ANodeKind(
   || stage!=='P0-A' && ['action','verification','human','loop'].includes(kind)
   || ['P1','P2'].includes(stage) && kind==='parallel';
 
-function interactiveDiagnostic(analysis, code, message, index, node) {
+export function interactiveDiagnostic(analysis, code, message, index, node, field = '') {
+  const pointer = '/nodes/' + index;
   const location = index === undefined ? { line: 1, column: 1 }
-    : analysis.literal.locations.get('/nodes/' + index) ?? { line: 1, column: 1 };
+    : analysis.literal.locations.get(pointer + field) ?? analysis.literal.locations.get(pointer) ?? { line: 1, column: 1 };
   return Object.freeze({
     code, severity: 'error', message, file: analysis.snapshot.absFilename,
     line: location.line, column: location.column,

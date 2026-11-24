@@ -478,6 +478,41 @@ test('P2 Plan repair receives both workflow-level and node-level compiler diagno
     ['proposal', 'plan-repair', 'semantic-review']);
 });
 
+test('P2 Author repairs race inputs before the first semantic candidate review', async t => {
+  const f = await setup(t, { useNodeOptionsForNewDrafts: true });
+  const request = f.options.execution.request;
+  const action = (id, options) => ({ id, kind: 'action', name: id, options: { action: id, effect: 'read-only', ...options } });
+  const plan = { entryNodeId: 'race', edges: [],
+    coverage: [{ intentId: 'goal', status: 'covered', coveredBy: ['race'] }],
+    nodes: [
+      { id: 'race', kind: 'parallel', name: 'Race',
+        options: { branchMode: 'subflow', branches: ['left', 'right'], join: { strategy: 'any', next: 'summary' } } },
+      action('left', { reads: [], writes: ['electronic'], next: 'summary' }),
+      action('right', { reads: [], writes: ['paper'], next: 'summary' }),
+      action('summary', { next: 'done' }),
+      { id: 'done', kind: 'terminal', name: 'Done', options: { status: 'succeeded' } }
+    ] };
+  f.options.execution.request = async input => {
+    const task = input.prepared?.task;
+    if (!['proposal', 'plan-repair'].includes(task?.node.id)) return request(input);
+    f.calls.push(input);
+    const answer = structuredClone(plan);
+    if (task.node.id === 'plan-repair') {
+      const [diagnostic] = task.input.planDiagnostics;
+      assert.equal(diagnostic.code, 'FK_I_PARALLEL_INPUT');
+      assert.equal(diagnostic.nodeId, 'summary');
+      assert.match(diagnostic.message, /electronic.*paper/);
+      answer.nodes.find(node => node.id === 'summary').options.reads = [];
+    }
+    return agentResult({ rawText: JSON.stringify(answer) });
+  };
+  const ready = await advance(f, await f.start(), { choices: { executionMode: 'interactive-p2' } });
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  assert.deepEqual(ready.candidate.manifest.workflowDefinition.nodes.find(node => node.id === 'summary').reads, []);
+  assert.deepEqual(f.calls.filter(call => call.stage === 'agent').map(call => call.prepared.task.node.id),
+    ['proposal', 'plan-repair', 'semantic-review']);
+});
+
 test('P2 derives subflow controls from bundled node options and validates supplementary edges', async t => {
   const f = await setup(t, { useNodeOptionsForNewDrafts: true });
   const request = f.options.execution.request;

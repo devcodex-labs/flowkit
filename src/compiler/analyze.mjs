@@ -5,6 +5,7 @@ import { validateFields } from './validate.mjs';
 import { checkSkills } from './skill-check.mjs';
 import { analyzeGraph } from './graph.mjs';
 import { analyzeDataflow } from './dataflow.mjs';
+import { parallelInputDiagnostics } from './interactive/parallel-inputs.mjs';
 import { parseWhen, WhenSyntaxError } from '../when/parser.mjs';
 
 /** Private analysis pipeline; it does not generate code or establish SDK runtime validity. */
@@ -38,7 +39,13 @@ export async function analyzeSource(source, suppliedOptions = {}, {interactiveSt
       const result = analyzeGraph(literal, context);
       graph = result.graph;
       diagnostics.push(...result.diagnostics);
-      if (graph) { dataflow = analyzeDataflow(graph, literal, context); diagnostics.push(...dataflow.diagnostics); }
+      if (graph) {
+        dataflow = analyzeDataflow(graph, literal, context);
+        diagnostics.push(...dataflow.diagnostics);
+        if (interactiveStage === 'P2' && diagnostics.every(item => item.severity !== 'error')) {
+          diagnostics.push(...parallelInputDiagnostics(literal, graph, context, conditions));
+        }
+      }
     }
     diagnostics.push(...await checkSkills(literal, context));
   }

@@ -6,6 +6,9 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {spawn,spawnSync} from 'node:child_process';
 import {createApiAgentAdapter} from '../../src/host/api-agent.mjs';
+import {analyzeSource} from '../../src/compiler/analyze.mjs';
+import {lowerInteractive} from '../../src/compiler/interactive/lower.mjs';
+import {emitInteractive} from '../../src/compiler/interactive/emit.mjs';
 import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {
   compileInteractive,complete,cancelInteractiveRun,createInteractiveAdminContext,createInteractiveHostContext,
@@ -61,6 +64,20 @@ async function fixture(t) {
 const submission=(frame,result={answer:'yes'})=>({
   runId:frame.runId,requestId:frame.pending[0].requestId,kind:'agent',outcome:'succeeded',result,
 });
+
+async function registerParallelInputRuntimeProbe(file, registry) {
+  const options={featureStage:'P2',output:'memory',skillCheck:false};
+  const blocked=await compileInteractive(file,options);
+  assert.equal(blocked.code,'');
+  assert.ok(blocked.diagnostics.some(item=>item.code==='FK_I_PARALLEL_INPUT'));
+  // Emit the structurally valid fixture without the P2 source check to exercise the independent runtime guard.
+  const source=await readFile(file);
+  const analysis=await analyzeSource(source,{filename:file,skillCheck:false},{interactiveStage:'P1'});
+  const {ir}=lowerInteractive(analysis,options);
+  const emitted=emitInteractive(ir);
+  assert.ok(emitted.code,JSON.stringify(emitted.diagnostics));
+  return registry.putImmutable(Buffer.from(emitted.code),emitted.programIdentity);
+}
 
 test('operation claims survive a reopened Store and settlement is separate from the workflow terminal',async t=>{
   const f=await fixture(t);
@@ -640,7 +657,8 @@ export default defineWorkflow({id:'parallel-guards',name:'Parallel guards',versi
 
   await writeFile(file,[entry+group('publish'),left,right,
     "action('publish',{name:'Publish',action:'publish',reads:['left'],writes:[],next:'done'})",done].join(','));
-  const mixed=await start(file,{}, {},{...cfg,startKey:'input'});
+  const mixedRef=await registerParallelInputRuntimeProbe(file,cfg.programRegistry);
+  const mixed=await start(mixedRef,{}, {},{...cfg,startKey:'input'});
   const restricted={...cfg,auth:context({subjectId:'right-host',authorizeTask:({nodeId})=>nodeId==='right'})};
   const drawn=await resume(mixed.runId,{},restricted);
   assert.deepEqual(drawn.pending.map(item=>item.nodeId),['right']);
@@ -843,9 +861,7 @@ terminal('done',{name:'Done',status:'succeeded'})
     .replace("terminal('done'",`condition('route',{name:'Route',branches:[{when:'true',next:'consumer'}]}),
 node('consumer',{name:'Consumer',agent:'writer',inputs:['left'],output:{type:'object'},next:'done'}),
 terminal('done'`));
-  const checked=await compileInteractive(consumes,{output:'memory',featureStage:'P2',skillCheck:false});
-  assert.ok(checked.code,JSON.stringify(checked.diagnostics));
-  const ref=await cfg.programRegistry.putImmutable(Buffer.from(checked.code),checked.programIdentity);
+  const ref=await registerParallelInputRuntimeProbe(consumes,cfg.programRegistry);
   const inputsCfg={...cfg,startKey:'p2-required-input',policy:{...policy,capabilityStage:'P2'}};
   const invalidInputs=await start(ref,runtime,{},inputsCfg);
   assert.equal(invalidInputs.status,'errored');

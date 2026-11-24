@@ -21,7 +21,7 @@ export const packageFiles = [
   ['src/author/flowkit-workflow-author/SKILL.md', 'dist/author/flowkit-workflow-author/SKILL.md'],
   ...['contracts', 'control', 'skill-ref', 'task-spec', 'artifact-identity', 'workflow-contract'].map(name => [`src/shared/${name}.mjs`, `dist/shared/${name}.mjs`]),
   ...['source', 'extract', 'validate', 'skill-check', 'analyze', 'graph-algorithms', 'graph', 'graph-snapshot', 'dataflow', 'values', 'paths', 'mermaid', 'emit-plan', 'helpers', 'emit', 'compile', 'api', 'output'].map(name => [`src/compiler/${name}.mjs`, `dist/compiler/${name}.mjs`]),
-  ...['feature-gate', 'lower', 'validate-ir'].map(name => [`src/compiler/interactive/${name}.mjs`, `dist/compiler/interactive/${name}.mjs`]),
+  ...['feature-gate', 'lower', 'validate-ir', 'parallel-inputs'].map(name => [`src/compiler/interactive/${name}.mjs`, `dist/compiler/interactive/${name}.mjs`]),
   ['src/compiler/interactive/emit.mjs', 'dist/compiler/interactive/emit.mjs'],
   ...['compile', 'identity', 'load', 'canonical', 'checkpoint', 'protocol', 'sqlite-store', 'operation-ledger', 'artifact-ledger', 'coordinator', 'index', 'host-attestation', 'trusted-host', 'versioned'].map(name => [`src/interactive/${name}.mjs`, `dist/interactive/${name}.mjs`]),
   ...['parser', 'evaluate'].map(name => [`src/when/${name}.mjs`, `dist/when/${name}.mjs`]),
