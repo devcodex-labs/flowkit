@@ -83,7 +83,9 @@ codex plugin list --marketplace flowkit-local
 
 下载链接过期时，让 Codex 用原 `draftId`、`candidateHash` 和返回结果里的 `exportReceipt` 重新调用 `flowkit_export_workflow`。原候选和原文件仍可读取时，FlowKit 核验三个 SHA-256 后签发新链接，保留原 HTML 签名。此调用只传收据。要导出当前渲染版本，打开当前预览并使用它的 `layoutRevision`。原收据的文件内容改变或缺失时，补领会失败。
 
-已有 Interactive 运行绑定的宿主可以在调用 `startLocalMcp` 时提供 `resolveRunViewer`。解析器接收运行 ID 与当前操作员的服务端请求上下文，返回该次运行的 `{ auth, ref, options }`。其中 `auth` 为请求范围内的受信 Host 能力，`ref` 绑定实际运行及其 Program 和 GraphSnapshot，`options` 提供原运行的策略、Store、Program registry 和同一 GraphSnapshot。操作员可打开 `/runs/<runId>` 查阅状态、激活次数和重试记录，并按修订翻页。在产物中心可筛选当前页授权产物的节点、类型、版本或生效状态，点击产物可回到来源节点。刷新与翻页都只读取运行。文件正文仍由宿主的授权存储接口提供。
+已有 Interactive 运行绑定的宿主可以在调用 `startLocalMcp` 时提供 `resolveRunViewer`。解析器接收运行 ID 与当前操作员的服务端请求上下文，返回该次运行的 `{ auth, ref, options }`。其中 `auth` 为请求范围内的受信 Host 能力，`ref` 绑定实际运行及其 Program 和 GraphSnapshot，`options` 提供原运行的策略、Store、Program registry 和同一 GraphSnapshot。当 `runWorkflow` 返回该次运行，且查看绑定和读取权限都通过时，`flowkit_run_workflow` 会附上 `runUrl`。操作员使用现有本机会话打开此链接。
+
+实时页自动显示当前修订、待处理节点、并行分支、激活和重试，以及暂停原因。连接中断时，页面标记连接状态并保留最后读到的运行状态。重连后继续读取同一个 Run，补齐事件后显示终态。页面读取不会提交任务或推进运行。“查看运行历史”按修订翻页。产物中心可筛选当前页已授权的产物，文件正文由宿主的授权存储接口提供。
 
 宿主如需关联接收方的候选，可另外提供 `candidate`，并在 `ref` 中声明 `collectionId`、`candidateHash` 与 `approvalRef`。宿主应按这三项验证接收方的审批。页面还会验证候选文件及图摘要，才展示该候选和 Mermaid。导入可以生成新的候选身份，运行仍绑定原 Program 和 GraphSnapshot。
 

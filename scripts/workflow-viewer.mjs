@@ -142,8 +142,9 @@ export function workflowPage({ graph, candidateHash, mermaid, definition, contro
     ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}),
     ...(design ? { design } : {}),
     ...(executionBindings.size ? { executionBindings: [...executionBindings.values()] } : {}) });
-  const html = controls ? shell.replace("form-action 'none'", "form-action 'self'")
-    .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : shell.replace(controlsSlot, '');
+  const pageShell = runView?.progressUrl ? shell.replace("connect-src 'none'", "connect-src 'self'") : shell;
+  const html = controls ? pageShell.replace("form-action 'none'", "form-action 'self'")
+    .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : pageShell.replace(controlsSlot, '');
   return html.replace(embeddedData, () => data);
 }
 
@@ -178,49 +179,64 @@ export async function workflowTracePage({candidate,ref,standardTrace,authorizeTr
     runView:{type:'standard-trace',status,events:projected,pending:[],artifacts:null}});
 }
 
+function viewCandidate(candidate, ref, graph, verifyFiles) {
+  if (!candidate && !ref.candidateHash) return;
+  try {
+    if (candidate?.hash===ref.candidateHash && candidate?.manifest?.collectionId===ref.collectionId &&
+        candidate?.manifest?.artifactHash===graph.artifactHash &&
+        (verifyFiles ? checkCandidate(candidate).graphDigest===graph.graphDigest : true)) return;
+  } catch { /* Invalid candidate bytes cannot bind the viewer. */ }
+  throw Object.assign(new Error('Viewer candidate does not match the running Program and graph'),{code:'FK_I_PROGRAM_MISMATCH'});
+}
+
+async function projectRunProgress(auth, ref, options, snapshot, afterRevision) {
+  if(afterRevision>snapshot.revision)throw Object.assign(new Error('Viewer cursor exceeds Run revision'),{code:'FK_I_INVALID_TRANSITION'});
+  const result=await viewSection(() => auth.listRunViewEvents({ ref, afterRevision }, options));
+  const page=result?.events.filter(event=>event.revision<=snapshot.revision) ?? null;
+  const {runId,artifactHash,graphDigest,revision,status,pauseReason}=snapshot;
+  return {type:'interactive-journal',runId,artifactHash,graphDigest,revision,status,pauseReason:pauseReason??null,
+    candidateHash:ref.candidateHash ?? null, cursor:page ? page.at(-1)?.revision??afterRevision : null,
+    pending:snapshot.pending.map(({nodeId,kind,activation,attempt,scope})=>({nodeId,kind,activation,attempt,scope})),
+    events:page?.map(({revision,nodeId,kind,activation,attempt,receiptOutcome})=>
+      ({revision,nodeId,kind,activation,attempt,receiptOutcome})) ?? null};
+}
+
+/** Read the current Run and one authorized journal page, without changing the Run. */
+export async function workflowRunProgress({auth,ref,options,candidate,afterRevision=-1}) {
+  const snapshot=await auth.readRunView(ref,options);
+  viewCandidate(candidate,ref,options.graphSnapshot,false);
+  return projectRunProgress(auth,ref,options,snapshot,afterRevision);
+}
+
 /** The integrating Host supplies a request-scoped authority. Queries never advance the Run. */
-export async function workflowRunPage({ auth, ref, options, candidate, afterRevision = -1, artifactAfter = 0,
+export async function workflowRunPage({ auth, ref, options, candidate, afterRevision, artifactAfter = 0,
   viewManifest, authorizeViewManifest, requestContext }) {
   options = { ...options, graphSnapshot: structuredClone(options.graphSnapshot) };
   const graph=options.graphSnapshot;
-  const snapshot = await auth.readRunView(ref, options);
-  let candidateHash, mermaid;
-  if (candidate || ref.candidateHash) {
-    try {
-      if (!candidate || candidate.hash!==ref.candidateHash || candidate.manifest?.collectionId!==ref.collectionId ||
-        checkCandidate(candidate).graphDigest!==graph.graphDigest) {
-        throw new Error('candidate identity differs');
-      }
-    } catch {
-      throw Object.assign(new Error('Viewer candidate does not match the running Program and graph'),{code:'FK_I_PROGRAM_MISMATCH'});
-    }
-    candidateHash=candidate.hash;
-    mermaid=candidate.files['workflow.mmd'];
-  }
-  const manifest=await authorizedManifest({requestContext,ref,viewManifest,authorizeViewManifest});
-  if(afterRevision>snapshot.revision)throw Object.assign(new Error('Viewer cursor exceeds Run revision'),{code:'FK_I_INVALID_TRANSITION'});
-  const [events, artifacts] = await Promise.all([
-    viewSection(() => auth.listRunViewEvents({ ref, afterRevision }, options)),
-    viewSection(() => auth.readRunArtifacts({ ref, after: artifactAfter }, options)),
+  const snapshot=await auth.readRunView(ref,options);
+  viewCandidate(candidate,ref,graph,true);
+  const live=afterRevision===undefined && artifactAfter===0;
+  const firstRevision=afterRevision ?? Math.max(-1,snapshot.revision-50);
+  const [manifest, progress, artifacts]=await Promise.all([
+    authorizedManifest({requestContext,ref,viewManifest,authorizeViewManifest}),
+    projectRunProgress(auth,ref,options,snapshot,firstRevision),
+    viewSection(() => auth.readRunArtifacts({ref,after:artifactAfter},options)),
   ]);
-  const page=events?.events.filter(event=>event.revision<=snapshot.revision);
-  const cursor=page?.at(-1)?.revision??afterRevision;
   const runPath = '/runs/' + encodeURIComponent(ref.runId);
-  const links = ['<a href="' + runPath + '">刷新运行状态</a>'];
-  if (events && cursor < snapshot.revision) {
-    links.push('<a href="' + runPath + '?afterRevision=' + cursor + '&amp;artifactAfter=' + artifactAfter +
+  const links = live ? ['<p id="liveRunStatus" role="status"></p>',
+    '<a href="' + runPath + '?afterRevision=-1">查看运行历史</a>'] : ['<a href="' + runPath + '">返回实时运行</a>'];
+  if (progress.cursor!==null && progress.cursor<snapshot.revision) {
+    links.push('<a href="' + runPath + '?afterRevision=' + progress.cursor + '&amp;artifactAfter=' + artifactAfter +
       '">后续事件</a>');
   }
   if (artifacts?.next != null) {
-    links.push('<a href="' + runPath + '?afterRevision=' + afterRevision + '&amp;artifactAfter=' + artifacts.next +
+    links.push('<a href="' + runPath + '?afterRevision=' + firstRevision + '&amp;artifactAfter=' + artifacts.next +
       '">更多产物</a>');
   }
-  return workflowPage({ graph, candidateHash, mermaid, definition: candidate?.manifest.workflowDefinition, executionManifest: candidate?.manifest,
-    controls: links.join(' '), viewManifest:manifest, runView: {
-    type:'interactive-journal', revision: snapshot.revision, status: snapshot.status, pauseReason: snapshot.pauseReason,
-    pending: snapshot.pending.map(({ nodeId, kind, activation, attempt }) => ({ nodeId, kind, activation, attempt })),
-    events: page?.map(({ revision, nodeId, kind, activation, attempt, receiptOutcome }) =>
-      ({ revision, nodeId, kind, activation, attempt, receiptOutcome })) ?? null,
+  return workflowPage({ graph, candidateHash:candidate?.hash, mermaid:candidate?.files['workflow.mmd'],
+    definition:candidate?.manifest.workflowDefinition,executionManifest:candidate?.manifest,
+    controls:links.join(' '),viewManifest:manifest,runView:{
+    ...progress,...(live?{progressUrl:runPath+'/progress'}:{}),
     artifacts: artifacts?.items.map(({ artifactId, versionId, nodeId, contentHash, mimeType,
       sizeBytes, latestVersionId, effectiveVersionId }) =>
       ({ artifactId, versionId, nodeId, contentHash, mimeType, sizeBytes, latestVersionId, effectiveVersionId })) ?? null,

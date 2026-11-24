@@ -17,7 +17,7 @@ import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canExportPortable, commitDelivery, deliveryMatches, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
-import { defaultLayout, viewerHash, workflowPage, workflowRunPage, workflowTracePage } from './workflow-viewer.mjs';
+import { defaultLayout, viewerHash, workflowPage, workflowRunPage, workflowRunProgress, workflowTracePage } from './workflow-viewer.mjs';
 import { generateLayout, layoutContractHash } from './workflow-viewer/auto-layout.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
@@ -760,11 +760,29 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           requiredCapabilities: draft.candidate.manifest.workflowDefinition?.nodes?.flatMap(node => [node.action ?? node.verifier].filter(Boolean)) } } : {}) };
     }
 
+    const resolveRunBinding = async runId => {
+      if (typeof runId !== 'string' || !runId || runId.length>256) return null;
+      const view = await dependencies.resolveRunViewer?.({ runId, requestContext: context });
+      return view?.ref?.runId===runId ? view : null;
+    };
     const runWorkflow = typeof dependencies.runWorkflow === 'function' && (async scope => {
       const candidate = binding.store.readVersion(scope.collectionId, scope.skillId, scope.candidateHash);
       if (!candidate) throw new Error('No approved Workflow Skill at the requested identity');
-      checkCandidate(candidate);
-      return dependencies.runWorkflow(scope, { candidate, store: binding.store });
+      const graph=checkCandidate(candidate);
+      const result=await dependencies.runWorkflow(scope, { candidate, store: binding.store });
+      if (graph.mode==='standard' || !result?.runId || !dependencies.resolveRunViewer) return result;
+      try {
+        const view=await resolveRunBinding(result.runId);
+        if (!view || view.standardTrace || view.ref.artifactHash!==graph.artifactHash ||
+          view.ref.graphDigest!==graph.graphDigest || (view.ref.candidateHash || view.candidate) &&
+          (view.ref.candidateHash!==candidate.hash || view.ref.collectionId!==scope.collectionId ||
+            view.candidate?.hash!==candidate.hash || view.candidate?.manifest?.collectionId!==scope.collectionId)) return result;
+        await view.auth.readRunView(view.ref,view.options);
+        return {...result,runUrl:origin+'/runs/'+encodeURIComponent(result.runId)};
+      } catch {
+        // Viewer binding is optional. Execution has already returned a Run.
+        return result;
+      }
     });
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
       { ...binding, ...(runWorkflow ? { runWorkflow } : {}), workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present, authoringMaterials,
@@ -793,29 +811,33 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       if (url.pathname === '/' && req.method === 'GET' && operator(req)) {
         return html(res, sourcePanel);
       }
-      if (route === 'runs' && ref && !action && req.method === 'GET' && dependencies.resolveRunViewer) {
+      if (route === 'runs' && ref && (!action || action==='progress') && req.method === 'GET' && dependencies.resolveRunViewer) {
         if (!operator(req)) return json(res, 403, { error: '请先建立本机操作员会话。' });
         const runId = decodeURIComponent(ref);
-        const afterRevision = Number(url.searchParams.get('afterRevision') ?? -1);
+        const progress=action==='progress';
+        const afterRevision=url.searchParams.has('afterRevision') ? Number(url.searchParams.get('afterRevision')) : undefined;
         const artifactAfter = Number(url.searchParams.get('artifactAfter') ?? 0);
-        if (url.pathname !== '/runs/' + ref || !runId || runId.length > 256 ||
-            !Number.isSafeInteger(afterRevision) || afterRevision < -1 ||
+        if (url.pathname !== '/runs/' + ref + (progress?'/progress':'') || !runId || runId.length>256 ||
+            (afterRevision!==undefined && (!Number.isSafeInteger(afterRevision) || afterRevision< -1)) ||
+            (progress && url.searchParams.has('artifactAfter')) ||
             !Number.isSafeInteger(artifactAfter) || artifactAfter < 0) {
           return json(res, 400, { error: '运行标识或分页位置不合法。' });
         }
-        const binding = await dependencies.resolveRunViewer({ runId, requestContext: context });
-        if (!binding || binding.ref?.runId !== runId) return json(res, 404, { error: '找不到可查看的运行。' });
         try {
-          if (binding.standardTrace) {
-            if (afterRevision!==-1 || artifactAfter!==0) return json(res,400,{error:'单次调用记录没有持久分页。'});
-            return html(res,await workflowTracePage({...binding,requestContext:context}));
+          const view=await resolveRunBinding(runId);
+          if (!view) return json(res, 404, { error: '找不到可查看的运行。' });
+          if (view.standardTrace) {
+            if (progress || (afterRevision??-1)!==-1 || artifactAfter!==0) return json(res,400,{error:'单次调用记录没有持久分页。'});
+            return html(res,await workflowTracePage({...view,requestContext:context}));
           }
-          return html(res, await workflowRunPage({ ...binding, requestContext:context, afterRevision, artifactAfter }));
+          if (progress) return json(res,200,await workflowRunProgress({...view,afterRevision}));
+          return html(res,await workflowRunPage({...view,requestContext:context,afterRevision,artifactAfter}));
         } catch (error) {
           if (error.code === 'FK_I_HOST_DENIED' || error.code === 'FK_I_PROGRAM_MISMATCH') {
             return json(res, 404, { error: '找不到可查看的运行。' });
           }
           if (error.code === 'FK_I_INVALID_TRANSITION') return json(res, 400, { error: '运行分页位置不合法。' });
+          if (progress) return json(res,503,{error:'暂时无法读取运行进度。'});
           throw error;
         }
       }

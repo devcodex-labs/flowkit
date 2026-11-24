@@ -156,7 +156,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       });
   }
   if (!workflowUi || typeof runWorkflow === 'function') {
-    tool('flowkit_run_workflow', 'Run a fixed approved Artifact using the Host execution binding.',
+    tool('flowkit_run_workflow', 'Run a fixed approved Artifact using the Host execution binding. Present runUrl to the operator when returned.',
       { collectionId: id, skillId: id, candidateHash: hash, executionRef: id }, async (input, ctx) => {
         if (typeof runWorkflow !== 'function') throw new Error('Host execution binding is unavailable');
         return runWorkflow({ namespace, ...input, requestContext, signal: ctx.signal });

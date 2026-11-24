@@ -1067,6 +1067,8 @@ summary.contract-trigger::-webkit-details-marker {display:none}
 #flowkit-host-controls button {border:1px solid #365cc0;border-radius:8px;padding:7px 12px;background:#315bb7;color:white;cursor:pointer}
 #flowkit-host-controls button:disabled {opacity:.55;cursor:wait}
 #flowkit-host-controls a {color:#315bb7;font-size:13px;padding:4px}
+#liveRunStatus {margin-right:auto!important;color:#233c67;font-weight:600}
+.node.has-pending {outline:2px solid #dba247;outline-offset:2px}
 .node.has-pending .node-run-status {display:inline;color:#b67a0b}
 .node-run-status {display:none}
 #miniViewport {transform-origin:0 0}
@@ -1910,12 +1912,16 @@ const wrapRows = items => '<div class="list-stack">'+items.join('')+'</div>';
 const offlineArtifact = '当前未绑定运行，暂无可查看的产物版本。';
 const runLabels={running:'运行中',waiting:'等待处理',paused:'已暂停',succeeded:'成功',failed:'失败',errored:'出错',cancelled:'已取消'};
 const eventLabels={'run.started':'开始运行','run.finished':'运行结束','receipt.accepted':'已接收回执','transition.committed':'状态已提交'};
+const pauseLabels={'reconciliation':'等待对账','stage-budget':'等待下一次调度','skill-temporary':'等待技能恢复'};
 const isStandardTrace = DATA.runView?.type==='standard-trace';
 const runSummary = () => [['记录来源',isStandardTrace?'Standard 单次调用记录':'Interactive 持久日志'],
   ['运行状态',runLabels[DATA.runView.status]??DATA.runView.status],
   ...(!isStandardTrace?[['修订',DATA.runView.revision]]:[]),
-  ...(DATA.runView.pauseReason?[['暂停原因',DATA.runView.pauseReason]]:[])];
+  ...(DATA.runView.pauseReason?[['暂停原因',pauseLabels[DATA.runView.pauseReason]??DATA.runView.pauseReason]]:[])];
 const activationLabel = ({activation,attempt}) => activation===undefined?'':` · 激活 ${activation} · 尝试 ${attempt}`;
+function laneLabel(scope) {
+  return scope?.length ? ' · 分支 '+scope.map(({laneId})=>actualNodes.get(laneId)?.name??laneId).join(' / ') : '';
+}
 function runDetails(node) {
   const run=DATA.runView;
   if(!run)return `<div class="runtime-empty">${esc(modeNote)}</div>`;
@@ -1928,7 +1934,7 @@ function runDetails(node) {
       :note('单次调用中没有该节点的记录。'));
   }
   return facts(runSummary())+
-    (pending.length?list(pending.map(task=>'待处理 · '+(types[task.kind]??task.kind)+activationLabel(task))):'')+
+    (pending.length?list(pending.map(task=>'待处理 · '+(types[task.kind]??task.kind)+activationLabel(task)+laneLabel(task.scope))):'')+
     (events?.length?list(events.map(event=>'#'+event.revision+' · '+(eventLabels[event.kind]??event.kind)+
       activationLabel(event)+(event.receiptOutcome?' · '+(runLabels[event.receiptOutcome]??event.receiptOutcome):''))):
       note(events?'本页没有该节点的事件。':'当前授权未提供事件。'));
@@ -2029,7 +2035,7 @@ function renderOverview() {
     ])+(g.contract?'<div class="panel-actions"><button type="button" class="panel-btn" data-read-root-contract>阅读根契约</button></div>':''))+
     section('流程阶段',wrapRows(DATA.phases.map(p=>`<button type="button" class="relation-row" data-stage-focus="${esc(p.id)}"><span>${esc(p.title)}</span><small>${p.count} 个节点</small></button>`)))+
     (DATA.mermaid?section('流程定义','<button class="panel-btn" type="button" data-read-mermaid>阅读 Mermaid</button>'):'')+
-    (DATA.runView?section('只读运行状态',facts(runSummary())):section('预览模式',note(modeNote))));
+    (DATA.runView?section('只读运行状态',facts(runSummary()),'run-overview'):section('预览模式',note(modeNote))));
 }
 const joinRuleLabels={all_succeeded:'全部分支成功',any:'任一分支成功'};
 function regionTargets(title,targets) {
@@ -2431,25 +2437,114 @@ for(const phase of DATA.phases) $('stageJump').add(new Option(phase.title,phase.
 renderStages();
 renderEdges();
 renderNodes();
-if (DATA.runView) {
-  $('workflowStats').querySelector('.demo-tag').textContent=isStandardTrace?'Standard · 单次记录':'运行 · 只读';
-  const pending=new Set(DATA.runView.pending.map(task=>task.nodeId));
-  for (const node of DATA.nodes) {
-    const card=nodeElements.get(node.id);
-    if (!pending.has(node.nodeId)) continue;
-    card.classList.add('has-pending');
-    const badge=card.querySelector('.node-run-status');
-    if (badge) {badge.textContent='◉';badge.title='等待处理';}
-  }
-}
+if (DATA.runView) $('workflowStats').querySelector('.demo-tag').textContent=isStandardTrace?'Standard · 单次记录':'运行 · 只读';
 renderMinimap();
 for(const node of DATA.nodes) accessible(nodeElements.get(node.id),node.label+' · '+node.slug);
 for(const edge of DATA.edges) accessible(edgeElements.get(edge.id),nodes.get(edge.source).label+' → '+nodes.get(edge.target).label);
 initSheetResize();
 resetToGlobalView(true,false);
+if (DATA.runView) {
+  renderRunActivity();
+  if (DATA.runView.progressUrl) watchRun();
+}
 syncMotionPlayback();
 const confirmationButton = document.querySelector('#flowkit-host-controls button[type="submit"]');
 if (confirmationButton) confirmationButton.disabled = false;
+
+function renderRunActivity() {
+  const pending=new Map();
+  for (const {nodeId} of DATA.runView?.pending??[]) pending.set(nodeId,(pending.get(nodeId)??0)+1);
+  for (const node of DATA.nodes) {
+    const card=nodeElements.get(node.id);
+    const count=pending.get(node.nodeId)??0;
+    card.classList.toggle('has-pending',count>0);
+    const badge=card.querySelector('.node-run-status');
+    if (badge) {
+      badge.textContent=count>1?'◉ '+count:'◉';
+      badge.title=count?'待处理 '+count+' 项':'';
+    }
+  }
+  const execution=$('panel-section-execution');
+  if (execution && selectedNode) {
+    execution.innerHTML='<div class="section-title">执行状态</div>'+runDetails(nodes.get(selectedNode));
+  }
+  const overview=$('panel-section-run-overview');
+  if (overview) {
+    overview.innerHTML='<div class="section-title">只读运行状态</div>'+
+      (DATA.runView?facts(runSummary()):note('该运行当前不可查看。'));
+  }
+}
+
+function watchRun() {
+  const initial=DATA.runView;
+  const progressUrl=new URL(initial.progressUrl,location.href);
+  const status=$('liveRunStatus');
+  if (!status || progressUrl.origin!==location.origin || progressUrl.pathname!==location.pathname+'/progress') return;
+  const terminal=new Set(['succeeded','failed','errored','cancelled']);
+  let timer, busy=false, stopped=false, retry=1000;
+
+  function showConnection(message='') {
+    const view=DATA.runView;
+    const count=view?.pending.length??0;
+    const summary=view?[runLabels[view.status], '修订 '+view.revision,
+      count?'待办 '+count+' 项':'',pauseLabels[view.pauseReason]??view.pauseReason]:[];
+    const text=[message,...summary].filter(Boolean).join(' · ');
+    if (status.textContent!==text) status.textContent=text;
+  }
+  function deny() {
+    stopped=true;
+    DATA.runView=null;
+    renderRunActivity();
+    if (!artifactCenter.hidden) updateArtifactList();
+    showConnection('运行当前不可查看');
+  }
+  function schedule(delay) {
+    clearTimeout(timer);
+    if (!stopped) timer=setTimeout(poll,delay);
+  }
+  function caughtUp(view) {
+    return terminal.has(view.status) && (view.cursor===null || view.cursor>=view.revision);
+  }
+  async function poll() {
+    if (busy || stopped) return;
+    busy=true;
+    const previous=DATA.runView;
+    const cursor=previous.cursor??Math.max(-1,previous.revision-50);
+    progressUrl.searchParams.set('afterRevision',String(cursor));
+    let delay=1000;
+    try {
+      const response=await fetch(progressUrl,{cache:'no-store',signal:AbortSignal.timeout(8000)});
+      if ([400,401,403,404].includes(response.status)) return deny();
+      if (!response.ok) throw new Error('Unable to load progress');
+      const next=await response.json();
+      if (next.runId!==initial.runId || next.artifactHash!==initial.artifactHash ||
+          next.graphDigest!==initial.graphDigest || next.candidateHash!==initial.candidateHash ||
+          !Object.hasOwn(runLabels,next.status) || !Number.isSafeInteger(next.revision) || next.revision<previous.revision ||
+          !Array.isArray(next.pending) || (next.events!==null &&
+            (!Array.isArray(next.events) || !Number.isSafeInteger(next.cursor) || next.cursor<cursor || next.cursor>next.revision))) return deny();
+      const events=next.events===null ? null : [...(previous.events??[]),...next.events].slice(-250);
+      DATA.runView={...previous,...next,events};
+      renderRunActivity();
+      showConnection();
+      retry=1000;
+      stopped=caughtUp(DATA.runView);
+      if (Number.isSafeInteger(next.cursor) && next.cursor<next.revision) delay=100;
+    } catch {
+      showConnection('连接中断，正在重连');
+      delay=retry;
+      retry=Math.min(8000,retry*2);
+    } finally {
+      busy=false;
+      schedule(delay);
+    }
+  }
+  showConnection();
+  stopped=caughtUp(initial);
+  if (stopped) return;
+  window.addEventListener('online',()=>schedule(0));
+  window.addEventListener('offline',()=>{ if (!stopped) showConnection('连接中断，正在重连'); });
+  schedule(0);
+}
 })();
 </script>
 </body>
