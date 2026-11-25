@@ -26,7 +26,7 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
     canonicalizationVersion:'jcs-rfc8785-v1',bindingManifest:{}};
   const auth=createInteractiveHostContext({namespace,subjectId:'reviewer',authorize:()=>true,authorizeTask:()=>true,
     authorizeHuman:({bundle})=>({proofId:'approved-material',evidenceHash:bundle.bundleHash})});
-  let ref,latest;
+  let ref,first,latest;
   let initial=createSqliteInteractivePersistence(db,{namespace});
   try {
     let options={...initial,auth,policy,startKey:'artifact-probe',graphSnapshot};
@@ -36,7 +36,7 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
     for(const number of [1,2]) {
       const pending=frame.pending[0];
       const storageRef=path.join(dir,`evidence-v${number}.txt`);
-      await writeFile(storageRef,`Business evidence version ${number}\n`+'x'.repeat(1024*1024));
+      await writeFile(storageRef,`# Business evidence version ${number}\n\n- 固定版本\n`);
       const bytes=await readFile(storageRef);
       const contentHash=sha256Bytes(bytes);
       const op={runId:frame.runId,operationKey:pending.task.operationKey,inputHash:sha256Bytes(canonicalBytes(pending.task))};
@@ -46,7 +46,7 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
       frame=await complete({kind:'action',runId:frame.runId,requestId:pending.requestId,operationKey:op.operationKey,
         outcome:'succeeded',result},{},options);
       records.push({runId:frame.runId,requestId:pending.requestId,artifactId:'evidence',contentHash,
-        mimeType:'text/plain',sizeBytes:bytes.length,storageRef});
+        mimeType:'text/markdown',sizeBytes:bytes.length,storageRef,versionLabel:'v'+number});
     }
     const review=frame.pending[0];
     const request={runId:frame.runId,requestId:review.requestId,reviewDigest:review.task.reviewDigest};
@@ -55,7 +55,7 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
     const readOnly=createInteractiveHostContext({namespace,subjectId:'observer',authorizeTask:()=>true,
       authorize:({action})=>action==='viewer:artifacts'});
     await assert.rejects(initial.artifactController.registerVersion({...records[0],action:'viewer:artifacts'},readOnly),{code:'FK_I_HOST_DENIED'});
-    const first=await initial.artifactController.registerVersion(records[0],auth);
+    first=await initial.artifactController.registerVersion(records[0],auth);
     const expiresAt=Date.now()+120000;
     const previous=await initial.artifactController.freezeBundle({...request,versionIds:[first.versionId],expiresAt},auth);
     latest=await initial.artifactController.registerVersion(records[1],auth);
@@ -89,12 +89,24 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
     const index=await auth.readRunArtifacts({ref},options);
     assert.equal(index.items.length,2);
     assert.ok(index.items.every(v=>v.latestVersionId===latest.versionId&&v.effectiveVersionId===latest.versionId));
+    assert.deepEqual(index.items.map(v=>[v.versionLabel,v.confirmed??false]),[['v1',false],['v2',true]]);
     assert.equal(JSON.stringify(index).includes('storageRef'),false);
+    let allowBody=true,tamper=false,contentReads=0;
     const browserHost=createInteractiveHostContext({namespace,subjectId:'observer',authorizeTask:()=>true,
-      authorize:({action})=>['viewer:read','viewer:artifacts','viewer:events'].includes(action)});
+      authorize:({action,artifactId,versionId})=>action==='viewer:artifact-content'
+        ?allowBody&&artifactId==='evidence'&&[first.versionId,latest.versionId].includes(versionId)
+        :['viewer:read','viewer:artifacts','viewer:events'].includes(action)});
     const service=await startLocalMcp({listen:{port:0},dataDir:path.join(dir,'mcp'),exportDir:path.join(dir,'exports')},{
       credential:'isolated-viewer-test-credential',
       resolveRunViewer:({runId})=>runId===ref.runId?{auth:browserHost,ref,options}:null,
+      async readArtifactContent({storageRef,artifactId,runId}) {
+        assert.equal(artifactId,'evidence');
+        assert.equal(runId,ref.runId);
+        contentReads++;
+        const bytes=await readFile(storageRef);
+        if(tamper)bytes[0]=0x21;
+        return bytes;
+      },
     });
     try {
       const root=new URL(service.url).origin;
@@ -114,6 +126,25 @@ terminal('done',{name:'Done',status:'succeeded'}),terminal('blocked',{name:'Bloc
       assert.ok(data.runView.events.some(event=>Number.isSafeInteger(event.activation)&&Number.isSafeInteger(event.attempt)));
       assert.deepEqual(data.runView.artifacts.map(item=>item.effectiveVersionId),[latest.versionId,latest.versionId]);
       assert.doesNotMatch(html,/storageRef|Business evidence version/);
+      const contentUrl=version=>runUrl+'/artifact-content?artifactId=evidence&versionId='+encodeURIComponent(version);
+      assert.equal((await fetch(contentUrl(first.versionId))).status,403);
+      const page=await (await fetch(runUrl+'/artifacts?after=0',{headers})).json();
+      assert.deepEqual(page.items.map(version=>version.versionId),[first.versionId,latest.versionId]);
+      assert.doesNotMatch(JSON.stringify(page),/storageRef|Business evidence version/);
+      for(const [version,number] of [[first,1],[latest,2]]) {
+        const result=await fetch(contentUrl(version.versionId),{headers});
+        assert.equal(result.status,200);
+        const body=await result.json();
+        assert.match(body.text,new RegExp('version '+number));
+        assert.equal(body.versionLabel,'v'+number);
+        assert.equal(Object.hasOwn(body,'storageRef'),false);
+      }
+      allowBody=false;
+      assert.equal((await fetch(contentUrl(first.versionId),{headers})).status,404);
+      assert.equal(contentReads,2);
+      allowBody=true;
+      tamper=true;
+      assert.equal((await fetch(contentUrl(latest.versionId),{headers})).status,409);
       const refresh=readWorkflowPageData(await (await fetch(runUrl+'?afterRevision=0',{headers})).text());
       assert.equal(refresh.runView.revision,data.runView.revision);
       assert.ok(refresh.runView.events.every(event=>event.revision>0));

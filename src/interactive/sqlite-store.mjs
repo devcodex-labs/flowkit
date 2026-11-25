@@ -218,8 +218,22 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const forkPoint = db.prepare('SELECT revision,node_id FROM fk_i_fork_points WHERE namespace=? AND run_id=? AND revision=?');
   const earlierForkPoint = db.prepare('SELECT revision,node_id FROM fk_i_fork_points WHERE namespace=? AND run_id=? AND node_id=? AND revision<? ORDER BY revision DESC LIMIT 1');
   const forkPointBody = db.prepare('SELECT checkpoint_json FROM fk_i_fork_points WHERE namespace=? AND run_id=? AND revision=?');
+  // Mirror describeForkPoint's latest preceding entry for unscoped receipts.
+  // The representative must be chosen before applying the page cursor.
   const forkSelections = db.prepare(`
-    SELECT revision FROM fk_i_fork_points WHERE namespace=:ns AND run_id=:id AND node_id=:node AND revision<:before
+    SELECT point.revision FROM fk_i_fork_points AS point
+    WHERE point.namespace=:ns AND point.run_id=:id AND point.node_id=:node AND point.revision<:before
+      AND NOT EXISTS (
+        SELECT 1 FROM fk_i_journal AS receipt
+        WHERE receipt.namespace=:ns AND receipt.run_id=:id AND receipt.revision>point.revision
+          AND json_extract(receipt.entry_json,'$.kind')='receipt-accepted'
+          AND json_extract(receipt.entry_json,'$.nodeId')=:node
+          AND coalesce(json_array_length(receipt.entry_json,'$.scope'),0)=0
+          AND receipt.revision<coalesce((
+            SELECT min(next.revision) FROM fk_i_fork_points AS next
+            WHERE next.namespace=:ns AND next.run_id=:id AND next.node_id=:node AND next.revision>point.revision
+          ),9223372036854775807)
+      )
     UNION
     SELECT revision FROM fk_i_journal WHERE namespace=:ns AND run_id=:id AND revision<:before
       AND json_extract(entry_json,'$.kind')='receipt-accepted' AND json_extract(entry_json,'$.nodeId')=:node

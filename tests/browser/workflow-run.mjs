@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -74,7 +74,7 @@ test('browser shows an authorized Standard trace and a different persisted Inter
   const worker=createInteractiveHostContext({namespace,subjectId:'worker',authorize:()=>true,authorizeTask:()=>true,
     authorizeHuman:({reviewDigest})=>({proofId:'browser-review',evidenceHash:reviewDigest})});
   const viewer=createInteractiveHostContext({namespace,subjectId:'viewer',authorizeTask:()=>true,
-    authorize:({action,...target})=>['viewer:read','viewer:events','viewer:artifacts'].includes(action)&&
+    authorize:({action,...target})=>['viewer:read','viewer:events','viewer:artifacts','viewer:artifact-content'].includes(action)&&
       Object.entries(approval).every(([key,value])=>target[key]===value)});
   const open=()=>createSqliteInteractivePersistence(path.join(dir,'run.sqlite'),{namespace});
   let persistence=open(), frame, service, browser;
@@ -86,13 +86,15 @@ test('browser shows an authorized Standard trace and a different persisted Inter
       {...interactiveProgram.identity,artifactHash:interactive.graph.artifactHash});
     frame=await start(programRef,{},{privateInput:'private-run-state'},options);
     const [{requestId}]=frame.pending;
-    const body='Actual browser review material';
+    const body='## Actual browser review material\n\n- **Original version**';
     const storageRef=path.join(dir,'material.txt');
     await writeFile(storageRef,body);
     const contentHash=artifactDigest(body);
     frame=await settleRead(frame,options,worker,contentHash);
     await persistence.artifactController.registerVersion({runId:frame.runId,requestId,
-      artifactId:'review-material',contentHash,mimeType:'text/plain',sizeBytes:Buffer.byteLength(body),storageRef},worker);
+      artifactId:'review-material',contentHash,mimeType:'text/markdown',sizeBytes:Buffer.byteLength(body),storageRef,versionLabel:'v1'},worker);
+    for(let i=1;i<=100;i++)await persistence.artifactController.registerVersion({runId:frame.runId,requestId,
+      artifactId:'page-material-'+i,contentHash,mimeType:'text/markdown',sizeBytes:Buffer.byteLength(body),storageRef},worker);
     persistence.close();
     persistence=open();
     const ref={namespace,runId:frame.runId,artifactHash:interactive.graph.artifactHash,graphDigest:interactive.graph.graphDigest,
@@ -104,7 +106,8 @@ test('browser shows an authorized Standard trace and a different persisted Inter
     let viewManifest={schemaVersion:1,graphDigest:ref.graphDigest,
       nodeDescriptions:[{nodeId:'review',text:'Approved note <em>as text</em>'}]};
     service=await startLocalMcp({listen:{port:0},dataDir:path.join(dir,'mcp'),exportDir:path.join(dir,'exports')},{
-      credential:'isolated-browser-run-test',resolveRunViewer:({runId})=>runId===standardRef.runId?
+      credential:'isolated-browser-run-test',readArtifactContent:({storageRef})=>readFile(storageRef),
+      resolveRunViewer:({runId})=>runId===standardRef.runId?
         {ref:standardRef,candidate:standard.candidate,standardTrace:{status:completed.status,events},
           authorizeTrace:({ref:requested,requestContext})=>allowStandard&&requested.runId===standardRef.runId&&!!requestContext.principalId}:
         runId===ref.runId?{ref,candidate:viewerCandidate,auth:viewer,options:viewOptions,viewManifest,
@@ -155,7 +158,19 @@ test('browser shows an authorized Standard trace and a different persisted Inter
     assert.match(journalPanel,/Interactive 持久日志[\s\S]*待处理/);
     await page.locator('#artifactCenterBtn').click();
     assert.match(await page.locator('#acList').innerText(),/review-material/);
-    assert.match(await page.locator('#acList').innerText(),new RegExp(contentHash));
+    const artifact=page.locator('.ac-item').filter({has:page.getByText('review-material',{exact:true})});
+    assert.match(await artifact.innerText(),/版本 v1/);
+    await artifact.getByText('版本与内容摘要').click();
+    assert.match(await artifact.innerText(),new RegExp(contentHash));
+    await artifact.getByRole('button',{name:'查看正文'}).click();
+    assert.equal(await page.locator('#readerContent h2').textContent(),'Actual browser review material');
+    assert.equal(await page.locator('#readerContent strong').textContent(),'Original version');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:'下一页'}).click();
+    await page.getByText('page-material-100',{exact:true}).waitFor();
+    assert.equal(await page.getByText('review-material',{exact:true}).count(),0);
+    await page.getByRole('button',{name:'上一页'}).click();
+    await page.getByText('review-material',{exact:true}).waitFor();
     assert.equal((await viewer.readRunView(ref,viewOptions)).revision,frame.revision);
     const [prior]=frame.pending;
     const runOptions={...viewOptions,auth:worker};

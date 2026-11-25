@@ -14,7 +14,7 @@ interface Candidate {
 }
 export interface FlowkitAuthoringMaterial { id: string; title: string; content: string }
 export type FlowkitMaterialSource = (FlowkitAuthoringMaterial & { kind: 'text' }) |
-  { kind: 'material'; id: string; sha256: string } | { kind: 'design'; ref: string; sha256: string };
+  { kind: 'material'; id: string; sha256: string } | { kind: 'design'; ref: string; sha256: string; groupId?: string };
 /** Per-connection Host bindings. Runtime values remain owned by the Host. */
 export interface FlowkitMcpOptions {
   namespace: string;
@@ -28,6 +28,7 @@ export interface FlowkitMcpOptions {
     Promise<{ destination: { id: string } }>;
   applyCollectionPlan?(plan: { destination: { id: string } }, approvalRef: string, context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
   runWorkflow?(scope: { namespace: string; collectionId: string; skillId: string; candidateHash: string; executionRef: string; requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<unknown>;
+  queueAuthoringTurn?(input: AuthorTurnInput, context: AuthorRequestContext): Promise<AuthorDraftView>;
   workflowUi?: {
     defaultCollectionId: string;
     present(draft: AuthorDraftView, context?: AuthorRequestContext): unknown;
@@ -36,7 +37,8 @@ export interface FlowkitMcpOptions {
     authoringMaterials?(scope: { input: AuthorTurnInput; sources?: FlowkitMaterialSource[]; draft: AuthorDraftView },
       context: AuthorRequestContext, signal: AbortSignal): Promise<AuthorTurnInput>;
     design?(input: { collectionId: string; requestId: string; title: string } &
-      ({ materials: FlowkitAuthoringMaterial[]; sources?: never } | { sources: FlowkitMaterialSource[]; materials?: never }),
+      ({ materials: FlowkitAuthoringMaterial[]; sources?: never } |
+        { sources: Exclude<FlowkitMaterialSource, { kind: 'design' }>[]; materials?: never }),
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
     relayout?(input: { collectionId: string; draftId: string; candidateHash: string; expectedLayoutRevision: string; requestId: string },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;

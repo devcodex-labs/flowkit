@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { during } from '../runtime/tasks.mjs';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 
@@ -37,6 +38,7 @@ export function newTurnBudget(policy) {
 
 /** Reserve before actual dispatch, not around a black-box completed turn. Unknown usage stays charged. */
 export function createTurnPorts({ changeTurn, signal, requestContext, execution, track, beforeDispatch }) {
+  const modelObservation = new AsyncLocalStorage();
   let dispatchFailure;
   const guarded = (promise, kind) => promise.catch(error => { dispatchFailure ??= { error, kind }; throw error; });
   function check(turn) {
@@ -45,6 +47,9 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
     if (turn.executionToken === null || turn.status !== 'running') throw authorError('author-fenced', 'Turn execution was fenced');
   }
   async function call(kind, input, operation, supplied = {}) {
+    const operationSignal = supplied.signal && supplied.signal !== signal
+      ? AbortSignal.any([signal, supplied.signal]) : signal;
+    operationSignal.throwIfAborted();
     await beforeDispatch(kind, input, supplied);
     const id = randomUUID(), inputBytes = jsonBytes(input);
     const field = { request: 'requests', tool: 'toolCalls', io: 'ioCalls' }[kind];
@@ -82,11 +87,11 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
     let dispatched = false;
     // Track the real operation promise, even if the caller stops awaiting after logical cancellation.
     const pending = Promise.resolve().then(async () => {
-      signal.throwIfAborted();
+      operationSignal.throwIfAborted();
       await beforeDispatch(kind, input, supplied);
-      signal.throwIfAborted(); changeTurn(check, { read: true });
+      operationSignal.throwIfAborted(); changeTurn(check, { read: true });
       dispatched = true;
-      return operation(input, { ...supplied, signal, requestContext });
+      return operation(input, { ...supplied, signal: operationSignal, requestContext });
     }).then(async value => {
       if (kind === 'tool' && (value instanceof Response || JSON.stringify(value) === undefined)) throw authorError('author-executor', 'Tool result must be JSON data');
       if (value instanceof Response) {
@@ -147,8 +152,8 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
     });
     track(settled);
     try {
-      const result = await during(signal, () => settled);
-      signal.throwIfAborted();
+      const result = await during(operationSignal, () => settled);
+      operationSignal.throwIfAborted();
       return result.value;
     } catch (error) {
       changeTurn(turn => {
@@ -158,9 +163,18 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       throw error;
     }
   }
-  const port = kind => (input, context) => {
+  const port = kind => async (input, context) => {
     if (typeof execution[kind] !== 'function') throw authorError('author-executor', `Host ${kind} port is unavailable`);
-    return guarded(call(kind, input, execution[kind], context), kind);
+    const observation = kind === 'request' && modelObservation.getStore();
+    if (observation) observation.started = true;
+    try {
+      const value = await guarded(call(kind, input, execution[kind], context), kind);
+      if (observation) observation.completed = true;
+      return value;
+    } catch (error) {
+      if (observation) observation.failure = error;
+      throw error;
+    }
   };
   return Object.freeze({ request: port('request'), tool: port('tool'), io: port('io'),
     read: (input, operation) => guarded(call('io', input, operation), 'io'),
@@ -183,7 +197,21 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
         turn.budget.repairs.push(repairId);
       });
     },
-    observed() { let count; changeTurn(turn => { count = turn.budget.used.requests; }, { read: true }); return count; },
+    async observeModel(operation, stage = 'model') {
+      const observation = { started: false, completed: false };
+      const value = await modelObservation.run(observation, operation);
+      if (observation.completed) return value;
+      const failed = value?.status === 'failed' || value?.status === 'cancelled';
+      const aborted = ['AbortError', 'TimeoutError'].includes(observation.failure?.name);
+      if (Object.hasOwn(observation, 'failure') && !(failed && aborted)) throw observation.failure;
+      if (failed) {
+        const reported = value.status === 'cancelled' ? 'cancelled' : value.failure?.code;
+        const reason = typeof reported === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(reported) ? reported : 'unavailable';
+        const phase = observation.started ? 'request not completed' : 'before guarded request';
+        throw authorError('FKA_MODEL_REQUEST_NOT_COMPLETED', `Model stage ${stage}: ${phase} (adapter: ${reason}).`);
+      }
+      throw authorError('author-unobserved', 'Execution bypassed the guarded model request port');
+    },
     check() { if (dispatchFailure) throw dispatchFailure.error; changeTurn(check, { read: true }); }
   });
 }

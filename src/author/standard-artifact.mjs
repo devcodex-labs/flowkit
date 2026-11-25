@@ -3,7 +3,8 @@ import { definitionDigest, graphContentHash, verifyGraphSnapshot } from '../comp
 import { STANDARD_ARTIFACT_HEADER, artifactDigest, standardIdentity } from '../shared/artifact-identity.mjs';
 import { isSemVer } from '../shared/task-spec.mjs';
 import { skillDocument, validateSkillName,workflowReference } from './skill-document.mjs';
-import { assertReadyStandardPlan, missingRootOutputSources, roleBearingKinds, validWorkflowRole } from './workflow-plan.mjs';
+import { assertReadyStandardPlan, missingRootOutputSources, roleBearingKinds, validNodeDescription, validWorkflowRole } from './workflow-plan.mjs';
+import { executionContracts, pinExecutionContracts, validateExecutionPins } from './execution-contracts.mjs';
 import { compileInteractiveDraft } from '../interactive/compile.mjs';
 import { interactiveStageForMode,workflowExecutionModes } from '../interactive/protocol.mjs';
 
@@ -51,7 +52,7 @@ function resolveSkillPins(definition, pins) {
 export async function prepareStandardSkill({ file, collectionId, skillId, name, description, version,
   hostProfile, buildId, includeSource = false, professionalSkills = [], compilerOptions, plan: suppliedPlan,
   executionMode = suppliedPlan?.target.executionMode ?? 'standard',references={},documents=[],
-  safetyPolicies=[],verifySafetyPolicy }) {
+  safetyPolicies=[],verifySafetyPolicy, hostExecutionContracts }) {
   references=structuredClone(references);professionalSkills=structuredClone(professionalSkills);
   safetyPolicies=structuredClone(safetyPolicies);
   if (!workflowExecutionModes.includes(executionMode)) throw new TypeError('Unsupported Workflow Skill mode');
@@ -168,6 +169,8 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   const files = Object.freeze({ 'SKILL.md': entry, 'workflow.js': artifact.code, 'workflow.mmd': artifact.mermaid,
     ...(includeSource ? { [SOURCE_PATH]: snapshot.sourceText } : {}),...references });
   const nodeRoles = plan?.nodes.filter(node => node.requiredRole).map(({ id: nodeId, requiredRole }) => ({ nodeId, ...requiredRole }));
+  const nodeDescriptions = plan?.nodes.filter(node => node.description).map(({ id: nodeId, description: text }) => ({ nodeId, text }));
+  const nodeExecutionContracts = pinExecutionContracts(definition, executionContracts(hostExecutionContracts), nodeRoles, executionMode);
   const manifest = Object.freeze({ mode: executionMode, collectionId, skillId, name, version,
     workflowDefinition:structuredClone(definition),
     workflowId: definition.id, workflowVersion: definition.version,
@@ -175,6 +178,8 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     graphSnapshotJson: JSON.stringify(artifact.graphSnapshot),
     professionalSkills: resolveSkillPins(definition, professionalSkills), buildId, builtAt: new Date().toISOString(),
     ...(nodeRoles?.length ? { nodeRoles } : {}),
+    ...(nodeDescriptions?.length ? { nodeDescriptions } : {}),
+    ...(nodeExecutionContracts.length ? { nodeExecutionContracts } : {}),
     ...(documentEvidence.length?{documents:documentEvidence}:{}),
     ...(approvedSafety.length?{safetyPolicies:approvedSafety}:{}),
     ...(plan ? { planRef: Object.freeze({ planId: plan.planId, revision: plan.revision, planHash: plan.planHash,
@@ -209,6 +214,14 @@ export function checkCandidate({ files, manifest, hash }) {
     throw new TypeError('Workflow Skill candidate bytes or manifest differ');
   }
   const { graphSnapshotJson, workflowDefinition } = manifest;
+  if (manifest.nodeDescriptions !== undefined) {
+    const nodeIds = new Set(workflowDefinition.nodes.map(node => node.id));
+    const notes = manifest.nodeDescriptions;
+    if (!Array.isArray(notes) || notes.length === 0 || notes.some(item =>
+      !item || Object.keys(item).length !== 2 || !nodeIds.has(item.nodeId) || !validNodeDescription(item.text)) ||
+      new Set(notes.map(item => item.nodeId)).size !== notes.length) throw new TypeError('Workflow Skill has invalid node descriptions');
+  }
+  if (manifest.nodeExecutionContracts !== undefined) validateExecutionPins(workflowDefinition, manifest.nodeExecutionContracts);
   if (JSON.stringify(resolveSkillPins(workflowDefinition, manifest.professionalSkills)) !== JSON.stringify(manifest.professionalSkills)) {
     throw new TypeError('Workflow Skill manifest does not match the compiled Professional Skill requirements');
   }

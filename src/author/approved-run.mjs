@@ -10,9 +10,10 @@ import { checkCandidate } from './standard-artifact.mjs';
 import { interactiveStageForMode } from '../interactive/protocol.mjs';
 import { restrictInteractiveHostContext, start as startInteractive } from '../interactive/versioned.mjs';
 import { resolveTrustedProfessionalPin } from './professional-skills.mjs';
+import { executionContracts, pinExecutionContracts } from './execution-contracts.mjs';
 
 async function approvedWorkflow(store, { collectionId, skillId, candidateHash, skillDirectory, executionRef },
-  { hostProfile, authorizeExecution, resolveRunProfessionalSkill }) {
+  { hostProfile, authorizeExecution, resolveRunProfessionalSkill, hostExecutionContracts }) {
   if (typeof executionRef !== 'string' || !executionRef.trim() || typeof authorizeExecution !== 'function') {
     throw new Error('Host execution authorization is required');
   }
@@ -23,6 +24,10 @@ async function approvedWorkflow(store, { collectionId, skillId, candidateHash, s
   const manifest = candidate.manifest;
   if (!hostProfile || hostProfile.id !== manifest.hostProfile.id || hostProfile.digest !== manifest.hostProfile.digest) {
     throw new Error('Current Host profile differs from the approved Workflow Skill');
+  }
+  if (manifest.nodeExecutionContracts && JSON.stringify(manifest.nodeExecutionContracts) !== JSON.stringify(
+    pinExecutionContracts(manifest.workflowDefinition, executionContracts(hostExecutionContracts), manifest.nodeRoles, manifest.mode))) {
+    throw new Error('Current Host execution contracts differ from the approved Workflow Skill');
   }
   const workflowFile = path.join(path.resolve(skillDirectory), 'workflow.js');
   const authorization = Object.freeze({ collectionId, skillId, candidateHash, executionRef, workflowFile, artifactHash: manifest.artifactHash });

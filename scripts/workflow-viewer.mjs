@@ -100,7 +100,7 @@ function scriptData(value) {
     '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
 }
 
-function annotatedLayout(graph,manifest,definition,viewLayout) {
+function annotatedLayout(graph,manifest,definition,viewLayout,descriptionSource='host') {
   const layout=viewLayout??layoutFor(graph,definition);
   if(manifest?.schemaVersion!==1||manifest.graphDigest!==graph.graphDigest||
       !Array.isArray(manifest.nodeDescriptions)||manifest.nodeDescriptions.length>graph.nodes.length)return layout;
@@ -112,7 +112,7 @@ function annotatedLayout(graph,manifest,definition,viewLayout) {
     descriptions.set(item.nodeId,item.text);
   }
   return {...layout,nodes:layout.nodes.map(node=>descriptions.has(node.nodeId)
-    ?{...node,description:descriptions.get(node.nodeId),descriptionSource:'host'}:node)};
+    ?{...node,description:descriptions.get(node.nodeId),descriptionSource}:node)};
 }
 
 async function authorizedManifest({viewManifest,authorizeViewManifest,requestContext,ref}) {
@@ -128,21 +128,30 @@ export function readWorkflowPageData(html) {
 }
 
 /** Assemble the confirmed offline viewer. The caller owns the same-origin confirmation form. */
-export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout, executionManifest, pendingSkillDigests, design }) {
+export function workflowPage({ graph, candidateHash, mermaid, definition, controls = '', runView, viewManifest, viewLayout, executionManifest, pendingSkillDigests, design, project }) {
   if (!graph?.nodes?.length || typeof graph.graphDigest !== 'string') throw new TypeError('Missing compiled workflow graph');
   const executionBindings = new Map();
   for (const { nodeId, id, label } of executionManifest?.nodeRoles ?? []) executionBindings.set(nodeId, { nodeId, role: { id, label }, skills: [] });
+  for (const { nodeId, id, version, digest } of executionManifest?.nodeExecutionContracts ?? []) {
+    const binding = executionBindings.get(nodeId) ?? { nodeId, skills: [] };
+    binding.contract = { id, version, digest };
+    executionBindings.set(nodeId, binding);
+  }
   for (const { nodeId, id, version, digest, source } of executionManifest?.professionalSkills ?? []) {
     const binding = executionBindings.get(nodeId) ?? { nodeId, skills: [] };
     binding.skills.push({ id, version, digest, ...(source ? { source } : {}),
       ...(pendingSkillDigests?.has(digest) ? { pendingApproval: true } : {}) });
     executionBindings.set(nodeId, binding);
   }
-  const data = scriptData({ schemaVersion: 1, graph, layout: annotatedLayout(graph,viewManifest,definition,viewLayout),
+  const compiledNotes = executionManifest?.nodeDescriptions && { schemaVersion: 1, graphDigest: graph.graphDigest,
+    nodeDescriptions: executionManifest.nodeDescriptions };
+  const data = scriptData({ schemaVersion: 1, graph, ...(project ? {} : {
+    layout: annotatedLayout(graph,viewManifest ?? compiledNotes,definition,viewLayout,viewManifest ? 'host' : 'author') }),
     ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}),
-    ...(design ? { design } : {}),
+    ...(design ? { design } : {}), ...(project ? { project } : {}),
     ...(executionBindings.size ? { executionBindings: [...executionBindings.values()] } : {}) });
-  const pageShell = runView?.progressUrl || runView?.forkUrl ? shell.replace("connect-src 'none'", "connect-src 'self'") : shell;
+  const pageShell = runView?.progressUrl || runView?.forkUrl || runView?.artifactsUrl || design
+    ? shell.replace("connect-src 'none'", "connect-src 'self'") : shell;
   const html = controls ? pageShell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : pageShell.replace(controlsSlot, '');
   return html.replace(embeddedData, () => data);
@@ -208,9 +217,16 @@ export async function workflowRunProgress({auth,ref,options,candidate,afterRevis
   return projectRunProgress(auth,ref,options,snapshot,afterRevision);
 }
 
+export async function workflowRunArtifacts({ auth, ref, options, after = 0 }) {
+  const { items, next } = await auth.readRunArtifacts({ ref, after }, options);
+  return { next, items: items.map(({ artifactId, versionId, nodeId, contentHash, mimeType, sizeBytes,
+    latestVersionId, effectiveVersionId, confirmed, versionLabel }) =>
+    ({ artifactId, versionId, nodeId, contentHash, mimeType, sizeBytes, latestVersionId, effectiveVersionId, confirmed, versionLabel })) };
+}
+
 /** The integrating Host supplies a request-scoped authority. Queries never advance the Run. */
 export async function workflowRunPage({ auth, ref, options, candidate, afterRevision, artifactAfter = 0,
-  viewManifest, authorizeViewManifest, requestContext, forkEnabled }) {
+  viewManifest, authorizeViewManifest, requestContext, forkEnabled, artifactContentEnabled }) {
   options = { ...options, graphSnapshot: structuredClone(options.graphSnapshot) };
   const graph=options.graphSnapshot;
   const snapshot=await auth.readRunView(ref,options);
@@ -220,7 +236,7 @@ export async function workflowRunPage({ auth, ref, options, candidate, afterRevi
   const [manifest, progress, artifacts]=await Promise.all([
     authorizedManifest({requestContext,ref,viewManifest,authorizeViewManifest}),
     projectRunProgress(auth,ref,options,snapshot,firstRevision),
-    viewSection(() => auth.readRunArtifacts({ref,after:artifactAfter},options)),
+    viewSection(() => workflowRunArtifacts({auth,ref,options,after:artifactAfter})),
   ]);
   const runPath = '/runs/' + encodeURIComponent(ref.runId);
   const links = live ? ['<p id="liveRunStatus" role="status"></p>',
@@ -237,8 +253,8 @@ export async function workflowRunPage({ auth, ref, options, candidate, afterRevi
     definition:candidate?.manifest.workflowDefinition,executionManifest:candidate?.manifest,
     controls:links.join(' '),viewManifest:manifest,runView:{
     ...progress,...(live?{progressUrl:runPath+'/progress'}:{}),...(forkEnabled?{forkUrl:runPath+'/fork'}:{}),
-    artifacts: artifacts?.items.map(({ artifactId, versionId, nodeId, contentHash, mimeType,
-      sizeBytes, latestVersionId, effectiveVersionId }) =>
-      ({ artifactId, versionId, nodeId, contentHash, mimeType, sizeBytes, latestVersionId, effectiveVersionId })) ?? null,
+    artifacts:artifacts?.items??null, artifactNext:artifacts?.next??null, artifactAfter,
+    ...(artifacts?{artifactsUrl:runPath+'/artifacts'}:{}),
+    ...(artifacts&&artifactContentEnabled?{artifactContentUrl:runPath+'/artifact-content'}:{}),
   } });
 }

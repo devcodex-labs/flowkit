@@ -2,7 +2,7 @@
 
 **v1.0.0 · Node.js >=22.13.0 · 专有授权 · 私有 GitHub Packages**
 
-FlowKit 将任务意图转成可视、可审、可执行的工作流，由授权宿主按图推进、保存状态并交付结果。可以从自然语言、现有流程、项目材料或 Skill 开始。编译器静态检查工作流结构。项目或功能梳理可以先交付带材料依据的 HTML 与 Mermaid 设计图。
+FlowKit 将任务意图转成可视、可审、可执行的工作流，由授权宿主按图推进、保存状态并交付结果。可以从自然语言、现有流程、项目材料或 Skill 开始。编译器静态检查工作流结构。项目或功能梳理可以先交付一份带材料依据的离线 HTML 设计图。
 
 [公开文档](https://devcodex-labs.github.io/flowkit/) · [工作流示例](https://devcodex-labs.github.io/flowkit/examples/index.html) · [内部示例源码](https://github.com/devcodex-labs/flowkit/tree/main/examples)
 

@@ -1,16 +1,20 @@
 import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { createWorkflowAuthor } from './author.mjs';
 import { checkPlanCapabilities } from './draft.mjs';
 import { reviewStandardCandidate } from './standard-artifact.mjs';
-import { materializePlan } from './workflow-plan.mjs';
+import { materializePlan, roleBearingKinds, validWorkflowRole } from './workflow-plan.mjs';
+import { executionContracts, pinExecutionContracts } from './execution-contracts.mjs';
 import { bindProfessionalNeeds } from './workflow-professional-bindings.mjs';
 import { runArtifact } from '../runtime/run.mjs';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { authorError, isIntentModelOutputError } from './host-budget.mjs';
 import { authorIdentity } from './host-target.mjs';
 import { evalWhen } from '../when/evaluate.mjs';
+import { createBudget, prepareTaskV2 } from '../runtime/tasks.mjs';
+import { authorDocumentWork } from './document-work.mjs';
 
 function clarificationQuestions(draft, intent, continuation, answered) {
   const questions = draft.questions.filter(({ id }) =>
@@ -75,12 +79,12 @@ function isReviewFinding(item) {
     (item.nodeIds === undefined || Array.isArray(item.nodeIds) && item.nodeIds.every(id => typeof id === 'string')));
 }
 
-export function rejectedReview(candidate, findings = []) {
+export function rejectedReview(candidate, findings = [], limit = 8) {
   const candidateHash = candidate.hash;
   const declaredIds = new Set(candidate.manifest.workflowDefinition?.nodes.map(node => node.id));
   return {
     candidateHash,
-    findings: findings.slice(0, 8).map(item => {
+    findings: findings.slice(0, limit).map(item => {
       const { message, nodeIds = [], rule } = typeof item === 'string' ? { message: item } : item;
       const linkedNodes = [...new Set(nodeIds.filter(id => declaredIds.has(id)))].slice(0, 8);
       return { message: message.trim().slice(0, 800), nodeIds: linkedNodes, ...(rule?.trim() ? { rule: rule.trim().slice(0, 360) } : {}) };
@@ -93,7 +97,7 @@ export function rejectedReview(candidate, findings = []) {
 }
 
 /** Real domain operations for the compiled fixed core. Semantic failures never enter syntax repair. */
-export async function executeAuthorCore({ draft, turn, options, ports, signal, requestContext, observeReview, track }) {
+export async function executeAuthorCore({ draft, turn, options, ports, signal, requestContext, observeReview, track, documentSteps }) {
   const execution = options.execution;
   if (typeof execution?.createSession !== 'function') throw authorError('author-executor', 'An independently responsive Host execution session is required');
   const session = await execution.createSession(Object.freeze({ request: ports.request, tool: ports.tool, io: ports.io }),
@@ -116,6 +120,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     readDocumentUrl: options.readDocumentUrl && (url => ports.read({ url }, () => options.readDocumentUrl(url, { requestContext, signal }))) });
   const workspace = await mkdtemp(path.join(options.workRoot, '.flowkit-author-'));
   let reviewObservation;
+  let documentWork, documentSummary, documentReview, documentFailure, documentRequest, documentTarget;
+  const trustedContracts = executionContracts(options.hostExecutionContracts);
   const state = { reviewOnly: turn.kind === 'review-only' };
   const skillDrafts = new Map();
   function setReviewCandidate(state, candidate, previous) {
@@ -127,6 +133,16 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     diff.compilerEvidence.actionRoutes = JSON.parse(graphSnapshotJson).executionEdges
       .filter(({ role }) => role === 'action-failure' || role === 'action-error')
       .map(({ from, to, role }) => ({ from, to, role }));
+    diff.compilerEvidence.nodeDescriptions = candidate.manifest.nodeDescriptions ?? [];
+    if (candidate.manifest.nodeExecutionContracts) {
+      const pins = pinExecutionContracts(workflowDefinition, trustedContracts, candidate.manifest.nodeRoles, mode);
+      if (authorIdentity(pins) !== authorIdentity(candidate.manifest.nodeExecutionContracts)) {
+        throw authorError('FKA_EXECUTION_CONTRACT', 'The candidate is bound to a different Host execution contract');
+      }
+      const digests = new Set(pins.map(pin => pin.digest));
+      diff.compilerEvidence.hostExecutionContracts = { pins, contracts: trustedContracts.filter(contract => digests.has(contract.digest)) };
+    }
+    documentTarget = { candidate, compilerEvidence: diff.compilerEvidence };
     state.reviewTarget = { hash: candidate.hash, mode, artifactHash, contract: workflowDefinition?.contract ?? null };
   }
   function authoringManifest({ graphSnapshotJson: _graph, ...manifest }) {
@@ -138,19 +154,66 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
   const clarify = (message, questions) => Object.assign(authorError('author-resource', message), { outcome: 'needs-clarification', questions });
-  const observed = async operation => {
-    const before = ports.observed();
+  const observed = (operation, stage) => ports.observeModel(() => {
     const pending = Promise.resolve().then(operation);
     track(pending);
-    const value = await pending;
-    if (ports.observed() === before) throw authorError('author-unobserved', 'Execution bypassed the guarded model request port');
-    return value;
-  };
+    return pending;
+  }, stage);
+  function documents(context, request) {
+    const budget = createBudget({ deadlineMs: turn.budget.deadlineMs, maxTaskBytes: 192000,
+      maxDispatches: turn.budget.limits.maxRequests, hostProfile: options.hostProfile }, signal);
+    const work = authorDocumentWork({ context, request, ...documentSteps,
+      async runModel(kind, description, input) {
+        const requestId = randomUUID();
+        const task = { protocolVersion: 2, workflow: { id: 'flowkit-author-core', artifactHash: options.coreIdentity.artifactHash },
+          run: { runId: turn.attemptId }, node: { id: 'document-' + kind, name: 'Author document ' + kind },
+          task: { description }, input, missing: [], outputSchema: { type: 'object' },
+          execution: { requestId, activationId: requestId, attempt: 1, reasons: [], deadlineMs: turn.budget.deadlineMs } };
+        const taskContext = { signal, budget, hostProfile: options.hostProfile, deadlineMs: turn.budget.deadlineMs, descriptionResources: [] };
+        budget.dispatch();
+        const prepared = await prepareTaskV2(task, session.runtime, taskContext, taskContext);
+        const response = await observed(() => session.runtime.runAgentTask(prepared, taskContext), 'document-' + kind);
+        if (response?.status !== 'succeeded') throw authorError(response?.failure?.code ?? 'FKA_DOCUMENT_MODEL',
+          `Document ${kind} failed: ${response?.failure?.message ?? 'the Host did not return a model result'}`);
+        return { value: response.result, execution: { requestId, usage: response.usage ?? null } };
+      } });
+    return work;
+  }
+  async function prepareDocuments(context, instruction) {
+    try {
+      documentRequest = { goal: draft.goal, instruction, choices: draft.choices };
+      documentWork = documents(context, documentRequest);
+      const frozenSource = draft.documentWork?.manifest.sourceIdentity;
+      if (frozenSource && documentWork?.manifest.sourceIdentity !== frozenSource) {
+        throw authorError('FKA_MATERIAL_CHANGED', 'Continue with the exact authorized document version or start a new draft');
+      }
+      if (documentWork) {
+        documentSteps.open(documentWork.manifest);
+        documentSummary = await documentWork.prepare();
+      }
+    } catch (error) {
+      documentFailure = Object.assign(error, { outcome: 'needs-revision' });
+      throw error;
+    }
+    return documentSummary ?? context;
+  }
   const actions = {
     async loadReview(ctx) {
       if (!draft.candidate) throw authorError('author-review', 'No committed candidate exists for review-only');
       if (draft.candidate.manifest.hostProfile.digest !== options.hostProfile.digest) throw clarify('Host profile changed; rebuild before review', [question('host-profile', 'Review target Host capabilities', ['rebuild', 'cancel'])]);
-      ctx.state.authorizedRequest = { ...(draft.authorizedRequest ?? { input: draft.goal }), reviewRequest: turn.request };
+      const { contextSnapshot, ...reviewRequest } = turn.request;
+      if (draft.documentSource) {
+        documentRequest = draft.documentRequest;
+        documentWork = documents(contextSnapshot, documentRequest);
+        if (documentWork?.manifest.sourceIdentity !== draft.documentSource.sourceIdentity) {
+          documentFailure = Object.assign(authorError('FKA_MATERIAL_UNAVAILABLE', 'Reauthorize the exact original document material before reviewing this candidate'),
+            { outcome: 'needs-revision' });
+          throw documentFailure;
+        }
+        documentSteps.open(documentWork.manifest);
+        documentSummary = draft.authorizedRequest.contextSnapshot;
+      } else reviewRequest.contextSnapshot = contextSnapshot;
+      ctx.state.authorizedRequest = { ...(draft.authorizedRequest ?? { input: draft.goal }), reviewRequest };
       ctx.state.effectiveIntent = draft.intent ?? { importedDefinition: draft.candidate.manifest.workflowDefinition };
       ctx.state.intentChanges = [];
       ctx.state.baselineEvidence = draft.baselineEvidence ?? { manifest: authoringManifest(draft.candidate.manifest), source: draft.operation };
@@ -175,6 +238,11 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
       let input = turn.request.input;
       let context = turn.request.contextSnapshot;
+      if (context === null && draft.documentWork) {
+        documentFailure = Object.assign(authorError('FKA_MATERIAL_UNAVAILABLE', 'Reauthorize the exact document before continuing this draft'),
+          { outcome: 'needs-revision' });
+        throw documentFailure;
+      }
       let draftContext;
       if (continuation) {
         const previous = draft.authorizedRequest;
@@ -190,6 +258,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         ctx.state.authorizedRequest.currentDraft = draftContext;
         if (supportsNodeOptions) ctx.state.authorizedRequest.planSource = 'node-options';
       }
+      context = await prepareDocuments(context, input);
+      if (documentWork) ctx.state.authorizedRequest.contextSnapshot = context;
       const baseline = Object.hasOwn(authorization, 'baseline') ? authorization.baseline : continuation ? undefined : draft.intentBaseline;
       const mayRepairIntentOutput = draft.operation === 'create' && (!draft.candidate || !!turn.reviewRevision) && !baseline;
       const request = { input,
@@ -198,7 +268,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         confirmedConstraintIds: authorization.confirmedConstraintIds, signal };
       for (let attempt = 0; attempt <= 1; attempt++) {
         try {
-          const intent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, request))));
+          const intent = JSON.parse(JSON.stringify(await observed(() => author.analyze(draft, request), 'intent')));
           const questions = clarificationQuestions(draft, intent, continuation, answered);
           if (!continuation || questions.length ||
             (intent.coverage === 'complete' && !intent.issues.length && !intent.unresolved.length)) {
@@ -220,10 +290,16 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         }
       }
       ctx.state.intentChanges = ctx.state.effectiveIntent.changes;
-      ctx.state.baselineEvidence = { ...(draft.intent ? { priorModelInterpretation: draft.intent } : {}),
-        plan: draft.plan ?? null, candidateHash: draft.candidate?.hash ?? null,
-        workflow: draft.previousCandidate ? { manifest: authoringManifest(draft.previousCandidate.manifest) } : null,
-        materials: context ?? null };
+      const priorPlan = documentWork && draft.plan ? {
+        planHash: draft.plan.planHash, entryNodeId: draft.plan.entryNodeId, contract: draft.plan.contract ?? null,
+        nodes: draft.plan.nodes.map(({ id, kind, name, options, requiredRole }) => ({
+          id, kind, name, ...(options?.action || options?.verifier ? { capability: options.action ?? options.verifier } : {}),
+          ...(requiredRole ? { requiredRole } : {})
+        }))
+      } : draft.plan;
+      ctx.state.baselineEvidence = { ...(!documentWork && draft.intent ? { priorModelInterpretation: draft.intent } : {}),
+        plan: priorPlan ?? null, candidateHash: draft.candidate?.hash ?? null,
+        workflow: draft.previousCandidate ? { manifest: authoringManifest(draft.previousCandidate.manifest) } : null };
       if (baseline) ctx.state.baselineEvidence.intentBaseline = baseline;
       if (turn.reviewRevision) ctx.state.baselineEvidence.reviewRejection = turn.reviewRevision;
     },
@@ -236,7 +312,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       const catalog = graph && await graph.getCapabilities({ ids: options.initialCapabilityIds ?? ['flowkit::compile-workflow'] });
       ctx.state.catalogSnapshot = { documents, catalog: catalog ?? null,
         generalDocumentation: { text: guide, contentHash: artifactDigest(guide), source: 'bundled-author-guide' },
-        hostProfile: options.hostProfile, choices: draft.choices };
+        hostProfile: options.hostProfile, choices: draft.choices,
+        ...(trustedContracts.length ? { hostExecutionContracts: trustedContracts } : {}) };
       ctx.state.confirmedPlan = false;
       if (turn.request.confirmedPlanHash) {
         if (draft.plan?.planHash !== turn.request.confirmedPlanHash || draft.plan.intentRef.effectiveIntentHash !== ctx.state.effectiveIntent.intentRef.effectiveIntentHash) {
@@ -255,6 +332,18 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       try { proposal = JSON.parse(ctx.state.rawText); }
       catch (error) { ctx.state.planDiagnostics = [{ message: error.message }]; return; }
       try {
+        if (Array.isArray(proposal.nodes)) {
+          const invalidRoles = proposal.nodes.filter(node => node?.requiredRole !== undefined &&
+            (!roleBearingKinds.has(node.kind) || !validWorkflowRole(node.requiredRole)));
+          if (invalidRoles.length) {
+            ctx.state.planDiagnostics = invalidRoles.map(node => ({ code: 'FKA_PLAN_ROLE_INVALID',
+              ...(typeof node.id === 'string' ? { nodeId: node.id } : {}),
+              message: roleBearingKinds.has(node.kind)
+                ? 'Use exactly {id,label} for requiredRole, with a kebab-case ID and a trimmed display label of at most 80 characters.'
+                : 'Only Agent, Action, Verification and Human are assigned execution roles. Assign the role to the executable step.' }));
+            return;
+          }
+        }
         const planningIntent = structuredClone(ctx.state.effectiveIntent);
         if (draft.plan?.intentRef?.effectiveIntentHash === planningIntent.intentRef.effectiveIntentHash &&
           draft.plan.intentRef.changeSetHash === planningIntent.intentRef.changeSetHash) planningIntent.intentRef = draft.plan.intentRef;
@@ -304,6 +393,16 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
               code, message, ...(typeof nodeId === 'string' ? { nodeId } : {})
             }));
             return;
+          }
+          if (trustedContracts.length) {
+            try {
+              const roles = proposal.nodes.filter(node => node.requiredRole).map(node => ({ nodeId: node.id, ...node.requiredRole }));
+              pinExecutionContracts(compiledPlan.definition, trustedContracts, roles, draft.choices.executionMode);
+            } catch (error) {
+              ctx.state.planDiagnostics = [{ code: error.code, message: error.message,
+                ...(error.nodeId ? { nodeId: error.nodeId } : {}) }];
+              return;
+            }
           }
           proposal = compiledPlan.proposal;
         }
@@ -385,6 +484,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
               hostProfile: options.hostProfile, buildId: turn.attemptId, includeSource: draft.choices.includeSource,
               executionMode: draft.choices.executionMode, compilerOptions: { projectRoot: workspace, skillCheck: false },
               documents: ctx.state.resourceSnapshot.documents.map(item => item.evidence),
+              hostExecutionContracts: trustedContracts,
               professionalSkills: ctx.state.resourceSnapshot.professionalSkills.map(({ nodeId, id, version, digest, source }) =>
                 ({ nodeId, id, version, digest, ...(source === undefined ? {} : { source }) })),
               safetyPolicies: ctx.state.resourceSnapshot.safetyPolicies });
@@ -409,7 +509,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     },
     async bindReviewReceipt(ctx) {
       if (ctx.state.passed !== true || ctx.state.findings.length) {
-        ctx.state.reviewRejection = rejectedReview(ctx.state.candidate, ctx.state.findings);
+        ctx.state.reviewRejection = rejectedReview(ctx.state.candidate, ctx.state.findings, documentWork ? 24 : 8);
         ctx.state.reviewDiagnostics = [{ code: 'FKA_REVIEW_NOT_QUALIFIED',
           message: 'Independent review did not pass. Use review-only to review the same candidate, or revise it to address a confirmed issue.',
           candidateHash: ctx.state.candidate.hash, nextAction: 'review-only' }];
@@ -428,7 +528,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           options.authorization.reviewPolicy === 'independent-subject' ? 'Configure an independently authorized reviewer and its actual execution evidence' :
             'Configure the actual semantic review execution observer', ['configure-host-review', 'cancel'])]);
       }
-      ctx.state.reviewReceipt = { observation, candidateHash: ctx.state.candidate.hash };
+      ctx.state.reviewReceipt = { observation, candidateHash: ctx.state.candidate.hash,
+        ...(documentReview ? { document: documentReview } : {}) };
     }
   };
   const runtime = { ...session.runtime, evalWhen, isControlSignal: session.runtime.isControlSignal ?? (() => false),
@@ -447,7 +548,32 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           throw error;
         }
       }
-      const result = await observed(() => session.runtime.runAgentTask(prepared, context));
+      let result;
+      if (id === 'semantic-review' && documentWork) {
+        let chapterReview;
+        try { chapterReview = await documentWork.review(documentTarget.candidate, documentTarget.compilerEvidence, documentSummary); }
+        catch (error) {
+          documentFailure = Object.assign(error, { outcome: 'needs-revision' });
+          throw error;
+        }
+        const { findings, ...receipt } = chapterReview;
+        if (findings.length) {
+          return { status: 'succeeded', result: { passed: false, findings }, usage: {
+            inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, durationMs: 0, toolCalls: 0 }, events: [] };
+        }
+        documentReview = receipt;
+      }
+      result = await observed(() => session.runtime.runAgentTask(prepared, context), id);
+      if (documentWork && ['proposal', 'plan-repair'].includes(id) &&
+          result?.status === 'failed' && ['invalid-result', 'token-limit'].includes(result.failure?.code)) {
+        try {
+          const plan = await documentWork.plan(prepared.task.input, prepared.task.task.description, trustedContracts);
+          result = { status: 'succeeded', result: { rawText: JSON.stringify(plan) }, events: result.events };
+        } catch (error) {
+          documentFailure = Object.assign(error, { outcome: 'needs-revision' });
+          throw error;
+        }
+      }
       if (result?.status === 'succeeded' && (id === 'semantic-review' ?
         typeof result.result?.passed !== 'boolean' || !Array.isArray(result.result?.findings) || result.result.findings.some(item => !isReviewFinding(item)) :
         typeof result.result?.rawText !== 'string')) throw authorError('author-schema', 'Author TaskV2 result does not satisfy its declared output contract');
@@ -473,10 +599,15 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       { signal, projectRoot: options.workRoot, skillCheck: false });
     // The generated workflow routes action failures through its needs-info
     // terminal. Preserve the explicit technical recovery state in the Host.
+    if (documentFailure) throw documentFailure;
     if (result.error?.outcome === 'needs-revision') throw result.error;
+    if (documentWork) {
+      result.state.documentSource = documentWork.manifest;
+      result.state.documentRequest = documentRequest;
+    }
     const diff = result.state?.candidateDiff;
     if (diff) {
-      const { actionRoutes: _reviewOnlyRoutes, ...compilerEvidence } = diff.compilerEvidence;
+      const { actionRoutes: _reviewOnlyRoutes, hostExecutionContracts: _privateHostContracts, ...compilerEvidence } = diff.compilerEvidence;
       result.state.candidateDiff = { ...diff, compilerEvidence };
     }
     return { outcome: result.terminal === 'candidate-ready' ? 'candidate-ready' : result.terminal === 'needs-info' ?

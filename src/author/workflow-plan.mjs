@@ -15,6 +15,26 @@ export function validWorkflowRole(role) {
     Object.keys(role).length === 2;
 }
 
+/** Apply the Author's closed-output default to generated schemas only. */
+function authorContract(contract) {
+  if (!contract?.output) return contract;
+  function closeNested(schema, nested = false) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+    if (schema.type === 'array') return { ...schema, items: closeNested(schema.items, true) };
+    if (schema.type !== 'object' || !schema.properties || typeof schema.properties !== 'object' ||
+        Array.isArray(schema.properties)) return schema;
+    return { ...schema,
+      properties: Object.fromEntries(Object.entries(schema.properties).map(([key, field]) => [key, closeNested(field, true)])),
+      ...(nested && !Object.hasOwn(schema, 'additionalProperties') ? { additionalProperties: false } : {})
+    };
+  }
+  return { ...contract, output: closeNested(contract.output) };
+}
+
+export const validNodeDescription = text => typeof text === 'string' && text.trim() === text && text.length > 0 && text.length <= 4096;
+export const validPlanAssumption = item => item && typeof item.id === 'string' &&
+  typeof item.statement === 'string' && typeof item.requiresConfirmation === 'boolean';
+
 /** Find successful exits reachable without a declared producer for a required output. */
 export function missingRootOutputSources(definition, graph) {
   const { input, output } = definition.contract ?? {};
@@ -85,7 +105,8 @@ export async function materializePlan(draft, proposal, compilerOptions) {
     steps.push(`  ${builder}(${JSON.stringify(node.id)},${JSON.stringify({ name: node.name, ...node.options })})`);
   }
   const id = JSON.stringify(draft.target.name);
-  const contract=proposal.contract===undefined?'':`contract:${JSON.stringify(proposal.contract)},`;
+  const normalizedContract = authorContract(proposal.contract);
+  const contract=normalizedContract===undefined?'':`contract:${JSON.stringify(normalizedContract)},`;
   const source = `import { ${[...builders].join(', ')} } from '@devcodex-labs/flowkit/dsl';\n` +
     `export default defineWorkflow({id:${id},name:${id},version:${JSON.stringify(draft.target.version)},${contract}nodes:[\n${steps.join(',\n')}\n]});\n`;
   const stage=interactiveStageForMode(draft.choices?.executionMode);
@@ -108,11 +129,13 @@ export async function materializePlan(draft, proposal, compilerOptions) {
   const annotations = suppliedEdges.filter(edge => edge?.kind !== 'control' &&
     (EDGE_KINDS.has(edge?.kind) || !control.has(JSON.stringify([edge?.from, edge?.to]))));
   const edges = [...control.values(), ...annotations];
-  const plannedNodes = nodes.map(({ id, kind, name, options, requiredRole, professionalNeeds }) => ({ id, kind, name, options,
+  const plannedNodes = nodes.map(({ id, kind, name, options, description, requiredRole, professionalNeeds }) => ({ id, kind, name, options,
+    ...(description !== undefined ? { description } : {}),
     ...(requiredRole !== undefined ? { requiredRole } : {}),
     ...(professionalNeeds !== undefined ? { professionalNeeds } : {}),
     ...(kind === 'loop' ? { onSuccess: options.onSuccess, onMaxExceeded: options.onMaxExceeded } : {}) }));
-  return { source, proposal: { ...proposal, nodes: plannedNodes, edges }, sourceHash: artifactDigest(source) };
+  return { source, definition: analysis.literal.definition, proposal: { ...proposal, nodes: plannedNodes, edges,
+    ...(normalizedContract === undefined ? {} : { contract: normalizedContract }) }, sourceHash: artifactDigest(source) };
 }
 
 export function assertReadyStandardPlan(plan, mode = 'standard') {
@@ -125,10 +148,11 @@ export function assertReadyStandardPlan(plan, mode = 'standard') {
 
 /** Validate the Author's planning proposal against the effective intent and the selected mode. */
 export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash) {
-  const { nodes, edges, entryNodeId, contract, assumptions = [], nonGoals = [], unresolvedIssues = [], coverage: suppliedCoverage,
+  const { nodes, edges, entryNodeId, contract: suppliedContract, assumptions = [], nonGoals = [], unresolvedIssues = [], coverage: suppliedCoverage,
     capabilityRequirements = [], resourceRequirements = [], hostProfileRef } = structuredClone(proposal);
   const constraintIds = new Set(intent.constraints.map(item => item.id));
   const requirementIds = new Set([...intent.goals.map(item => item.id), ...constraintIds]);
+  const contract = authorContract(suppliedContract);
   const declaredContract=workflowContract(contract);
   if (!suppliedCoverage || typeof suppliedCoverage !== 'object') {
     throw new TypeError('Plan coverage must map authorized requirement IDs to the enforcing node IDs');
@@ -155,10 +179,13 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
   const namedNodes = nodes.filter(node => node.name !== undefined);
   const invalidName = namedNodes.find(node => !isWorkflowNodeName(node.name));
   if (invalidName) throw new TypeError(`WorkflowPlan node ${invalidName.id} needs a valid display name of at most ${WORKFLOW_NODE_NAME_MAX_LENGTH} characters`);
+  const invalidDescription = nodes.find(node => node.description !== undefined && !validNodeDescription(node.description));
+  if (invalidDescription) throw new TypeError(`WorkflowPlan node ${invalidDescription.id} has an invalid display description`);
   const names = namedNodes.map(node => node.name);
   if (new Set(names).size !== names.length) throw new TypeError('WorkflowPlan node display names must be distinct');
-  if (assumptions.some(item => !item || typeof item.id !== 'string' || typeof item.statement !== 'string' ||
-    typeof item.requiresConfirmation !== 'boolean')) throw new TypeError('Plan assumptions must declare id, statement and requiresConfirmation');
+  if (!Array.isArray(assumptions) || !assumptions.every(validPlanAssumption)) {
+    throw new TypeError('Plan assumptions must declare id, statement and requiresConfirmation');
+  }
   const invalidId = nodes.find(node => !isWorkflowId(node.id));
   if (invalidId) throw new TypeError(`WorkflowPlan node ID ${JSON.stringify(invalidId.id)} must be kebab-case with at most ${WORKFLOW_ID_MAX_LENGTH} characters`);
   if (ids.size !== nodes.length) throw new TypeError('WorkflowPlan node IDs must be unique');

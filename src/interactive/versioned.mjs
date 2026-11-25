@@ -32,6 +32,7 @@ export function createInteractiveHostContext({namespace,subjectId,authorize,auth
     readRunView:(ref,options)=>readRunView(ref,{...options,auth}),
     listRunViewEvents:(input,options)=>listRunViewEvents(input,{...options,auth}),
     readRunArtifacts:(input,options)=>readRunArtifacts(input,{...options,auth}),
+    readRunArtifactContent:(input,options,readContent)=>readRunArtifactContent(input,{...options,auth},readContent),
   });
   authCallbacks.set(auth,{authorize,authorizeTask,authorizeHuman});
   return auth;
@@ -522,6 +523,40 @@ async function readRunArtifacts(input,options) {
   await checkAccess(options,'viewer:artifacts',identity);
   return safeJSONSnapshot({schemaVersion:1,namespace:identity.namespace,runId:identity.runId,
     artifactHash:identity.artifactHash,graphDigest:identity.graphDigest,...page});
+}
+
+/** Resolve the storage reference only inside the exact authorized version read. */
+async function readRunArtifactContent(input,options,readContent) {
+  options=operationOptions(options);
+  const {ref,artifactId,versionId}=safeJSONSnapshot(input,8192);
+  if(typeof artifactId!=='string'||!artifactId||artifactId.length>160||/[\u0000-\u001f\u007f]/.test(artifactId)||
+    typeof versionId!=='string'||!/^sha256:[0-9a-f]{64}$/.test(versionId)) {
+    throw fail('FK_I_INVALID_OPERATION','Invalid artifact version identity');
+  }
+  const target={artifactId,versionId};
+  const {ref:identity}=await viewerTarget(ref,options,'viewer:artifact-content',target);
+  const ledger=artifactLedgers.get(options.store);
+  const version=ledger?.readVersion(identity.runId,artifactId,versionId);
+  if(!version) throw fail('FK_I_HOST_DENIED','Artifact version is unavailable');
+  const {storageRef,contentHash,mimeType,sizeBytes,versionLabel}=version;
+  const media=mimeType.split(';',1)[0].trim().toLowerCase();
+  if(typeof readContent!=='function'||sizeBytes>128*1024||!(/^(?:text\/|application\/(?:json$|[^/]+\+json$))/.test(media))) return null;
+  const raw=await readContent(Object.freeze({namespace:identity.namespace,runId:identity.runId,
+    ...target,contentHash,mimeType,sizeBytes,storageRef,signal:options.signal}));
+  if(raw==null)return null;
+  if(typeof raw!=='string'&&!(raw instanceof Uint8Array)) throw fail('FK_I_ARTIFACT_CONTENT_INVALID','Artifact storage did not return text bytes');
+  if((typeof raw==='string'?Buffer.byteLength(raw):raw.byteLength)!==sizeBytes) {
+    throw fail('FK_I_ARTIFACT_CONTENT_INVALID','Artifact bytes differ from the registered version');
+  }
+  const bytes=Buffer.from(raw);
+  if(sha256Bytes(bytes)!==contentHash) {
+    throw fail('FK_I_ARTIFACT_CONTENT_INVALID','Artifact bytes differ from the registered version');
+  }
+  let text;
+  try {text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}
+  catch {throw fail('FK_I_ARTIFACT_CONTENT_INVALID','Artifact is not valid UTF-8 text');}
+  await checkAccess(options,'viewer:artifact-content',{...identity,...target});
+  return {...target,mimeType,text,...(versionLabel===undefined?{}:{versionLabel})};
 }
 
 function bindingRuntime(runtime,policy) {

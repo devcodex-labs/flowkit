@@ -130,9 +130,8 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
             await reader.getByRole('searchbox').fill(search);
             await reader.getByRole('button',{name:'查找下一处'}).click();
             assert.equal(await reader.locator('.reader-match').count(),1);
-            await reader.getByRole('button',{name:'放大文字'}).click();
-            assert.equal(await reader.locator('.reader-content').getAttribute('data-reader-size'),'large');
-            await reader.getByRole('button',{name:'还原文字'}).click();
+            assert.equal(await reader.getByRole('button',{name:'放大文字'}).count(),0);
+            assert.equal(await reader.getByRole('searchbox').evaluate(el=>getComputedStyle(el).fontSize),'13px');
             await page.keyboard.press('Escape');
             assert.equal(await reader.isVisible(),false);
             assert.equal(await page.getByRole('button',{name:label,exact:true}).isVisible(),true);

@@ -1,6 +1,6 @@
 import type { AgentTaskV2, PreparedAgentTask, AgentExecutionResult, HostPreparationContext, TaskJsonObject, FlowkitOptions, Runtime, RunResult } from './index.js';
 import type { InteractiveFrameV1, InteractiveOperationController, InteractiveOptionsV1, InteractiveRuntimeV1, TrustedHostContextV1 } from './interactive.js';
-import type { AuthorCandidate, AuthorProfessionalSkill } from './author-host.js';
+import type { AuthorCandidate, AuthorProfessionalSkill, HostExecutionContract } from './author-host.js';
 export { createWorkflowAuthorHost } from './author-host.js';
 export type { AuthorHostOptions, WorkflowAuthorHost, AuthorRequestContext, AuthorDraftView, AuthorTurnInput, AuthorCandidate, AuthorBudgetPolicy, AuthorReviewRejection } from './author-host.js';
 
@@ -15,6 +15,7 @@ export interface ApprovedWorkflowStore {
 }
 export interface ApprovedWorkflowHostAuthority {
   hostProfile: { id: string; digest: string };
+  hostExecutionContracts?: readonly HostExecutionContract[];
   authorizeExecution(scope: ApprovedWorkflowScope): boolean | Promise<boolean>;
   resolveRunProfessionalSkill?(pin: { nodeId: string; id: string; version: string; digest: string; source: string },
     scope: ApprovedWorkflowScope & { signal?: AbortSignal }): { authorized: boolean; source: string; candidate: AuthorProfessionalSkill } | null |

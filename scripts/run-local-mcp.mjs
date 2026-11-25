@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createWorkflowAuthorHost } from '../dist/host.mjs';
 import { checkProfessionalSkill, planProfessionalSkills, resolveTrustedProfessionalPin } from '../src/author/professional-skills.mjs';
-import { designDiagram } from './workflow-viewer/design.mjs';
+import { collectDesignSections, mergeDesignSections, packDesignScope, planDesignCanvas, projectDesignLayoutGraph } from './workflow-viewer/project-design.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
@@ -17,7 +17,7 @@ import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canExportPortable, commitDelivery, deliveryMatches, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
-import { defaultLayout, viewerHash, workflowPage, workflowRunPage, workflowRunProgress, workflowTracePage } from './workflow-viewer.mjs';
+import { defaultLayout, viewerHash, workflowPage, workflowRunArtifacts, workflowRunPage, workflowRunProgress, workflowTracePage } from './workflow-viewer.mjs';
 import { listInteractiveForkPoints } from '../src/interactive/index.mjs';
 import { generateLayout, layoutContractHash } from './workflow-viewer/auto-layout.mjs';
 
@@ -182,7 +182,10 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
   const layoutAbort = new AbortController();
   const layoutRequests = new Map();
   const designRequests = new Map();
-  const designNames = ['design.html', 'design.mmd'];
+  const designFailures = new Map();
+  const legacyDesignNames = ['design.html', 'design.mmd'];
+  const designNames = result => result.format === 2 ? ['design.html'] : legacyDesignNames;
+  const designOwner = context => authorIdentity([context.principalId, context.workspaceId, collectionId]);
   const closeStorage = async () => {
     if (storageClosed) return;
     storageClosed = true;
@@ -226,7 +229,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           const value = await dependencies.readAuthoringMaterial?.({ id: source.id, sha256: source.sha256, collectionId, requestContext, signal });
           if (value?.authorized !== true || value.id !== source.id || typeof value.title !== 'string' ||
               !value.title.trim() || value.title.length > 160 || typeof value.content !== 'string' ||
-              !value.content.length || value.content.length > 12000) {
+              !value.content.length || allowDesign && Buffer.byteLength(value.content) > 262144) {
             throw materialError('FKA_MATERIAL_UNAVAILABLE', 'The Host could not authorize the selected material: ' + source.id);
           }
           if (artifactDigest(value.content) !== source.sha256) {
@@ -239,15 +242,19 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           const record = key && get(key);
           const result = record?.result;
           if (result?.designHash !== source.sha256 || !record?.selection || !record.summary ||
-              !(await deliveryMatches(result.directory, result.hashes, designNames))) {
+              record.owner && record.owner !== designOwner(requestContext) ||
+              !(await deliveryMatches(result.directory, result.hashes, designNames(result)))) {
             throw materialError('FKA_MATERIAL_UNAVAILABLE', 'The selected design version is unavailable or differs from the delivered version');
           }
-          materials.push(...await resolveDesignMaterials(record, requestContext, signal));
-          designs.push({ sha256: result.designHash, summary: record.summary });
+          const selected = source.groupId ? await resolveDesignGroup(record, source.groupId, requestContext, signal) :
+            { materials: await resolveDesignMaterials(record, requestContext, signal), summary: record.summary };
+          materials.push(...selected.materials);
+          designs.push({ sha256: result.designHash, ...(source.groupId ? { groupId: source.groupId } : {}),
+            summary: selected.summary });
         }
       }
-      if (materials.length > 6 || new Set(materials.map(item => item.id)).size !== materials.length ||
-          Buffer.byteLength(JSON.stringify([materials, designs])) > 262144) {
+      if (new Set(materials.map(item => item.id)).size !== materials.length ||
+          allowDesign && (materials.length > 6 || Buffer.byteLength(JSON.stringify([materials, designs])) > 262144)) {
         throw materialError('FKA_MATERIAL_LIMIT', 'Choose up to six unique materials within the Author input budget');
       }
       return { materials, designs };
@@ -259,6 +266,71 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         throw materialError('FKA_MATERIAL_CHANGED', 'The selected design material no longer matches its reviewed version');
       }
       return materials;
+    }
+
+    function designEvidence(source, material, range) {
+      const bytes=Buffer.from(material.content);
+      if (artifactDigest(bytes)!==source.digest) throw materialError('FKA_MATERIAL_CHANGED','Design evidence source changed');
+      const selection=range?bytes.subarray(range.start,range.end):bytes;
+      if (range && (range.start<0 || range.end>bytes.length || range.start>=range.end ||
+        artifactDigest(selection)!==range.digest)) throw materialError('FKA_MATERIAL_CHANGED','Design evidence range changed');
+      if (selection.length>256*1024) return null;
+      const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(selection);
+      const lines=range?{
+        first:bytes.subarray(0,range.start).reduce((line,byte)=>line+(byte===10),1),
+        count:text.replace(/\n$/,'').split('\n').length
+      }:undefined;
+      return { text, ...(lines?{lines}:{}), mimeType:/\.(?:md|markdown)$/i.test(source.title)?'text/markdown':'text/plain' };
+    }
+
+    const approveExcerpt = (source, range, requestContext, signal) =>
+      dependencies.authorizeDesignExcerptExport?.({sourceId:source.id,sourceDigest:source.digest,
+        rangeId:range.id,rangeDigest:range.digest,start:range.start,end:range.end,collectionId,requestContext,signal});
+
+    async function designExportExcerpts(design, materials, requestContext, signal) {
+      if (typeof dependencies.authorizeDesignExcerptExport!=='function') return [];
+      const sources=new Map(design.sources.map(source=>[source.id,source]));
+      const byId=new Map(materials.map(material=>[material.id,material]));
+      const excerpts=[];
+      let total=0;
+      for (const range of design.ranges??[]) {
+        signal.throwIfAborted();
+        const size=range.end-range.start;
+        if(total+size>256*1024)continue;
+        const source=sources.get(range.sourceId);
+        if(await approveExcerpt(source,range,requestContext,signal)!==true)continue;
+        const evidence=designEvidence(source,byId.get(source.id),range);
+        if(evidence) {
+          total+=size;
+          excerpts.push({rangeId:range.id,...evidence});
+        }
+      }
+      return excerpts;
+    }
+
+    async function resolveDesignGroup(record, groupId, requestContext, signal) {
+      const group = record.summary.groups?.find(item => item.id === groupId);
+      if (!group) throw materialError('FKA_MATERIAL_UNAVAILABLE', 'Unknown section in the selected design version');
+      const selected = new Set(group.ranges.map(range => range.sourceId));
+      const pinned = new Map(record.summary.sources.map(source => [source.id, source]));
+      const { materials } = await resolveSources(record.selection.filter(source => selected.has(source.id)), requestContext, signal, false);
+      const byId = new Map(materials.map(material => {
+        if (pinned.get(material.id)?.digest !== artifactDigest(material.content)) {
+          throw materialError('FKA_MATERIAL_CHANGED', 'The selected design material no longer matches its reviewed version');
+        }
+        return [material.id, material];
+      }));
+      const slices = group.ranges.map(({ id, sourceId, start, end, digest }) => {
+        const material = byId.get(sourceId);
+        if (!material) throw materialError('FKA_MATERIAL_UNAVAILABLE', 'The selected design section is unavailable');
+        const content = Buffer.from(material.content).subarray(start, end).toString('utf8');
+        if (artifactDigest(content) !== digest) throw materialError('FKA_MATERIAL_CHANGED', 'The selected section changed');
+        return { id, title: material.title, content };
+      });
+      const nodeIds = new Set(group.nodeIds);
+      return { materials: slices, summary: { sources: [...selected].map(id => pinned.get(id)),
+        nodeSources: record.summary.nodeSources.filter(node => nodeIds.has(node.id)),
+        groups: [group], unresolved: group.unresolved ?? [] } };
     }
 
     async function authoringMaterials({ input, sources, draft }, requestContext, signal) {
@@ -278,67 +350,158 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       return { ...input, contextSnapshot: { hostContext: input.contextSnapshot ?? null, ...snapshot } };
     }
 
+    async function reauthorizeDraftSources(draftId, requestContext, signal) {
+      const selected = get('authoring-materials:' + draftId);
+      if (selected) await resolveSources(selected, requestContext, signal);
+    }
+
     async function createDesign({ requestId, title, materials, sources }, requestContext, signal) {
       const selection = sources ?? materials.map(item => ({ kind: 'text', ...item }));
       materials = (await resolveSources(selection, requestContext, signal, false)).materials;
       const materialHash = artifactDigest(JSON.stringify([title, materials]));
       const key = 'design:' + artifactDigest(requestId).slice(7);
-      const record = insert(key, { materialHash, title, selection });
-      if (record.materialHash !== materialHash || record.selection && authorIdentity(record.selection) !== authorIdentity(selection)) {
+      const owner = designOwner(requestContext);
+      const identity = authorIdentity([provider, process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'] ?? null]);
+      const record = insert(key, { materialHash, title, selection, owner, identity });
+      if (record.materialHash !== materialHash || record.owner && record.owner !== owner ||
+          !record.result && record.identity && record.identity !== identity ||
+          record.selection && authorIdentity(record.selection) !== authorIdentity(selection)) {
         throw new Error('Design request ID already belongs to different source material');
       }
-      let result = record.result;
+      const result = record.result;
       if (!result) {
         if (!designRequests.has(key)) {
+          const failure = designFailures.get(key);
+          if (failure) {
+            designFailures.delete(key);
+            throw failure;
+          }
           if (designRequests.size >= capacity.maxPhysicalExecutions) throw new Error('Design Author capacity is busy');
-          const deadline = AbortSignal.timeout(config.authorTurnDurationMs ?? 240000);
+          const durationMs = config.authorTurnDurationMs ?? 240_000;
+          const expiresAt = performance.now() + durationMs;
+          const deadline = AbortSignal.timeout(durationMs);
           const workSignal = AbortSignal.any([deadline, layoutAbort.signal]);
           const pending = Promise.resolve().then(async () => {
             let prepared = get(key).prepared;
             if (!prepared) {
-              const output = await model.planDesign({ title, materials, signal: workSignal });
-              const { identity, graph, design, mermaid, viewManifest } = designDiagram(title, materials, output.proposal);
-              const arrangement = model.planLayout && await layoutRequest('design-layout:' + viewerHash + ':' + graph.graphDigest, graph);
-              workSignal.throwIfAborted();
-              const files = { 'design.html': workflowPage({ graph, mermaid, design, viewManifest, viewLayout: arrangement?.layout }),
-                'design.mmd': mermaid };
-              const hashes = Object.fromEntries(designNames.map(name => [name, artifactDigest(files[name])]));
+              const original = new Map(materials.map(material => [material.id, artifactDigest(material.content)]));
+              const sections = await collectDesignSections({ title, materials, signal: workSignal,
+                modelIdentity: identity, plan: input => model.planDesign(input),
+                load: section => get(key + ':' + section),
+                save: (section, receipt) => put(key + ':' + section, receipt),
+                async authorize(ids) {
+                  const needed = new Set(ids);
+                  const { materials: fresh } = await resolveSources(selection.filter(source => needed.has(source.id)), requestContext, workSignal, false);
+                  if (fresh.length !== needed.size || fresh.some(item => artifactDigest(item.content) !== original.get(item.id))) {
+                    throw materialError('FKA_MATERIAL_CHANGED', 'The selected design section has changed');
+                  }
+                } });
+              const merged = mergeDesignSections(title, materials, sections);
+              const { graph, design, mermaid, viewManifest } = merged;
+              const canvas = planDesignCanvas(graph, design);
+              function arrange(graph, ceiling) {
+                const layoutMs = Math.max(0, Math.min(ceiling, Math.floor((expiresAt - performance.now()) / 2)));
+                if (layoutMs && model.planLayout) {
+                  return arrangeDesign(graph, AbortSignal.any([workSignal, AbortSignal.timeout(layoutMs)]));
+                }
+              }
+              let project, viewLayout, layoutSource = 'fallback';
+              if (canvas) {
+                const { layoutGraphs, ...structure } = canvas;
+                const positions = [];
+                let arranged = 0, modelScopes = 0;
+                for (const { id, graph: rawScope } of layoutGraphs) {
+                  layoutAbort.signal.throwIfAborted();
+                  const scope = projectDesignLayoutGraph(rawScope);
+                  const needsModel = scope.nodes.length > 1 || scope.referenceEdges.length > 0;
+                  if (needsModel) modelScopes++;
+                  const arrangement = needsModel ? await arrange(scope, config.authorTaskTimeoutMs ?? 60_000) : undefined;
+                  if (arrangement?.layout) arranged++;
+                  const layout = arrangement?.layout ?? defaultLayout(scope);
+                  const packed = packDesignScope(id, scope, layout, Boolean(arrangement?.layout));
+                  positions.push({ ...packed, layoutSource: arrangement?.layout ? 'model' : needsModel ? 'fallback' : 'single-node',
+                    ...(arrangement?.layout ? { modelLayout: { graphDigest: scope.graphDigest, contractHash: layoutContractHash,
+                      placementHash: artifactDigest(JSON.stringify(packed)), receipts: arrangement.receipts } } : {}) });
+                }
+                project = { ...structure, positions };
+                layoutSource = arranged && arranged === modelScopes ? 'model' : arranged ? 'mixed' : 'fallback';
+              } else {
+                viewLayout = (await arrange(graph, 60_000))?.layout;
+                if (viewLayout) layoutSource = 'model';
+              }
+              layoutAbort.signal.throwIfAborted();
+              const excerpts=await designExportExcerpts(design,materials,requestContext,workSignal);
+              const files = { 'design.html': workflowPage({ graph, mermaid, viewManifest, viewLayout, project,
+                design:excerpts.length?{...design,excerpts}:design }) };
+              const hashes = { 'design.html': artifactDigest(files['design.html']) };
               const directory = path.join(exportDir, key.replace(':', '-'));
-              const value = { designHash: identity, graphDigest: graph.graphDigest, directory, hashes,
-                layoutSource: arrangement?.layout ? 'model' : 'fallback', provider: output.provider, model: output.model,
-                requestId: output.requestId, sources: design.sources };
-              prepared = { files, value, summary: design };
-              put(key, { materialHash, title, selection, prepared });
+              const value = { format: 2, designHash: merged.identity, graphDigest: graph.graphDigest, directory, hashes,
+                layoutSource, provider: sections[0].provider, model: sections[0].model,
+                requestId: sections[0].requestId, sourceCount: design.sources.length, sectionCount: sections.length };
+              prepared = { files, value, summary: design, excerptIds:excerpts.map(item=>item.rangeId) };
+              put(key, { materialHash, title, selection, owner, identity, prepared });
             }
             const { files, value, summary } = prepared;
-            await commitDelivery(exportDir, value.directory, files, value.hashes, designNames);
-            put(key, { materialHash, title, selection, summary, result: value });
+            await resolveDesignMaterials({ title, selection, materialHash }, requestContext, workSignal);
+            for (const rangeId of prepared.excerptIds??[]) {
+              const range=summary.ranges.find(item=>item.id===rangeId);
+              const source=summary.sources.find(item=>item.id===range?.sourceId);
+              if (!source || await approveExcerpt(source,range,requestContext,workSignal)!==true) {
+                put(key, { materialHash, title, selection, owner, identity });
+                throw materialError('FKA_MATERIAL_UNAVAILABLE','Permission for the prepared design excerpt changed');
+              }
+            }
+            workSignal.throwIfAborted();
+            await commitDelivery(exportDir, value.directory, files, value.hashes, designNames(value));
+            put(key, { materialHash, title, selection, owner, identity, summary, result: value });
             return value;
+          }).catch(error => {
+            if (!deadline.aborted && !layoutAbort.signal.aborted) {
+              if (designFailures.size >= capacity.maxDrafts) designFailures.delete(designFailures.keys().next().value);
+              designFailures.set(key, error);
+            }
+            throw error;
           }).finally(() => designRequests.delete(key));
+          void pending.catch(() => {});
           designRequests.set(key, pending);
         }
-        result = await designRequests.get(key);
+        return { status: 'running', requestId };
       }
       signal?.throwIfAborted();
       if (selection.some(source => source.kind === 'material')) {
         await resolveDesignMaterials({ title, selection, materialHash }, requestContext, signal);
       }
-      if (!(await deliveryMatches(result.directory, result.hashes, designNames))) throw new Error('Design files changed after delivery');
+      if (!(await deliveryMatches(result.directory, result.hashes, designNames(result)))) throw new Error('Design files changed after delivery');
       const ref = seal('design', key);
-      const files = designNames.map(name => ({ name, sha256: result.hashes[name], url: origin + '/designs/' + ref + '/' + name }));
+      const files = designNames(result).map(name => ({ name, sha256: result.hashes[name], url: origin + '/designs/' + ref + '/' + name }));
       const { hashes: _hashes, ...rest } = result;
-      return { ...rest, designRef: ref, files };
+      return { status: 'ready', ...rest, designRef: ref, files };
     }
-    function layoutRequest(key, graph) {
+    async function arrangeDesign(graph, signal) {
+      if (signal.aborted) return;
+      let expire;
+      const expired = new Promise(resolve => {
+        expire = () => resolve(undefined);
+        signal.addEventListener('abort', expire, { once: true });
+      });
+      try {
+        const key = 'design-layout:' + viewerHash + ':' + layoutContractHash + ':' + graph.graphDigest;
+        return await Promise.race([layoutRequest(key, graph, signal), expired]);
+      } finally {
+        signal.removeEventListener('abort', expire);
+      }
+    }
+    function layoutRequest(key, graph, optionalDeadline) {
       const cached = get(key);
       if (cached) return cached;
       let pending = layoutRequests.get(key);
       if (!pending && !layoutAbort.signal.aborted && layoutRequests.size < capacity.maxPhysicalExecutions) {
-        const deadline = AbortSignal.timeout(config.authorTurnDurationMs ?? 240_000);
+        const deadline = optionalDeadline ?? AbortSignal.timeout(config.authorTurnDurationMs ?? 240_000);
         const signal = AbortSignal.any([layoutAbort.signal, deadline]);
         pending = Promise.resolve().then(async () => {
           const result = await generateLayout(graph, defaultLayout(graph), planLayout, signal);
-          if (!result.layout || layoutAbort.signal.aborted) return result;
+          signal.throwIfAborted();
+          if (!result.layout) return result;
           return insert(key, { ...result, graphDigest: graph.graphDigest, layoutContractHash,
             layoutHash: artifactDigest(JSON.stringify(result.layout)) });
         }).catch(() => ({ reason: deadline.aborted ? 'layout-deadline' : 'layout-unavailable' }))
@@ -427,6 +590,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       }
     };
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
+      hostExecutionContracts: dependencies.hostExecutionContracts,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
       professionalSkillCatalog,
       async resolveProfessionalSkill(pin, scope) {
@@ -438,7 +602,9 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       },
       budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
         // The internal compile port returns a candidate with Program, Mermaid and GraphSnapshot.
-        maxResponseBytes: 1024 * 1024 }, execution: model.execution,
+        maxResponseBytes: 1024 * 1024 },
+      documentBudgetPolicy: { durationMs: config.authorTurnDurationMs ?? 900000, maxBytes: 48 * 1024 * 1024 },
+      execution: model.execution,
       resolveImportSource({ sourceRef }) {
         const source = trustedImport(sourceRef);
         return source && { candidate: source.candidate, sourceRef, issuer: sourceIssuer(source) };
@@ -448,10 +614,12 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         async authorize({ action, collectionId: target, requestContext, approvalRef, publicationId, draftId, signal }) {
           if (target !== collectionId || authorIdentity(requestContext) !== authorIdentity(context)) return false;
           if (action === 'collection-plan') return approvalRef === bootstrap;
+          if (action === 'advance-commit' || action === 'approve') await reauthorizeDraftSources(draftId, requestContext, signal);
           if (action !== 'publish') return true;
           const record = approval(approvalRef);
           if (record?.confirmed !== true || record.publicationId !== publicationId || record.draftId !== draftId) return false;
           const draft = await authorHost.readDraft({ draftId }, requestContext, signal);
+          if (!draft.savedReceipt) await reauthorizeDraftSources(draftId, requestContext, signal);
           return draft.savedReceipt?.publicationId === publicationId || trustedDraft(draft);
         },
         verifyApproval({ approvalRef, draftId, candidateHash, reviewRef, previousHash, contentHash }) {
@@ -460,10 +628,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             record.reviewRef === reviewRef && record.previousHash === previousHash && record.contentHash === contentHash;
           return { approved, subjectId: context.principalId, approvalId: approvalRef };
         },
-        verifySettlement({ evidenceRef, draftId, turnId, attemptId, decision, resultHash, reservations }) {
+        async verifySettlement({ evidenceRef, draftId, turnId, attemptId, decision, resultHash, reservations, requestContext, signal }) {
           const proof = recoveryProofs.get(evidenceRef);
           if (!proof || proof.draftId !== draftId || proof.turnId !== turnId || proof.attemptId !== attemptId ||
               proof.decision !== decision || proof.resultHash !== resultHash) return;
+          if (decision === 'confirm-result') await reauthorizeDraftSources(draftId, requestContext, signal);
           const noEffect = Object.values(reservations).every(item => item.sideEffect === 'read' && item.sideEffectStatus === 'none');
           if (decision === 'confirm-no-effect' && !noEffect) return;
           return { verified: true, physicalDone: true, noEffect, draftId, turnId, attemptId, evidenceRef, resultHash };
@@ -556,10 +725,13 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     }
     const publicReview = review => ({ qualified: review.receipt?.qualified === true,
       findings: review.rejection?.findings?.map(({ message, nodeIds }) => ({ message, nodeIds })) ?? [],
+      ...(review.receipt?.document ? { document: { sourceIdentity: review.receipt.document.sourceIdentity,
+        graphDigest: review.receipt.document.graphDigest, sections: review.receipt.document.sections.length } } : {}),
       ...(review.receipt?.reviewRef ? { reviewRef: review.receipt.reviewRef } : {}) });
 
-    async function exportCandidate({ draftId, candidateHash, layoutRevision, exportReceipt }, _context, signal) {
+    async function exportCandidate({ draftId, candidateHash, layoutRevision, exportReceipt }, requestContext, signal) {
       const draft = await readDraft(draftId, candidateHash, signal);
+      if (!draft.savedReceipt) await reauthorizeDraftSources(draftId, requestContext, signal);
       if (!draft.savedReceipt && !trustedDraft(draft)) throw new Error(untrustedReason);
       function issue(receipt, record) {
         const { directory, hashes, layoutRevision } = record;
@@ -752,6 +924,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         collectionId: draft.collectionId, previousHash: draft.previousHash, questions: draft.questions,
         diagnostics: draft.diagnostics?.map(({ code, message }) => ({ code, message })),
         review: publicReview({ receipt: draft.reviewReceipt, rejection: draft.reviewRejection }),
+        ...(draft.documentProgress ? { documentProgress: draft.documentProgress } : {}),
         ...(attempt ? { recovery: { tool: 'flowkit_recover_workflow', turnId: attempt.turnId } } : {}),
         ...(draft.plan?.planHash ? { planHash: draft.plan.planHash } : {}),
         ...(draft.candidate ? { candidate: { name: draft.candidate.manifest.name, version: draft.candidate.manifest.version,
@@ -853,6 +1026,34 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           return json(res,503,{error:'暂时无法发起复跑。'});
         }
       }
+      if (route==='runs' && ref && ['artifacts','artifact-content'].includes(action) &&
+        url.pathname==='/runs/'+ref+'/'+action && req.method==='GET' && dependencies.resolveRunViewer) {
+        if (!operator(req)) return json(res,403,{error:'请先建立本机操作员会话。'});
+        const runId=decodeURIComponent(ref);
+        const signal=AbortSignal.timeout(config.authorTaskTimeoutMs??90000);
+        try {
+          const view=await resolveRunBinding(runId);
+          if (!view || view.standardTrace) return json(res,404,{error:'运行或产物不可用。'});
+          const options={...view.options,signal};
+          if (action==='artifacts') {
+            const after=Number(url.searchParams.get('after')??0);
+            return json(res,200,await workflowRunArtifacts({...view,options,after}));
+          }
+          const artifactId=url.searchParams.get('artifactId'), versionId=url.searchParams.get('versionId');
+          const audience=dependencies.readArtifactContent;
+          if (typeof audience!=='function') return json(res,404,{error:'宿主未提供正文。'});
+          const content=await view.auth.readRunArtifactContent({ref:view.ref,artifactId,versionId},options,
+            version=>audience({...version,requestContext:context}));
+          return content?json(res,200,content):json(res,404,{error:'该版本没有可阅读正文。'});
+        } catch (error) {
+          if (error.code==='FK_I_INVALID_OPERATION') return json(res,400,{error:'产物标识或分页位置不合法。'});
+          if (error.code==='FK_I_ARTIFACT_CONTENT_INVALID') return json(res,409,{error:'正文与登记版本不符，无法打开。'});
+          if (['FK_I_HOST_DENIED','FK_I_PROGRAM_MISMATCH','FK_I_BINDING_MISSING'].includes(error.code)) {
+            return json(res,404,{error:'运行或产物不可用。'});
+          }
+          return json(res,503,{error:'暂时无法读取产物。'});
+        }
+      }
       if (route === 'runs' && ref && (!action || action==='progress') && req.method === 'GET' && dependencies.resolveRunViewer) {
         if (!operator(req)) return json(res, 403, { error: '请先建立本机操作员会话。' });
         const runId = decodeURIComponent(ref);
@@ -874,7 +1075,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           }
           if (progress) return json(res,200,await workflowRunProgress({...view,afterRevision}));
           return html(res,await workflowRunPage({...view,requestContext:context,afterRevision,artifactAfter,
-            forkEnabled:typeof dependencies.forkRun==='function'}));
+            forkEnabled:typeof dependencies.forkRun==='function',
+            artifactContentEnabled:typeof dependencies.readArtifactContent==='function'}));
         } catch (error) {
           if (error.code === 'FK_I_HOST_DENIED' || error.code === 'FK_I_PROGRAM_MISMATCH') {
             return json(res, 404, { error: '找不到可查看的运行。' });
@@ -909,11 +1111,32 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="' + action + '"' });
         return res.end(contents);
       }
-      if (route === 'designs' && req.method === 'GET' && designNames.includes(action)) {
+      if (route==='designs' && ref && action==='evidence' && req.method==='GET' && url.pathname==='/designs/'+ref+'/evidence') {
+        if (!operator(req)) return json(res,403,{error:'请先建立本机操作员会话。'});
+        const key=unseal('design',ref),record=key&&get(key);
+        const sourceId=url.searchParams.get('source'),rangeId=url.searchParams.get('range');
+        const source=record?.summary?.sources?.find(item=>item.id===sourceId);
+        const range=rangeId&&record?.summary?.ranges?.find(item=>item.id===rangeId&&item.sourceId===sourceId);
+        if (!record?.result || record.owner!==designOwner(context) || !source || rangeId&&!range) {
+          return json(res,404,{error:'没有可打开的材料引用。'});
+        }
+        const selected=record.selection?.filter(item=>item.id===source.id);
+        if (selected?.length!==1) return json(res,404,{error:'此导出仅保留来源引用。'});
+        try {
+          const signal=AbortSignal.timeout(config.authorTaskTimeoutMs??90000);
+          const {materials}=await resolveSources(selected,context,signal,false);
+          const evidence=designEvidence(source,materials[0],range);
+          return evidence?json(res,200,evidence):json(res,413,{error:'原文件较大，请从节点选择具体证据片段。'});
+        } catch {
+          return json(res,404,{error:'无法取得已授权的原始版本。'});
+        }
+      }
+      if (route === 'designs' && req.method === 'GET' && legacyDesignNames.includes(action)) {
         const key = unseal('design', ref);
         const record = key && get(key);
         const entry = record?.result;
-        if (!entry) return json(res, 403, { error: 'Invalid design link' });
+        if (!entry || record.owner && record.owner !== designOwner(context)) return json(res, 403, { error: 'Invalid design link' });
+        if (!designNames(entry).includes(action)) return json(res, 404, { error: 'Design file is unavailable' });
         if (record.selection?.some(source => source.kind === 'material')) {
           const signal = AbortSignal.timeout(config.authorTaskTimeoutMs ?? 90000);
           try { await resolveDesignMaterials(record, context, signal); }

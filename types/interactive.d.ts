@@ -535,9 +535,13 @@ export interface TrustedHostContextV1 {
   readRunView(ref:RunViewerRef,options:RunViewerOptions):Promise<RunViewerSnapshot>;
   listRunViewEvents(input:{ref:RunViewerRef;afterRevision?:number;limit?:number},options:RunViewerOptions):Promise<RunViewerEvents>;
   readRunArtifacts(input:{ref:RunViewerRef;after?:number},options:RunViewerOptions):Promise<RunArtifactIndex>;
+  readRunArtifactContent(input:{ref:RunViewerRef;artifactId:string;versionId:string},options:RunViewerOptions,
+    readContent:(version:ArtifactMetadata & {namespace:string;runId:string;versionId:string;storageRef:string;signal?:AbortSignal})=>
+      string|Uint8Array|null|Promise<string|Uint8Array|null>):
+    Promise<{artifactId:string;versionId:string;versionLabel?:string;mimeType:string;text:string}|null>;
 }
 
-interface ArtifactMetadata {artifactId:string;contentHash:string;mimeType:string;sizeBytes:number}
+interface ArtifactMetadata {artifactId:string;contentHash:string;mimeType:string;sizeBytes:number;versionLabel?:string}
 interface ArtifactVersion extends ArtifactMetadata {versionId:string;nodeId:string;requestId:string}
 export interface ReviewBundle {runId:string;requestId:string;reviewDigest:string;expiresAt:number;bundleHash:string;
   versions:Array<Pick<ArtifactVersion,'artifactId'|'versionId'|'contentHash'>>}
@@ -548,7 +552,7 @@ export interface InteractiveArtifactController {
     expectedBundleHash?:string},auth:TrustedHostContextV1):Promise<ReviewBundle>;
 }
 export interface RunArtifactIndex {schemaVersion:1;namespace:string;runId:string;artifactHash:string;graphDigest:string;
-  items:Array<ArtifactVersion & {latestVersionId:string;effectiveVersionId:string|null}>;next:number|null}
+  items:Array<ArtifactVersion & {latestVersionId:string;effectiveVersionId:string|null;confirmed?:true}>;next:number|null}
 
 export type RunViewerRef = {namespace:string;runId:string;artifactHash:string;graphDigest:string} & (
   {collectionId:string;candidateHash:string;approvalRef:string} |
@@ -616,7 +620,7 @@ export declare function createInteractiveHostContext(options:{
   subjectId:string;
   authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|
     'run:fork'|'run:fork:redo-writes'|
-    'viewer:read'|'viewer:events'|'viewer:output'|'viewer:artifacts'|'artifact:register'|'artifact:freeze'|
+    'viewer:read'|'viewer:events'|'viewer:output'|'viewer:artifacts'|'viewer:artifact-content'|'artifact:register'|'artifact:freeze'|
     'operation:claim'|'operation:read'|'operation:settle'|'operation:list'|'operation:compensate'|
     'operation:recover-compensation'|'operation:settle-compensation';
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;

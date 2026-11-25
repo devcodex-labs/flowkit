@@ -41,17 +41,28 @@ export interface AuthorDraftView {
   candidate?: AuthorCandidate | null; previousHash: string | null;
   reviewReceipt?: { qualified: boolean; reviewRef: string; candidateHash: string; [key: string]: unknown } | null;
   reviewRejection?: AuthorReviewRejection;
+  documentProgress?: { sourceIdentity: string; sections: number; extracted: number; merged: number; reviewed: number };
   approvalReceipt?: { approvalRef: string; [key: string]: unknown } | null;
   diagnostics?: Array<{ code?: string; message?: string; [key: string]: unknown }>;
   [key: string]: unknown;
 }
+export type HostExecutionContract = { id: string; version: string; implementationDigest: string;
+  roles?: readonly string[]; rules: readonly string[] } & (
+  { kind: 'action'; effect: 'read-only' | 'write'; reads: readonly string[]; writes: readonly string[];
+    resultRoutes?: { key: string; cases: ReadonlyArray<{ value: string | number | boolean | null;
+      next: { kind: 'action'; id: string } | { kind: 'terminal'; status: 'succeeded' | 'failed' } }> } } |
+  { kind: 'verification'; effect?: never; reads?: never; writes?: never; resultRoutes?: never });
+
 export interface AuthorHostOptions {
+  hostExecutionContracts?: readonly HostExecutionContract[];
   namespace: string; storageFile: string; collectionIds: string[];
   hostProfile: { id: string; digest: string; [key: string]: unknown };
   defaults?: AuthorChoices;
   /** Compile the initial Standard Plan from its validated node options. */
   useNodeOptionsForNewDrafts?: boolean;
   budgetPolicy?: Partial<AuthorBudgetPolicy>;
+  /** Optional finite budget for material-based turns that dispatch multiple document tasks. */
+  documentBudgetPolicy?: Partial<AuthorBudgetPolicy>;
   capacity: { maxPhysicalExecutions: number; maxPendingCandidates?: number; maxDrafts: number; maxDraftBytes: number;
     maxRetainedDraftBytes: number; maxReceiptBytes: number; maxTurnsPerDraft: number };
   retention?: { policyRef: string; idempotencyRetentionMs: number };

@@ -89,6 +89,10 @@ codex plugin list --marketplace flowkit-local
 
 需要让操作员从节点复跑时，宿主同时提供 `forkRun(request, {view, requestContext})`。根据当前操作员身份绑定原 Program 和对应批准候选，调用 [指定节点复跑 SDK](/reference/interactive#forkInteractiveRun)，把返回的新 Run 加入宿主调度，并让 `resolveRunViewer` 能解析新 Run。操作员打开一个终态运行，在节点详情里点「查看可复跑记录」，选择一次历史执行，核对页面显示的实际起点，再点「从这次执行重新开始」。选择并行分支时页面会标出将重跑的整组。需要重做外部写入时勾选对应选项，并由宿主单独授权。新运行打开独立链接，原链接继续查看原结果。
 
+产物中心显示当前页的历史、最新和已确认版本。只有带批准记录的版本显示「已确认」，当前生效版本另标「生效」。登记产物时可提供 `versionLabel`，否则显示可核对的短版本标识，完整摘要可展开查看。筛选作用于当前页。
+
+需要预览正文时，宿主提供可选的 `readArtifactContent({ namespace, runId, artifactId, versionId, storageRef, requestContext, signal })`，从自己的存储返回字符串、UTF-8 字节或 `null`。Host 需要为精确版本授权 `viewer:artifact-content`。FlowKit 在授权后传入服务端存储引用，检查字节长度和正文 SHA-256，并在响应前再次核对权限。页面可预览不超过 128 KiB 的文本和 JSON，Markdown 标题、列表、表格和代码可直接阅读。
+
 宿主如需关联接收方的候选，可另外提供 `candidate`，并在 `ref` 中声明 `collectionId`、`candidateHash` 与 `approvalRef`。宿主应按这三项验证接收方的审批。页面还会验证候选文件及图摘要，才展示该候选和 Mermaid。导入可以生成新的候选身份，运行仍绑定原 Program 和 GraphSnapshot。
 
 Standard 宿主可以通过同一解析器显示一次真实调用的 trace。启用编译 trace，使用 `runtime.trace.start` 和 `runtime.trace.end` 收集节点调用，再返回 `{ ref, candidate, standardTrace, authorizeTrace }`。`ref` 含运行 ID、候选、产物和图摘要，`standardTrace` 含运行结果 `status` 和 `events`。每条事件含 `nodeId` 和 `kind`，结束事件另有 `outcome`。`authorizeTrace` 必须根据当前请求身份和这些摘要授权。页面只展示节点的实际调用记录，持久日志和修订分页由 Interactive 提供。
@@ -164,11 +168,27 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 签名三文件可携带 Professional Skill 的逻辑来源、ID、精确版本和摘要。接收端可以先查看和复审。缺少授权依赖时预览给出原因，`@devcodex-labs/flowkit/host` 的 `runApprovedCollectionWorkflow` 拒绝运行。同一集合使用批准仓库的精确版本。跨宿主通过 `resolveRunProfessionalSkill` 返回经授权的准确源候选，由 FlowKit 重验实物和版本后才派发。私有 Skill 正文留在授权仓库。带本地文档或 Host 安全策略的候选仍需接收方通过原 Host 安装与核验。
 
-用项目或功能材料梳理流程时，可以请宿主调用 `flowkit_create_design_diagram`，只提供本次允许模型读取的文字材料。返回 `design.html` 与 `design.mmd`。点击节点可查依据，概览汇总材料摘要和待确认项。设计图不包含运行程序。需要推进任务时，从该设计起草可执行工作流、检查实际契约并完成候选复审。
+用项目或功能材料梳理流程时，可以请宿主调用 `flowkit_create_design_diagram`，只提供本次允许模型读取的文字材料。项目材料按 UTF-8 范围处理，整图不设节点、关系或缺口总数门槛。首次生成先返回 `status: "running"`。使用相同请求 ID 和同一批来源继续查询，生成过程无需保持同一个连接。中断后可续用已核对的分片。当每个分片均有处理记录时，返回 `status: "ready"` 及单份离线 `design.html`。
+
+打开大型图时，同一画布展示项目总览和已有的跨块关系。点击块可原位展开，点击跨块连线可看每条原始关系的起止节点、条件和材料依据。用工具栏搜索名称或标识可直接定位文件里的节点。总览或子流程可分层排版，模型的单次布局预算应用到每层任务。MCP 回执通过 `layoutSource` 标明采用模型、采用部分模型或使用本地回退。原始节点、关系和待确认项保存在同一个离线文件中。静态图采用工作流详情组件显示取证说明和字段空态。需要推进实际任务时，用经授权的设计引用起草并复审可执行候选。节点详情内的来源分组标识是设计引用可用的 `groupId`。
 
 本机 MCP 的设计与 Author 可以共用材料选择。普通材料用 `{kind:"text", id, title, content}`。宿主能重新授权读取的版本用 `{kind:"material", id, sha256}`，其中摘要是原始文字的 SHA-256。创建设计后，将结果里的 `designRef` 与 `designHash` 分别作为 `{kind:"design", ref, sha256}` 的两项引用，连同额外需求或方案在 `flowkit_prepare_workflow` 的 `sources` 传入。同一草稿沿用第一次选择的版本。每次起草以及通过本机链接下载设计时，服务会重新核对所需来源。读取权限被撤销、材料内容变更或设计交付版本不一致时，请先处理来源。选择其他材料版本可新建草稿。
 
+本机 MCP 起草工作流时，Host 可以通过一条 `kind:"material"` 引用交付一份长契约原件。内联文本每项上限为 12,000 字符，解析后的材料合计受 256 KiB JSON 上限约束。长材料按原文区间分段提取并合并为一个工作流候选。复审核对各段原文与同一候选的实际编译结构，再核对整体行为。
+
+长材料的大纲生成若漏掉已授权要求的节点映射，Author 按缺失的要求分批核对已有计划和受信 Host 契约。缺乏证据时保留缺口，并继续阻止候选进入可批准状态。
+
+Author Plan 节点的 `description` 说明这步的业务目的、关键判断或产物。它位于 `options` 外，随候选写入签名清单。同一个候选的预览、离线 HTML 及运行页面都可读取此说明。普通读写、硬性结果条件和分支仍从实际编译结构展示。
+
+Host 可配置可信的 `hostExecutionContracts`，为 Action 和 Verification 指定能力 ID、版本、实际实现摘要及可复审的业务规则。Action 契约声明写入键、读取键和外部效果。Interactive 会校验三者和编译定义一致，Standard 的读取与外部效果由绑定宿主负责。可选角色列表约束该能力可被哪些节点角色引用。候选与已批准运行核对精确契约摘要。签名导出只携带节点说明和契约引用，契约正文由批准的 Host 提供。详细的权限与业务结果由真正的回调和控制流执行。
+
+如果某个回调结果必须进入指定步骤，可在受信 Action 契约声明 `resultRoutes`。例如 `{ key: "outcome", cases: [{ value: "closed", next: { kind: "action", id: "notify" } }] }` 要求回调产出 `closed` 后的实际路径调度 `notify`。也可以声明 `{ kind: "terminal", status: "succeeded" }`。Author 从正常后继按编译顺序求值 Condition，经过的谓词只能依赖这个标量键。Interactive 可用回调声明的读取键或写入键，Standard 使用声明的写入键。应使用实际实现返回的值。校验范围是声明的案例及其下一步，完整实现和其他业务路径仍由复审与宿主实测核对。
+
+如果 `flowkit_prepare_workflow` 返回 `running`，用原草稿 ID 调用 `flowkit_get_workflow_draft` 查看进度和结果。连接断开重开后可继续查询。Host 重启导致状态需要对账时，先执行恢复工具，再用同一版本的材料继续草稿。已完成且输入身份匹配的分段结果可以续用。当前候选通过全部复审并得到确认后，仍使用现有的三文件导出。
+
 本机服务嵌入应用时，宿主通过 `readAuthoringMaterial` 绑定其材料目录和读取许可，确认后用 `runWorkflow` 绑定实际 SDK 执行能力。调用 `flowkit_run_workflow` 时提供已批准候选摘要和由宿主批准的 `executionRef`。普通本机配置仍可用既有 SDK 在独立宿主运行。设计引用不代表运行授权。
+
+在设计图输入节点名、登记标识或节点 ID，可以用方向键、回车或鼠标定位节点。节点描述支持 Markdown。点击「材料依据」查看来源，点击「证据范围」查看引用的具体字节片段。通过本机链接打开图时，需要已有操作员会话，服务重新核对所选材料的读取权限及源版本摘要。离线图默认仅保存引用。确有随图交付证据的需求时，宿主可提供 `authorizeDesignExcerptExport`，按 `sourceId`、材料摘要、`rangeId`、片段摘要和当前请求逐段批准。离线摘录随 HTML 流转，请按可分享范围选择。
 
 跨宿主需要携带获准的私有依赖时，可在 SDK 的 `/host` 调用 `sealOfflineWorkflowDependencies`。来源端从批准库读取精确版本，用 Ed25519 签名，并通过 RSA-OAEP SHA-256 和 AES-256-GCM 为指定接收端加密。接收端使用 `openOfflineWorkflowDependencies` 核对发布者和授权，随后按原导入流程批准候选，并将包的 `resolverFor(approved)` 绑定为 `resolveRunProfessionalSkill`。文档通过包的 `readDocument(pin)` 按精确版本读取。两种读路径都重新核对信任和许可。普通三文件继续单独交付。接收端宿主负责执行批准与安全策略。
 

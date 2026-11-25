@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import * as z from 'zod/v4';
 import { workflowExecutionModes } from './interactive/protocol.mjs';
+import { hasLongAuthorMaterials } from './author/document-work.mjs';
 
 const id = z.string().min(1).max(256);
 const hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -11,7 +12,7 @@ const response = value => ({ content: [{ type: 'text', text: JSON.stringify(valu
 
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
-  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, limits = {} }) {
+  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, limits = {} }) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
@@ -25,6 +26,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const allowed = new Set(collectionIds);
   const server = new McpServer({ name: 'flowkit', version: '1.0.0' }, workflowUi ? {
     instructions: 'Use flowkit_start_workflow to create a draft, then flowkit_prepare_workflow with a turn to clarify or compile. ' +
+      'When preparation returns a running draft, use flowkit_get_workflow_draft with its ID to get the result. ' +
       (workflowUi.recover ? 'For a draft with recovery information, use flowkit_recover_workflow before sending another turn. ' : '') +
       'Open the candidate preview for visual review and user confirmation. Use flowkit_export_workflow for the three files and ' +
       'flowkit_add_workflow only for an explicit request to add the exact candidate or import a selected source.'
@@ -55,7 +57,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   };
   const draftView = draft => workflowUi ? workflowUi.present(draft, requestContext) : Object.fromEntries(['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash',
     'goal', 'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt',
-    'reviewRejection']
+    'reviewRejection', 'documentProgress']
     .filter(key => Object.hasOwn(draft, key)).map(key => [key, draft[key]]));
   async function exactDraft(collectionId, draftId, signal) {
     const draft = await author().readDraft({ draftId }, requestContext, signal);
@@ -111,7 +113,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const materialSources = z.array(z.discriminatedUnion('kind', [
     material.extend({ kind: z.literal('text') }).strict(),
     z.object({ kind: z.literal('material'), id, sha256: hash }).strict(),
-    z.object({ kind: z.literal('design'), ref: id, sha256: hash }).strict()
+    z.object({ kind: z.literal('design'), ref: id, sha256: hash, groupId: id.optional() }).strict()
   ])).min(1).max(6);
   const sourceOptions = workflowUi?.authoringMaterials ? { sources: materialSources.optional() } : {};
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
@@ -123,6 +125,9 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       const draft = await exactDraft(collectionId, input.draftId, ctx.signal);
       if (workflowUi?.authoringMaterials) input = await workflowUi.authoringMaterials({ input, sources, draft }, requestContext, ctx.signal);
       // An HTTP disconnect stops waiting. Only explicit SDK cancellation fences this shared turn.
+      if (workflowUi && queueAuthoringTurn && hasLongAuthorMaterials(input.contextSnapshot)) {
+        return draftView(await queueAuthoringTurn(input, requestContext));
+      }
       return draftView(await author().advanceTurn(input, requestContext));
     });
   tool('flowkit_review_candidate', 'Read the exact candidate difference, review receipt or rejected review findings.',
@@ -164,9 +169,10 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   if (workflowUi) {
-    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Summarize authorized project or feature materials as an offline design diagram and Mermaid file.',
-      { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(material.strict()).min(1).max(6).optional(),
-        ...sourceOptions }, (input, ctx) => {
+    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Create a single source-backed, offline project design HTML. If status is running, poll with the same request ID and sources until ready.',
+      { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(material.strict()).min(1).optional(),
+        sources: z.array(z.discriminatedUnion('kind', [material.extend({ kind: z.literal('text') }).strict(),
+          z.object({ kind: z.literal('material'), id, sha256: hash }).strict()])).min(1).optional() }, (input, ctx) => {
         if (Boolean(input.materials) === Boolean(input.sources)) throw new Error('Provide exactly one materials or sources selection');
         return workflowUi.design(input, requestContext, ctx.signal);
       });

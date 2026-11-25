@@ -445,10 +445,18 @@ try {
       await verifyApprovedSkillRun(exported, saved);
       const material = (await readFile('website/content/guide/workflow-authoring.mdx', 'utf8')).split('\n## 用 Author 准备 Workflow Skill')[0].slice(0, 12000);
       const source = { id: 'flowkit-guide', title: 'FlowKit 工作流编写指南', content: material };
-      const design = await tool('flowkit_create_design_diagram', { requestId: 'real-guide-map',
-        title: 'FlowKit 本机起草、复审与交付', materials: [source] });
+      const designInput = { requestId: 'real-guide-map', title: 'FlowKit 本机起草、复审与交付', materials: [source] };
+      const designDeadline = Date.now() + 600000;
+      let design;
+      for (;;) {
+        design = await tool('flowkit_create_design_diagram', designInput);
+        if (design.status !== 'running') break;
+        if (Date.now() >= designDeadline) throw new Error('Project design did not finish before the acceptance deadline');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      assert.equal(design.status, 'ready');
       assert.ok(design.requestId);
-      assert.deepEqual((await readdir(design.directory)).sort(), ['design.html', 'design.mmd']);
+      assert.deepEqual(await readdir(design.directory), ['design.html']);
       const view = readWorkflowPageData(await readFile(path.join(design.directory, 'design.html'), 'utf8'));
       assert.equal(view.graph.mode, 'design');
       assert.ok(view.graph.nodes.length >= 3 && view.graph.referenceEdges.length >= 2);

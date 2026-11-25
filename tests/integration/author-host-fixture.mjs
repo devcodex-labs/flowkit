@@ -27,7 +27,14 @@ export async function fixture(file, overrides = {}) {
         calls.push(input);
         if (input.stage === 'intent') return structuredClone(intent);
         const id = input.prepared.task.node.id;
-        const plan = input.prepared.task.input.authorizedRequest?.planSource === 'node-options' ? executableProposal : proposal;
+        if (id.startsWith('document-') && overrides.documentTask) {
+          return { status: 'succeeded', result: await overrides.documentTask(id, input.prepared.task.input), events: [] };
+        }
+        if (id === 'proposal' && overrides.documentPlanFallback) {
+          return { status: 'failed', failure: { code: 'invalid-result', message: 'Incomplete Plan response',
+            sideEffectStatus: 'none', retryable: false }, events: [] };
+        }
+        const plan = overrides.proposal ?? (input.prepared.task.input.authorizedRequest?.planSource === 'node-options' ? executableProposal : proposal);
         const result = id === 'proposal' || id === 'plan-repair' ? { rawText: JSON.stringify(plan) } :
           id === 'semantic-review' ? { passed: true, findings: [] } : { rawText: source };
         return { status: 'succeeded', result, events: [] };

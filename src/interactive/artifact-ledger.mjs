@@ -37,6 +37,9 @@ export function prepareArtifactLedger(db,{namespace,transaction,load,receipt,ass
   const list=db.prepare(`SELECT a.*, e.version_id AS effective_version_id FROM fk_i_business_artifact AS a
     LEFT JOIN fk_i_artifact_effective AS e USING(namespace,run_id,artifact_id)
     WHERE a.namespace=? AND a.run_id=? AND a.ordinal>? ORDER BY a.ordinal LIMIT 101`);
+  const approvals=db.prepare(`SELECT DISTINCT json_extract(v.value,'$.versionId') AS version_id
+    FROM fk_i_review_bundle AS b, json_each(b.snapshot,'$.versions') AS v
+    WHERE b.namespace=? AND b.run_id=? AND json_extract(b.approval,'$.decision')='approve'`);
   function activeRun(runId) {
     const cp=load(runId);
     if(!cp) throw fail('FK_I_HOST_DENIED','Run is unavailable');
@@ -53,7 +56,7 @@ export function prepareArtifactLedger(db,{namespace,transaction,load,receipt,ass
     }
   }
   return Object.freeze({
-    register({runId,requestId,artifactId,contentHash,mimeType,sizeBytes,storageRef}) {
+    register({runId,requestId,artifactId,contentHash,mimeType,sizeBytes,storageRef,versionLabel}) {
       return transaction('write',()=>{
         activeRun(runId);
         const producing=receipt(runId,requestId);
@@ -62,7 +65,8 @@ export function prepareArtifactLedger(db,{namespace,transaction,load,receipt,ass
         if(!validText(artifactId,160)||!validText(mimeType,120)||!validText(storageRef,512)||!Number.isSafeInteger(sizeBytes)||sizeBytes<0) {
           throw fail('FK_I_INVALID_OPERATION','Invalid artifact version metadata');
         }
-        const metadata={contentHash,mimeType,sizeBytes,storageRef};
+        if(versionLabel!==undefined&&!validText(versionLabel,80)) throw fail('FK_I_INVALID_OPERATION','Invalid artifact version label');
+        const metadata={contentHash,mimeType,sizeBytes,storageRef,...(versionLabel===undefined?{}:{versionLabel})};
         const versionId=hash({namespace,runId,requestId,artifactId,...metadata});
         const existing=version.get(namespace,runId,versionId);
         if(existing) return project(existing);
@@ -122,14 +126,22 @@ export function prepareArtifactLedger(db,{namespace,transaction,load,receipt,ass
       decide.run(JSON.stringify({revision,...proof}),namespace,runId,requestId);
       if(proof.decision==='approve') for(const item of versions) record.run(namespace,runId,item.artifactId,item.versionId);
     },
+    readVersion(runId,artifactId,versionId) {
+      return transaction('read',()=>{
+        activeRun(runId);
+        const row=version.get(namespace,runId,versionId);
+        return row?.artifact_id===artifactId?project(row):null;
+      });
+    },
     list(runId,after=0) {
       return transaction('read',()=>{
         activeRun(runId);
         const rows=list.all(namespace,runId,after);
+        const confirmed=new Set(approvals.all(namespace,runId).map(row=>row.version_id));
         return {items:rows.slice(0,100).map(row=>{
           const {storageRef:_storageRef,...metadata}=project(row);
           return {...metadata,latestVersionId:latest.get(namespace,runId,row.artifact_id)?.version_id,
-            effectiveVersionId:row.effective_version_id??null};
+            effectiveVersionId:row.effective_version_id??null,...(confirmed.has(row.version_id)?{confirmed:true}:{})};
         }),
         next:rows.length>100?rows[99].ordinal:null};
       });

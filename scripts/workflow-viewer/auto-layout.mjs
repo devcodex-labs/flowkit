@@ -5,6 +5,7 @@ import { ports, routeEdges } from './layout-routes.mjs';
 const guide = readFileSync(new URL('./layout-skill.md', import.meta.url), 'utf8');
 const schemaVersion = 1;
 const limits = Object.freeze({ compact: 60, nodes: 360, edges: 900, phases: 12, depth: 8, requests: 30, colGap: 58, rowGap: 52 });
+export const layoutTaskCapacity = Object.freeze({ nodes: limits.nodes, edges: limits.edges });
 export const layoutSkillHash = artifactDigest(guide);
 export const layoutContractHash = artifactDigest(JSON.stringify([schemaVersion, limits, layoutSkillHash]));
 const directions = ['LR', 'RL', 'TB', 'BT'];

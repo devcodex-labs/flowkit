@@ -11,6 +11,7 @@ import { executeAuthorCore, rejectedReview } from './host-core.mjs';
 import { checkProfessionalSkill } from './professional-skills.mjs';
 import { discoverPublication, cleanupPublicationGeneration } from './host-discovery.mjs';
 import { authorError, budgetPolicy, newTurnBudget, positive, createTurnPorts, jsonBytes } from './host-budget.mjs';
+import { hasLongAuthorMaterials } from './document-work.mjs';
 
 const clone = value => structuredClone(value);
 const select = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
@@ -19,7 +20,8 @@ const publicationView = (saved, currentActive, stateVersion) => clone({ ...selec
   ...(saved.generation ? { generation: select(saved.generation, ['discoveryRoot', 'collectionId', 'directory', 'manifestHash', 'generationId', 'snapshotHash']) } : {}),
   currentActive, isCurrent: currentActive === saved.candidateHash, ...(stateVersion === undefined ? {} : { stateVersion }) });
 const content = draft => ({ intent: draft.intent?.intentRef?.effectiveIntentHash ?? null, choices: draft.choices, target: draft.target,
-  coreIdentity: draft.coreIdentity, plan: draft.plan ?? null, resources: draft.resources ?? null, candidateHash: draft.candidate?.hash ?? null });
+  coreIdentity: draft.coreIdentity, plan: draft.plan ?? null, resources: draft.resources ?? null, candidateHash: draft.candidate?.hash ?? null,
+  ...(draft.documentSource ? { documentSource: draft.documentSource.sourceIdentity } : {}) });
 const requiredId = (value, label) => {
   if (typeof value !== 'string' || !value.trim() || value.length > 256) throw new TypeError(`${label} is required`);
   return value;
@@ -56,6 +58,8 @@ export async function createWorkflowAuthorHost(supplied) {
     throw authorError('author-executor', 'FKA_HOST_BINDING_MISSING: independently responsive execution and guarded request ports are required');
   }
   const policy = budgetPolicy(options.budgetPolicy);
+  const documentPolicy = budgetPolicy({ ...policy, maxRequests: Math.max(policy.maxRequests, 168),
+    ...options.documentBudgetPolicy });
   const requiredCapacity = ['maxPhysicalExecutions', 'maxDrafts', 'maxDraftBytes', 'maxRetainedDraftBytes', 'maxReceiptBytes', 'maxTurnsPerDraft'];
   if (requiredCapacity.some(key => options.capacity?.[key] === undefined)) throw Object.assign(authorError('author-executor', 'Host must configure finite execution, draft and receipt capacities'), {
     missingBindings: requiredCapacity.filter(key => options.capacity?.[key] === undefined) });
@@ -68,6 +72,7 @@ export async function createWorkflowAuthorHost(supplied) {
     maxTurnsPerDraft: positive(options.capacity.maxTurnsPerDraft, 256, 'turn receipts per draft') };
   if (capacity.maxDrafts > 100000 || capacity.maxTurnsPerDraft > 10000) throw authorError('author-capacity', 'Host capacity exceeds bounded inventory limits');
   options.hostProfile = authorInput(options.hostProfile, policy.maxBytes);
+  if (options.hostExecutionContracts !== undefined) options.hostExecutionContracts = authorInput(options.hostExecutionContracts, 131072);
   const storageFile = path.resolve(requiredId(options.storageFile, 'storageFile'));
   options.workRoot = path.dirname(storageFile);
   await mkdir(options.workRoot, { recursive: true });
@@ -100,6 +105,15 @@ export async function createWorkflowAuthorHost(supplied) {
       if (['approved', 'candidate-ready'].includes(result.status)) result.status = 'needs-review';
     }
     if (draft.recoveryRef) result.recoveryRef = draft.recoveryRef;
+    if (draft.documentWork) {
+      const { manifest, receipts } = draft.documentWork;
+      const counts = { extract: 0, merge: 0, review: 0 };
+      for (const { kind } of Object.values(receipts)) {
+        if (Object.hasOwn(counts, kind)) counts[kind]++;
+      }
+      result.documentProgress = { sourceIdentity: manifest.sourceIdentity, sections: manifest.sections.length,
+        extracted: counts.extract, merged: counts.merge, reviewed: counts.review };
+    }
     const turns = state ? state.turns(draft.id, capacity.maxTurnsPerDraft + 1) :
       store.authorTransaction(state => state.turns(draft.id, capacity.maxTurnsPerDraft + 1));
     result.physicalOutstanding = turns.filter(turn => turn.physicalOutstanding).map(turn => ({ turnId: turn.turnId, attemptId: turn.attemptId }));
@@ -158,6 +172,7 @@ export async function createWorkflowAuthorHost(supplied) {
       contentRevision: draft.contentRevision, contentHash: draft.contentHash, candidateHash: draft.candidate?.hash,
       planHash: hash(draft.plan ?? null), resourceHash: hash(draft.resources ?? null), coreHash: hash(options.coreIdentity),
       hostProfileHash: hash(options.hostProfile),
+      ...(options.hostExecutionContracts?.length ? { hostExecutionContractHash: hash(options.hostExecutionContracts) } : {}),
       reviewPolicy: options.authorization.reviewPolicy ?? 'separate-pass',
       previousHash: draft.previousHash };
   }
@@ -171,6 +186,7 @@ export async function createWorkflowAuthorHost(supplied) {
     draft.intent = value.effectiveIntent; draft.plan = value.currentPlan ?? null; draft.resources = value.resourceSnapshot ?? null;
     if (result.intentBaseline !== undefined) draft.intentBaseline = result.intentBaseline;
     draft.coreIdentity = result.coreIdentity; draft.authorizedRequest = value.authorizedRequest; draft.baselineEvidence = value.baselineEvidence;
+    draft.documentSource = value.documentSource; draft.documentRequest = value.documentRequest;
     draft.candidate = value.candidate ?? null; draft.diff = value.candidateDiff ?? null;
     const contentHash = hash(content(draft));
     if (draft.contentHash !== contentHash) { draft.contentRevision++; draft.contentHash = contentHash; draft.reviewReceipt = null; draft.approvalReceipt = null; }
@@ -273,7 +289,7 @@ export async function createWorkflowAuthorHost(supplied) {
       await authorize('read', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       return view(draft);
     },
-    async advanceTurn(input, currentRequestContext, signal) {
+    async advanceTurn(input, currentRequestContext, signal, admitted) {
       const initial = read(input.draftId);
       await authorize('advance', initial.collectionId, currentRequestContext, signal, { draftId: initial.id });
       requiredId(input.turnId, 'turnId');
@@ -386,7 +402,8 @@ export async function createWorkflowAuthorHost(supplied) {
             ...previous, ...lastTurn?.reviewAuthorization, ...lastTurn?.request
           }, ['baseline', 'baselineId', 'confirmedConstraintIds']) } : {}),
           priorReview: draft.reviewReceipt ?? null, priorApproval: draft.approvalReceipt ?? null,
-          request, fingerprint, status: 'running', physicalOutstanding: true, budget: newTurnBudget(policy) };
+          request, fingerprint, status: 'running', physicalOutstanding: true,
+          budget: newTurnBudget(hasLongAuthorMaterials(request.contextSnapshot ?? draftContextSnapshot) ? documentPolicy : policy) };
         if (turn.kind === 'authoring') draft.lastAuthoringTurnId = turn.turnId;
         draft.activeExecution = turn.executionToken; draft.status = 'running';
         draft.reviewReceipt = null; draft.approvalReceipt = null;
@@ -440,9 +457,34 @@ export async function createWorkflowAuthorHost(supplied) {
       const ports = createTurnPorts({ changeTurn, signal: combined, requestContext: currentRequestContext,
         execution: options.execution, beforeDispatch: (kind, portInput, toolBinding) => authorize(`execute-${kind}`, initial.collectionId,
           currentRequestContext, combined, { draftId: initial.id, portInput, toolBinding }), track });
+      const documentOwner = hash([options.coreIdentity, options.hostProfile, currentRequestContext]);
+      const documentSteps = {
+        open(manifest) {
+          mutate(initial.id, undefined, draft => {
+            if (draft.activeExecution !== turn.executionToken) throw authorError('author-fenced', 'Document execution was fenced');
+            const previous = draft.documentWork;
+            if (previous?.owner === documentOwner && previous.manifest.sourceIdentity === manifest.sourceIdentity) return NO_CHANGE;
+            draft.documentWork = { owner: documentOwner, manifest, receipts: {} };
+          });
+        },
+        readStep({ kind, id, sourceIdentity, key }) {
+          const work = read(initial.id).documentWork;
+          const receipt = work?.receipts[kind + ':' + id];
+          if (work?.owner === documentOwner && work.manifest.sourceIdentity === sourceIdentity && receipt?.key === key) return receipt;
+        },
+        saveStep(receipt) {
+          mutate(initial.id, undefined, draft => {
+            const work = draft.documentWork;
+            if (draft.activeExecution !== turn.executionToken || work?.owner !== documentOwner ||
+                work.manifest.sourceIdentity !== receipt.sourceIdentity) throw authorError('author-fenced', 'Document checkpoint identity changed');
+            work.receipts[receipt.kind + ':' + receipt.id] = receipt;
+          });
+        }
+      };
       try {
+        if (admitted) admitted(view(read(input.draftId)));
         const core = executeAuthorCore({ draft: read(input.draftId), turn, options, ports,
-          signal: combined, requestContext: currentRequestContext, observeReview: options.authorization.observeReview ?? (() => null), track });
+          signal: combined, requestContext: currentRequestContext, observeReview: options.authorization.observeReview ?? (() => null), track, documentSteps });
         track(core);
         const result = await during(combined, () => core);
         combined.throwIfAborted();
@@ -701,6 +743,12 @@ export async function createWorkflowAuthorHost(supplied) {
       return { namespace: options.namespace, collectionIds: [...options.collectionIds], authorHost: publicHost,
         requestContext, store, resolveAuthoringInput: bindings.resolveAuthoringInput ?? options.resolveAuthoringInput,
         resolveCollectionPlan: bindings.resolveCollectionPlan, runWorkflow: bindings.runWorkflow, limits: bindings.limits,
+        queueAuthoringTurn(input, context) {
+          return new Promise((resolve, reject) => {
+            host.advanceTurn(authorInput(input, policy.maxBytes), authorInput(context, policy.maxBytes), undefined, resolve)
+              .then(resolve, reject);
+          });
+        },
         authorize: async (request, context = requestContext) => {
           await authorize(request.action ?? request.operation, request.collectionId, context, request.signal); return true;
         },

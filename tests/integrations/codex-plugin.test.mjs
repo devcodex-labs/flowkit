@@ -304,14 +304,65 @@ test('incomplete and denied Professional Skill discovery never starts a Skill dr
   assert.equal(selected.resourceRequirements[0].source, 'source-b');
 });
 
-test('project design uses known source IDs, commits two offline files and replays an exact request', async t => {
+async function finishedDesign(request) {
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    const response = await request();
+    if (response.isError || JSON.parse(response.content[0].text).status !== 'running') return response;
+    if (Date.now() >= deadline) throw new Error('Design fixture did not finish');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+test('an optional layout timeout does not prevent delivery or repeat the design model', async t => {
+  let service, client;
+  let modelCalls = 0;
+  let layoutSignal;
+  let finishLayout;
+  t.after(async () => {
+    finishLayout?.();
+    await client?.close();
+    await service?.close();
+  });
+  const root = await ownedDirectory(t);
+  const model = monthlyTimesheetModel();
+  model.planLayout = ({ signal }) => {
+    layoutSignal = signal;
+    return new Promise((_, reject) => { finishLayout = () => reject(new Error('Layout stopped')); });
+  };
+  model.planDesign = async ({ materials: [material] }) => {
+    modelCalls++;
+    return { status: 'completed', requestId: 'design-result', provider: 'fixture', model: 'fixture', proposal: {
+      schemaVersion: 1, nodes: [{ id: 'start', name: 'Start', description: 'Read request', sources: [material.id] }],
+      edges: [], unresolved: [], coverage: [{ source: material.id, status: 'represented', reason: 'First step' }]
+    } };
+  };
+  const token = 'test-design-layout-timeout';
+  service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'),
+    exportDir: path.join(root, 'exports'), authorTurnDurationMs: 600 }, { credential: token, modelBinding: model });
+  client = new Client({ name: 'flowkit-design-timeout-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+  const arguments_ = { requestId: 'design-layout-timeout', title: 'Request', materials: [{ id: 'guide', title: 'Guide', content: 'Read' }] };
+  const request = () => client.callTool({ name: 'flowkit_create_design_diagram', arguments: arguments_ });
+  const response = await finishedDesign(request);
+  assert.ok(!response.isError, JSON.stringify(response));
+  const result = JSON.parse(response.content[0].text);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.layoutSource, 'fallback');
+  assert.equal(layoutSignal?.aborted, true);
+  assert.equal(modelCalls, 1);
+  assert.deepEqual(await readdir(result.directory), ['design.html']);
+  assert.equal(JSON.parse((await request()).content[0].text).designHash, result.designHash);
+});
+
+test('project design uses known source IDs, commits one offline HTML and replays an exact request', async t => {
   let service, client;
   t.after(async () => { await client?.close(); await service?.close(); });
   const root = await ownedDirectory(t);
   const model = monthlyTimesheetModel();
   const material = { id: 'guide', title: '交付指南', content: '先复审，后由用户确认。' };
   const materialRef = { kind: 'material', id: material.id, sha256: artifactDigest(material.content) };
-  let activeSource = true, changedSource = false, authorInputs = [], acceptedRuns = 0;
+  let activeSource = true, changedSource = false, allowExcerpt = false, authorInputs = [], acceptedRuns = 0;
   const physical = model.execution.request;
   model.execution.request = async input => {
     if (input.flowkitIntent) authorInputs.push(input.flowkitIntent);
@@ -320,15 +371,19 @@ test('project design uses known source IDs, commits two offline files and replay
   let calls = 0;
   model.planDesign = async ({ materials }) => {
     calls++;
-    return { provider: 'test', model: 'test', requestId: 'design-test-observation', proposal: { schemaVersion: 1,
+    return { status: 'completed', provider: 'test', model: 'test', requestId: 'design-test-observation', proposal: { schemaVersion: 1,
       nodes: [{ id: 'review', name: '复审工作流', description: '核对候选', sources: [materials[0].id] },
         { id: 'confirm', name: '确认候选', description: '由用户确认', sources: [materials[0].id] }],
-      edges: [{ from: 'review', to: 'confirm', description: '复审完成' }],
+      coverage: [{ source: materials[0].id, status: 'represented', reason: '已识别复审和确认节点' }],
+      edges: [{ from: 'review', to: 'confirm', description: '复审完成', sources: [materials[0].id] }],
       unresolved: [{ question: '谁依照仓库制度执行复审？', sources: [materials[0].id] }] } };
   };
   const token = 'test-design-diagram-credential';
   service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') },
     { credential: token, modelBinding: model,
+      authorizeDesignExcerptExport({ sourceId, sourceDigest, rangeDigest }) {
+        return allowExcerpt && sourceId === material.id && sourceDigest === materialRef.sha256 && rangeDigest === materialRef.sha256;
+      },
       readAuthoringMaterial({ id, requestContext }) {
         assert.equal(requestContext.principalId, 'flowkit-local-owner');
         return activeSource && id === material.id
@@ -347,15 +402,16 @@ test('project design uses known source IDs, commits two offline files and replay
   client = new Client({ name: 'flowkit-design-test', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
   const input = { requestId: 'delivery-design', title: '交付流程设计', materials: [material] };
-  const create = args => client.callTool({ name: 'flowkit_create_design_diagram', arguments: args });
+  const create = args => finishedDesign(() => client.callTool({ name: 'flowkit_create_design_diagram', arguments: args }));
   const first = await create(input);
   assert.ok(!first.isError, JSON.stringify(first));
   const result = JSON.parse(first.content[0].text);
-  assert.deepEqual((await readdir(result.directory)).sort(), ['design.html', 'design.mmd']);
+  assert.deepEqual(await readdir(result.directory), ['design.html']);
   const html = await readFile(path.join(result.directory, 'design.html'), 'utf8');
   const view = readWorkflowPageData(html);
   assert.equal(view.graph.mode, 'design');
   assert.deepEqual(view.design.sources, [{ id: material.id, title: material.title, digest: artifactDigest(material.content) }]);
+  assert.equal(view.design.excerpts, undefined);
   assert.equal(view.design.unresolved.length, 1);
   assert.equal(JSON.parse((await create(input)).content[0].text).designHash, result.designHash);
   assert.equal((await create({ ...input, title: '不同请求' })).isError, true);
@@ -364,8 +420,24 @@ test('project design uses known source IDs, commits two offline files and replay
     const response = await client.callTool({ name, arguments: args });
     return { ...JSON.parse(response.content[0].text), isError: response.isError === true };
   };
-  const pinned = await call('flowkit_create_design_diagram', { requestId: 'pinned-design', title: input.title, sources: [materialRef] });
+  allowExcerpt = true;
+  const pinnedResult = await create({ requestId: 'pinned-design', title: input.title, sources: [materialRef] });
+  assert.ok(!pinnedResult.isError, JSON.stringify(pinnedResult));
+  const pinned = JSON.parse(pinnedResult.content[0].text);
   assert.equal((await fetch(pinned.files[0].url)).status, 200);
+  const pinnedView = readWorkflowPageData(await readFile(path.join(pinned.directory, 'design.html'), 'utf8'));
+  const [excerpt] = pinnedView.design.excerpts;
+  assert.equal(excerpt.text, material.content);
+  const evidenceUrl = new URL('evidence', pinned.files[0].url);
+  evidenceUrl.search = new URLSearchParams({ source: material.id, range: excerpt.rangeId });
+  assert.equal((await fetch(evidenceUrl)).status, 403);
+  const evidenceHeaders = { cookie: await browserIdentity(service) };
+  const evidenceResponse = await fetch(evidenceUrl, { headers: evidenceHeaders });
+  assert.equal(evidenceResponse.status, 200);
+  assert.equal((await evidenceResponse.json()).text, material.content);
+  changedSource = true;
+  assert.equal((await fetch(evidenceUrl, { headers: evidenceHeaders })).status, 404);
+  changedSource = false;
   const draft = await call('flowkit_start_workflow', { requestId: 'design-to-workflow', operation: 'create',
     goal: '基于交付指南起草工作流', executionMode: 'standard' });
   const turn = { draftId: draft.id, turnId: 'from-design', expectedStateVersion: draft.stateVersion,
@@ -382,6 +454,8 @@ test('project design uses known source IDs, commits two offline files and replay
   const follow = { ...turn, turnId: 'continued', expectedStateVersion: candidate.stateVersion, input: '继续复审' };
   activeSource = false;
   assert.equal((await call('flowkit_prepare_workflow', { turn: follow })).error.code, 'FKA_MATERIAL_UNAVAILABLE');
+  assert.equal((await call('flowkit_export_workflow', { draftId: draft.id,
+    candidateHash: candidate.candidate.candidateHash })).error.code, 'FKA_MATERIAL_UNAVAILABLE');
   for (const file of pinned.files) assert.equal((await fetch(file.url)).status, 403);
   activeSource = true; changedSource = true;
   assert.equal((await call('flowkit_prepare_workflow', { turn: follow })).error.code, 'FKA_MATERIAL_CHANGED');
@@ -394,14 +468,102 @@ test('project design uses known source IDs, commits two offline files and replay
   assert.equal((await call('flowkit_run_workflow', execution)).isError, true);
   const accepted = await call('flowkit_add_workflow', { requestId: 'approve-design-run',
     sourceRef: draft.id, candidateHash: candidate.candidate.candidateHash });
-  const cookie = await browserIdentity(service);
+  const cookie = evidenceHeaders.cookie;
   const saved = await (await confirmInTestBrowser(accepted.confirmationUrl, cookie)).json();
   assert.equal((await call('flowkit_run_workflow', { ...execution, skillId: saved.workflowId, executionRef: 'denied' })).isError, true);
   assert.equal((await call('flowkit_run_workflow', { ...execution, skillId: saved.workflowId })).status, 'succeeded');
   assert.equal(acceptedRuns, 1);
-  await writeFile(path.join(result.directory, 'design.mmd'), 'tampered');
-  assert.equal((await fetch(result.files.find(file => file.name.endsWith('.mmd')).url)).status, 409);
+  await writeFile(path.join(result.directory, 'design.html'), 'tampered');
+  assert.equal((await fetch(result.files[0].url)).status, 409);
   assert.equal((await create(input)).isError, true);
+});
+
+test('project design resumes authorized persisted fragments and delivers one complete large HTML', async t => {
+  let client, service;
+  t.after(async () => { try { await client?.close(); } finally { await service?.close(); } });
+  const root = await ownedDirectory(t);
+  const model = monthlyTimesheetModel();
+  const contents = Array.from({ length: 7 }, (_, index) => ({
+    id: 'material-' + index, title: 'Phase ' + index,
+    content: index === 0 ? '🙂中'.repeat(2100) + '\r\n结尾' : 'Actual project phase ' + index
+  }));
+  const sources = contents.map(material => ({ kind: 'material', id: material.id, sha256: artifactDigest(material.content) }));
+  const stats = new Map();
+  let calls = 0, unavailable = false, fail = true, revokeDuringPlanning = false;
+  model.planDesign = async ({ materials: [part] }) => {
+    stats.set(part.id, (stats.get(part.id) ?? 0) + 1);
+    if (++calls === 2 && fail) throw new Error('Interrupted design');
+    if (revokeDuringPlanning && part.id === 'material-6') unavailable = true;
+    const nodes = Array.from({ length: 51 }, (_, index) => ({ id: 'step-' + index, name: 'Step ' + index,
+      description: 'A reviewed step', sources: [part.id] }));
+    return { status: 'completed', requestId: 'plan-' + calls, proposal: { schemaVersion: 1, nodes,
+      edges: nodes.slice(0, -1).map((node, index) => ({ from: node.id, to: nodes[index + 1].id,
+        description: 'continues', sources: [part.id] })),
+      unresolved: Array.from({ length: 3 }, (_, index) => ({ question: 'Review ' + index, sources: [part.id] })),
+      coverage: [{ source: part.id, status: 'represented', reason: 'Bound to reviewed phases' }]
+    } };
+  };
+  const credential = 'test-resumable-project-key';
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') };
+  async function connect() {
+    service = await startLocalMcp(config, { credential, modelBinding: model, readAuthoringMaterial({ id }) {
+      const material = contents.find(value => value.id === id);
+      return material && !(unavailable && id === 'material-0') ? { authorized: true, ...material } : null;
+    } });
+    client = new Client({ name: 'project-resumption-test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + credential } } }));
+  }
+  const input = { requestId: 'large-design', title: 'Large project', sources };
+  const request = args => client.callTool({ name: 'flowkit_create_design_diagram', arguments: args });
+  const create = args => finishedDesign(() => request(args));
+  async function noDelivery() {
+    const entries = await readdir(config.exportDir).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return [];
+    });
+    assert.deepEqual(entries, []);
+  }
+  await connect();
+  const pending = JSON.parse((await request(input)).content[0].text);
+  assert.deepEqual(pending, { status: 'running', requestId: input.requestId });
+  assert.equal((await create(input)).isError, true);
+  await noDelivery();
+  const first = [...stats.keys()][0];
+  await client.close();
+  await service.close();
+  await connect();
+  fail = false;
+  unavailable = true;
+  assert.equal((await create(input)).isError, true);
+  assert.equal(calls, 2);
+  unavailable = false;
+  revokeDuringPlanning = true;
+  assert.equal((await create(input)).isError, true);
+  await noDelivery();
+  assert.equal(stats.get(first), 1);
+  const finished = calls;
+  unavailable = false;
+  revokeDuringPlanning = false;
+  let result = await create(input);
+  if (result.isError) {
+    assert.match(result.content[0].text, /authorize|unavailable/i);
+    result = await create(input);
+  }
+  assert.ok(!result.isError, JSON.stringify(result));
+  const delivered = JSON.parse(result.content[0].text);
+  assert.equal(delivered.status, 'ready');
+  assert.equal(calls, finished);
+  assert.deepEqual(await readdir(delivered.directory), ['design.html']);
+  const data = readWorkflowPageData(await readFile(path.join(delivered.directory, 'design.html'), 'utf8'));
+  assert.ok(data.graph.nodes.length > 360);
+  assert.ok(data.graph.referenceEdges.length > 120);
+  assert.ok(data.design.unresolved.length > 20);
+  assert.deepEqual(data.design.sources.map(source => source.id), contents.map(part => part.id));
+  const nodeIds = new Set(data.graph.nodes.map(node => node.id));
+  const positions = data.project.positions.flatMap(scope => scope.tiles).map(tile => tile.id).filter(id => nodeIds.has(id));
+  assert.deepEqual(positions.sort(), [...nodeIds].sort());
+  assert.ok(data.project.root.length > 1);
+  assert.equal((await create({ ...input, sources: sources.slice(1) })).isError, true);
 });
 
 test('invalid placement and partition replies receive exact feedback before tightly scoped arrangement', async () => {

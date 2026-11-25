@@ -154,6 +154,7 @@ button{cursor:pointer}
 .list-stack{display:flex;flex-direction:column;gap:6px}
 .relation-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 9px;border:1px solid #e8edf3;border-radius:8px;background:#fff;text-align:left;width:100%;color:#526078}
 .relation-row:hover{border-color:#bdcafa;background:#f8faff}
+a.relation-row{text-decoration:none}
 .relation-row span{font-size:10px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .relation-row small{font-size:8px;color:#9aa4b4;white-space:nowrap}
 .panel-actions{display:flex;gap:7px;margin-top:11px}
@@ -322,7 +323,7 @@ button{cursor:pointer}
 .inspector-sub{font-size:12px;line-height:1.5}
 .inspector-body{padding:16px 19px 28px}
 .panel-section{margin-top:22px}
-.section-title,.rich-section .rich-heading .section-title{font-size:13px;line-height:1.4;letter-spacing:0;font-weight:750;color:#586780}
+.section-title,.rich-section .rich-heading .section-title{font-size:13px;line-height:1.4;letter-spacing:0;font-weight:600;color:#586780}
 .info-box,.rich-preview{font-size:14px;line-height:1.8;color:#41516a}
 .rich-preview{padding:13px 14px}
 .rich-preview.collapsed{max-height:172px}
@@ -434,7 +435,7 @@ button{cursor:pointer}
 
 /* Consistent Chinese-first typography, including SVG labels */
 html,body,button,input,.node,.edge-layer text,.reader-content,.inspector{font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif!important}
-code,pre,.schema-type,.node-id,.inspector-sub{font-family:Consolas,"Cascadia Code",ui-monospace,monospace}
+code,pre,.schema-type,.node-id,.inspector-sub.is-identifier{font-family:Consolas,"Cascadia Code",ui-monospace,monospace}
 .node-id{font-size:10px}
 .node-title{font-size:13px}
 .edge-label text{font-size:12px}
@@ -975,6 +976,10 @@ html,body,button,input,textarea,.node,.stage,.tooltip,.inspector,.reader-dialog,
 .ac-item-main strong{font-size:14px;overflow-wrap:anywhere;color:#253755}
 .ac-item-main small{font-size:11px;color:#8999af;overflow-wrap:anywhere}
 .ac-item-main p{color:#667a96;font-size:12px;margin:0;line-height:1.55}
+.ac-digests{font:400 12px/1.55 var(--cn-font);color:#536680;overflow-wrap:anywhere}
+.ac-digests summary{cursor:pointer}
+.ac-pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:10px}
+.ac-pager[hidden]{display:none}
 .ac-item-side{display:flex;flex-direction:column;gap:6px;min-width:116px;align-items:flex-start}
 .ac-item-side .ac-version{font-size:11px;color:#667996;font-weight:700}
 .ac-item-side .artifact-state{font-size:11px}
@@ -1045,7 +1050,6 @@ html,body,button,input,textarea,.node,.stage,.tooltip,.inspector,.reader-dialog,
 dialog.reader-overlay {width:100%;height:100%;max-width:none;max-height:none;margin:0;border:0;color:inherit}
 .reader-tools {display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid #e8eef7}
 .reader-tools input {min-width:0;max-width:100%;padding:6px 8px;border:1px solid #dce5f3;border-radius:6px}
-#readerContent[data-reader-size="large"] :is(p,li,pre,.contract-name,.contract-type,.meta-list) {font-size:1.15em}
 #readerContent .reader-match {outline:2px solid #eab548;outline-offset:2px}
 .reader-line {display:block;min-height:1.4em}
 .mermaid-reader {overflow:auto;white-space:pre;font-family:monospace}
@@ -1073,6 +1077,40 @@ summary.contract-trigger::-webkit-details-marker {display:none}
 .node-run-status {display:none}
 #miniViewport {transform-origin:0 0}
 .template-items {margin:0;padding-left:1.25em;display:grid;gap:5px}
+#inspector .template-items,#inspector .rich-text{font-family:var(--cn-font);font-size:14px;font-weight:400;line-height:1.65;overflow-wrap:anywhere}
+#inspector .design-evidence summary,.evidence-link{font:400 14px/1.65 var(--cn-font);overflow-wrap:anywhere}
+.evidence-link{border:0;background:none;padding:0;color:#315991;cursor:pointer;text-align:left}
+.evidence-link:hover{text-decoration:underline;text-underline-offset:3px}
+.evidence-link:focus-visible{outline:2px solid #5278e8;outline-offset:2px;border-radius:3px}
+.evidence-facts{font:400 13px/1.65 var(--cn-font);color:#586780;overflow-wrap:anywhere;margin-bottom:12px}
+.reader-tools input,.reader-tools .reader-action{font:400 13px/1.4 var(--cn-font);color:#41516a}
+.reader-tools input::placeholder{color:#667691;opacity:1}
+.reader-content .rich-text{font:400 14px/1.65 var(--cn-font);overflow-wrap:anywhere}
+.rich-text :is(h1,h2,h3,h4,h5,h6){font-size:1.1em;font-weight:650;margin:0.8em 0 0.4em}
+.rich-text :is(p,ul,ol,pre,table){margin:0.55em 0}
+.rich-text :is(pre,table){display:block;max-width:100%;overflow:auto}
+.rich-text pre,.reader-source{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px 12px;background:#f5f7fb;border:1px solid #e0e7f3;border-radius:7px}
+.rich-text table{border-collapse:collapse}
+.rich-text :is(td,th){padding:5px 9px;border:1px solid #e0e7f3;text-align:left}
+#inspector .meta-list .v,#inspector .relation-row small{font-family:var(--cn-font);font-weight:400;min-width:0;white-space:normal;overflow-wrap:anywhere}
+#inspector .relation-row small{font-size:12px;line-height:1.5;color:#58657c}
+.project-stage .stage-head{padding-right:104px}
+.project-fold{position:absolute;right:13px;top:12px;pointer-events:auto;border:1px solid #dce4f2;border-radius:7px;
+ background:#fff;color:#3b5276;font-size:13px;padding:5px 8px;cursor:pointer}
+.project-block-count{font-size:11.5px;line-height:1.5;font-weight:400;color:#526788}
+.project-link-row{font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+.project-link-row a{color:#315ba6}
+.search-wrap{position:relative}
+.search-wrap:focus-within{border-color:#8caaf3;box-shadow:0 0 0 2px #e6edff}
+.node-search-menu{position:absolute;top:calc(100% + 5px);left:0;width:min(330px,calc(100vw - 28px));z-index:50;
+ background:#fff;border:1px solid #dbe5f4;border-radius:10px;box-shadow:0 12px 24px #25375524;overflow:hidden}
+.node-search-options{max-height:min(310px,38vh);overflow:auto;overscroll-behavior:contain;padding:4px}
+.node-search-options:empty{display:none}
+.node-search-option{padding:8px 10px;border-radius:6px;cursor:pointer;color:#253755;display:grid;gap:3px;overflow-wrap:anywhere}
+.node-search-option:hover,.node-search-option[aria-selected="true"]{background:#edf3ff}
+.search-wrap .node-search-option span{font:500 13px/1.45 var(--cn-font);color:inherit}
+.node-search-option small,.node-search-status{font:400 12px/1.45 var(--cn-font);color:#5b6d88}
+.node-search-status{border-top:1px solid #eef2f8;margin:0;padding:7px 14px}
 .template-error {margin:1em;padding:1em;background:#fff5f5;color:#7f1d1d;position:absolute;z-index:20}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0s!important;transition-duration:0s!important}}
 </style></head>
@@ -1088,8 +1126,8 @@ summary.contract-trigger::-webkit-details-marker {display:none}
     </div>
     <div class="top-meta" id="workflowStats">
     <span class="demo-tag">V4.5 · 离线结构</span>
-    <span class="stat"><strong id="statNodes"></strong> 声明节点</span>
-    <span class="stat"><strong id="statEdges"></strong> 编译关系</span>
+    <span class="stat"><strong id="statNodes"></strong> <span id="statNodeLabel">声明节点</span></span>
+    <span class="stat"><strong id="statEdges"></strong> <span id="statEdgeLabel">编译关系</span></span>
     <span class="stat"><strong id="statPhases"></strong> 阶段</span>
   </div>
   </header>
@@ -1111,7 +1149,9 @@ summary.contract-trigger::-webkit-details-marker {display:none}
       <div class="divider-v"></div>
       <label class="stage-jump-control">阶段 <select id="stageJump" aria-label="选择工作流阶段"></select></label><button id="stageFocusBtn" class="tool-btn" type="button">定位阶段</button>
 <div class="divider-v"></div>
-<label class="search-wrap"><span>⌕</span><input id="searchInput" aria-label="搜索节点名称或 ID" placeholder="搜索节点名称 / ID，按 Enter"></label>
+<div class="search-wrap"><span aria-hidden="true">⌕</span><input id="searchInput" role="combobox" aria-label="搜索节点名称或 ID" aria-controls="nodeSearchOptions" aria-expanded="false" aria-autocomplete="list" autocomplete="off" placeholder="搜索节点名称 / ID">
+        <div class="node-search-menu" id="nodeSearchMenu" hidden><div class="node-search-options" id="nodeSearchOptions" role="listbox" aria-label="匹配节点"></div><p class="node-search-status" id="nodeSearchStatus" role="status"></p></div>
+      </div>
       <button class="tool-btn" id="searchBtn">定位节点</button>
     </div>
     <div class="toolbar-right">
@@ -1166,6 +1206,10 @@ summary.contract-trigger::-webkit-details-marker {display:none}
     </div>
     <div class="ac-context" id="acContext"></div>
     <div class="ac-list" id="acList"></div>
+    <div class="ac-pager" id="acPager" hidden><span id="acPageStatus" role="status"></span>
+      <button type="button" class="panel-btn" id="acPrevious">上一页</button>
+      <button type="button" class="panel-btn" id="acNext">下一页</button>
+    </div>
   </div>
 </section>
 <div class="minimap" id="minimap" hidden aria-hidden="true">
@@ -1194,7 +1238,6 @@ summary.contract-trigger::-webkit-details-marker {display:none}
     <form class="reader-tools" id="readerSearchForm" role="search">
       <input type="search" id="readerSearch" aria-label="查找详情" placeholder="查找详情">
       <button type="submit" class="reader-action">查找下一处</button>
-      <button type="button" class="reader-action" id="readerSize" aria-pressed="false">放大文字</button>
       <span id="readerMatches" role="status"></span>
     </form>
     <div id="readerContent" class="reader-content"></div>
@@ -1271,14 +1314,130 @@ function prepare(config) {
   if (sets.size !== actualNodes.size || graph.referenceEdges.some(edge=>!mapped.has(edge.edgeId))) throw new Error('流程结构的展示映射不完整。');
   return { graph, runView:config.runView, mermaid:config.mermaid, executionBindings:config.executionBindings, design:config.design,
     groups:layout.groups, phases:layout.phases.map(phase => ({...phase,
-    count:visualNodes.filter(node => node.phase===phase.id && !node.helper).length +
-      new Set(visualNodes.filter(node => node.phase===phase.id && node.helper && node.spec).map(node => node.nodeId)).size,
+    count:phase.projectCount??(visualNodes.filter(node => node.phase===phase.id && !node.helper).length +
+      new Set(visualNodes.filter(node => node.phase===phase.id && node.helper && node.spec).map(node => node.nodeId)).size),
   })), nodes:visualNodes, edges:visualEdges };
 }
 
-let DATA;
+const projectColors=['#4769ae','#2b8976','#7757a2','#ac7342','#426d87','#9a5374'];
+let DATA, PROJECT, projectTarget, projectBlocks, projectParents, projectNodes, projectEdges;
+let openBlocks=new Set();
+function projectHref(kind, id) {
+  return id ? '#' + kind + '/' + encodeURIComponent(id) : '#overview';
+}
+function readProjectTarget() {
+  const [kind, fragment] = location.hash.slice(1).split('/');
+  let id;
+  try { id = decodeURIComponent(fragment ?? ''); } catch { return null; }
+  return ((kind === 'node' && projectNodes.has(id)) || (kind === 'group' && projectBlocks.has(id))) ? { kind, id } : null;
+}
+function openProjectTarget(target) {
+  if (!target) return;
+  for (let id = target.kind === 'group' ? target.id : projectParents.get(target.id); id; id = projectParents.get(id)) {
+    openBlocks.add(id);
+  }
+}
+function projectData(raw) {
+  const positions = new Map(raw.project.positions.map(({ id, tiles }) => [id, new Map(tiles.map(tile => [tile.id, tile]))]));
+  const descriptions = new Map(raw.design.groups.flatMap(group => group.steps.map(step => [step.id, step.description])));
+  const representations = new Map(), shown = [], phases = [], cards = [];
+  const routesByScope=new Map(raw.project.positions.map(({id,routes})=>[id,routes??[]]));
+  const activeRoutes=new Map();
+  const count = id => projectBlocks.get(id)?.count ?? 1;
+  function represent(id, by) {
+    const group = projectBlocks.get(id);
+    if (group) group.members.forEach(member => represent(member, by));
+    else representations.set(id, by);
+  }
+  function axes(values, field, size) {
+    const spans = new Map();
+    for (const value of values) spans.set(value[field], Math.max(spans.get(value[field]) ?? 0, value[size]));
+    const offsets = new Map();
+    let cursor = 26;
+    for (const coordinate of [...spans.keys()].sort((a,b) => a-b)) {
+      offsets.set(coordinate,cursor);
+      cursor += spans.get(coordinate) + 84;
+    }
+    return { offsets, extent: cursor - 58 };
+  }
+  function arrange(scope, memberIds, color) {
+    const saved = positions.get(scope);
+    const entries = memberIds.map((id,index) => {
+      const block = projectBlocks.get(id);
+      const shade = scope === 'overview' ? projectColors[index % projectColors.length] : color;
+      const tile = saved.get(id);
+      const subtree = block && openBlocks.has(id) ? arrange(id,block.members,shade) : null;
+      return { id,block,shade,subtree,x:tile.x,y:tile.y,w:subtree?.w ?? tile.w,h:subtree?.h ?? tile.h };
+    });
+    const packed=entries.every(entry=>!entry.subtree);
+    const horizontal=packed?packedAxis(entries,'x','w'):axes(entries,'x','w');
+    const vertical=packed?packedAxis(entries,'y','h'):axes(entries,'y','h');
+    return { scope,entries,horizontal,vertical,w:horizontal.extent+16,h:vertical.extent+62,color };
+  }
+  function packedAxis(entries,field,size) {
+    const origin=26-Math.min(...entries.map(entry=>entry[field]));
+    return {origin, offsets:new Map(entries.map(entry=>[entry[field],entry[field]+origin])),
+      extent:origin+Math.max(...entries.map(entry=>entry[field]+entry[size]))+26};
+  }
+  function draw(area, left, top) {
+    const group=projectBlocks.get(area.scope);
+    if(area.horizontal.origin!==undefined){
+      for(const {edgeId,route} of routesByScope.get(area.scope)) {
+        activeRoutes.set(edgeId,route.map(([x,y])=>[x+left+area.horizontal.origin,y+top+38+area.vertical.origin]));
+      }
+    }
+    phases.push({id:area.scope,title:group?.title??raw.graph.name,color:area.color,
+      x:left,y:top,w:area.w,h:area.h,projectCount:group?.count??raw.graph.nodes.length,
+      ...(group?{projectGroup:group.id}:{})});
+    for (const entry of area.entries) {
+      const {id,block,subtree,shade}=entry;
+      const x=left+area.horizontal.offsets.get(entry.x),y=top+38+area.vertical.offsets.get(entry.y);
+      if (subtree) {
+        draw(subtree,x,y);
+        continue;
+      }
+      represent(id,id);
+      shown.push(projectNodes.get(id)??{id,name:block.title,type:'design',ownerIds:[],inputs:[],outputs:[]});
+      cards.push({id,nodeId:id,phase:area.scope,x,y,w:entry.w,h:entry.h,projectColor:shade,
+        ...(block?{projectGroup:block.id,projectCount:count(id)}:{description:descriptions.get(id),descriptionSource:'host'})});
+    }
+  }
+  draw(arrange('overview',raw.project.root,'#64748b'),40,58);
+  const bundled=new Map();
+  for (const edge of raw.graph.referenceEdges) {
+    const from=representations.get(edge.from), to=representations.get(edge.to);
+    const collapsed=from!==edge.from||to!==edge.to;
+    if (collapsed&&from===to) continue;
+    const key=from+'>'+to;
+    let bundle=bundled.get(key);
+    if (!bundle) {bundle={...edge,from,to,members:[]};bundled.set(key,bundle);}
+    bundle.members.push(edge.edgeId);
+  }
+  const edgeMembers=new Map();
+  const referenceEdges=[], layoutEdges=[];
+  for (const {members,...edge} of bundled.values()) {
+    edgeMembers.set(edge.edgeId,members);
+    referenceEdges.push(edge);
+    const route=activeRoutes.get(edge.edgeId);
+    layoutEdges.push({id:'e'+layoutEdges.length,edgeId:edge.edgeId,source:edge.from,target:edge.to,kind:'normal',
+      label:members.length>1?members.length+' 条关系':edge.condition??'',...(route?{route}:{})});
+  }
+  return { ...raw, graph:{...raw.graph,nodes:shown,entryNodeId:representations.get(raw.graph.entryNodeId),referenceEdges},
+    design:{...raw.design,edgeMembers}, layout:{nodes:cards,edges:layoutEdges,phases,groups:[]} };
+}
 try {
-  DATA = prepare(JSON.parse($('workflow-data').textContent));
+  const raw = JSON.parse($('workflow-data').textContent);
+  if (raw.project) {
+    PROJECT = raw;
+    projectBlocks = records(raw.project.groups);
+    projectParents = new Map(raw.project.groups.flatMap(g => g.members.map(id => [id,g.id])));
+    projectNodes = records(raw.graph.nodes);
+    projectEdges = new Map(raw.graph.referenceEdges.map(e => [e.edgeId,e]));
+    openBlocks = new Set(history.state?.flowkitBlocks ?? (raw.project.expandInitially ? projectBlocks.keys() : []));
+    projectTarget = readProjectTarget();
+    openProjectTarget(projectTarget);
+  }
+  DATA = prepare(PROJECT ? projectData(raw) : raw);
 } catch (error) {
   $('templateError').textContent = error instanceof SyntaxError ? '工作流配置无法读取。' : error.message;
   $('templateError').hidden = false;
@@ -1286,21 +1445,25 @@ try {
 }
 const viewport=$('viewport'),world=$('world'),stageLayer=$('stageLayer'),nodeLayer=$('nodeLayer'),edgeLayer=$('edgeLayer');
 const inspector=$('inspector'),tooltip=$('tooltip'),miniWorld=$('minimapWorld'),miniViewport=$('miniViewport');
-const nodes=records(DATA.nodes), edges=DATA.edges, phaseMap=records(DATA.phases);
-const regions = new Map(DATA.graph.regions.map(region => [region.ownerId,region]));
-const actualNodes = records(DATA.graph.nodes);
-const displayedGroups = DATA.edges.some(edge=>edge.route) ? DATA.groups : [];
-const WORLD_W = Math.ceil(Math.max(...DATA.nodes.map(node => node.x+node.w), ...DATA.phases.map(phase => phase.x+phase.w),
-  ...displayedGroups.map(group => group.x+group.w))+70);
-const WORLD_H = Math.ceil(Math.max(...DATA.nodes.map(node => node.y+node.h), ...DATA.phases.map(phase => phase.y+phase.h),
-  ...displayedGroups.map(group => group.y+group.h))+90);
-const MINI_SCALE_X=184/WORLD_W, MINI_SCALE_Y=96/WORLD_H;
-for (const element of [world,edgeLayer,miniWorld]) {
-  element.style.width = WORLD_W+'px';
-  element.style.height = WORLD_H+'px';
+let nodes, edges, phaseMap, regions, actualNodes, cardsByNode, WORLD_W, WORLD_H, MINI_SCALE_X, MINI_SCALE_Y;
+function bindCanvasData() {
+  nodes=records(DATA.nodes); edges=DATA.edges; phaseMap=records(DATA.phases);
+  regions=new Map(DATA.graph.regions.map(region=>[region.ownerId,region]));
+  actualNodes=records(DATA.graph.nodes);
+  cardsByNode=new Map(DATA.nodes.map(card=>[card.nodeId,card]));
+  const groups=edges.some(edge=>edge.route)?DATA.groups:[];
+  const boxes=[...DATA.nodes,...DATA.phases,...groups];
+  WORLD_W=boxes.reduce((max,box)=>Math.max(max,box.x+box.w),0)+70;
+  WORLD_H=boxes.reduce((max,box)=>Math.max(max,box.y+box.h),0)+90;
+  MINI_SCALE_X=184/WORLD_W; MINI_SCALE_Y=96/WORLD_H;
+  for (const element of [world,edgeLayer,miniWorld]) {
+    element.style.width = WORLD_W+'px';
+    element.style.height = WORLD_H+'px';
+  }
+  edgeLayer.setAttribute('viewBox', `0 0 ${WORLD_W} ${WORLD_H}`);
+  miniWorld.style.transform = `scale(${MINI_SCALE_X},${MINI_SCALE_Y})`;
 }
-edgeLayer.setAttribute('viewBox', `0 0 ${WORLD_W} ${WORLD_H}`);
-miniWorld.style.transform = `scale(${MINI_SCALE_X},${MINI_SCALE_Y})`;
+bindCanvasData();
 const groupTemplate = world.querySelector('.ci-group');
 groupTemplate.remove();
 for (const group of DATA.groups??[]) {
@@ -1320,6 +1483,7 @@ function kebab(n){return n.slug||n.id.toLowerCase();}
 function phaseTitle(id){return phaseMap.get(id)?.title||id;}
 function stageColor(id){return phaseMap.get(id)?.color||'#64748b';}
 function nodeColor(n){
+ if(n.projectColor)return n.projectColor;
  if(n.id==='Done')return '#16a36a';
  if(['Blocked','RollbackFailed','_FlowkitException'].includes(n.id))return '#df5555';
  if(n.id==='NeedsClarification'||n.id==='CloseoutFailed')return '#d58b21';
@@ -1346,11 +1510,13 @@ function edgeDesc(e){
 }
 function renderStages(){
  stageLayer.innerHTML=DATA.phases.map(p=>`
- <section class="stage" data-stage-id="${p.id}" style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--stage-color:${p.color}">
+ <section class="stage${p.projectGroup?' project-stage':''}" data-stage-id="${esc(p.id)}" style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--stage-color:${p.color}">
   <div class="stage-head"><div class="stage-title"><i class="stage-dot"></i>${esc(p.title)}</div><span class="stage-count">${p.count} 个节点</span></div>
   <div class="stage-subtitle">${esc(p.desc)}</div>
+  ${p.projectGroup?`<button type="button" class="project-fold" data-project-fold="${esc(p.projectGroup)}" aria-label="折叠 ${esc(p.title)}" aria-expanded="true">折叠</button>`:''}
  </section>`).join('');
  stageLayer.querySelectorAll('[data-stage-id]').forEach(el=>stageElements.set(el.dataset.stageId,el));
+ stageLayer.querySelectorAll('[data-project-fold]').forEach(button=>button.addEventListener('click',()=>toggleProjectBlock(button.dataset.projectFold)));
 }
 function renderMinimap(){
  miniWorld.querySelectorAll('.mini-stage,.mini-node').forEach(e=>e.remove());
@@ -1382,10 +1548,11 @@ function renderNodes(){
      el.innerHTML=`<span class="helper-glyph">${n.helper==='parallel-start'?'↗':'⇲'}</span><span class="helper-label">${n.helper==='parallel-start'?'并行':'汇合'}</span>`;
    }else{
      const lines=wrapLabel(n.label,n.w);
-     const type=cardType(n);
-     el.innerHTML=`<span class="pulse-ring"></span><div class="node-top"><span class="node-type">${type}</span><span class="node-icon">${kindIcons[n.visualKind]||'▣'}</span><span class="node-run-status" title="">○</span></div><div class="node-title" title="${esc(n.label)}">${lines.map(esc).join('<br>')}</div><div class="node-id">${esc(kebab(n))}</div>`;
+     const type=n.projectGroup?'子流程':cardType(n);
+     el.innerHTML=`<span class="pulse-ring"></span><div class="node-top"><span class="node-type">${type}</span><span class="node-icon">${kindIcons[n.visualKind]||'▣'}</span><span class="node-run-status" title="">○</span></div><div class="node-title" title="${esc(n.label)}">${lines.map(esc).join('<br>')}</div><div class="${n.projectGroup?'project-block-count':'node-id'}">${esc(n.projectGroup?n.projectCount+' 个节点 · 展开':kebab(n))}</div>`;
    }
-   el.addEventListener('click',ev=>{ev.stopPropagation();selectNode(n.id,true);});
+   if(n.projectGroup)el.setAttribute('aria-expanded','false');
+   el.addEventListener('click',ev=>{ev.stopPropagation();if(n.projectGroup)toggleProjectBlock(n.projectGroup);else selectNode(n.id,true);});
    el.addEventListener('pointerenter',ev=>{if(selectedNode===n.id)return;showTooltip(ev,`<b>${esc(n.label)}</b><br><span style="opacity:.76">${esc(kebab(n))} · ${esc(typeName(n))}</span><br><span style="opacity:.86">${esc(n.description.slice(0,76))}${n.description.length>76?'…':''}</span>`);});
    el.addEventListener('pointermove',moveTooltip);
    el.addEventListener('pointerleave',hideTooltip);
@@ -1597,7 +1764,7 @@ function focusEdgeNeighborhood(id){
 }
 function centerNode(id){focusNodeNeighborhood(id);}
 function updateFocusControls(){
- const active=!!(selectedNode||selectedEdge);
+ const active=!!(selectedNode||selectedEdge||PROJECT&&!PROJECT.project.expandInitially&&openBlocks.size);
  $('globalViewBtn').style.display=active?'inline-flex':'none';
  if(!active)$('canvasHintText').textContent='点击节点聚焦、上游高亮；点击连线查看条件与方向动画';
 }
@@ -1618,6 +1785,8 @@ function updateMiniViewport(){
 // Global direction animation is ON from initial page load. Selection only emphasizes paths.
 function prepareMotionForSelection(){ /* keep playback state, never force a click to start */ }
 function selectNode(id,openPanel){
+ if(PROJECT&&projectBlocks.has(id)){toggleProjectBlock(id);return;}
+ if(!nodes.has(id))return;
  selectedNode=id;selectedEdge=null;hoverItem=null;hideTooltip();prepareMotionForSelection();
  if(openPanel)inspector.classList.remove('closed');
  updateSelection();updateFocusControls();
@@ -1841,7 +2010,8 @@ function refreshEdgeMotion(){
 }
 
 
-function setPanelHeader(eyebrow,title,sub){
+function setPanelHeader(eyebrow,title,sub,identifier=false){
+ $('inspectorSub').classList.toggle('is-identifier',identifier);
  $('inspectorEyebrow').textContent=eyebrow;$('inspectorTitle').textContent=title;$('inspectorSub').textContent=sub||'';
  $('inspectorNav').replaceChildren();$('inspectorNav').hidden=true;
 }
@@ -1853,6 +2023,89 @@ function relationButton(id,caption,small){
 function edgeButton(e,caption){
  return `<button class="relation-row" data-goto-edge="${e.id}"><span>${esc(e.label||edgeDesc(e))}</span><small>${esc(caption||`${kebab(nodes.get(e.source))} → ${kebab(nodes.get(e.target))}`)}</small></button>`;
 }
+function designRangeLabels(ids){
+ const ranges=new Map((DATA.design.ranges??[]).map(range=>[range.id,range]));
+ const titles=new Map(DATA.design.sources.map(source=>[source.id,source.title]));
+ return (ids??[]).flatMap(id=>{
+   const range=ranges.get(id);
+   return range ? [(titles.get(range.sourceId)??range.sourceId)+' · 字节 '+range.start+'–'+range.end] : [];
+ });
+}
+function evidenceList(sources, rangeIds) {
+ const bySource=new Map(DATA.design.sources.map(source=>[source.id,source]));
+ const byRange=new Map((DATA.design.ranges??[]).map(range=>[range.id,range]));
+ const entries=rangeIds?rangeIds.flatMap(id=>{
+   const range=byRange.get(id),source=range&&bySource.get(range.sourceId);
+   return source?[{source,range}]:[];
+ }):sources.flatMap(id=>bySource.has(id)?[{source:bySource.get(id)}]:[]);
+ return entries.length?'<ul class="template-items">'+entries.map(({source,range})=>
+   '<li><button class="evidence-link" type="button" data-evidence-source="'+esc(source.id)+'"'+
+   (range?' data-evidence-range="'+esc(range.id)+'"':'')+'>'+esc(source.title)+
+   (range?' · 字节 '+esc(range.start)+'–'+esc(range.end):'')+'</button></li>').join('')+'</ul>':
+   note(rangeIds?'材料没有标注字节范围。':'未关联来源材料。');
+}
+function designEdgeRanges(id){
+ return designRangeLabels(DATA.design.edgeRanges?.find(item=>item.edgeId===id)?.ranges);
+}
+function rememberProjectTarget(target) {
+ const href=projectHref(target?.kind,target?.id);
+ const mode=href===location.hash?'replaceState':'pushState';
+ history[mode]({...history.state,flowkitBlocks:[...openBlocks]},'',href);
+}
+function updateProjectStages(){
+ $('stageJump').replaceChildren(...PROJECT.project.groups.map(group=>new Option(group.title,group.id)));
+}
+function indexCanvasControls(){
+ for(const node of DATA.nodes) accessible(nodeElements.get(node.id),node.projectGroup?'展开 '+node.label:node.label+' · '+node.slug);
+ for(const edge of DATA.edges) accessible(edgeElements.get(edge.id),nodes.get(edge.source).label+' → '+nodes.get(edge.target).label);
+}
+function redrawProject(target,origin) {
+ const before=phaseMap.get(origin)??nodes.get(origin);
+ stopMotion();
+ if(ambientRaf!==null)cancelAnimationFrame(ambientRaf);
+ ambientRaf=null;ambientLayer=null;ambientShapes.length=0;
+ hideTooltip();selectedNode=null;selectedEdge=null;hoverItem=null;
+ DATA=prepare(projectData(PROJECT));bindCanvasData();
+ edgeElements.clear();nodeElements.clear();stageElements.clear();
+ renderStages();renderEdges();renderNodes();renderMinimap();indexCanvasControls();
+ const after=phaseMap.get(origin)??nodes.get(origin);
+ if(before&&after){tx+=(before.x-after.x)*scale;ty+=(before.y-after.y)*scale;setTransform();}
+ else fit(false);
+ if(target?.kind==='node'&&nodes.has(target.id))selectNode(target.id,true);
+ else {
+  updateSelection();
+  if(target?.kind==='group'&&!origin)focusOriginalStage(target.id);
+  updateFocusControls();
+  if(!inspector.classList.contains('closed'))renderOverview();
+ }
+ syncMotionPlayback();
+}
+function toggleProjectBlock(id) {
+ const remainsOpen=!openBlocks.delete(id);
+ if(remainsOpen)openBlocks.add(id);
+ const parent=projectParents.get(id);
+ const target=remainsOpen?{kind:'group',id}:parent?{kind:'group',id:parent}:null;
+ rememberProjectTarget(target);
+ redrawProject(target,id);
+ (stageLayer.querySelector('[data-project-fold="'+id+'"]')??nodeElements.get(id))?.focus({preventScroll:true});
+}
+function visitProjectTarget(target) {
+ if(!target)openBlocks=new Set(PROJECT.project.expandInitially?projectBlocks.keys():[]);
+ openProjectTarget(target);
+ rememberProjectTarget(target);
+ redrawProject(target);
+}
+function renderDesignProjectNav(){
+ if(!PROJECT)return;
+ window.addEventListener('hashchange',()=>{
+   const target=readProjectTarget();
+   const saved=history.state?.flowkitBlocks;
+   if(saved||!target)openBlocks=new Set(saved??(PROJECT.project.expandInitially?projectBlocks.keys():[]));
+   openProjectTarget(target);
+   redrawProject(target);
+ });
+}
+
 function bindPanelActions(){
  $('inspectorBody').querySelectorAll('[data-fork-node]').forEach(b=>b.addEventListener('click',()=>openForkPoints(b)));
  $('inspectorBody').querySelectorAll('[data-goto-node]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.gotoNode;selectNode(id,true);centerNode(id);}));
@@ -1887,6 +2140,78 @@ function initSheetResize(){
 
 
 const list = entries => `<ul class="template-items">${entries.map(text => '<li>'+esc(text)+'</li>').join('')}</ul>`;
+function inlineMarkdown(value) {
+  const pattern=/`([^`]+)`|\*\*([^*]+)\*\*|_([^_]+)_|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let html='',offset=0;
+  for(const match of value.matchAll(pattern)) {
+    const [token,code,strong,em,label,href]=match;
+    html+=esc(value.slice(offset,match.index));
+    offset=match.index+token.length;
+    if(code)html+='<code>'+esc(code)+'</code>';
+    else if(strong)html+='<strong>'+esc(strong)+'</strong>';
+    else if(em)html+='<em>'+esc(em)+'</em>';
+    else if(/^https?:\/\//i.test(href))html+='<a href="'+esc(href)+'" target="_blank" rel="noopener noreferrer">'+esc(label)+'</a>';
+    else html+=esc(token);
+  }
+  return html+esc(value.slice(offset));
+}
+
+// Render a bounded Markdown subset as escaped text and fixed HTML elements.
+function markdown(value) {
+  const lines=value.replace(/\r\n?/g,'\n').split('\n');
+  const html=[];
+  const heading=/^(#{1,6})[ \t]+(.+)$/;
+  const item=/^\s*([-+*]|\d+[.)])[ \t]+(.+)$/;
+  const fence=/^\s*```(?:[\w+-]+)?\s*$/;
+  const cells=text=>text.trim().replace(/^\||\|$/g,'').split('|').map(cell=>cell.trim());
+  const tableAt=index=>{
+    const row=lines[index], next=lines[index+1];
+    return row?.includes('|')&&next?.includes('|')&&cells(next).length===cells(row).length&&
+      cells(next).every(cell=>/^:?-{3,}:?$/.test(cell));
+  };
+  for(let i=0;i<lines.length;) {
+    const line=lines[i++];
+    if(!line.trim())continue;
+    if(fence.test(line)) {
+      const start=i;
+      while(i<lines.length&&!/^\s*```\s*$/.test(lines[i]))i++;
+      html.push('<pre><code>'+esc(lines.slice(start,i).join('\n'))+'</code></pre>');
+      if(i<lines.length)i++;
+      continue;
+    }
+    const title=heading.exec(line);
+    if(title) {
+      const tag='h'+title[1].length;
+      html.push('<'+tag+'>'+inlineMarkdown(title[2])+'</'+tag+'>');
+      continue;
+    }
+    const first=item.exec(line);
+    if(first) {
+      const ordered=/^\d/.test(first[1]),tag=ordered?'ol':'ul';
+      const items=[first[2]];
+      let next=item.exec(lines[i]??'');
+      while(next&&/^\d/.test(next[1])===ordered) {
+        items.push(next[2]);
+        next=item.exec(lines[++i]??'');
+      }
+      html.push('<'+tag+'>'+items.map(text=>'<li>'+inlineMarkdown(text)+'</li>').join('')+'</'+tag+'>');
+      continue;
+    }
+    if(tableAt(i-1)) {
+      const headers=cells(line);
+      const renderCells=(values,tag)=>'<tr>'+headers.map((_,index)=>'<'+tag+'>'+inlineMarkdown(values[index]??'')+'</'+tag+'>').join('')+'</tr>';
+      i++;
+      const rows=[];
+      while(lines[i]?.trim()&&lines[i].includes('|'))rows.push(renderCells(cells(lines[i++]),'td'));
+      html.push('<table><thead>'+renderCells(headers,'th')+'</thead><tbody>'+rows.join('')+'</tbody></table>');
+      continue;
+    }
+    const paragraph=[line];
+    while(lines[i]?.trim()&&!heading.test(lines[i])&&!item.test(lines[i])&&!fence.test(lines[i])&&!tableAt(i))paragraph.push(lines[i++]);
+    html.push('<p>'+inlineMarkdown(paragraph.join(' '))+'</p>');
+  }
+  return html.join('');
+}
 const inspectorBody=$('inspectorBody');
 let navigationScrollTop=null;
 function facts(entries) {
@@ -1941,18 +2266,24 @@ function runDetails(node) {
       note(events?'本页没有该节点的事件。':'当前授权未提供事件。'));
 }
 const artifactLabels={effective:'生效版本',latest:'最新版本',history:'历史版本'};
-const cardsByNode=new Map(DATA.nodes.map(card=>[card.nodeId,card]));
 const artifactSource=item=>actualNodes.get(item.nodeId)?.name??item.nodeId;
 function renderArtifactItem(item) {
   const card=cardsByNode.get(item.nodeId);
   const labels=[];
-  if(item.effectiveVersionId===item.versionId)labels.push(artifactLabels.effective);
+  const effective=item.effectiveVersionId===item.versionId;
+  if(effective||item.confirmed)labels.push('已确认');
+  if(effective)labels.push('生效');
   if(item.latestVersionId===item.versionId)labels.push(artifactLabels.latest);
+  if(!effective&&item.latestVersionId!==item.versionId)labels.push(artifactLabels.history);
+  const preview=DATA.runView.artifactContentUrl&&/^(?:text\/|application\/(?:json(?:;|$)|[^/]+\+json(?:;|$)))/i.test(item.mimeType);
   return `<div class="ac-item"><div class="ac-item-main">
     <strong>${esc(item.artifactId)}</strong><small>${esc(artifactSource(item))} · ${esc(item.mimeType)} · ${esc(item.sizeBytes)} B</small>
-    <p>版本 ${esc(item.versionId)} · ${esc(item.contentHash)}</p></div>
-    <div class="ac-item-side"><span class="ac-version">${labels.join(' · ')||artifactLabels.history}</span></div>
-    ${card?`<div class="ac-item-actions"><button type="button" data-artifact-source="${esc(card.id)}">定位来源节点</button></div>`:''}</div>`;
+    <p>版本 ${esc(item.versionLabel??item.versionId.replace(/^sha256:/,'').slice(0,12))}</p>
+    <details class="ac-digests"><summary>版本与内容摘要</summary><div>版本 <code>${esc(item.versionId)}</code></div><div>正文 <code>${esc(item.contentHash)}</code></div></details></div>
+    <div class="ac-item-side"><span class="ac-version">${labels.join(' · ')}</span></div>
+    <div class="ac-item-actions">
+      ${preview?`<button type="button" data-artifact-version="${esc(item.versionId)}">查看正文</button>`:''}
+      ${card?`<button type="button" data-artifact-source="${esc(card.id)}">定位来源节点</button>`:''}</div></div>`;
 }
 function artifactContent(nodeId) {
   const run=DATA.runView;
@@ -1978,11 +2309,13 @@ function artifactContent(nodeId) {
 }
 const readingTitles={description:'节点描述',inputs:'输入契约',outputs:'输出契约',
   constraints:'执行约束',checks:'校验规则',completionCriteria:'完成条件'};
-function readingSection(key,body,empty=false) {
+const nodePanelJumps=[['description','描述'],['inputs','输入'],['outputs','输出'],['artifacts','产物'],
+  ['constraints','约束'],['checks','校验'],['completionCriteria','完成'],['execution','运行']];
+function readingSection(key,body,empty=false,title=readingTitles[key]) {
   const contract=key==='inputs'||key==='outputs';
   const control=empty?'':`<div class="rich-controls"><button type="button" data-read-section="${key}">专注阅读 ↗</button></div>`;
   return `<section class="panel-section ${contract?'contract-section':'rich-section'}" id="panel-section-${key}">
-    <div class="rich-heading"><div class="section-title">${readingTitles[key]}</div>${control}</div>
+    <div class="rich-heading"><div class="section-title">${title}</div>${control}</div>
     <div data-reading-content${contract?'':' class="rich-preview"'}>${body}</div></section>`;
 }
 const outcomeColors={'verification-success':'green','verification-failure':'red','action-error':'red',
@@ -2014,12 +2347,12 @@ function contractCards(fields,direction) {
     }).join('')+'</div>';
 }
 function renderOverview() {
-  const g = DATA.graph;
+  const g = PROJECT?.graph??DATA.graph;
   if (DATA.design) {
     setPanelHeader('DESIGN DIAGRAM','设计图概览',g.name);
     const sourceName = id => DATA.design.sources.find(source=>source.id===id)?.title??id;
     const gaps = DATA.design.unresolved.map(item=>`${item.question}（${item.sources.map(sourceName).join('、')}）`);
-    insertPanel(section('材料依据',list(DATA.design.sources.map(source=>source.title+' · '+source.digest)))+
+    insertPanel(section('材料依据',evidenceList(DATA.design.sources.map(source=>source.id)))+
       section('待确认',gaps.length?list(gaps):note('暂无待确认项。'))+
       section('流程关系','<button class="panel-btn" type="button" data-read-mermaid>阅读 Mermaid</button>'));
     return;
@@ -2055,29 +2388,44 @@ function regionDetails(region) {
   ])+regionTargets('分支入口',lanes.map(lane=>[lane.entry,`${lane.memberIds.length} 个成员`]))+
     regionTargets('正常出口',region.normalExits.map(id=>[id]))+'</div>';
 }
+function designNodeContext(node) {
+  const design=DATA.design;
+  const id=node.spec.id;
+  const provenance=design.nodeSources.find(item=>item.id===id);
+  const sources=provenance?.sources??[];
+  const ranges=design.nodeRanges?.find(item=>item.id===id)?.ranges??[];
+  const ancestors=[];
+  if(PROJECT) for(let parent=projectParents.get(id);parent;parent=projectParents.get(parent)) {
+    ancestors.unshift(projectBlocks.get(parent).title);
+  }
+  const original=(PROJECT?.graph??DATA.graph).referenceEdges;
+  const incoming=original.filter(edge=>edge.to===id);
+  const outgoing=original.filter(edge=>edge.from===id);
+  const related=(relationships,endpoint)=>{
+    return wrapRows(relationships.map(edge=>{
+      const target=edge[endpoint];
+      const caption=edge.condition;
+      return PROJECT
+        ? `<a class="relation-row" href="${projectHref('node',target)}"><span>${esc(projectNodes.get(target).name)}</span><small>${esc(caption)}</small></a>`
+        : relationButton(cardsByNode.get(target).id,caption);
+    }));
+  };
+  return { provenance, sources, ranges, ancestors, incoming, outgoing, related };
+}
 function renderNodePanel(node) {
   const spec = node.spec;
-  if (DATA.design) {
-    setPanelHeader('DESIGN STEP',node.label,node.slug);
-    const sources = (DATA.design.nodeSources.find(item=>item.id===spec?.id)?.sources??[])
-      .map(id=>DATA.design.sources.find(source=>source.id===id)?.title??id);
-    const related = edges.filter(edge=>edge.source===node.id||edge.target===node.id);
-    insertPanel(section('设计说明',`<div class="rich-text"><p>${esc(node.description)}</p></div>`)+
-      section('材料依据',list(sources))+
-      (related.length?section('相关步骤',wrapRows(related.map(edge=>edgeButton(edge)))):'')+
-      '<div class="panel-actions"><button class="panel-btn" data-back-overview>返回设计图概览</button></div>');
-    return;
-  }
+  const design = DATA.design && spec ? designNodeContext(node) : null;
   const binding = DATA.executionBindings?.find(item => item.nodeId === spec?.id);
-  setPanelHeader('NODE DETAILS', node.label, node.slug);
+  setPanelHeader(design?'设计节点':'NODE DETAILS', node.label, node.slug,true);
   const attributes = spec ? [
-    ['节点 ID',spec.id],['类型',readableTypes(spec)],
+    ['节点 ID',spec.id],['类型',readableTypes(spec)],['材料标识',design?.provenance?.key],
     ['副作用',spec.effect],['结束状态',spec.status],['最大修订',spec.maxRevisions],
     ['最大迭代',spec.maxIterations],['重试次数',spec.retries],
   ].filter(([,value]) => value!==undefined) : [];
   const region = regions.get(spec?.id);
-  const parentRegions = spec?.ownerIds.map(id => actualNodes.get(id)?.name??id) ?? [];
-  const incoming=edges.filter(edge => edge.target===node.id),outgoing=edges.filter(edge => edge.source===node.id);
+  const parentRegions = design?.ancestors ?? spec?.ownerIds.map(id => actualNodes.get(id)?.name??id) ?? [];
+  const incoming=design?.incoming??edges.filter(edge => edge.target===node.id);
+  const outgoing=design?.outgoing??edges.filter(edge => edge.source===node.id);
   const constraints=[
     ['副作用',spec?.effect],['最大修订',spec?.maxRevisions],
     ['最大迭代',spec?.maxIterations],['重试次数',spec?.retries],
@@ -2085,45 +2433,58 @@ function renderNodePanel(node) {
   const verifier=spec?.type==='verification';
   const checkResult=verifier?facts([['校验能力',spec.capabilityId]])+
     (outgoing.length?badges(...outgoing.map(edge=>pill(lineName(edge),outcomeColors[edge.spec?.role]))):''):'';
-  const jumps=[['description','描述'],['inputs','输入'],['outputs','输出'],['artifacts','产物'],
-    ['constraints','约束'],['checks','校验'],['completionCriteria','完成'],['execution','运行']];
-  const scope = node.descriptionSource==='host'
-    ? '<span class="sample-label">宿主说明</span><strong>展示说明与当前编译图绑定</strong>' : node.referenceDescription
+  const scope = design
+    ? '<span class="sample-label">静态设计</span><strong>节点说明与来源材料绑定</strong>' : node.descriptionSource==='host'
+    ? '<span class="sample-label">宿主说明</span><strong>展示说明与当前编译图绑定</strong>' : node.descriptionSource==='author'
+    ? '<span class="sample-label">候选说明</span><strong>展示说明随当前候选版本保存</strong>' : node.referenceDescription
     ? '<span class="sample-label">V4.5 节点说明</span><strong>描述来自设计稿，执行字段来自当前编译</strong>'
     : '<span class="sample-label">编译结构</span><strong>当前版本的节点定义</strong>';
   const content = [
     `<div class="sample-banner">${scope}</div>`,
     badges(pill(spec?readableTypes(spec):'结构说明','blue'),pill(phaseTitle(node.phase)),...(node.shape?[pill(node.shape)]:[])),
-    readingSection('description',`<div class="rich-text"><p>${esc(node.description)}</p></div>`),
+    readingSection('description','<div class="rich-text">'+markdown(node.description)+'</div>'),
     ...(spec?[section('节点身份',facts([['所属阶段',phaseTitle(node.phase)],...attributes]))]:[]),
     ...(['agent','action','verification','human'].includes(spec?.type) ? [section('执行角色',facts([
       ['执行者类型',readableTypes(spec)],['所需角色',binding?.role?.label??'待明确'],
       ['运行权限','由宿主核验'],
     ]))] : []),
-    ...(spec?.capabilityId?[section('执行能力',`<div class="role-card"><span class="capability-name">${esc(spec.capabilityId)}</span><small>${esc(readableTypes(spec))} · 由宿主绑定</small></div>`)]:[]),
+    ...(spec?.capabilityId?[section('执行能力',`<div class="role-card"><span class="capability-name">${esc(spec.capabilityId)}</span><small>${esc(readableTypes(spec))} · ${binding?.contract ? esc('宿主契约 ' + binding.contract.version) : '由宿主绑定'}</small></div>`)]:[]),
     ...(spec?.type==='agent' ? [section('关联 Skills',binding?.skills?.length?list(binding.skills.map(skill=>
       `${skill.id} · ${skill.version} · ${skill.pendingApproval?'草稿待批准':'已固定'}`)):note('此节点无固定 Skill。'))] : []),
     ...(parentRegions.length ? [section('所属结构',list(parentRegions))] : []),
+    ...(design?[section('材料依据',evidenceList(design.sources))+
+      section('证据范围',evidenceList([],design.ranges))]:[]),
     ...(region ? [section('分支与汇合',regionDetails(region),'branches')] : []),
-    readingSection('inputs',contractCards(spec?.inputs??[],'input'),!spec?.inputs.length),
+    ...(!design?[readingSection('inputs',contractCards(spec?.inputs??[],'input'),!spec?.inputs.length),
     readingSection('outputs',contractCards(spec?.outputs??[],'output'),!spec?.outputs.length),
     section('节点产物',`<div class="v42-artifact-note node-artifact-empty"><span>${DATA.runView?'在产物中心查看此节点的授权版本。':offlineArtifact}</span><button type="button" class="panel-btn" data-open-artifact-center="${esc(node.id)}">查看产物中心</button></div>`,'artifacts'),
     readingSection('constraints',constraints.length?facts(constraints):'此节点未声明执行约束。',!constraints.length),
-    readingSection('checks',checkResult||'此节点没有独立的校验能力。',!verifier),
-    readingSection('completionCriteria',spec?.status?facts([['结束状态',spec.status]]):
-      outgoing.length?completionRows(outgoing):'无后继流转。',!spec?.status&&!outgoing.length),
-    section('执行状态',runDetails(node),'execution'),
+    readingSection('checks',checkResult||'此节点没有独立的校验能力。',!verifier)]:[]),
+    readingSection('completionCriteria',design?(outgoing.length?design.related(outgoing,'to'):'无已取证的后继流转。'):
+      spec?.status?facts([['结束状态',spec.status]]):outgoing.length?completionRows(outgoing):'无后继流转。',!spec?.status&&!outgoing.length),
+    section('执行状态',design?note('静态设计未绑定运行。输入输出契约、执行约束、校验和产物在绑定宿主后的运行页查看。'):
+      runDetails(node),'execution'),
     ...(DATA.runView?.forkUrl?[section('从历史执行复跑',
       `<button type="button" class="panel-btn" data-fork-node="${esc(node.nodeId)}">查看可复跑记录</button><div data-fork-choices></div>`,'fork')]:[]),
-    section(`上游节点 · ${incoming.length}`,incoming.length?wrapRows(incoming.map(edge=>edgeButton(edge))):note('没有上游连线。')),
-    section(`下游流转 · ${outgoing.length}`,outgoing.length?wrapRows(outgoing.map(edge=>edgeButton(edge))):note('没有下游连线。')),
+    section(`上游节点 · ${incoming.length}`,incoming.length?(design?design.related(incoming,'from'):wrapRows(incoming.map(edge=>edgeButton(edge)))):note('没有上游连线。'),'upstream'),
+    section(`下游流转 · ${outgoing.length}`,outgoing.length?(design?design.related(outgoing,'to'):wrapRows(outgoing.map(edge=>edgeButton(edge)))):note('没有下游连线。'),'downstream'),
     `<div class="panel-actions"><button class="panel-btn primary" data-center-node="${esc(node.id)}">聚焦此节点</button><button class="panel-btn" data-back-overview>返回概览</button></div>`,
   ];
-  insertPanel(content.join(''),jumps);
+  insertPanel(content.join(''),nodePanelJumps);
 }
 function renderEdgePanel(edge) {
   const spec = edge.spec;
   const source = nodes.get(edge.source), target = nodes.get(edge.target);
+  if(PROJECT){
+    const members=DATA.design.edgeMembers.get(spec.edgeId).map(id=>projectEdges.get(id));
+    const link=(id)=>'<a href="'+projectHref('node',id)+'">'+esc(projectNodes.get(id).name)+'</a>';
+    const pairs=members.map(item=>'<div class="info-box project-link-row" data-project-relationship="'+esc(item.edgeId)+'">'+
+      link(item.from)+' → '+link(item.to)+
+      '<div>'+esc(item.condition)+'</div>'+list(designEdgeRanges(item.edgeId))+'</div>');
+    setPanelHeader('流程关系',members.length+' 条原始关系',source.label+' → '+target.label);
+    insertPanel(section('起点、目标与条件',wrapRows(pairs)));
+    return;
+  }
   const edgeColor={success:'green',branch:'orange',error:'red',loop:'purple',parallel:'teal'}[edge.kind];
   setPanelHeader('EDGE DETAILS', roles[spec?.role]??(spec ? edgeDesc(edge) : '运行时异常说明'), source.label+' → '+target.label);
   const entries = spec ? [
@@ -2135,6 +2496,7 @@ function renderEdgePanel(edge) {
   insertPanel(badges(pill(roles[spec?.role]??'控制提示',edgeColor),pill(edge.dashed?'虚线':'实线'),pill('连线 '+edge.id))+
     section('流转关系',`<div class="edge-ends">${endpoint(source,'来源节点')}<span aria-hidden="true">→</span>${endpoint(target,'目标节点')}</div>`)+
     section('条件与连线标签',note(spec?.condition??(edge.label||'按编译图中的控制关系流转。')))+
+    (DATA.design && spec ? section('材料依据',list(designEdgeRanges(spec.edgeId))) : '')+
     section('流转属性',spec ? facts([...entries,['来源阶段',phaseTitle(source.phase)],['目标阶段',phaseTitle(target.phase)]]) :
       note('此提示线用于说明运行时异常。实际结果请查看宿主的故障及恢复记录。'))+
     '<div class="panel-actions"><button class="panel-btn" data-back-overview>返回概览</button></div>');
@@ -2146,12 +2508,64 @@ function toast(message) {
   clearTimeout(toast.timer);
   toast.timer=setTimeout(() => area.classList.remove('show'),1800);
 }
-function runSearch() {
-  const query=$('searchInput').value.trim().toLowerCase();
-  if(!query)return;
-  const hits=DATA.nodes.filter(node => [node.id,node.label,node.slug].some(value => value.toLowerCase().includes(query)));
-  const match=hits.find(node => node.slug.toLowerCase()===query)||hits[0];
-  if(!match){toast('没有找到匹配的节点');return;}
+const searchInput=$('searchInput'),nodeSearchMenu=$('nodeSearchMenu'),nodeSearchOptions=$('nodeSearchOptions');
+const nodeSearchLimit=12;
+let nodeSearchHits=[],nodeSearchActive=-1;
+function searchNodes() {
+  const typed=searchInput.value.trim().toLowerCase();
+  if(!typed)return [];
+  const keys=PROJECT&&new Map(PROJECT.design.nodeSources.map(item=>[item.id,item.key]));
+  const entries=PROJECT?[...projectNodes.values()].map(({id,name})=>({id,label:name,key:keys.get(id),
+    context:projectBlocks.get(projectParents.get(id))?.title})):
+    DATA.nodes.map(({id,label,slug,phase})=>({id,label,key:slug,context:phaseTitle(phase)}));
+  return entries.flatMap(entry=>{
+    const values=[entry.id,entry.label,entry.key??''].map(value=>value.toLowerCase());
+    const rank=values.includes(typed)?0:values.some(value=>value.startsWith(typed))?1:2;
+    return rank<2||values.some(value=>value.includes(typed))?[{...entry,rank}]:[];
+  }).sort((a,b)=>a.rank-b.rank);
+}
+function setSearchActive(index) {
+  nodeSearchActive=index;
+  for(const [position,row] of [...nodeSearchOptions.children].entries())row.setAttribute('aria-selected',String(position===index));
+  const active=nodeSearchOptions.children[index];
+  if(active) {
+    searchInput.setAttribute('aria-activedescendant',active.id);
+    active.scrollIntoView({block:'nearest'});
+  } else searchInput.removeAttribute('aria-activedescendant');
+}
+function hideSearchResults() {
+  nodeSearchMenu.hidden=true;
+  searchInput.setAttribute('aria-expanded','false');
+  setSearchActive(-1);
+}
+function showSearchResults() {
+  nodeSearchHits=searchNodes();
+  if(!searchInput.value.trim()){hideSearchResults();return;}
+  nodeSearchOptions.replaceChildren(...nodeSearchHits.slice(0,nodeSearchLimit).map(({label,context,key,id},index)=>{
+    const row=document.createElement('div');
+    row.id='nodeSearchOption-'+index;
+    row.dataset.index=String(index);
+    row.className='node-search-option';
+    row.setAttribute('role','option');
+    const title=document.createElement('span'),detail=document.createElement('small');
+    title.textContent=label;
+    row.title=id;
+    detail.textContent=[context,key].filter(Boolean).join(' · ')||id;
+    row.append(title,detail);
+    return row;
+  }));
+  const count=nodeSearchHits.length;
+  $('nodeSearchStatus').textContent=count>nodeSearchLimit?'共 '+count+' 项，显示前 '+nodeSearchLimit+' 项。可继续输入以缩小范围。':count?'共 '+count+' 项':'未找到节点。';
+  nodeSearchMenu.hidden=false;
+  searchInput.setAttribute('aria-expanded','true');
+  setSearchActive(-1);
+}
+function runSearch(index=nodeSearchActive) {
+  if(!searchInput.value.trim())return;
+  const match=(nodeSearchMenu.hidden?searchNodes():nodeSearchHits)[Math.max(0,index)];
+  if(!match){showSearchResults();return;}
+  hideSearchResults();
+  if(PROJECT){visitProjectTarget({kind:'node',id:match.id});return;}
   selectNode(match.id,true);
   if(hits.length>1)toast(`匹配到 ${hits.length} 个节点，已定位 ${match.label}`);
 }
@@ -2198,12 +2612,44 @@ $('minimap').addEventListener('click',event => {
   setTransform();
 });
 $('fitBtn').onclick=fit;
-$('globalViewBtn').onclick=() => resetToGlobalView(true);
+$('globalViewBtn').onclick=() => {
+ if(PROJECT){inspector.classList.add('closed');visitProjectTarget(null);}
+ else resetToGlobalView(true);
+};
 $('zoomIn').onclick=() => zoomCenter(1.18);
 $('zoomOut').onclick=() => zoomCenter(.84);
-$('searchBtn').onclick=runSearch;
-$('searchInput').addEventListener('keydown',event => {if(event.key==='Enter') runSearch();});
-$('stageFocusBtn').onclick=() => focusOriginalStage($('stageJump').value);
+$('searchBtn').onclick=()=>runSearch();
+searchInput.addEventListener('input',showSearchResults);
+searchInput.addEventListener('focus',showSearchResults);
+searchInput.addEventListener('keydown',event=>{
+  if(event.isComposing||event.keyCode===229)return;
+  if(event.key==='Enter'){event.preventDefault();runSearch();}
+  if(event.key==='Escape'&&!nodeSearchMenu.hidden){event.preventDefault();event.stopPropagation();hideSearchResults();}
+  if(event.key==='Tab')hideSearchResults();
+  if(event.key==='ArrowDown'||event.key==='ArrowUp'){
+    if(nodeSearchMenu.hidden)showSearchResults();
+    const count=nodeSearchOptions.children.length;
+    if(nodeSearchMenu.hidden||!count)return;
+    event.preventDefault();
+    const step=event.key==='ArrowDown'?1:-1;
+    setSearchActive((nodeSearchActive<0&&step<0?count-1:(nodeSearchActive+step+count)%count));
+  }
+});
+nodeSearchOptions.addEventListener('pointerdown',event=>{
+  if(event.pointerType==='mouse'&&event.target.closest('[role="option"]'))event.preventDefault();
+});
+nodeSearchOptions.addEventListener('click',event=>{
+  const row=event.target.closest('[data-index]');
+  if(row)runSearch(Number(row.dataset.index));
+});
+document.addEventListener('pointerdown',event=>{
+  if(!event.target.closest('.search-wrap,#searchBtn'))hideSearchResults();
+});
+$('stageFocusBtn').onclick=() => {
+ const id=$('stageJump').value;
+ if(PROJECT)visitProjectTarget({kind:'group',id});
+ else focusOriginalStage(id);
+};
 $('closeInspector').onclick=() => resetToGlobalView(true);
 $('toggleInspector').onclick=() => {
   if (!inspector.classList.contains('closed')) {
@@ -2260,6 +2706,72 @@ function openReader(title,subtitle,content) {
   clearReaderMatch();
   reader.showModal();
 }
+function readerDocument(content, media) {
+  const markdownType=/^text\/markdown(?:\s*;|$)/i.test(media);
+  const body=document.createElement(markdownType?'div':'pre');
+  if(markdownType) {
+    body.className='rich-text';
+    body.innerHTML=markdown(content);
+  } else {
+    body.className='reader-source';
+    body.textContent=content;
+  }
+  return body;
+}
+
+async function readViewerJson(url,params,signal) {
+  const target=new URL(url,location.href);
+  for(const [key,value] of Object.entries(params))target.searchParams.set(key,value);
+  const response=await fetch(target,{signal,credentials:'same-origin',redirect:'error'});
+  const data=await response.json().catch(()=>null);
+  if(!response.ok||!data)throw new Error(data?.error??'暂时无法读取正文。');
+  return data;
+}
+
+async function openEvidence(button) {
+  const {evidenceSource:sourceId,evidenceRange:rangeId}=button.dataset;
+  const source=DATA.design.sources.find(item=>item.id===sourceId);
+  const range=rangeId&&DATA.design.ranges?.find(item=>item.id===rangeId&&item.sourceId===sourceId);
+  if(!source||rangeId&&!range)return;
+  const content=document.createElement('div');
+  content.innerHTML='<div class="evidence-facts">'+(range?'来源片段 · 字节 '+esc(range.start)+'–'+esc(range.end):'来源文件')+
+    '<details class="design-evidence"><summary>版本摘要</summary><code>'+esc(source.digest)+'</code>'+
+    (range?.digest?'<p>片段摘要 <code>'+esc(range.digest)+'</code></p>':'')+'</details></div>';
+  const result=document.createElement('div');
+  result.setAttribute('aria-live','polite');
+  content.append(result);
+  openReader(range?'证据范围':'材料依据',source.title,content);
+  const fill=evidence=>{
+    result.replaceChildren();
+    if(evidence.lines) {
+      const line=document.createElement('p');
+      line.className='evidence-facts';
+      line.textContent='原文件第 '+evidence.lines.first+'–'+(evidence.lines.first+evidence.lines.count-1)+' 行（按字节片段显示）';
+      result.append(line);
+    }
+    result.append(readerDocument(evidence.text,evidence.mimeType));
+  };
+  const online=/^https?:$/.test(location.protocol)&&/^\/designs\/[A-Za-z0-9._-]+\/design\.html$/.test(location.pathname);
+  const embedded=range&&DATA.design.excerpts?.find(item=>item.rangeId===range.id);
+  if(embedded&&!online){fill(embedded);return;}
+  if(!online){
+    result.textContent=range?'此离线图仅保留此片段的来源引用。':
+      '原文件未随离线图提供。可在节点的证据范围查看已随图交付的片段。';
+    return;
+  }
+  result.textContent='正在读取已授权的原始版本…';
+  try {fill(await readViewerJson('evidence',{source:sourceId,...(range?{range:range.id}:{})},AbortSignal.timeout(15000)));}
+  catch(error){result.textContent=error.message;}
+}
+readerContent.addEventListener('click',event=>{
+  const link=event.target.closest('.relation-row');
+  if(!link)return;
+  reader.close();
+  if(link.dataset.gotoNode){
+    selectNode(link.dataset.gotoNode,true);
+    centerNode(link.dataset.gotoNode);
+  }
+});
 function openTextReader(title,text) {
   const body=document.createElement('pre');
   body.className='mermaid-reader';
@@ -2277,8 +2789,9 @@ $('readerSearchForm').addEventListener('submit',event=>{
   const query=readerSearch.value.trim().toLowerCase();
   if(!query)return;
   readerContent.querySelector('.reader-match')?.classList.remove('reader-match');
-  const blocks=[...readerContent.querySelectorAll('p,li,summary,pre:not(.mermaid-reader),.reader-line,.meta-list > div,.rich-preview > div')];
-  const matches=blocks.filter(block=>block.textContent.toLowerCase().includes(query));
+  const selector='h1,h2,h3,h4,h5,h6,p,li,summary,th,td,pre:not(.mermaid-reader),.reader-line,.meta-list > div,.rich-preview > div';
+  const blocks=[...readerContent.querySelectorAll(selector)];
+  const matches=blocks.filter(block=>!block.querySelector(selector)&&block.textContent.toLowerCase().includes(query));
   if(!matches.length){$('readerMatches').textContent='未找到匹配内容';return;}
   readerMatchIndex=(readerMatchIndex+1)%matches.length;
   const match=matches[readerMatchIndex];
@@ -2287,20 +2800,56 @@ $('readerSearchForm').addEventListener('submit',event=>{
   match.scrollIntoView({block:'nearest'});
   $('readerMatches').textContent=`${readerMatchIndex+1} / ${matches.length}`;
 });
-$('readerSize').onclick=event=>{
-  const enlarged=readerContent.dataset.readerSize!=='large';
-  readerContent.dataset.readerSize=enlarged?'large':'normal';
-  event.currentTarget.setAttribute('aria-pressed',String(enlarged));
-  event.currentTarget.textContent=enlarged?'还原文字':'放大文字';
-};
 let artifactOpener=null;
 let artifactNode='';
+const artifactPageHistory=DATA.runView?.artifactAfter>0?[0]:[];
+let artifactPageLoading=false;
 function updateArtifactList() {
   $('acList').innerHTML=artifactContent(artifactNode);
+  const run=DATA.runView;
+  $('acPager').hidden=!run?.artifactsUrl||(!artifactPageHistory.length&&run.artifactNext==null);
+  $('acPrevious').disabled=artifactPageLoading||!artifactPageHistory.length;
+  $('acNext').disabled=artifactPageLoading||run?.artifactNext==null;
+}
+async function changeArtifactPage(forward) {
+  const run=DATA.runView;
+  const after=forward?run?.artifactNext:artifactPageHistory.at(-1);
+  if(artifactPageLoading||after==null||!run?.artifactsUrl)return;
+  artifactPageLoading=true;
+  $('acPrevious').disabled=$('acNext').disabled=true;
+  $('acPageStatus').textContent='正在加载…';
+  try {
+    const page=await readViewerJson(run.artifactsUrl,{after},AbortSignal.timeout(15000));
+    if(forward)artifactPageHistory.push(run.artifactAfter??0);
+    else artifactPageHistory.pop();
+    Object.assign(run,{artifacts:page.items,artifactAfter:after,artifactNext:page.next});
+    for(const type of new Set(page.items.map(item=>item.mimeType))) {
+      if(![...$('acType').options].some(option=>option.value===type))$('acType').add(new Option(type,type));
+    }
+    $('acPageStatus').textContent='第 '+(artifactPageHistory.length+1)+' 页 · 筛选当前页';
+  } catch(error){$('acPageStatus').textContent=error.message;}
+  finally {artifactPageLoading=false;updateArtifactList();}
+}
+$('acPrevious').onclick=()=>void changeArtifactPage(false);
+$('acNext').onclick=()=>void changeArtifactPage(true);
+
+async function openArtifactBody(versionId) {
+  const run=DATA.runView,item=run?.artifacts?.find(artifact=>artifact.versionId===versionId);
+  if(!item||!run.artifactContentUrl)return;
+  const body=document.createElement('div');
+  body.textContent='正在读取已授权的产物版本…';
+  body.setAttribute('aria-live','polite');
+  openReader('产物正文',item.artifactId+(item.versionLabel?' · '+item.versionLabel:''),body);
+  try {
+    const data=await readViewerJson(run.artifactContentUrl,{artifactId:item.artifactId,versionId},AbortSignal.timeout(15000));
+    body.replaceChildren(readerDocument(data.text,data.mimeType));
+  } catch(error){body.textContent=error.message;}
 }
 $('acSearch').addEventListener('input',updateArtifactList);
 for(const id of ['acStatus','acType','acGroup'])$(id).addEventListener('change',updateArtifactList);
 $('acList').addEventListener('click',event=>{
+  const version=event.target.closest('[data-artifact-version]');
+  if(version){void openArtifactBody(version.dataset.artifactVersion);return;}
   const source=event.target.closest('[data-artifact-source]');
   if(!source)return;
   showStructure();
@@ -2340,7 +2889,7 @@ function showStructure() {
 $('inspectorNav').addEventListener('click',event=>{
   const button=event.target.closest('[data-jump]');
   if(!button)return;
-  const target=$('panel-section-'+button.dataset.jump);
+  const target=$('panel-section-'+button.dataset.jump)??(DATA.design?$('panel-section-execution'):null);
   if(!target)return;
   markSection(button.dataset.jump);
   const top=target.getBoundingClientRect().top-inspectorBody.getBoundingClientRect().top+inspectorBody.scrollTop-12;
@@ -2359,15 +2908,20 @@ inspectorBody.addEventListener('scroll',()=>{
   navigationScrollTop=null;
   const buttons=[...$('inspectorNav').querySelectorAll('[data-jump]')];
   const marker=inspectorBody.getBoundingClientRect().top+28;
-  const current=buttons.findLast(button=>$('panel-section-'+button.dataset.jump).getBoundingClientRect().top<=marker);
+  const current=buttons.findLast(button=>{
+    const section=$('panel-section-'+button.dataset.jump);
+    return section&&section.getBoundingClientRect().top<=marker;
+  });
   markSection((current??buttons[0])?.dataset.jump);
 });
 inspectorBody.addEventListener('click',event=>{
+  const evidence=event.target.closest('[data-evidence-source]');
+  if(evidence){void openEvidence(evidence);return;}
   const read=event.target.closest('[data-read-section]');
   if(read){
-    const key=read.dataset.readSection;
-    const content=read.closest('.panel-section').querySelector('[data-reading-content]');
-    openReader(readingTitles[key],nodes.get(selectedNode).label,content.cloneNode(true));
+    const section=read.closest('.panel-section');
+    openReader(section.querySelector('.section-title').textContent,nodes.get(selectedNode).label,
+      section.querySelector('[data-reading-content]').cloneNode(true));
   }
   if(event.target.closest('[data-read-mermaid]')){
     openTextReader('Mermaid 流程定义',DATA.mermaid);
@@ -2433,20 +2987,24 @@ document.addEventListener('visibilitychange',syncMotionPlayback);
 reducedMotion.addEventListener('change',syncMotionPlayback);
 document.title=DATA.graph.name+' · FlowKit';
 $('workflowTitle').textContent=DATA.graph.name+' · '+DATA.graph.workflowVersion;
-$('statNodes').textContent=DATA.graph.nodes.length;
-$('statEdges').textContent=DATA.graph.referenceEdges.length;
-$('statPhases').textContent=DATA.phases.length;
-for(const phase of DATA.phases) $('stageJump').add(new Option(phase.title,phase.id));
+$('statNodes').textContent=(PROJECT?.graph??DATA.graph).nodes.length;
+$('statEdges').textContent=(PROJECT?.graph??DATA.graph).referenceEdges.length;
+if(DATA.design){$('statNodeLabel').textContent='节点';$('statEdgeLabel').textContent='流程关系';}
+$('statPhases').textContent=PROJECT?.project.root.length??DATA.phases.length;
+if(PROJECT)updateProjectStages();
+else for(const phase of DATA.phases) $('stageJump').add(new Option(phase.title,phase.id));
 renderStages();
 renderEdges();
 renderNodes();
 if (DATA.runView) $('workflowStats').querySelector('.demo-tag').textContent=isStandardTrace?'Standard · 单次记录':
   DATA.runView.forkUrl?'运行 · 支持复跑':'运行 · 只读';
 renderMinimap();
-for(const node of DATA.nodes) accessible(nodeElements.get(node.id),node.label+' · '+node.slug);
-for(const edge of DATA.edges) accessible(edgeElements.get(edge.id),nodes.get(edge.source).label+' → '+nodes.get(edge.target).label);
+indexCanvasControls();
 initSheetResize();
 resetToGlobalView(true,false);
+renderDesignProjectNav();
+if(projectTarget?.kind==='node')selectNode(projectTarget.id,true);
+if(projectTarget?.kind==='group')focusOriginalStage(projectTarget.id);
 if (DATA.runView) {
   renderRunActivity();
   if (DATA.runView.progressUrl) watchRun();
@@ -2520,7 +3078,7 @@ function openForkPoints(button) {
       if (!response.ok) throw new Error(result.error);
       for (const point of result.points) {
         if (points.has(String(point.revision))) continue;
-        const activation=point.activation===undefined?'入口':'激活 '+point.activation+' · 尝试 '+point.attempt;
+        const activation=point.activation===undefined?'入口快照':'历史执行 · 激活 '+point.activation+' · 尝试 '+point.attempt;
         const scope=point.scope.map(({laneId})=>label(laneId)).join(' / ');
         points.set(String(point.revision),point);
         select.add(new Option('修订 '+point.revision+' · '+activation+(scope?' · '+scope:''),String(point.revision)));

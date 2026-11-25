@@ -256,8 +256,9 @@ export default defineWorkflow({id:'fork',name:'Fork',version:'1.0.0',nodes:[
   const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
   try {
     const options={...cfg,...reopened};
-    const list=async nodeId=>(await listInteractiveForkPoints({ref:source,nodeId},options)).points.filter(point=>point.activation!==undefined);
+    const list=async nodeId=>(await listInteractiveForkPoints({ref:source,nodeId},options)).points;
     const [later,earlier]=await list('quality');
+    assert.equal((await list('quality')).length,2);
     assert.ok(later.activation>earlier.activation && later.entryRevision>earlier.entryRevision);
     const input=(point,startKey,redoWrites=false)=>({source,revision:point.revision,entryRevision:point.entryRevision,startKey,redoWrites});
     await assert.rejects(forkInteractiveRun({...input(later,'mismatch'),entryRevision:earlier.entryRevision},{},options),
@@ -276,6 +277,11 @@ export default defineWorkflow({id:'fork',name:'Fork',version:'1.0.0',nodes:[
     assert.equal(external.prepare('SELECT count(*) AS n FROM writes').get().n,1);
 
     const [write]=await list('write');
+    assert.equal((await list('write')).length,1);
+    assert.ok(write.activation>0);
+    const [fallback]=await list('done');
+    assert.equal(fallback.revision,fallback.entryRevision);
+    assert.equal(fallback.activation,undefined);
     const noRedo=await forkInteractiveRun(input(write,'write-skipped'),{},options);
     await assert.rejects(options.operationController.claim(claimFor(noRedo),auth),{code:'FK_I_HOST_DENIED'});
     allowRedo=false;
@@ -300,6 +306,53 @@ export default defineWorkflow({id:'fork',name:'Fork',version:'1.0.0',nodes:[
       {},options),{code:'FK_I_FORK_UNAVAILABLE'});
     assert.deepEqual(await reopened.store.load(original.runId),parent);
   } finally {reopened.close();}
+});
+
+test('node fork pages do not repeat entry snapshots for accepted receipts on a different page',async t=>{
+  const f=await fixture(t);
+  const file=path.join(f.dir,'fork-pagination.workflow.js');
+  await writeFile(file,`import {defineWorkflow,action,loop,verification,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'fork-pagination',name:'Fork pagination',version:'1.0.0',nodes:[
+  loop('attempts',{name:'Attempts',body:'quality',onSuccess:'done',onMaxExceeded:'exhausted',maxIterations:56}),
+  verification('quality',{name:'Quality',verifier:'quality',onSuccess:'attempts',onFailure:'repair'}),
+  action('repair',{name:'Repair',action:'repair',effect:'read-only',reads:[],writes:[],next:'quality'}),
+  terminal('done',{name:'Done',status:'succeeded'}),terminal('exhausted',{name:'Exhausted',status:'failed'})
+]});`);
+  const {code,diagnostics,programIdentity,graphSnapshot}=await compileInteractive(file,{output:'memory',featureStage:'P0-B'});
+  assert.ok(code,JSON.stringify(diagnostics));
+  const program=await f.persistence.programRegistry.putImmutable(Buffer.from(code),programIdentity);
+  const candidateHash=sha256Bytes(Buffer.from('fork pagination candidate'));
+  const auth=context({authorizeTask:()=>true});
+  const options={...f.options,auth,graphSnapshot,
+    policy:{...policy,capabilityStage:'P0-B',bindingManifest:{},approvedSkillHash:candidateHash}};
+  let frame=await start(program,{}, {},options);
+  for(let index=1;index<=55;index++){
+    const pending=frame.pending[0];
+    assert.equal(pending.nodeId,'quality');
+    frame=await complete({runId:frame.runId,requestId:pending.requestId,kind:'verification',
+      outcome:'succeeded',result:{passed:index===55}},{},options);
+    if(index===55) break;
+    const repair=frame.pending[0];
+    assert.equal(repair.nodeId,'repair');
+    const {operationKey}=repair.task;
+    const operation={runId:frame.runId,operationKey,inputHash:sha256Bytes(canonicalBytes(repair.task))};
+    await options.operationController.claim({...operation,requestId:repair.requestId},auth);
+    const result={set:{}};
+    await options.operationController.settle({...operation,effect:'no-effect',evidenceHash:operation.inputHash,result},auth);
+    frame=await complete({runId:frame.runId,requestId:repair.requestId,operationKey,kind:'action',outcome:'succeeded',result},{},options);
+  }
+  assert.equal(frame.status,'succeeded');
+  const ref={namespace:ns,runId:frame.runId,artifactHash:graphSnapshot.artifactHash,graphDigest:graphSnapshot.graphDigest,
+    collectionId:'fork-collection',candidateHash,approvalRef:'fork-approved'};
+  const first=await listInteractiveForkPoints({ref,nodeId:'quality'},options);
+  assert.equal(first.points.length,50);
+  const second=await listInteractiveForkPoints({ref,nodeId:'quality',beforeRevision:first.next},options);
+  assert.equal(second.points.length,5);
+  assert.equal(second.next,null);
+  const all=[...first.points,...second.points];
+  assert.equal(new Set(all.map(point=>point.activation)).size,55);
+  assert.equal(new Set(all.map(point=>point.entryRevision)).size,55);
+  assert.ok(all.every((point,index)=>point.revision>point.entryRevision && (!index || point.revision<all[index-1].revision)));
 });
 
 test('P0-B persists Loop limits and binds Human decisions to the current review',async t=>{
