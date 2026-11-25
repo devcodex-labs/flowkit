@@ -138,6 +138,22 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       ' PRIMARY KEY (namespace, run_id, revision), UNIQUE (namespace, run_id, transition_id),',
       ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id)',
       ') STRICT;',
+      'CREATE TABLE IF NOT EXISTS fk_i_fork_points (',
+      ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, revision INTEGER NOT NULL,',
+      ' node_id TEXT NOT NULL, checkpoint_json TEXT NOT NULL,',
+      ' PRIMARY KEY (namespace, run_id, revision),',
+      ' FOREIGN KEY (namespace, run_id, revision) REFERENCES fk_i_journal(namespace, run_id, revision)',
+      ') STRICT;',
+      'CREATE INDEX IF NOT EXISTS fk_i_fork_point_node ON fk_i_fork_points(namespace,run_id,node_id,revision);',
+      "CREATE INDEX IF NOT EXISTS fk_i_fork_receipt_node ON fk_i_journal(namespace,run_id,json_extract(entry_json,'$.nodeId'),revision)",
+      " WHERE json_extract(entry_json,'$.kind')='receipt-accepted';",
+      'CREATE TABLE IF NOT EXISTS fk_i_run_forks (',
+      ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, source_run TEXT NOT NULL,',
+      ' selected_revision INTEGER NOT NULL, entry_revision INTEGER NOT NULL, redo_writes INTEGER NOT NULL CHECK (redo_writes IN (0,1)),',
+      ' PRIMARY KEY (namespace, run_id),',
+      ' FOREIGN KEY (namespace, run_id) REFERENCES fk_i_runs(namespace, run_id),',
+      ' FOREIGN KEY (namespace, source_run, entry_revision) REFERENCES fk_i_fork_points(namespace, run_id, revision)',
+      ') STRICT;',
       'CREATE TABLE IF NOT EXISTS fk_i_operations (',
       ' namespace TEXT NOT NULL, run_id TEXT NOT NULL, operation_key TEXT NOT NULL,',
       ' request_id TEXT NOT NULL, input_hash TEXT NOT NULL, business_key TEXT, read_only INTEGER NOT NULL CHECK (read_only IN (0,1)),',
@@ -198,6 +214,21 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
   const readReceipt = db.prepare('SELECT * FROM fk_i_receipt_index WHERE namespace = ? AND run_id = ? AND request_id = ?');
   const insertReceipt = db.prepare('INSERT OR IGNORE INTO fk_i_receipt_index(namespace, run_id, request_id, node_id, attempt, digest, accepted_revision, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const journalAtRevision = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND revision = ?');
+  const insertForkPoint = db.prepare('INSERT INTO fk_i_fork_points(namespace,run_id,revision,node_id,checkpoint_json) VALUES (?,?,?,?,?)');
+  const forkPoint = db.prepare('SELECT revision,node_id FROM fk_i_fork_points WHERE namespace=? AND run_id=? AND revision=?');
+  const earlierForkPoint = db.prepare('SELECT revision,node_id FROM fk_i_fork_points WHERE namespace=? AND run_id=? AND node_id=? AND revision<? ORDER BY revision DESC LIMIT 1');
+  const forkPointBody = db.prepare('SELECT checkpoint_json FROM fk_i_fork_points WHERE namespace=? AND run_id=? AND revision=?');
+  const forkSelections = db.prepare(`
+    SELECT revision FROM fk_i_fork_points WHERE namespace=:ns AND run_id=:id AND node_id=:node AND revision<:before
+    UNION
+    SELECT revision FROM fk_i_journal WHERE namespace=:ns AND run_id=:id AND revision<:before
+      AND json_extract(entry_json,'$.kind')='receipt-accepted' AND json_extract(entry_json,'$.nodeId')=:node
+    ORDER BY revision DESC LIMIT 51`);
+  const insertRunFork = db.prepare('INSERT INTO fk_i_run_forks VALUES (?,?,?,?,?,?)');
+  const runFork = db.prepare('SELECT redo_writes FROM fk_i_run_forks WHERE namespace=? AND run_id=?');
+  const unsettledWrites = db.prepare(`SELECT 1 FROM fk_i_operations WHERE namespace=? AND run_id=? AND read_only=0
+    AND (effect IS NULL OR compensation_evidence_hash IS NULL AND
+      (compensation_key IS NOT NULL OR ? AND effect='applied' AND compensation_plan IS NOT NULL)) LIMIT 1`);
   const journalById = db.prepare('SELECT * FROM fk_i_journal WHERE namespace = ? AND run_id = ? AND transition_id = ?');
   const pendingOperationEffects=db.prepare('SELECT effect FROM fk_i_operations WHERE namespace=? AND run_id=? AND request_id=?');
   const addAdminEvent=db.prepare(`INSERT INTO fk_i_admin_events
@@ -278,6 +309,59 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
       throw failure('FK_I_RECEIPT_CONFLICT', 'accepted request identity changed');
     }
   }
+  function saveForkPoint(checkpoint, bytes) {
+    if (checkpoint.status!=='running' || checkpoint.phase!=='enter' || checkpoint.parallel ||
+        checkpoint.controlStack.length || checkpoint.pending || checkpoint.prepared || checkpoint.candidate) return;
+    const nodeId=checkpoint.blockId.slice(0,-'::enter'.length);
+    if (!nodeId || !checkpoint.blockId.endsWith('::enter')) return;
+    insertForkPoint.run(namespace,checkpoint.runId,checkpoint.revision,nodeId,bytes.toString('utf8'));
+  }
+
+  function checkedForkJournal(runId, revision) {
+    const row=journalAtRevision.get(namespace,runId,revision);
+    if (!row) return null;
+    const entry=JSON.parse(row.entry_json);
+    if (journalDigest(namespace,runId,revision,row.transition_id,row.previous_hash,row.checkpoint_hash,entry)!==row.entry_hash) {
+      throw failure('FK_I_STORE_CORRUPT','invalid fork journal record');
+    }
+    return {row,entry};
+  }
+
+  function describeForkPoint(runId, revision) {
+    const record=checkedForkJournal(runId,revision);
+    if (!record) return null;
+    const {entry}=record;
+    const exact=forkPoint.get(namespace,runId,revision);
+    const scope=entry.kind==='receipt-accepted' ? entry.scope??[] : [];
+    const nodeId=exact?.node_id??(entry.kind==='receipt-accepted'?entry.nodeId:null);
+    if (!nodeId) return null;
+    const point=exact??earlierForkPoint.get(namespace,runId,scope[0]?.groupId??nodeId,revision);
+    if (!point) return null;
+    return {revision,nodeId,entryRevision:point.revision,startNodeId:point.node_id,scope,
+      ...(entry.activation===undefined?{}:{activation:entry.activation,attempt:entry.attempt})};
+  }
+
+  function readForkPoint(runId, revision) {
+    const head=decodeRow(read.get(namespace,runId));
+    if (!head || !TERMINAL.has(head.status)) throw failure('FK_I_FORK_UNAVAILABLE','source Run must be terminal');
+    if (unsettledWrites.get(namespace,runId,Number(head.status==='cancelled'))) {
+      throw failure('FK_I_FORK_UNAVAILABLE','source Run has unsettled writes or unresolved compensation');
+    }
+    const point=describeForkPoint(runId,revision);
+    if (!point) throw failure('FK_I_FORK_UNAVAILABLE','no saved entry for this execution');
+    const record=checkedForkJournal(runId,point.entryRevision);
+    const saved=forkPointBody.get(namespace,runId,point.entryRevision);
+    if (!record || !saved) throw failure('FK_I_STORE_CORRUPT','fork checkpoint is missing');
+    const checkpoint=decodeCheckpoint(decodeCanonical(saved.checkpoint_json,record.row.checkpoint_hash,MAX_CHECKPOINT_BYTES));
+    if (checkpoint.namespace!==namespace || checkpoint.runId!==runId || checkpoint.revision!==point.entryRevision ||
+        checkpoint.artifactHash!==head.artifactHash || checkpoint.policyHash!==head.policyHash ||
+        checkpoint.blockId!==point.startNodeId+'::enter' || checkpoint.phase!=='enter' || checkpoint.parallel ||
+        checkpoint.controlStack.length || checkpoint.status!=='running' || checkpoint.pending || checkpoint.prepared || checkpoint.candidate) {
+      throw failure('FK_I_STORE_CORRUPT','fork checkpoint identity differs');
+    }
+    return {point,checkpoint,headRevision:head.revision,checkpointHash:record.row.checkpoint_hash};
+  }
+
   function appendJournal(runId, revision, transitionId, checkpointHash, previousHash, entry) {
     identifier(transitionId, 'transitionId');
     const detail = safeJSONSnapshot(entry, MAX_JOURNAL_BYTES);
@@ -305,6 +389,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
           throw failure('FK_I_STALE_RECEIPT','Task dispatch deadline expired');
         }
         const readOnly=pending.kind==='action' && pending.task.effect==='read-only';
+        if (!readOnly && runFork.get(namespace,runId)?.redo_writes===0) {
+          throw failure('FK_I_HOST_DENIED','This fork did not authorize new external writes');
+        }
         if (readOnly && compensationPlan) {
           throw failure('FK_I_INVALID_OPERATION','Read-only Actions do not have a compensation plan');
         }
@@ -483,6 +570,20 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         const initial={...base,startKey,startIntentHash,program,activationSeq:base.activationSeq??0,
           policyHash:base.policyHash??digest({}),policyIdentity:base.policyIdentity??checkpointPolicy({},base.policyHash??digest({})),
           receivedSubmission:null,stageCount:0,receiptCount:0};
+        const origin=intent?.kind==='node-fork' ? intent : null;
+        if (origin) {
+          const source=readForkPoint(origin.runId,origin.revision);
+          const saved=source.checkpoint;
+          if (source.point.entryRevision!==origin.entryRevision || source.headRevision!==origin.headRevision ||
+              source.checkpointHash!==origin.checkpointHash || typeof origin.redoWrites!=='boolean' ||
+              initial.artifactHash!==saved.artifactHash || initial.policyHash!==saved.policyHash || initial.phase!=='enter' ||
+              initial.blockId!==saved.blockId || initial.status!=='running' || initial.controlStack.length ||
+              initial.pending || initial.prepared || initial.candidate ||
+              digest([initial.state,initial.regionCounters??null,initial.contextError??null,initial.unavailableParallelKeys??null])!==
+              digest([saved.state,saved.regionCounters??null,saved.contextError??null,saved.unavailableParallelKeys??null])) {
+            throw failure('FK_I_FORK_UNAVAILABLE','fork start does not match the recorded entry');
+          }
+        }
         const eventDigest=digest(['genesis',startIntentHash]);
         const proposalDigest=digest(['create',initial.blockId]);
         const transitionId=digest([namespace,initial.runId,null,null,eventDigest,initial.artifactHash,proposalDigest]);
@@ -510,6 +611,8 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         insertRun.run(namespace, initial.runId, startKey, startIntentHash, 0,
           initial.artifactHash, checkpointBytes.toString('utf8'), checkpointHash);
         appendJournal(initial.runId,0,transitionId,checkpointHash,null,{kind:'created',transition});
+        if (origin) insertRunFork.run(namespace,initial.runId,origin.runId,origin.revision,origin.entryRevision,Number(origin.redoWrites));
+        saveForkPoint(initial,checkpointBytes);
         return {created:true,checkpoint:decodeCheckpoint(JSON.parse(checkpointBytes.toString('utf8')))};
       });
     },
@@ -561,6 +664,7 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         if (updated.changes !== 1) throw failure('FK_I_CAS_CONFLICT', 'revision changed during transaction');
         const entryHash = appendJournal(runId, next.revision, transitionId, checkpointHash,
           last.entry_hash, journal);
+        if (current.phase!=='enter' || current.blockId!==checkpoint.blockId) saveForkPoint(checkpoint,bytes);
         if (journal?.kind === 'receipt-accepted') {
           if (runDeadlineExpired(current)) throw failure('FK_I_RUN_DEADLINE','Run deadline expired before acceptance');
           const laneReceipt=next.parallel?.receipt;
@@ -595,6 +699,20 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
         return {committed:true,checkpoint};
       });
     },
+
+    listForkPoints(runId,nodeId,before) {
+      return transaction('read',()=>{
+        const head=decodeRow(read.get(namespace,runId));
+        if (!head || !TERMINAL.has(head.status) || unsettledWrites.get(namespace,runId,Number(head.status==='cancelled'))) {
+          return {points:[],next:null};
+        }
+        const rows=forkSelections.all({ns:namespace,id:runId,node:nodeId,before});
+        const page=rows.slice(0,50);
+        return {points:page.map(row=>describeForkPoint(runId,row.revision)).filter(Boolean),
+          next:rows.length>50?page.at(-1).revision:null};
+      });
+    },
+    readForkPoint(runId,revision) {return transaction('read',()=>readForkPoint(runId,revision));},
 
     /** Immutable, namespaced accepted-receipt lookup without growing CP. */
     getReceipt(runId, requestId) {

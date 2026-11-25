@@ -10,7 +10,7 @@ import { localModel } from '../../scripts/local-mcp-model.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
 import { checkCandidate, prepareStandardSkill, publishStandardSkill } from '../../src/author/standard-artifact.mjs';
 import { bindApprovedInteractiveWorkflow, runApprovedCollectionWorkflow } from '../../src/author/approved-run.mjs';
-import { complete, createInteractiveHostContext, createSqliteInteractivePersistence, resume } from '../../src/interactive/index.mjs';
+import { complete, createInteractiveHostContext, createSqliteInteractivePersistence, forkInteractiveRun, resume } from '../../src/interactive/index.mjs';
 import { artifactDigest } from '../../src/shared/artifact-identity.mjs';
 
 const provider = process.env.FLOWKIT_LIVE_VIEW_PROVIDER;
@@ -48,20 +48,23 @@ async function verifyWithModel(model, nodeId) {
   return {result,receipt:{provider,nodeId,requestId,model:receipt.model??'codex-default'}};
 }
 
-test('Interactive run link and browser follow parallel, pause, reconnect and terminal state', {timeout:provider?240000:60000}, async () => {
+test('Interactive browser follows parallel, pause, reconnect and two independent fork runs', {timeout:provider?420000:60000}, async () => {
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-live-view-'));
   const namespace='flowkit-local';
   const stateDir=path.join(dir,'service');
   const open=()=>createSqliteInteractivePersistence(path.join(dir,'runtime.sqlite'),{namespace});
-  const worker=createInteractiveHostContext({namespace,subjectId:'live-view-worker',authorize:()=>true,authorizeTask:()=>true});
-  let service, client, browser, candidateStore, view, runtimeOptions, approval, graph, target;
+  let allowFork=true;
+  const worker=createInteractiveHostContext({namespace,subjectId:'live-view-worker',
+    authorize:({action})=>action!=='run:fork'||allowFork,authorizeTask:()=>true});
+  let service, client, browser, candidateStore, view, runtimeOptions, approval, graph, target, lastFork;
+  const views=new Map();
   let persistence=open(), allowView=true, allowHistory=true, unavailable=false, terminalRevision;
   const policy={id:'live-view',version:'1',disclosePolicyId:'live-view',capabilityStage:'P2',
     canonicalizationVersion:'jcs-rfc8785-v1',bindingManifest:{}};
   const viewer=createInteractiveHostContext({namespace,subjectId:'live-view-reader',authorizeTask:()=>true,
     authorize:({action,runId,...actual})=>allowView &&
       (action==='viewer:read'||action==='viewer:events'&&allowHistory) &&
-      runId===view?.ref.runId && Object.entries(approval).every(([key,value])=>actual[key]===value)});
+      views.has(runId) && Object.entries(approval).every(([key,value])=>actual[key]===value)});
   const runtime={};
   const credential='isolated-live-view-mcp-test';
   const evidence=[];
@@ -75,7 +78,13 @@ test('Interactive run link and browser follow parallel, pause, reconnect and ter
       credential,
       resolveRunViewer({runId}) {
         if (unavailable) throw new Error('Host storage temporarily unavailable');
-        return view?.ref.runId===runId?view:null;
+        return views.get(runId)??null;
+      },
+      async forkRun(request,{view:origin}) {
+        const options={...runtimeOptions,graphSnapshot:graph};
+        lastFork=await forkInteractiveRun(request,runtime,options);
+        views.set(lastFork.runId,{...origin,ref:{...origin.ref,runId:lastFork.runId}});
+        return lastFork;
       },
       async runWorkflow(scope,{candidate,store}) {
         const execution={...scope,skillDirectory:dir};
@@ -85,6 +94,7 @@ test('Interactive run link and browser follow parallel, pause, reconnect and ter
         runtimeOptions=(await bindApprovedInteractiveWorkflow(store,execution,host)).options;
         view={candidate,auth:viewer,ref:{namespace,runId:started.runId,artifactHash:graph.artifactHash,graphDigest:graph.graphDigest,...approval},
           options:{...runtimeOptions,graphSnapshot:graph}};
+        views.set(started.runId,view);
         return started;
       }
     });
@@ -157,11 +167,11 @@ test('Interactive run link and browser follow parallel, pause, reconnect and ter
     await page.waitForFunction(()=>document.getElementById('inspectorTitle')?.textContent==='Check item count');
     await page.getByRole('button',{name:'放大',exact:true}).click();
     const checkedZoom=await page.locator('#zoomReadout').innerText();
-    async function submit(task,options=runtimeOptions) {
+    async function submit(task,options=runtimeOptions,runId=started.runId) {
       assert.equal(task.kind,'verification');
       const resolved=model?await verifyWithModel(model,task.nodeId):{result:{passed:true}};
-      if (resolved.receipt) evidence.push(resolved.receipt);
-      return complete({kind:'verification',runId:started.runId,requestId:task.requestId,outcome:'succeeded',result:resolved.result},
+      if (resolved.receipt) evidence.push({...resolved.receipt,runId});
+      return complete({kind:'verification',runId,requestId:task.requestId,outcome:'succeeded',result:resolved.result},
         runtime,options);
     }
     const first=await submit(started.pending[0]);
@@ -192,13 +202,58 @@ test('Interactive run link and browser follow parallel, pause, reconnect and ter
     assert.equal(completed.status,'succeeded');
     terminalRevision=completed.revision;
     assert.equal(navigations,originalNavigations);
+    const originalCheckpoint=await persistence.store.load(started.runId);
+    assert.equal(originalCheckpoint.revision,terminalRevision);
+    const forkEndpoint=started.runUrl+'/fork';
+    const origin=new URL(started.runUrl).origin;
+    assert.equal((await fetch(forkEndpoint+'?nodeId=handoff')).status,403);
+    const forks=[];
+
+    async function startFork(nodeName,nodeId,expectedStart,expectedPending) {
+      await page.getByRole('button',{name:nodeName+' · '+nodeId,exact:true}).press('Enter');
+      await page.getByRole('button',{name:'查看可复跑记录'}).click();
+      const picker=page.getByRole('combobox',{name:'历史执行'});
+      await picker.locator('option').first().waitFor({state:'attached'});
+      assert.match(await page.locator('[data-fork-entry]').innerText(),expectedStart);
+      const revision=Number(await picker.inputValue());
+      const details=await (await page.request.get(forkEndpoint+'?nodeId='+nodeId)).json();
+      const point=details.points.find(item=>item.revision===revision);
+      assert.equal(point.nodeId,nodeId);
+      assert.ok(point.activation>0);
+      const checked={revision,entryRevision:point.entryRevision,startKey:'policy-check-'+nodeId,redoWrites:false};
+      assert.equal((await page.request.post(forkEndpoint,{headers:{origin:'https://invalid.example'},data:checked})).status(),403);
+      allowFork=false;
+      const denied=await page.request.post(forkEndpoint,{headers:{origin},data:checked});
+      assert.equal(denied.status(),403,await denied.text());
+      allowFork=true;
+      const [response]=await Promise.all([
+        page.waitForResponse(r=>r.url()===forkEndpoint&&r.request().method()==='POST'),
+        page.getByRole('button',{name:'从这次执行重新开始'}).click(),
+      ]);
+      assert.equal(response.status(),200);
+      const {runId}=lastFork;
+      await page.waitForURL(origin+'/runs/'+runId);
+      assert.notEqual(runId,started.runId);
+      assert.deepEqual(lastFork.pending.map(task=>task.nodeId),expectedPending);
+      assert.equal((await page.request.post(forkEndpoint,{headers:{origin},
+        data:response.request().postDataJSON()})).status(),200);
+      assert.equal(lastFork.runId,runId);
+      let frame=lastFork;
+      while (frame.pending.length) frame=await submit(frame.pending[0],runtimeOptions,runId);
+      assert.equal(frame.status,'succeeded');
+      await observed(frame,[],'成功');
+      assert.deepEqual(await persistence.store.load(started.runId),originalCheckpoint);
+      forks.push({runId,nodeId,startNodeId:point.startNodeId,entryRevision:point.entryRevision,terminalRevision:frame.revision,status:frame.status});
+    }
+    await startFork('Confirm handoff','handoff',/实际起点 · Confirm handoff/,['handoff']);
+    assert.equal((await page.goto(started.runUrl)).status(),200);
+    await startFork('Check signed record','document',/Delivery checks · 从当次并行组入口重跑整个并行组/,['document','total']);
     assert.deepEqual(errors,[]);
-    assert.equal((await persistence.store.load(started.runId)).revision,terminalRevision);
     allowView=false;
     assert.equal((await page.request.get(endpoint)).status(),404);
     assert.equal((await launch()).runUrl,undefined);
     if (provider) console.log(JSON.stringify({provider,runId:started.runId,terminalRevision,status:completed.status,
-      reloads:0,port:new URL(service.url).port,evidence}));
+      reloads:0,port:new URL(service.url).port,forks,evidence}));
   } finally {
     await browser?.close();
     await client?.close();

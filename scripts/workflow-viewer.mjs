@@ -142,7 +142,7 @@ export function workflowPage({ graph, candidateHash, mermaid, definition, contro
     ...(candidateHash ? { candidateHash } : {}), ...(typeof mermaid==='string'?{mermaid}:{}), ...(runView ? { runView } : {}),
     ...(design ? { design } : {}),
     ...(executionBindings.size ? { executionBindings: [...executionBindings.values()] } : {}) });
-  const pageShell = runView?.progressUrl ? shell.replace("connect-src 'none'", "connect-src 'self'") : shell;
+  const pageShell = runView?.progressUrl || runView?.forkUrl ? shell.replace("connect-src 'none'", "connect-src 'self'") : shell;
   const html = controls ? pageShell.replace("form-action 'none'", "form-action 'self'")
     .replace(controlsSlot, () => '<aside id="flowkit-host-controls">' + controls + '</aside>') : pageShell.replace(controlsSlot, '');
   return html.replace(embeddedData, () => data);
@@ -210,7 +210,7 @@ export async function workflowRunProgress({auth,ref,options,candidate,afterRevis
 
 /** The integrating Host supplies a request-scoped authority. Queries never advance the Run. */
 export async function workflowRunPage({ auth, ref, options, candidate, afterRevision, artifactAfter = 0,
-  viewManifest, authorizeViewManifest, requestContext }) {
+  viewManifest, authorizeViewManifest, requestContext, forkEnabled }) {
   options = { ...options, graphSnapshot: structuredClone(options.graphSnapshot) };
   const graph=options.graphSnapshot;
   const snapshot=await auth.readRunView(ref,options);
@@ -236,7 +236,7 @@ export async function workflowRunPage({ auth, ref, options, candidate, afterRevi
   return workflowPage({ graph, candidateHash:candidate?.hash, mermaid:candidate?.files['workflow.mmd'],
     definition:candidate?.manifest.workflowDefinition,executionManifest:candidate?.manifest,
     controls:links.join(' '),viewManifest:manifest,runView:{
-    ...progress,...(live?{progressUrl:runPath+'/progress'}:{}),
+    ...progress,...(live?{progressUrl:runPath+'/progress'}:{}),...(forkEnabled?{forkUrl:runPath+'/fork'}:{}),
     artifacts: artifacts?.items.map(({ artifactId, versionId, nodeId, contentHash, mimeType,
       sizeBytes, latestVersionId, effectiveVersionId }) =>
       ({ artifactId, versionId, nodeId, contentHash, mimeType, sizeBytes, latestVersionId, effectiveVersionId })) ?? null,

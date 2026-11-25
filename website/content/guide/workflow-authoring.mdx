@@ -87,6 +87,8 @@ codex plugin list --marketplace flowkit-local
 
 实时页自动显示当前修订、待处理节点、并行分支、激活和重试，以及暂停原因。连接中断时，页面标记连接状态并保留最后读到的运行状态。重连后继续读取同一个 Run，补齐事件后显示终态。页面读取不会提交任务或推进运行。“查看运行历史”按修订翻页。产物中心可筛选当前页已授权的产物，文件正文由宿主的授权存储接口提供。
 
+需要让操作员从节点复跑时，宿主同时提供 `forkRun(request, {view, requestContext})`。根据当前操作员身份绑定原 Program 和对应批准候选，调用 [指定节点复跑 SDK](/reference/interactive#forkInteractiveRun)，把返回的新 Run 加入宿主调度，并让 `resolveRunViewer` 能解析新 Run。操作员打开一个终态运行，在节点详情里点「查看可复跑记录」，选择一次历史执行，核对页面显示的实际起点，再点「从这次执行重新开始」。选择并行分支时页面会标出将重跑的整组。需要重做外部写入时勾选对应选项，并由宿主单独授权。新运行打开独立链接，原链接继续查看原结果。
+
 宿主如需关联接收方的候选，可另外提供 `candidate`，并在 `ref` 中声明 `collectionId`、`candidateHash` 与 `approvalRef`。宿主应按这三项验证接收方的审批。页面还会验证候选文件及图摘要，才展示该候选和 Mermaid。导入可以生成新的候选身份，运行仍绑定原 Program 和 GraphSnapshot。
 
 Standard 宿主可以通过同一解析器显示一次真实调用的 trace。启用编译 trace，使用 `runtime.trace.start` 和 `runtime.trace.end` 收集节点调用，再返回 `{ ref, candidate, standardTrace, authorizeTrace }`。`ref` 含运行 ID、候选、产物和图摘要，`standardTrace` 含运行结果 `status` 和 `events`。每条事件含 `nodeId` 和 `kind`，结束事件另有 `outcome`。`authorizeTrace` 必须根据当前请求身份和这些摘要授权。页面只展示节点的实际调用记录，持久日志和修订分页由 Interactive 提供。

@@ -7,5 +7,5 @@ export {createInteractiveCoordinator} from './coordinator.mjs';
 // M5 Host-only provenance and disclosure facade. Does not expose a signer/private key.
 export {createTrustedInteractiveHost} from './trusted-host.mjs';
 export {normalizeHostAgentReceipt,createAgentReceiptStatement,encodeAgentReceiptStatement} from './host-attestation.mjs';
-export {start,complete,resume,cancelInteractiveRun,reserveInteractiveDispatch,createInteractiveHostContext,createInteractiveAdminContext,
+export {start,complete,resume,forkInteractiveRun,listInteractiveForkPoints,cancelInteractiveRun,reserveInteractiveDispatch,createInteractiveHostContext,createInteractiveAdminContext,
   createSqliteInteractivePersistence} from './versioned.mjs';

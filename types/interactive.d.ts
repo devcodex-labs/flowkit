@@ -555,6 +555,15 @@ export type RunViewerRef = {namespace:string;runId:string;artifactHash:string;gr
   {collectionId?:never;candidateHash?:never;approvalRef?:never}
 );
 export type RunViewerOptions=Omit<InteractiveOptionsV1,'auth'> & {graphSnapshot:GraphSnapshotV1};
+export interface InteractiveForkPoint {
+  revision:number;
+  nodeId:string;
+  entryRevision:number;
+  startNodeId:string;
+  scope:Array<{groupId:string;laneId:string}>;
+  activation?:number;
+  attempt?:number;
+}
 export interface RunViewerSnapshot {
   schemaVersion:1;namespace:string;runId:string;artifactHash:string;graphDigest:string;revision:number;
   status:InteractiveRunStatus;pauseReason?:string;publicOutput?:Record<string,unknown>;
@@ -606,11 +615,12 @@ export declare function createInteractiveHostContext(options:{
   namespace:string;
   subjectId:string;
   authorize(request:Readonly<{namespace:string;subjectId:string;action:'run:create'|'run:complete'|'run:resume'|'run:cancel'|'result:read'|
+    'run:fork'|'run:fork:redo-writes'|
     'viewer:read'|'viewer:events'|'viewer:output'|'viewer:artifacts'|'artifact:register'|'artifact:freeze'|
     'operation:claim'|'operation:read'|'operation:settle'|'operation:list'|'operation:compensate'|
     'operation:recover-compensation'|'operation:settle-compensation';
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
-    graphDigest?:string;collectionId?:string;candidateHash?:string;approvalRef?:string;
+    graphDigest?:string;collectionId?:string;candidateHash?:string;approvalRef?:string;entryRevision?:number;redoWrites?:boolean;
     reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';
     evidenceHash?:string;compensationKey?:string;compensationPlan?:Readonly<{capabilityId:string;inputHash:string}>}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;nodeId:string;
@@ -680,6 +690,10 @@ export declare function start(source:string|TrustedProgramRefV1,runtime:Interact
 export declare function complete(submission:HostSubmissionV1,runtime:InteractiveRuntimeV1,
   options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
 export declare function resume(runId:string,runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<InteractiveFrameV1>;
+export declare function listInteractiveForkPoints(input:{ref:RunViewerRef;nodeId:string;beforeRevision?:number},
+  options:RunViewerOptions & {auth:TrustedHostContextV1}):Promise<{points:InteractiveForkPoint[];next:number|null}>;
+export declare function forkInteractiveRun(input:{source:RunViewerRef;revision:number;entryRevision:number;startKey:string;redoWrites:boolean},
+  runtime:InteractiveRuntimeV1,options:RunViewerOptions & {auth:TrustedHostContextV1}):Promise<InteractiveFrameV1>;
 export declare function cancelInteractiveRun(runId:string,reasonCode:string,options:InteractiveOptionsV1):Promise<PublicInteractiveTerminalFrame>;
 export declare function reserveInteractiveDispatch(input:{runId:string;requestId:string;operationId:string},
   runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs:number;dispatches:number}>;

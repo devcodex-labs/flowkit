@@ -1854,6 +1854,7 @@ function edgeButton(e,caption){
  return `<button class="relation-row" data-goto-edge="${e.id}"><span>${esc(e.label||edgeDesc(e))}</span><small>${esc(caption||`${kebab(nodes.get(e.source))} → ${kebab(nodes.get(e.target))}`)}</small></button>`;
 }
 function bindPanelActions(){
+ $('inspectorBody').querySelectorAll('[data-fork-node]').forEach(b=>b.addEventListener('click',()=>openForkPoints(b)));
  $('inspectorBody').querySelectorAll('[data-goto-node]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.gotoNode;selectNode(id,true);centerNode(id);}));
  $('inspectorBody').querySelectorAll('[data-goto-edge]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.gotoEdge;selectEdge(id,true);}));
  $('inspectorBody').querySelectorAll('[data-center-node]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.centerNode;if(selectedNode!==id)selectNode(id,true);else focusNodeNeighborhood(id);}));
@@ -2112,6 +2113,8 @@ function renderNodePanel(node) {
     readingSection('completionCriteria',spec?.status?facts([['结束状态',spec.status]]):
       outgoing.length?completionRows(outgoing):'无后继流转。',!spec?.status&&!outgoing.length),
     section('执行状态',runDetails(node),'execution'),
+    ...(DATA.runView?.forkUrl?[section('从历史执行复跑',
+      `<button type="button" class="panel-btn" data-fork-node="${esc(node.nodeId)}">查看可复跑记录</button><div data-fork-choices></div>`,'fork')]:[]),
     section(`上游节点 · ${incoming.length}`,incoming.length?wrapRows(incoming.map(edge=>edgeButton(edge))):note('没有上游连线。')),
     section(`下游流转 · ${outgoing.length}`,outgoing.length?wrapRows(outgoing.map(edge=>edgeButton(edge))):note('没有下游连线。')),
     `<div class="panel-actions"><button class="panel-btn primary" data-center-node="${esc(node.id)}">聚焦此节点</button><button class="panel-btn" data-back-overview>返回概览</button></div>`,
@@ -2437,7 +2440,8 @@ for(const phase of DATA.phases) $('stageJump').add(new Option(phase.title,phase.
 renderStages();
 renderEdges();
 renderNodes();
-if (DATA.runView) $('workflowStats').querySelector('.demo-tag').textContent=isStandardTrace?'Standard · 单次记录':'运行 · 只读';
+if (DATA.runView) $('workflowStats').querySelector('.demo-tag').textContent=isStandardTrace?'Standard · 单次记录':
+  DATA.runView.forkUrl?'运行 · 支持复跑':'运行 · 只读';
 renderMinimap();
 for(const node of DATA.nodes) accessible(nodeElements.get(node.id),node.label+' · '+node.slug);
 for(const edge of DATA.edges) accessible(edgeElements.get(edge.id),nodes.get(edge.source).label+' → '+nodes.get(edge.target).label);
@@ -2473,6 +2477,91 @@ function renderRunActivity() {
     overview.innerHTML='<div class="section-title">只读运行状态</div>'+
       (DATA.runView?facts(runSummary()):note('该运行当前不可查看。'));
   }
+}
+
+function openForkPoints(button) {
+  const view=DATA.runView;
+  const output=button.parentElement.querySelector('[data-fork-choices]');
+  if (!view?.forkUrl || !['succeeded','failed','errored','cancelled'].includes(view.status)) {
+    output.textContent='运行结束后可以选择复跑点。';
+    return;
+  }
+  const endpoint=new URL(view.forkUrl,location.href);
+  if (endpoint.origin!==location.origin || endpoint.pathname!=='/runs/'+encodeURIComponent(view.runId)+'/fork') return;
+  output.innerHTML='<label>历史执行 <select aria-label="历史执行"></select></label>'+
+    '<p data-fork-entry></p><label><input type="checkbox"> 请求重做起点后的外部写入</label>'+
+    '<p>复用入口前已提交的结果。未勾选时，复跑遇到外部写入会停止派发；勾选后仍需宿主授权。</p>'+
+    '<button type="button" class="panel-btn primary" data-fork-start>从这次执行重新开始</button> '+
+    '<button type="button" class="panel-btn" data-fork-more hidden>更早的执行</button>'+
+    '<p role="status" data-fork-message></p>';
+  const select=output.querySelector('select'), redo=output.querySelector('input');
+  const start=output.querySelector('[data-fork-start]'), more=output.querySelector('[data-fork-more]');
+  const detail=output.querySelector('[data-fork-entry]'), message=output.querySelector('[data-fork-message]');
+  const points=new Map();
+  const label=id=>actualNodes.get(id)?.name??id;
+  let next=null;
+
+  function showEntry() {
+    const point=points.get(select.value);
+    start.disabled=!point;
+    redo.disabled=!point;
+    detail.textContent=point ? '实际起点 · '+label(point.startNodeId)+
+      (point.scope.length?' · 从当次并行组入口重跑整个并行组':'')+
+      ' · 入口修订 '+point.entryRevision : '';
+  }
+  async function load(before) {
+    more.disabled=true;
+    const query=new URL(endpoint);
+    query.searchParams.set('nodeId',button.dataset.forkNode);
+    if (before!==null) query.searchParams.set('beforeRevision',String(before));
+    try {
+      const response=await fetch(query,{cache:'no-store'});
+      const result=await response.json();
+      if (!response.ok) throw new Error(result.error);
+      for (const point of result.points) {
+        if (points.has(String(point.revision))) continue;
+        const activation=point.activation===undefined?'入口':'激活 '+point.activation+' · 尝试 '+point.attempt;
+        const scope=point.scope.map(({laneId})=>label(laneId)).join(' / ');
+        points.set(String(point.revision),point);
+        select.add(new Option('修订 '+point.revision+' · '+activation+(scope?' · '+scope:''),String(point.revision)));
+      }
+      next=result.next;
+      more.hidden=next===null;
+      message.textContent=points.size?'':'这条运行没有可用的入口状态。';
+      showEntry();
+    } catch (error) {
+      message.textContent=error.message||'无法读取复跑记录。';
+    } finally {more.disabled=false;}
+  }
+  select.addEventListener('change',showEntry);
+  more.addEventListener('click',()=>load(next));
+  start.addEventListener('click',async()=>{
+    const point=points.get(select.value);
+    if (!point || DATA.runView?.runId!==view.runId) return;
+    const redoWrites=redo.checked;
+    const key='flowkit-fork:'+view.runId+':'+point.revision+':'+redoWrites;
+    const startKey=sessionStorage.getItem(key)??crypto.randomUUID();
+    sessionStorage.setItem(key,startKey);
+    start.disabled=select.disabled=redo.disabled=true;
+    message.textContent='正在创建新运行。';
+    try {
+      const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({revision:point.revision,entryRevision:point.entryRevision,startKey,redoWrites})});
+      const result=await response.json();
+      if (!response.ok) throw new Error(result.error);
+      if (result.runUrl && new URL(result.runUrl).origin===location.origin) {
+        sessionStorage.removeItem(key);
+        location.assign(result.runUrl);
+        return;
+      }
+      message.textContent='新运行已创建（'+result.runId+'），暂时无法打开查看链接。可用同一请求重试打开。';
+    } catch(error) {
+      message.textContent=error.message||'暂时无法发起复跑。';
+    }
+    start.disabled=select.disabled=redo.disabled=false;
+  });
+  showEntry();
+  load(null);
 }
 
 function watchRun() {

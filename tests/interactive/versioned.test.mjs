@@ -13,7 +13,7 @@ import {canonicalBytes,sha256Bytes} from '../../src/interactive/canonical.mjs';
 import {
   compileInteractive,complete,cancelInteractiveRun,createInteractiveAdminContext,createInteractiveHostContext,
   createInteractiveCoordinator,
-  createSqliteCheckpointStore,createSqliteInteractivePersistence,resume,start,
+  createSqliteCheckpointStore,createSqliteInteractivePersistence,forkInteractiveRun,listInteractiveForkPoints,resume,start,
 } from '../../src/interactive/index.mjs';
 
 const ns='p0a-compatible';
@@ -199,6 +199,106 @@ terminal('done',{name:'Done',status:'succeeded'}), terminal('rejected',{name:'Re
       kind:'verification',outcome:'succeeded',result:{passed:false}}, {},options);
     assert.equal(terminal.status,'failed');
     assert.deepEqual((await auth.readTerminalResult(terminal.resultRef,options)).state,{receipt:'upstream-42'});
+  } finally {reopened.close();}
+});
+
+test('node forks use the chosen loop visit and gate fresh external writes after reopening SQLite',async t=>{
+  let external;
+  t.after(()=>external?.close());
+  const f=await fixture(t);
+  const file=path.join(f.dir,'fork.workflow.js');
+  await writeFile(file,`import {defineWorkflow,action,loop,verification,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'fork',name:'Fork',version:'1.0.0',nodes:[
+  action('write',{name:'Write receipt',action:'write-receipt',effect:'write',reads:[],writes:['receipt'],next:'attempts'}),
+  loop('attempts',{name:'Attempts',body:'quality',onSuccess:'done',onMaxExceeded:'exhausted',maxIterations:2}),
+  verification('quality',{name:'Quality',verifier:'quality',onSuccess:'attempts',onFailure:'repair'}),
+  action('repair',{name:'Repair record',action:'repair-record',effect:'read-only',reads:[],writes:['revised'],next:'quality'}),
+  terminal('done',{name:'Done',status:'succeeded'}),terminal('exhausted',{name:'Exhausted',status:'failed'})
+]});`);
+  const {code,diagnostics,programIdentity,graphSnapshot}=await compileInteractive(file,{output:'memory',featureStage:'P0-B'});
+  assert.ok(code,JSON.stringify(diagnostics));
+  const program=await f.persistence.programRegistry.putImmutable(Buffer.from(code),programIdentity);
+  const candidateHash=sha256Bytes(Buffer.from('fork candidate'));
+  let allowRedo=true;
+  const auth=context({authorizeTask:()=>true,authorize:({action})=>action!=='run:fork:redo-writes'||allowRedo});
+  const cfg={...f.options,auth,graphSnapshot,
+    policy:{...policy,capabilityStage:'P0-B',bindingManifest:{},approvedSkillHash:candidateHash}};
+  external=new DatabaseSync(path.join(f.dir,'fork-external.sqlite'));
+  external.exec('CREATE TABLE writes (key TEXT PRIMARY KEY)');
+  const claimFor=frame=>{
+    const pending=frame.pending[0];
+    return {runId:frame.runId,requestId:pending.requestId,operationKey:pending.task.operationKey,
+      inputHash:sha256Bytes(canonicalBytes(pending.task))};
+  };
+  async function finishAction(frame,config,readOnly,result) {
+    const claim=claimFor(frame);
+    const {operationController:operations}=config;
+    assert.equal((await operations.claim(claim,auth)).claimed,true);
+    if (!readOnly) external.prepare('INSERT INTO writes VALUES (?)').run(claim.operationKey);
+    const {runId,operationKey,inputHash,requestId}=claim;
+    await operations.settle({runId,operationKey,inputHash,effect:readOnly?'no-effect':'applied',
+      evidenceHash:sha256Bytes(Buffer.from('proof:'+operationKey)),result},auth);
+    return complete({runId,requestId,operationKey,kind:'action',outcome:'succeeded',result},{},config);
+  }
+  const verify=(frame,passed,config)=>complete({runId:frame.runId,requestId:frame.pending[0].requestId,
+    kind:'verification',outcome:'succeeded',result:{passed}},{},config);
+
+  const original=await start(program,{}, {},cfg);
+  const originalOperation=claimFor(original).operationKey;
+  const first=await finishAction(original,cfg,false,{set:{receipt:'committed-receipt'}});
+  const repair=await verify(first,false,cfg);
+  const second=await finishAction(repair,cfg,true,{set:{revised:true}});
+  const terminal=await verify(second,true,cfg);
+  assert.equal(terminal.status,'succeeded');
+  const parent=await f.persistence.store.load(original.runId);
+  const source={namespace:ns,runId:original.runId,artifactHash:graphSnapshot.artifactHash,graphDigest:graphSnapshot.graphDigest,
+    collectionId:'fork-collection',candidateHash,approvalRef:'fork-approved'};
+  const reopened=createSqliteInteractivePersistence(f.file,{namespace:ns});
+  try {
+    const options={...cfg,...reopened};
+    const list=async nodeId=>(await listInteractiveForkPoints({ref:source,nodeId},options)).points.filter(point=>point.activation!==undefined);
+    const [later,earlier]=await list('quality');
+    assert.ok(later.activation>earlier.activation && later.entryRevision>earlier.entryRevision);
+    const input=(point,startKey,redoWrites=false)=>({source,revision:point.revision,entryRevision:point.entryRevision,startKey,redoWrites});
+    await assert.rejects(forkInteractiveRun({...input(later,'mismatch'),entryRevision:earlier.entryRevision},{},options),
+      {code:'FK_I_FORK_UNAVAILABLE'});
+    await assert.rejects(forkInteractiveRun({...input(later,'wrong-version'),
+      source:{...source,candidateHash:sha256Bytes(Buffer.from('different candidate'))}},{},options),{code:'FK_I_HOST_DENIED'});
+    const laterRun=await forkInteractiveRun(input(later,'loop-later'),{},options);
+    const earlierRun=await forkInteractiveRun(input(earlier,'loop-earlier'),{},options);
+    assert.equal(laterRun.pending[0].nodeId,'quality');
+    assert.equal(earlierRun.pending[0].nodeId,'quality');
+    assert.notEqual(laterRun.pending[0].requestId,second.pending[0].requestId);
+    assert.equal((await verify(earlierRun,false,options)).pending[0].nodeId,'repair');
+    const exhausted=await verify(laterRun,false,options);
+    assert.equal(exhausted.terminal.nodeId,'exhausted');
+    assert.deepEqual((await auth.readTerminalResult(exhausted.resultRef,options)).state,{receipt:'committed-receipt',revised:true});
+    assert.equal(external.prepare('SELECT count(*) AS n FROM writes').get().n,1);
+
+    const [write]=await list('write');
+    const noRedo=await forkInteractiveRun(input(write,'write-skipped'),{},options);
+    await assert.rejects(options.operationController.claim(claimFor(noRedo),auth),{code:'FK_I_HOST_DENIED'});
+    allowRedo=false;
+    await assert.rejects(forkInteractiveRun(input(write,'write-denied',true),{},options),{code:'FK_I_HOST_DENIED'});
+    allowRedo=true;
+    const redoInput=input(write,'write-redone',true);
+    const redo=await forkInteractiveRun(redoInput,{},options);
+    assert.equal((await forkInteractiveRun(redoInput,{},options)).runId,redo.runId);
+    await assert.rejects(forkInteractiveRun(input(later,'write-redone',true),{},options),{code:'FK_I_START_CONFLICT'});
+    assert.notEqual(claimFor(redo).operationKey,originalOperation);
+    const redone=await finishAction(redo,options,false,{set:{receipt:'new-receipt'}});
+    assert.equal((await verify(redone,true,options)).status,'succeeded');
+    assert.equal(external.prepare('SELECT count(*) AS n FROM writes').get().n,2);
+
+    const unsettled=await start(program,{}, {},{...options,startKey:'unsettled-source'});
+    const unsettledClaim=claimFor(unsettled);
+    await options.operationController.claim(unsettledClaim,auth);
+    await cancelInteractiveRun(unsettled.runId,'TEST_CANCEL',options);
+    const unsettledRef={...source,runId:unsettled.runId};
+    assert.deepEqual(await listInteractiveForkPoints({ref:unsettledRef,nodeId:'write'},options),{points:[],next:null});
+    await assert.rejects(forkInteractiveRun({source:unsettledRef,revision:0,entryRevision:0,startKey:'blocked',redoWrites:false},
+      {},options),{code:'FK_I_FORK_UNAVAILABLE'});
+    assert.deepEqual(await reopened.store.load(original.runId),parent);
   } finally {reopened.close();}
 });
 
@@ -748,6 +848,23 @@ terminal('done',{name:'Done',status:'succeeded'})
     const rechecked=await verify(repaired,'validate',true,options);
     const result=await read(rechecked,'side',{side:1});
     assert.equal(result.status,'succeeded');
+    assert.deepEqual((await auth.readTerminalResult(result.resultRef,options)).state,
+      {review:{approved:true,comment:null},repaired:true,side:1});
+
+    const {points}=await listInteractiveForkPoints({ref:viewerRef,nodeId:'a'},viewOptions);
+    assert.equal(points.length,1);
+    const [point]=points;
+    assert.deepEqual(point.scope,repairView.scope);
+    assert.equal(point.startNodeId,'outer');
+    const fork=await forkInteractiveRun({source:viewerRef,revision:point.revision,entryRevision:point.entryRevision,
+      startKey:'nested-fork',redoWrites:false},{},viewOptions);
+    assert.deepEqual(fork.pending.map(item=>item.nodeId),['review','side']);
+    const reopenedReview=lookup(fork,'review');
+    assert.notEqual(reopenedReview.requestId,review.requestId);
+    const forkAccepted=await complete({runId:fork.runId,requestId:reopenedReview.requestId,kind:'human',
+      reviewDigest:reopenedReview.task.reviewDigest,outcome:'succeeded',result:{approved:true}},{},options);
+    const forkReady=await verify(forkAccepted,'validate',true,options);
+    assert.equal((await read(forkReady,'side',{side:2})).status,'succeeded');
     assert.deepEqual((await auth.readTerminalResult(result.resultRef,options)).state,
       {review:{approved:true,comment:null},repaired:true,side:1});
 

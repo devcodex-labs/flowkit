@@ -12,6 +12,7 @@ const authCallbacks=new WeakMap();
 const operationLedgers=new WeakMap();
 const artifactLedgers=new WeakMap();
 const cancellableStores=new WeakMap();
+const forkStores=new WeakMap();
 const adminCallbacks=new WeakMap();
 const hash=value=>sha256Bytes(canonicalBytes(value));
 const fail=(code,message)=>Object.assign(new Error(code+': '+message),{code});
@@ -74,10 +75,11 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
   const backend=createSqliteCheckpointStore(file,{namespace});
   const store=Object.freeze({
     namespace,
-    async createIfAbsent(startKey,initial,genesis) {
+    async createIfAbsent(startKey,initial,genesis,intent=null) {
+      if (intent!==null && intent?.kind!=='node-fork') throw fail('FK_I_INVALID_TRANSITION','invalid start intent');
       const {startKey:declaredKey,startIntentHash, ...checkpoint}=decodeCheckpoint(initial);
       const expected=hash({namespace,startKey,artifactHash:checkpoint.artifactHash,
-        state:checkpoint.state,policyHash:checkpoint.policyHash,intent:null});
+        state:checkpoint.state,policyHash:checkpoint.policyHash,intent});
       const expectedGenesis=genesisFor({...checkpoint,startIntentHash});
       if (declaredKey!==startKey || startIntentHash!==expected
         || genesis?.transitionId!==expectedGenesis.transitionId || genesis.fromRevision!==null
@@ -87,7 +89,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
         throw fail('FK_I_INVALID_TRANSITION','invalid genesis for versioned Run');
       }
       if (initial.lastTransitionId!==genesis.transitionId) throw fail('FK_I_INVALID_TRANSITION','invalid checkpoint head');
-      const result=backend.createRun({startKey,checkpoint,genesis});
+      const result=backend.createRun({startKey,checkpoint,genesis,startIntent:intent});
       return {...result,checkpoint:encodeCheckpoint(result.checkpoint)};
     },
     async load(runId) {
@@ -168,6 +170,7 @@ export function createSqliteInteractivePersistence(file,{namespace}={}) {
         ...(saved.entry.subjectId?{subjectId:saved.entry.subjectId}:{})};
     },
   });
+  forkStores.set(store,backend);
   const programRegistry=Object.freeze({
     namespace,
     async putImmutable(bytes,manifest) {
@@ -305,12 +308,14 @@ function executionStore(store,registry) {
         throw fail('FK_I_PROGRAM_MISMATCH','registered Program identity did not survive readback');
       }
     },
-    async createRun({startKey,checkpoint}) {
+    async createRun({startKey,checkpoint,startIntent=null}) {
       const startIntentHash=hash({namespace:store.namespace,startKey,artifactHash:checkpoint.artifactHash,
-        state:checkpoint.state,policyHash:checkpoint.policyHash,intent:null});
+        state:checkpoint.state,policyHash:checkpoint.policyHash,intent:startIntent});
       const initial={...checkpoint,startKey,startIntentHash};
       const genesis=genesisFor(initial);
-      const opened=await store.createIfAbsent(startKey,encodeCheckpoint({...initial,lastTransitionId:genesis.transitionId}),genesis);
+      const envelope=encodeCheckpoint({...initial,lastTransitionId:genesis.transitionId});
+      const opened=startIntent===null ? await store.createIfAbsent(startKey,envelope,genesis) :
+        await store.createIfAbsent(startKey,envelope,genesis,startIntent);
       if (opened?.checkpoint?.namespace!==store.namespace || opened.checkpoint.startKey!==startKey
         || opened.checkpoint.startIntentHash!==startIntentHash) throw uncertain();
       return {...opened,checkpoint:decodeCheckpoint(opened.checkpoint)};
@@ -419,7 +424,7 @@ async function readTerminalResult(resultRef,options) {
   });
 }
 
-async function viewerTarget(input,options,action) {
+async function viewerTarget(input,options,action,details={}) {
   const ref=safeJSONSnapshot(input,4096);
   const accessKeys=['namespace','runId','artifactHash','graphDigest'];
   const approvalKeys=['collectionId','candidateHash','approvalRef'];
@@ -429,7 +434,7 @@ async function viewerTarget(input,options,action) {
     typeof ref[key]!=='string'||!ref[key]||ref[key].length>256) || ref.namespace!==options.auth.namespace
     || [ref.artifactHash,ref.graphDigest,...(hasApproval?[ref.candidateHash]:[])]
       .some(digest=>!/^sha256:[0-9a-f]{64}$/.test(digest))) throw fail('FK_I_HOST_DENIED','invalid viewer identity');
-  const callbacks=await checkAccess(options,action,ref);
+  const callbacks=await checkAccess(options,action,{...ref,...details});
   const persisted=await options.store.load(ref.runId);
   if (persisted?.namespace!==ref.namespace || persisted.runId!==ref.runId
     || persisted.policyIdentity.policyHash!==hash(options.policy)
@@ -639,6 +644,56 @@ export async function start(source,runtime,initialState,options) {
   }
   return publicFrame(await coordinator.start({programBytes:bytes,programIdentity:identity,startKey,state,
     authorizeExisting:runId=>checkAccess(options,'run:resume',{runId})}),options,callbacks);
+}
+
+/** List saved entries and historical executions for one node. No state is disclosed. */
+export async function listInteractiveForkPoints(input,options) {
+  options=operationOptions(options);
+  const {ref,nodeId,beforeRevision=Number.MAX_SAFE_INTEGER}=safeJSONSnapshot(input,8192)??{};
+  if (typeof nodeId!=='string' || !Number.isSafeInteger(beforeRevision) || beforeRevision<1) {
+    throw fail('FK_I_INVALID_TRANSITION','invalid fork point query');
+  }
+  const {ref:identity,graph}=await viewerTarget(ref,options,'viewer:events');
+  if (options.policy.approvedSkillHash!==identity.candidateHash) {
+    throw fail('FK_I_HOST_DENIED','fork must keep the original Workflow Skill approval scope');
+  }
+  if (!graph.nodes.some(node=>node.id===nodeId)) throw fail('FK_I_FORK_UNAVAILABLE','node is outside the Program');
+  const store=forkStores.get(options.store);
+  const list=store?.listForkPoints(identity.runId,nodeId,beforeRevision)??{points:[],next:null};
+  await checkAccess(options,'viewer:events',identity);
+  return list;
+}
+
+/** Start from a recorded boundary of the exact Interactive Run. */
+export async function forkInteractiveRun(input,runtime,options) {
+  options=operationOptions(options);
+  const request=safeJSONSnapshot(input,8192)??{};
+  const {source,revision,entryRevision,startKey,redoWrites}=request;
+  if (Object.keys(request).length!==5 || !Number.isSafeInteger(revision) || revision<0 ||
+      !Number.isSafeInteger(entryRevision) || entryRevision<0 || entryRevision>revision ||
+      typeof startKey!=='string' || !startKey || startKey.length>256 || typeof redoWrites!=='boolean') {
+    throw fail('FK_I_INVALID_TRANSITION','invalid fork request');
+  }
+  const details={revision,entryRevision,startKey,redoWrites};
+  const {ref,persisted}=await viewerTarget(source,options,'run:fork',details);
+  if (options.policy.approvedSkillHash!==ref.candidateHash) {
+    throw fail('FK_I_HOST_DENIED','fork must keep the original Workflow Skill approval scope');
+  }
+  const backend=forkStores.get(options.store);
+  if (!backend) throw fail('FK_I_FORK_UNAVAILABLE','Store does not support saved fork points');
+  const {point,checkpoint,headRevision,checkpointHash}=backend.readForkPoint(ref.runId,revision);
+  if (point.entryRevision!==entryRevision || headRevision!==persisted.revision) {
+    throw fail('FK_I_FORK_UNAVAILABLE','selected entry is no longer available');
+  }
+  if (redoWrites) await checkAccess(options,'run:fork:redo-writes',{...ref,...details});
+  const coordinator=bind(runtime,options);
+  const programBytes=await options.programRegistry.resolveByHash(ref.artifactHash);
+  await checkAccess(options,'run:fork',{...ref,...details});
+  const callbacks=await checkAccess(options,'run:create',{startKey,artifactHash:ref.artifactHash});
+  const frame=await coordinator.start({programBytes,programIdentity:checkpoint.program,startKey,state:checkpoint.state,
+    startIntent:{kind:'node-fork',runId:ref.runId,revision,entryRevision,headRevision,checkpointHash,redoWrites},
+    forkCheckpoint:checkpoint,authorizeExisting:runId=>checkAccess(options,'run:resume',{runId})});
+  return publicFrame(frame,options,callbacks);
 }
 
 export async function complete(submission,runtime,options) {

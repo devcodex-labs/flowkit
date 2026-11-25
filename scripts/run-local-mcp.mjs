@@ -18,6 +18,7 @@ import { canExportPortable, commitDelivery, deliveryMatches, deliveryNames, esca
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
 import { defaultLayout, viewerHash, workflowPage, workflowRunPage, workflowRunProgress, workflowTracePage } from './workflow-viewer.mjs';
+import { listInteractiveForkPoints } from '../src/interactive/index.mjs';
 import { generateLayout, layoutContractHash } from './workflow-viewer/auto-layout.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
@@ -811,6 +812,47 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       if (url.pathname === '/' && req.method === 'GET' && operator(req)) {
         return html(res, sourcePanel);
       }
+      if (route==='runs' && ref && action==='fork' && url.pathname==='/runs/'+ref+'/fork' &&
+          dependencies.forkRun && dependencies.resolveRunViewer && ['GET','POST'].includes(req.method)) {
+        if (!operator(req) || (req.method==='POST' && req.headers.origin!==origin)) {
+          return json(res,403,{error:'需要本机操作员授权。'});
+        }
+        try {
+          const runId=decodeURIComponent(ref);
+          const view=await resolveRunBinding(runId);
+          if (!view || view.standardTrace) return json(res,404,{error:'找不到可复跑的运行。'});
+          await view.auth.readRunView(view.ref,view.options);
+          if (req.method==='GET') {
+            const before=url.searchParams.get('beforeRevision');
+            return json(res,200,await listInteractiveForkPoints({ref:view.ref,nodeId:url.searchParams.get('nodeId'),
+              ...(before===null?{}:{beforeRevision:Number(before)})},{...view.options,auth:view.auth}));
+          }
+          const input=JSON.parse(await readBody(req,4096));
+          if (!input || Object.keys(input).length!==4 || !Number.isSafeInteger(input.revision) || input.revision<0 ||
+              !Number.isSafeInteger(input.entryRevision) || input.entryRevision<0 || input.entryRevision>input.revision ||
+              typeof input.startKey!=='string' || !/^[a-zA-Z0-9_.:@-]{1,128}$/.test(input.startKey) ||
+              typeof input.redoWrites!=='boolean') return json(res,400,{error:'复跑请求不合法。'});
+          const {revision,entryRevision,startKey,redoWrites}=input;
+          const result=await dependencies.forkRun({source:view.ref,revision,entryRevision,startKey,redoWrites},{view,requestContext:context});
+          if (!result?.runId || result.runId===runId) throw new Error('Host did not return a distinct Run');
+          let runUrl=null;
+          try {
+            const next=await resolveRunBinding(result.runId);
+            if (next?.ref.artifactHash===view.ref.artifactHash && next.ref.graphDigest===view.ref.graphDigest &&
+                next.ref.candidateHash===view.ref.candidateHash && next.ref.collectionId===view.ref.collectionId &&
+                next.ref.approvalRef===view.ref.approvalRef) {
+              await next.auth.readRunView(next.ref,next.options);
+              runUrl=origin+'/runs/'+encodeURIComponent(result.runId);
+            }
+          } catch { /* A launched Run remains valid even if its viewer is temporarily unavailable. */ }
+          return json(res,200,{runId:result.runId,status:result.status,runUrl});
+        } catch(error) {
+          if (['FK_I_HOST_DENIED','FK_I_PROGRAM_MISMATCH'].includes(error?.code)) return json(res,403,{error:'宿主未授权复跑。'});
+          if (['FK_I_FORK_UNAVAILABLE','FK_I_START_CONFLICT'].includes(error?.code)) return json(res,409,{error:'复跑点当前不可用。'});
+          if (error instanceof SyntaxError || error?.code==='FK_I_INVALID_TRANSITION') return json(res,400,{error:'复跑请求不合法。'});
+          return json(res,503,{error:'暂时无法发起复跑。'});
+        }
+      }
       if (route === 'runs' && ref && (!action || action==='progress') && req.method === 'GET' && dependencies.resolveRunViewer) {
         if (!operator(req)) return json(res, 403, { error: '请先建立本机操作员会话。' });
         const runId = decodeURIComponent(ref);
@@ -831,7 +873,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             return html(res,await workflowTracePage({...view,requestContext:context}));
           }
           if (progress) return json(res,200,await workflowRunProgress({...view,afterRevision}));
-          return html(res,await workflowRunPage({...view,requestContext:context,afterRevision,artifactAfter}));
+          return html(res,await workflowRunPage({...view,requestContext:context,afterRevision,artifactAfter,
+            forkEnabled:typeof dependencies.forkRun==='function'}));
         } catch (error) {
           if (error.code === 'FK_I_HOST_DENIED' || error.code === 'FK_I_PROGRAM_MISMATCH') {
             return json(res, 404, { error: '找不到可查看的运行。' });

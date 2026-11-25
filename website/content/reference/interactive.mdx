@@ -36,6 +36,23 @@ Host 分别判定 `viewer:read`、`viewer:events` 和 `viewer:output` 权限。�
 
 `readRunArtifacts({ref, after}, options)` 受 `viewer:artifacts` 授权约束。它返回最新与生效版本指针及已登记的摘要，内部存储引用留在 Host。
 
+### 查询可复跑的历史入口 {#listInteractiveForkPoints}
+
+`listInteractiveForkPoints({ref, nodeId, beforeRevision}, options)` 返回可选择的历史执行元数据。用返回的 `next` 继续翻页。请求需要当前 `viewer:events` 权限。原 Run 来自集合时，仍需提供该次运行的集合、候选和批准引用。只有使用内置版本化 SQLite 持久层且留有入口记录的终态 Run 可以复跑。
+
+### 从指定节点复跑 {#forkInteractiveRun}
+
+`forkInteractiveRun({source, revision, entryRevision, startKey, redoWrites}, runtime, options)` 创建一个新 Interactive Run。使用列表返回的 `revision` 和 `entryRevision`，以及原 Program、图和执行策略。相同的 `startKey` 和意图可重试取回同一个新 Run。原 Run 的状态、回执和审计记录保留。
+
+| 场景 | 新 Run 的行为 |
+| --- | --- |
+| 串行节点和回环 | 从选中那次节点执行的入口开始，保留当时已提交状态和循环计数。节点内部重试从该次激活的入口重新开始。 |
+| 并行分支 | 从当次最外层并行组入口开始，重新调度该组和后续流程。已确认入口必须和列表返回的 `entryRevision` 一致。分支尚未提交回执时，请选择并行组入口。 |
+| 外部写入 | 保留起点前已写入流程状态的结果。起点后的写入需要 `redoWrites: true`、宿主授权和新 Run 的操作账本。缺少重做授权时，该步骤的操作领用会被拒绝。复跑时仍按能力的业务幂等规则处理。 |
+| 未对账写入 | 原 Run 存在未结算写入或未解决的补偿时，先完成对账再选择入口。 |
+
+Host 需要校验 `run:fork` 和 `run:create`。请求重做外部写入时还需 `run:fork:redo-writes`，新任务也必须通过常规权限和领用检查。新 Run 使用独立的待办、人工确认、产物登记和外部操作记录。入口状态含旧产物引用时，Host 继续验证该引用的存储读取权限和有效性。如果后续人工节点要求本次 Run 重新登记产物，请从产物生成节点或更早的入口复跑。
+
 静态诊断复用Standard分析器，编译器不下载远程Skill。skillCheck:false只跳过本地存在性检查，不放宽HTTPS白名单或integrity要求。flowkit.config.mjs由CLI读取，SDK不会隐式执行它。
 
 ### loadInteractiveProgram {#loadInteractiveProgram}

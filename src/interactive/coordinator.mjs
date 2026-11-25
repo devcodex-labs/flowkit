@@ -1421,7 +1421,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   }
 
   /** Register compiler-verified bytes before the idempotent start transaction. */
-  async function start({programBytes,programIdentity,startKey,runId=randomUUID(),state={},startIntent=null,
+  async function start({programBytes,programIdentity,startKey,runId=randomUUID(),state={},startIntent=null,forkCheckpoint,
     authorizeExisting}={}) {
     nonempty(startKey,'startKey');nonempty(runId,'runId');
     if (!(programBytes instanceof Uint8Array) || !programIdentity) {
@@ -1442,6 +1442,9 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       throw error;
     }
     const intentSnapshot=copy(startIntent);
+    if (forkCheckpoint && (!versioned || intentSnapshot?.kind!=='node-fork')) {
+      throw failure('FK_I_FORK_UNAVAILABLE','fork starts require a verified versioned origin');
+    }
     const program=await loadInteractiveProgram(byteSnapshot,declared.artifactHash);
     if (!versioned && declared.implementedStage!=='P0-A') {
       throw failure('FK_I_UNSUPPORTED_GRAPH','This Program requires the authorized Interactive Host API');
@@ -1450,7 +1453,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       .equals(canonicalBytes(declared))) {
       throw failure('FK_I_PROGRAM_MISMATCH','identity and verified Program differ');
     }
-    validateWorkflowInput(program.programTable.contract,stateSnapshot);
+    if (!forkCheckpoint) validateWorkflowInput(program.programTable.contract,stateSnapshot);
     assertRuntime(program,execution); // before any mutation, reject unavailable Stage bindings
     if (!policySnapshot.parallelEffectMode && Object.values(program.programTable.nodes).some(node=>
       node.kind==='parallel'&&node.metadata.strategy==='any'&&(node.metadata.branchNodes?.flat()??node.metadata.branches).some(id=>
@@ -1459,6 +1462,13 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       throw failure('FK_I_INVALID_OPERATION','Parallel any Actions require an explicit effect policy');
     }
     const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
+    if (forkCheckpoint) {
+      const {blockId,contextError,regionCounters,unavailableParallelKeys}=forkCheckpoint;
+      Object.assign(initial,{blockId,contextError,
+        ...(regionCounters?{regionCounters:copy(regionCounters)}:{}),
+        ...(unavailableParallelKeys?{unavailableParallelKeys:copy(unavailableParallelKeys)}:{})});
+      confirmCurrentBlock(initial,program);
+    }
     if (Object.values(program.programTable.nodes).some(node=>node.metadata.task)) {
       initial.taskContext=createBudget(policySnapshot.taskPolicy ?? {},signal).snapshot();
     }
