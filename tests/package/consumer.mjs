@@ -68,7 +68,7 @@ assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
 assert.deepEqual(Object.keys(interactive),[
   'cancelInteractiveRun','compileInteractive','complete','createAgentReceiptStatement','createInteractiveAdminContext','createInteractiveCoordinator',
   'createInteractiveHostContext','createSqliteCheckpointStore','createSqliteInteractivePersistence',
-  'createTrustedInteractiveHost','encodeAgentReceiptStatement',
+  'createTrustedInteractiveHost','encodeAgentReceiptStatement','forkInteractiveRun','listInteractiveForkPoints',
   'loadInteractiveProgram','normalizeHostAgentReceipt','reserveInteractiveDispatch','resume','start',
 ]);
 await writeFile('simple.workflow.js',
@@ -82,15 +82,28 @@ try {
   const auth=interactive.createInteractiveHostContext({
     namespace:'installed',subjectId:'test-host',authorize:()=>true,authorizeTask:()=>false,
   });
-  const frame=await interactive.start('simple.workflow.js',{}, {private:'host-only'},{
+  const options={
     ...versioned,auth,startKey:'installed-versioned',policy:{
       id:'consumer',version:'1',bindingManifest:{},disclosePolicyId:'consumer',
       capabilityStage:'P0-A',canonicalizationVersion:'jcs-rfc8785-v1',
     },
-  });
+    graphSnapshot:compiledInteractive.graphSnapshot,
+  };
+  const frame=await interactive.start('simple.workflow.js',{}, {private:'host-only'},options);
   assert.equal(frame.status,'succeeded');
   assert.equal(Object.hasOwn(frame,'state'),false);
-  assert.equal((await versioned.store.load(frame.runId)).protocolVersion,1);
+  const original=await versioned.store.load(frame.runId);
+  assert.equal(original.protocolVersion,1);
+  const {artifactHash,graphDigest}=options.graphSnapshot;
+  const ref={namespace:'installed',runId:frame.runId,artifactHash,graphDigest};
+  const {points}=await interactive.listInteractiveForkPoints({ref,nodeId:'done'},options);
+  assert.equal(points.length,1);
+  const [{revision,entryRevision}]=points;
+  const fork=await interactive.forkInteractiveRun({source:ref,revision,entryRevision,startKey:'installed-fork',redoWrites:false},{},options);
+  assert.notEqual(fork.runId,frame.runId);
+  assert.equal(fork.status,'succeeded');
+  assert.deepEqual((await auth.readTerminalResult(fork.resultRef,options)).state,{private:'host-only'});
+  assert.deepEqual(await versioned.store.load(frame.runId),original);
 } finally {versioned.close();}
 assert.ok(compiledInteractive.programIdentity?.artifactHash);
 await writeFile('task-interactive.workflow.js',
