@@ -2722,9 +2722,9 @@ function readerDocument(content, media) {
 async function readViewerJson(url,params,signal) {
   const target=new URL(url,location.href);
   for(const [key,value] of Object.entries(params))target.searchParams.set(key,value);
-  const response=await fetch(target,{signal,credentials:'same-origin',redirect:'error'});
+  const response=await fetch(target,{signal,credentials:'same-origin',redirect:'error',cache:'no-store'});
   const data=await response.json().catch(()=>null);
-  if(!response.ok||!data)throw new Error(data?.error??'暂时无法读取正文。');
+  if(!response.ok||!data)throw Object.assign(new Error(data?.error??'暂时无法读取正文。'),{status:response.status});
   return data;
 }
 
@@ -2803,40 +2803,102 @@ $('readerSearchForm').addEventListener('submit',event=>{
 let artifactOpener=null;
 let artifactNode='';
 const artifactPageHistory=DATA.runView?.artifactAfter>0?[0]:[];
-let artifactPageLoading=false;
-function updateArtifactList() {
-  $('acList').innerHTML=artifactContent(artifactNode);
+let artifactRequest=null;
+let artifactRefreshPending=false;
+function updateArtifactPager() {
   const run=DATA.runView;
   $('acPager').hidden=!run?.artifactsUrl||(!artifactPageHistory.length&&run.artifactNext==null);
-  $('acPrevious').disabled=artifactPageLoading||!artifactPageHistory.length;
-  $('acNext').disabled=artifactPageLoading||run?.artifactNext==null;
+  $('acPrevious').disabled=!!artifactRequest?.paging||!run?.artifacts||!artifactPageHistory.length;
+  $('acNext').disabled=!!artifactRequest?.paging||run?.artifactNext==null;
 }
-async function changeArtifactPage(forward) {
-  const run=DATA.runView;
-  const after=forward?run?.artifactNext:artifactPageHistory.at(-1);
-  if(artifactPageLoading||after==null||!run?.artifactsUrl)return;
-  artifactPageLoading=true;
-  $('acPrevious').disabled=$('acNext').disabled=true;
-  $('acPageStatus').textContent='正在加载…';
+function updateArtifactList() {
+  $('acList').innerHTML=artifactContent(artifactNode);
+  const enabled=!!DATA.runView?.artifacts?.length;
+  artifactCenter.querySelectorAll('input,select').forEach(control=>{control.disabled=!enabled;});
+  updateArtifactPager();
+}
+function addArtifactTypes() {
+  const node=nodes.get(artifactNode);
+  const types=new Set((DATA.runView?.artifacts??[]).filter(item=>!node||item.nodeId===node.nodeId).map(item=>item.mimeType));
+  const control=$('acType');
+  for(const type of [...types].sort()) {
+    if(![...control.options].some(option=>option.value===type))control.add(new Option(type,type));
+  }
+}
+function closeArtifactReader() {
+  if(!readerContent.querySelector('[data-artifact-reader]'))return;
+  if(reader.open)reader.close();
+  readerContent.replaceChildren();
+}
+function stopArtifactRefresh() {
+  artifactRequest?.controller.abort();
+  artifactRequest=null;
+  artifactRefreshPending=false;
+}
+async function loadArtifactPage(after,forward) {
+  const url=DATA.runView?.artifactsUrl;
+  if(!url||after==null||artifactCenter.hidden)return;
+  const paging=forward!==undefined;
+  if(artifactRequest&&!paging) {
+    artifactRefreshPending=true;
+    return;
+  }
+  if(artifactRequest?.paging)return;
+  // Navigation wins over background reads; a final refresh can wait behind either.
+  artifactRequest?.controller.abort();
+  const request={controller:new AbortController(),paging};
+  artifactRequest=request;
+  artifactRefreshPending=false;
+  if(paging) {
+    updateArtifactPager();
+    $('acPageStatus').textContent='正在加载…';
+  }
   try {
-    const page=await readViewerJson(run.artifactsUrl,{after},AbortSignal.timeout(15000));
-    if(forward)artifactPageHistory.push(run.artifactAfter??0);
-    else artifactPageHistory.pop();
-    Object.assign(run,{artifacts:page.items,artifactAfter:after,artifactNext:page.next});
-    for(const type of new Set(page.items.map(item=>item.mimeType))) {
-      if(![...$('acType').options].some(option=>option.value===type))$('acType').add(new Option(type,type));
+    const signal=AbortSignal.any([request.controller.signal,AbortSignal.timeout(15000)]);
+    const page=await readViewerJson(url,{after},signal);
+    const run=DATA.runView;
+    if(artifactRequest!==request||run?.artifactsUrl!==url)return;
+    if(paging) {
+      if(forward)artifactPageHistory.push(run.artifactAfter??0);
+      else artifactPageHistory.pop();
     }
+    if(paging||run.artifactNext!==page.next||JSON.stringify(run.artifacts)!==JSON.stringify(page.items)) {
+      Object.assign(run,{artifacts:page.items,artifactAfter:after,artifactNext:page.next});
+      addArtifactTypes();
+      updateArtifactList();
+    }
+    $('acScope').textContent='运行修订 '+run.revision;
     $('acPageStatus').textContent='第 '+(artifactPageHistory.length+1)+' 页 · 筛选当前页';
-  } catch(error){$('acPageStatus').textContent=error.message;}
-  finally {artifactPageLoading=false;updateArtifactList();}
+  } catch(error) {
+    const run=DATA.runView;
+    if(artifactRequest!==request||run?.artifactsUrl!==url)return;
+    if([401,403,404].includes(error.status)) {
+      Object.assign(run,{artifacts:null,artifactNext:null});
+      closeArtifactReader();
+      updateArtifactList();
+      $('acScope').textContent='产物当前不可查看';
+    } else $('acScope').textContent='产物刷新暂不可用';
+    $('acPageStatus').textContent=error.message;
+  } finally {
+    if(artifactRequest===request) {
+      artifactRequest=null;
+      updateArtifactPager();
+      if(artifactRefreshPending)refreshCurrentArtifacts();
+    }
+  }
 }
-$('acPrevious').onclick=()=>void changeArtifactPage(false);
-$('acNext').onclick=()=>void changeArtifactPage(true);
+function refreshCurrentArtifacts() {
+  void loadArtifactPage(DATA.runView?.artifactAfter??0);
+}
+$('acPrevious').onclick=()=>void loadArtifactPage(artifactPageHistory.at(-1),false);
+$('acNext').onclick=()=>void loadArtifactPage(DATA.runView?.artifactNext,true);
+window.addEventListener('online',refreshCurrentArtifacts);
 
 async function openArtifactBody(versionId) {
   const run=DATA.runView,item=run?.artifacts?.find(artifact=>artifact.versionId===versionId);
   if(!item||!run.artifactContentUrl)return;
   const body=document.createElement('div');
+  body.dataset.artifactReader='';
   body.textContent='正在读取已授权的产物版本…';
   body.setAttribute('aria-live','polite');
   openReader('产物正文',item.artifactId+(item.versionLabel?' · '+item.versionLabel:''),body);
@@ -2870,16 +2932,16 @@ function showArtifactCenter(nodeId='',opener=null) {
   $('acSearch').value='';
   $('acStatus').value='all';
   $('acType').replaceChildren(new Option('所有类型','all'));
-  const types=new Set((DATA.runView?.artifacts??[]).filter(item=>!nodeId||item.nodeId===nodes.get(nodeId).nodeId).map(item=>item.mimeType));
-  for(const type of [...types].sort())$('acType').add(new Option(type,type));
-  artifactCenter.querySelectorAll('input,select').forEach(control=>{control.disabled=!DATA.runView?.artifacts?.length;});
+  addArtifactTypes();
   updateArtifactList();
   $('acReturn').focus();
+  refreshCurrentArtifacts();
 }
 function showStructure() {
   const previous=artifactOpener;
   artifactOpener=null;
   artifactCenter.hidden=true;
+  stopArtifactRefresh();
   $('structureTab').classList.add('active');
   $('mobileStructureBtn').classList.add('active');
   $('artifactCenterBtn').classList.remove('active');
@@ -3140,6 +3202,8 @@ function watchRun() {
   }
   function deny() {
     stopped=true;
+    stopArtifactRefresh();
+    closeArtifactReader();
     DATA.runView=null;
     renderRunActivity();
     if (!artifactCenter.hidden) updateArtifactList();
@@ -3173,6 +3237,7 @@ function watchRun() {
       DATA.runView={...previous,...next,events};
       renderRunActivity();
       showConnection();
+      refreshCurrentArtifacts();
       retry=1000;
       stopped=caughtUp(DATA.runView);
       if (Number.isSafeInteger(next.cursor) && next.cursor<next.revision) delay=100;

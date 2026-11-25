@@ -89,7 +89,7 @@ codex plugin list --marketplace flowkit-local
 
 需要让操作员从节点复跑时，宿主同时提供 `forkRun(request, {view, requestContext})`。根据当前操作员身份绑定原 Program 和对应批准候选，调用 [指定节点复跑 SDK](/reference/interactive#forkInteractiveRun)，把返回的新 Run 加入宿主调度，并让 `resolveRunViewer` 能解析新 Run。操作员打开一个终态运行，在节点详情里点「查看可复跑记录」，选择一次历史执行，核对页面显示的实际起点，再点「从这次执行重新开始」。选择并行分支时页面会标出将重跑的整组。需要重做外部写入时勾选对应选项，并由宿主单独授权。新运行打开独立链接，原链接继续查看原结果。
 
-产物中心显示当前页的历史、最新和已确认版本。只有带批准记录的版本显示「已确认」，当前生效版本另标「生效」。登记产物时可提供 `versionLabel`，否则显示可核对的短版本标识，完整摘要可展开查看。筛选作用于当前页。
+产物中心显示当前页的历史、最新和已确认版本。打开产物中心、在实时运行期间查看，以及恢复连接后，都会重新读取当前页及其授权。运行到达终态时会再次同步。刷新保留搜索、筛选和页码。只有带批准记录的版本显示「已确认」，当前生效版本另标「生效」。登记产物时可提供 `versionLabel`，否则显示可核对的短版本标识，完整摘要可展开查看。筛选作用于当前页。
 
 需要预览正文时，宿主提供可选的 `readArtifactContent({ namespace, runId, artifactId, versionId, storageRef, requestContext, signal })`，从自己的存储返回字符串、UTF-8 字节或 `null`。Host 需要为精确版本授权 `viewer:artifact-content`。FlowKit 在授权后传入服务端存储引用，检查字节长度和正文 SHA-256，并在响应前再次核对权限。页面可预览不超过 128 KiB 的文本和 JSON，Markdown 标题、列表、表格和代码可直接阅读。
 

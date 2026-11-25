@@ -72,9 +72,11 @@ test('browser shows an authorized Standard trace and a different persisted Inter
   const policy={id:namespace,version:'1',disclosePolicyId:'browser',capabilityStage:'P2',
     canonicalizationVersion:'jcs-rfc8785-v1',bindingManifest:{}};
   const worker=createInteractiveHostContext({namespace,subjectId:'worker',authorize:()=>true,authorizeTask:()=>true,
-    authorizeHuman:({reviewDigest})=>({proofId:'browser-review',evidenceHash:reviewDigest})});
+    authorizeHuman:({reviewDigest,bundle})=>({proofId:'browser-review',evidenceHash:bundle?.bundleHash??reviewDigest})});
+  let allowArtifactIndex=true;
   const viewer=createInteractiveHostContext({namespace,subjectId:'viewer',authorizeTask:()=>true,
     authorize:({action,...target})=>['viewer:read','viewer:events','viewer:artifacts','viewer:artifact-content'].includes(action)&&
+      (action!=='viewer:artifacts'||allowArtifactIndex)&&
       Object.entries(approval).every(([key,value])=>target[key]===value)});
   const open=()=>createSqliteInteractivePersistence(path.join(dir,'run.sqlite'),{namespace});
   let persistence=open(), frame, service, browser;
@@ -200,6 +202,60 @@ test('browser shows an authorized Standard trace and a different persisted Inter
     const older=readWorkflowPageData(await (await page.goto(runUrl+'?afterRevision=0')).text()).runView;
     assert.deepEqual(older,latest);
     assert.equal((await viewer.readRunView(ref,viewOptions)).revision,second.revision);
+
+    await page.goto(runUrl);
+    const timeOrigin=await page.evaluate(()=>performance.timeOrigin);
+    await page.locator('#artifactCenterBtn').click();
+    await page.getByRole('button',{name:'下一页'}).click();
+    await page.getByText('page-material-100',{exact:true}).waitFor();
+    await page.locator('#acSearch').fill('review-material');
+    await page.locator('#acStatus').selectOption('latest');
+    assert.equal(await artifact.count(),0);
+
+    await page.context().setOffline(true);
+    const version=await persistence.artifactController.registerVersion({runId:frame.runId,
+      requestId:repair.pending[0].requestId,artifactId:'review-material',contentHash,mimeType:'text/markdown',
+      sizeBytes:Buffer.byteLength(body),storageRef,versionLabel:'v2'},worker);
+    assert.equal((await viewer.readRunView(ref,viewOptions)).revision,second.revision);
+    await page.context().setOffline(false);
+    await artifact.getByText('版本 v2',{exact:true}).waitFor({timeout:8000});
+    assert.equal(await page.locator('#acSearch').inputValue(),'review-material');
+    assert.equal(await page.locator('#acStatus').inputValue(),'latest');
+    assert.match(await page.locator('#acPageStatus').innerText(),/第 2 页/);
+
+    await artifact.getByRole('button',{name:'查看正文'}).click();
+    await page.locator('#readerContent h2').waitFor();
+    allowArtifactIndex=false;
+    await page.getByText('当前授权未提供产物索引。',{exact:true}).waitFor();
+    assert.equal(await page.locator('#detailReader').isVisible(),false);
+    assert.equal(await page.locator('#readerContent h2').count(),0);
+    allowArtifactIndex=true;
+    await artifact.getByText('版本 v2',{exact:true}).waitFor();
+    assert.equal(await page.locator('#acSearch').inputValue(),'review-material');
+
+    // Hold a pre-approval index response across the final Run transition.
+    const held=Promise.withResolvers(),release=Promise.withResolvers();
+    await page.route(/\/artifacts\?after=\d+$/,async route=>{
+      const response=await route.fetch();
+      held.resolve();
+      await release.promise;
+      await route.fulfill({response});
+    },{times:1});
+    try {
+      await held.promise;
+      const pending=second.pending[0];
+      const request={runId:frame.runId,requestId:pending.requestId,reviewDigest:pending.task.reviewDigest};
+      const bundle=await persistence.artifactController.freezeBundle({...request,versionIds:[version.versionId],
+        expiresAt:Date.now()+120000},worker);
+      const finished=await complete({...request,kind:'human',bundleHash:bundle.bundleHash,outcome:'succeeded',
+        result:{decision:'approve'}},{},runOptions);
+      assert.equal(finished.status,'succeeded');
+      await page.getByText('成功 · 修订 '+finished.revision,{exact:true}).waitFor();
+    } finally {release.resolve();}
+    await artifact.getByText('已确认 · 生效 · 最新版本',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>performance.timeOrigin),timeOrigin);
+    assert.equal(await page.locator('#acSearch').inputValue(),'review-material');
+    assert.equal(await page.locator('#acStatus').inputValue(),'latest');
   } finally {
     await browser?.close();
     await service?.close();
