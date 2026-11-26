@@ -14,12 +14,15 @@ function contained(root, target) {
 
 export async function readRegularResource(target, limit, signal) {
   signal?.throwIfAborted();
-  const expected = await lstat(target);
+  const expected = await lstat(target, { bigint: true });
   if (!expected.isFile()) throw skillError('FK_R011', 'Resource is not a regular file');
   const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
+    const stat = await file.stat({ bigint: true });
+    // Windows can omit the volume serial in the path stat while providing it on the open handle.
+    const sameDevice = stat.dev === expected.dev ||
+      (process.platform === 'win32' && expected.dev === 0n && stat.birthtimeNs === expected.birthtimeNs);
+    if (!stat.isFile() || !sameDevice || stat.ino !== expected.ino) {
       throw skillError('FK_R011', 'Resource changed before it could be read');
     }
     if (stat.size > limit) throw skillError('FK_R014', `Resource exceeds ${limit} bytes`);
