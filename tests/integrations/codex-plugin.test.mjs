@@ -218,7 +218,8 @@ test('the local Author drafts only after catalog lookup, publishes the approved 
         assert.match(resource.files['SKILL.md'], /Use the confirmed input/);
         return { status: 'succeeded', result: {}, events: [] };
       } };
-    const options = { hostProfile: portable.candidate.manifest.hostProfile, authorizeExecution: () => true, runtime };
+    const options = { hostProfile: portable.candidate.manifest.hostProfile, authorizeExecution: () => true,
+      resolveApplicableSafetyPolicies: () => [], runtime };
     await assert.rejects(runApprovedCollectionWorkflow(store, request, options, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
     await assert.rejects(runApprovedCollectionWorkflow(store, request, { ...options, resolveRunProfessionalSkill: () =>
       ({ authorized: false, source: pin.source, candidate: skill }) }, {}), { code: 'FKA_DEPENDENCY_UNAVAILABLE' });
@@ -395,6 +396,7 @@ test('project design uses known source IDs, commits one offline HTML and replays
         await writeFile(path.join(skillDirectory, 'workflow.js'), candidate.files['workflow.js']);
         return runApprovedCollectionWorkflow(store, { ...scope, skillDirectory }, {
           hostProfile: candidate.manifest.hostProfile, authorizeExecution: ({ executionRef }) => executionRef === 'authorized-design-run',
+          resolveApplicableSafetyPolicies: () => [],
           runtime: { isControlSignal: () => false, runVerification: () => true, runAction: async () => { acceptedRuns++; } }
         }, {});
       }
@@ -894,6 +896,7 @@ test('local MCP pins a validated model layout, confirms the candidate and replay
     file: path.resolve('examples/docs/conditional-routing/sample.workflow.js'),
     collectionId: 'other-collection', skillId: 'external-routing', name: 'external-routing',
     description: 'External routing workflow', version: '1.0.0', buildId: 'test-build',
+    safetyPolicies: [],
     hostProfile: { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') },
     compilerOptions: { skillCheck: false }
   });
@@ -1016,6 +1019,7 @@ test('local MCP rechecks revoked imports and saves a reviewed same-origin update
     await writeFile(file, original.replace("version: '1.0.0'", "version: '" + version + "'"));
     const { candidate, diagnostics } = await prepareStandardSkill({ file, collectionId: 'upstream', skillId: 'transferred',
       name: 'transferred', description: 'Transfer routing', version, hostProfile, buildId: identifier,
+      safetyPolicies: [],
       compilerOptions: { skillCheck: false } });
     assert.ok(candidate, JSON.stringify(diagnostics));
     return publicDelivery(candidate, key);

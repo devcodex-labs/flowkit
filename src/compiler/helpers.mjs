@@ -32,6 +32,7 @@ function traceTemplate() {
 
 function agentTemplate() {
   let stepNo = 0;
+  const invocationId = globalThis.crypto.randomUUID();
   // Diagnostic text must not change retry behavior or replace the original rejection cause.
   const rejectionText = (error) => {
     try { return String(error?.message ?? error); }
@@ -41,6 +42,8 @@ function agentTemplate() {
   const runStep = async (s) => {
     // Allocate before any await: parallel declarations keep deterministic overview numbers.
     const step = ++stepNo;
+    const activationId = JSON.stringify([invocationId, s.id, step]);
+    const requestIdFor = attempt => JSON.stringify([activationId, attempt]);
     const instruction = await s.skill();
     const input = {};
     const missing = [];
@@ -51,20 +54,45 @@ function agentTemplate() {
     let reasons = [];
     let threw = false;
     let cause;
+    const authorizeRetry = async attempt => {
+      if (attempt > s.retries) return;
+      ctx.signal?.throwIfAborted();
+      const proof = await runtime.authorizeLegacyRetry?.({
+        runId: ctx.runId, nodeId: s.id, step, attempt, activationId, requestId: requestIdFor(attempt),
+        reasons: [...reasons], signal: ctx.signal
+      });
+      ctx.signal?.throwIfAborted();
+      if (proof?.authorized !== true || proof.sideEffectStatus !== "none") {
+        throw Object.assign(new Error(`FK_R004 ${s.name} redispatch requires Host authorization and observed no side effect`),
+          threw ? { cause } : undefined, { code: "FK_R004", kind: "retry-not-authorized", reasons });
+      }
+    };
     for (let attempt = 1; attempt <= s.retries + 1; attempt++) {
       let result;
       try {
+        ctx.signal?.throwIfAborted();
         result = await runAgent({ id: s.id, name: s.name, instruction, input, missing, resultSchema: s.output,
-          attempt, reasons, ...(s.overview ? { overview: { step } } : {}), signal: ctx.signal, runId: ctx.runId });
+          attempt, activationId, requestId: requestIdFor(attempt), reasons,
+          ...(s.overview ? { overview: { step } } : {}), signal: ctx.signal, runId: ctx.runId });
         threw = false;
       } catch (error) {
+        ctx.signal?.throwIfAborted();
         if (isControlSignal(error)) throw error;
         threw = true;
         cause = error;
         reasons = [`runAgent threw: ${rejectionText(error)}`];
+        await authorizeRetry(attempt);
         continue;
       }
       reasons = validateResult(s.output, result);
+      if (!Array.isArray(reasons)) {
+        throw Object.assign(new Error(`FK_R004 ${s.name} validateResult must return validation messages`), { code: "FK_R004" });
+      }
+      for (let index = 0; index < reasons.length; index++) {
+        if (!Object.hasOwn(reasons, index) || typeof reasons[index] !== "string") {
+          throw Object.assign(new Error(`FK_R004 ${s.name} validateResult must return validation messages`), { code: "FK_R004" });
+        }
+      }
       if (reasons.length === 0 && checkStep) {
         const why = await checkStep({ id: s.id, name: s.name, attempt }, result, ctx);
         if (typeof why === "string") reasons = [why];
@@ -74,7 +102,9 @@ function agentTemplate() {
         const candidate = mergeOwn(mergeOwn({}, ctx.state), result);
         if (!(await verifyStep(s.id, s.verify, s.name, { ...ctx, state: candidate }))) reasons = [`verify ${s.verify} failed`];
       }
+      ctx.signal?.throwIfAborted();
       if (reasons.length === 0) { mergeOwn(ctx.state, result); return; }
+      await authorizeRetry(attempt);
     }
     throw Object.assign(new Error(`FK_R004 ${s.name}: ${reasons.join("; ")}`, threw ? { cause } : undefined), { code: "FK_R004", reasons });
   };

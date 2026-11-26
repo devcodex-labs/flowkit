@@ -58,7 +58,7 @@ export async function createWorkflowAuthorHost(supplied) {
     throw authorError('author-executor', 'FKA_HOST_BINDING_MISSING: independently responsive execution and guarded request ports are required');
   }
   const policy = budgetPolicy(options.budgetPolicy);
-  const documentPolicy = budgetPolicy({ ...policy, maxRequests: Math.max(policy.maxRequests, 168),
+  const documentPolicy = budgetPolicy({ ...policy, maxRequests: options.budgetPolicy?.maxRequests ?? 168,
     ...options.documentBudgetPolicy });
   const requiredCapacity = ['maxPhysicalExecutions', 'maxDrafts', 'maxDraftBytes', 'maxRetainedDraftBytes', 'maxReceiptBytes', 'maxTurnsPerDraft'];
   if (requiredCapacity.some(key => options.capacity?.[key] === undefined)) throw Object.assign(authorError('author-executor', 'Host must configure finite execution, draft and receipt capacities'), {
@@ -89,6 +89,13 @@ export async function createWorkflowAuthorHost(supplied) {
   const ownerId = randomUUID();
   const flights = new Map();
   const publications = new Map();
+  const terminalReceiptReserve = 2048;
+  function checkRetention(usage) {
+    if (usage.draftBytes + usage.activeExecutionDrafts * terminalReceiptReserve > capacity.maxRetainedDraftBytes ||
+        usage.receiptBytes + usage.tombstoneBytes + usage.settlementReserveBytes > capacity.maxReceiptBytes) {
+      throw authorError('author-capacity', 'Retained draft/receipt byte capacity reached; explicit Host retention decision required');
+    }
+  }
   function physicalSlotUnavailable(state, draft, activeDrafts = state.activeDrafts(capacity.maxDrafts + 1)) {
     const physical = activeDrafts.flatMap(item => state.turns(item.id)).filter(turn => turn.physicalOutstanding);
     return Boolean(draft.activeExecution || physical.some(turn => turn.draftId === draft.id) || physical.length >= capacity.maxPhysicalExecutions);
@@ -136,12 +143,11 @@ export async function createWorkflowAuthorHost(supplied) {
   }
   function write(state, draft, previous) {
     draft.stateVersion = previous + 1;
-    if (jsonBytes(draft) > capacity.maxDraftBytes) throw authorError('author-capacity', 'Draft byte capacity exceeded');
-    state.writeDraft(draft, previous);
-    const usage = state.usage();
-    if (usage.draftBytes > capacity.maxRetainedDraftBytes || usage.receiptBytes + usage.tombstoneBytes > capacity.maxReceiptBytes) {
-      throw authorError('author-capacity', 'Retained draft/receipt byte capacity reached; explicit Host retention decision required');
+    if (jsonBytes(draft) + (draft.activeExecution ? terminalReceiptReserve : 0) > capacity.maxDraftBytes) {
+      throw authorError('author-capacity', 'Draft byte capacity exceeded');
     }
+    state.writeDraft(draft, previous);
+    checkRetention(state.usage());
   }
   function mutate(id, expected, operation) {
     return store.authorTransaction(state => {
@@ -207,7 +213,8 @@ export async function createWorkflowAuthorHost(supplied) {
     turn.status = result.outcome; turn.executionToken = null; turn.reconciliationRequired = false;
     delete turn.preparedResult;
     const response = view({ ...draft, stateVersion: draft.stateVersion + 1 }, state);
-    turn.result = response; state.writeTurn(turn);
+    turn.result = response; turn.settlementReserveBytes = 0;
+    state.writeTurn(turn);
     return response;
   }
   async function discover(draftId, publicationId, context, signal) {
@@ -280,7 +287,7 @@ export async function createWorkflowAuthorHost(supplied) {
         draft.contentHash = hash(content(draft));
         if (jsonBytes(draft) > capacity.maxDraftBytes) throw authorError('author-capacity', 'Draft byte capacity exceeded');
         state.writeDraft(draft, null);
-        if (state.usage().draftBytes > capacity.maxRetainedDraftBytes) throw authorError('author-capacity', 'Retained draft byte capacity reached');
+        checkRetention(state.usage());
         return view(draft, state);
       });
     },
@@ -322,6 +329,7 @@ export async function createWorkflowAuthorHost(supplied) {
           turn.attemptHistory ??= []; turn.attemptHistory.push({ attemptId: turn.attemptId, status: turn.status, failure: turn.failure ?? null });
           turn.consumedRetryRefs ??= {}; turn.consumedRetryRefs[input.retryRef] = attemptId;
           turn.attemptId = attemptId; turn.ownerId = ownerId; turn.executionToken = randomUUID(); turn.status = 'running'; turn.physicalOutstanding = true;
+          turn.settlementReserveBytes = terminalReceiptReserve;
           turn.retryRef = null; delete turn.result; delete turn.failure;
           delete turn.preparedResult; delete turn.preparedResultHash; delete draft.recoveryRef;
           draft.activeExecution = turn.executionToken; draft.status = 'running';
@@ -402,7 +410,7 @@ export async function createWorkflowAuthorHost(supplied) {
             ...previous, ...lastTurn?.reviewAuthorization, ...lastTurn?.request
           }, ['baseline', 'baselineId', 'confirmedConstraintIds']) } : {}),
           priorReview: draft.reviewReceipt ?? null, priorApproval: draft.approvalReceipt ?? null,
-          request, fingerprint, status: 'running', physicalOutstanding: true,
+          request, fingerprint, status: 'running', physicalOutstanding: true, settlementReserveBytes: terminalReceiptReserve,
           budget: newTurnBudget(hasLongAuthorMaterials(request.contextSnapshot ?? draftContextSnapshot) ? documentPolicy : policy) };
         if (turn.kind === 'authoring') draft.lastAuthoringTurnId = turn.turnId;
         draft.activeExecution = turn.executionToken; draft.status = 'running';
@@ -507,11 +515,15 @@ export async function createWorkflowAuthorHost(supplied) {
         if (!flight.pending.size) releaseFlight();
         return response;
       } catch (error) {
-        mutate(input.draftId, undefined, (draft, state) => {
+        const recordFailure = compact => mutate(input.draftId, undefined, (draft, state) => {
           const current = state.readTurn(draft.id, turn.turnId);
           if (current.attemptId !== flight.attemptId || current.result) return NO_CHANGE;
-          const unknownWrite = Object.values(current.budget.reservations).some(item => item.sideEffectStatus === 'unknown');
-          current.reconciliationRequired = unknownWrite || !!current.preparedResult || error.code === 'FKA_RECONCILIATION_REQUIRED';
+          const code = String(error.code ?? 'author-execution').slice(0, 64);
+          const message = compact ? String(error.message).slice(0, 192) : error.message;
+          const observed = Object.values(current.budget.reservations);
+          const unknownWrite = observed.some(item => item.sideEffectStatus === 'unknown');
+          const knownWrite = observed.some(item => item.sideEffectStatus === 'known');
+          current.reconciliationRequired = unknownWrite || knownWrite || !!current.preparedResult || error.code === 'FKA_RECONCILIATION_REQUIRED';
           if (current.reconciliationRequired) draft.reconciliationRequired = true;
           if (draft.activeExecution === turn.executionToken) {
             const deadline = Date.now() >= turn.budget.deadlineMs && !controller.signal.aborted && !signal?.aborted;
@@ -519,15 +531,21 @@ export async function createWorkflowAuthorHost(supplied) {
               (['FKA_BUDGET_EXHAUSTED', 'FKA_REPAIR_EXHAUSTED', 'FKA_DEADLINE'].includes(error.code) ||
                 ['FKA_BUDGET_EXHAUSTED', 'FKA_DEADLINE'].includes(error.kind) ? 'needs-revision' : 'failed'));
             draft.reconciliationRequired = current.reconciliationRequired;
-            draft.diagnostics = [{ code: error.code ?? 'author-execution', message: error.message },
-              ...(error.code === 'FKA_REPAIR_EXHAUSTED' ? error.repairDiagnostics ?? [] : [])];
-            draft.questions = error.questions ?? [];
+            draft.diagnostics = [{ code, message },
+              ...(!compact && error.code === 'FKA_REPAIR_EXHAUSTED' ? error.repairDiagnostics ?? [] : [])];
+            draft.questions = compact ? [] : error.questions ?? [];
             draft.reviewReceipt = null; draft.approvalReceipt = null;
           }
           current.status = current.reconciliationRequired ? 'reconciliation-required' : draft.status; current.executionToken = null;
-          current.failure = { code: error.code ?? 'author-execution', message: error.message, sideEffectStatus: unknownWrite ? 'unknown' : 'none' };
+          current.failure = { code, message, sideEffectStatus: unknownWrite ? 'unknown' : knownWrite ? 'known' : 'none' };
+          current.settlementReserveBytes = 0;
           state.writeTurn(current);
         });
+        try { recordFailure(false); }
+        catch (failure) {
+          if (failure.code !== 'FKA_CAPACITY') throw failure;
+          recordFailure(true);
+        }
         flight.done = true; finishPhysical();
         await authorize('read', initial.collectionId, currentRequestContext, signal, { draftId: initial.id });
         return view(read(input.draftId));
@@ -644,6 +662,10 @@ export async function createWorkflowAuthorHost(supplied) {
       const draft = read(input.draftId); await authorize('settle', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       const observedTurn = store.authorTransaction(state => state.readTurn(draft.id, input.turnId));
       if (!observedTurn) throw authorError('author-turn-missing', 'Turn is unknown');
+      if (input.decision === 'confirm-no-effect' &&
+          Object.values(observedTurn.budget.reservations).some(receipt => receipt.sideEffectStatus === 'known')) {
+        throw authorError('author-settlement', 'A settled write cannot be reconciled as having no effect');
+      }
       assertUncommittedTurn(draft, observedTurn, input.decision);
       requiredId(input.evidenceRef, 'Trusted settlement evidenceRef');
       const observation = await options.authorization.verifySettlement?.({ ...input, namespace: options.namespace, storeId: meta.store_id,
@@ -656,6 +678,10 @@ export async function createWorkflowAuthorHost(supplied) {
         const turn = state.readTurn(draft.id, input.turnId);
         if (!turn || turn.attemptId !== observedTurn.attemptId) throw authorError('author-conflict', 'Settlement attempt changed');
         assertUncommittedTurn(current, turn, input.decision);
+        if (input.decision === 'confirm-no-effect' &&
+            Object.values(turn.budget.reservations).some(receipt => receipt.sideEffectStatus === 'known')) {
+          throw authorError('author-settlement', 'A settled write cannot be reconciled as having no effect');
+        }
         if (current.activeExecution && current.activeExecution !== turn.executionToken) throw authorError('author-conflict', 'Another turn owns the draft execution');
         const physical = physicalExecutions.get(JSON.stringify([meta.store_id, draft.id, input.turnId]));
         if (input.decision !== 'abandon' && (physical?.pending.size || observation.physicalDone !== true)) throw authorError('author-busy', 'Actual execution is still outstanding or physical proof is missing');
@@ -676,7 +702,11 @@ export async function createWorkflowAuthorHost(supplied) {
           turn.retryRef = remaining && !abandoned ? turn.retryRef ?? randomUUID() : null; turn.retryStateVersion = current.stateVersion + 1;
           turn.status = abandoned ? 'abandoned' : 'failed'; turn.reconciliationRequired = false; current.reconciliationRequired = false;
           if (!abandoned && ['running', 'reconciliation-required'].includes(current.status)) current.status = 'failed';
-          for (const receipt of Object.values(budget.reservations)) if (receipt.sideEffectStatus === 'unknown') { receipt.sideEffectStatus = 'none'; receipt.settlementRef = input.evidenceRef; }
+          for (const receipt of Object.values(budget.reservations)) if (receipt.sideEffectStatus === 'unknown') {
+            receipt.sideEffectStatus = 'none'; receipt.settlementRef = input.evidenceRef;
+            delete receipt.receiptReserveBytes;
+          }
+          budget.receiptReserveBytes = 0;
           for (const operation of Object.values(budget.toolOperations ?? {})) if (operation.status === 'unknown' || operation.status === 'running') operation.status = 'no-effect';
         } else if (input.decision === 'confirm-result') {
           if (!turn.preparedResult || observation.resultHash !== turn.preparedResultHash || hash(turn.preparedResult) !== turn.preparedResultHash) {

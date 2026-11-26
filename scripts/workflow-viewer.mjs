@@ -254,7 +254,7 @@ export async function workflowRunPage({ auth, ref, options, candidate, afterRevi
     controls:links.join(' '),viewManifest:manifest,runView:{
     ...progress,...(live?{progressUrl:runPath+'/progress'}:{}),...(forkEnabled?{forkUrl:runPath+'/fork'}:{}),
     artifacts:artifacts?.items??null, artifactNext:artifacts?.next??null, artifactAfter,
-    ...(artifacts?{artifactsUrl:runPath+'/artifacts'}:{}),
-    ...(artifacts&&artifactContentEnabled?{artifactContentUrl:runPath+'/artifact-content'}:{}),
+    ...(typeof auth.readRunArtifacts === 'function' ? { artifactsUrl: runPath+'/artifacts' } : {}),
+    ...(artifactContentEnabled?{artifactContentUrl:runPath+'/artifact-content'}:{}),
   } });
 }

@@ -40,6 +40,8 @@ function runtime(plan, label) {
     isControlSignal,
     evalWhen,
     validateResult: validate,
+    // These replay callbacks return fixture data and never perform an external write.
+    authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
     async runAgent(step) {
       const result = plan(step);
       calls.push({scenario: label, id: step.id, attempt: step.attempt, keys: Object.keys(result)});

@@ -8,6 +8,8 @@ export async function scenario(exhaust = false) {
       isControlSignal,
       async runAction(action, name, ctx) { observedState = ctx.state; },
       async runAgent(step) { attempts.push({ attempt: step.attempt, reasons: step.reasons, stateBefore: { ...observedState } }); return exhaust || step.attempt === 1 ? { answer: 42 } : { answer: '已修正' }; },
+      // The fixture's Agent only returns local data, so the Host has observed no external effect.
+      authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
       validateResult(schema, value) { return typeof value?.answer === 'string' ? [] : ['answer 必须是字符串']; },
     }, initial);
     return { result, attempts, initial, stateAtEnd: { ...observedState } };

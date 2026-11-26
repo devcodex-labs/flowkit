@@ -85,10 +85,10 @@ test('missing and invalid UTF-8 local failures are evicted; other filesystem err
   await writeFile(path.join(f.directory, 'a.md'), Buffer.from([0xff]));
   const error = await fail(loader.loadSkill('a.md'), 'FK_R014'); assert.ok(error.cause instanceof TypeError);
   await writeFile(path.join(f.directory, 'a.md'), 'fixed'); assert.equal(await loader.loadSkill('a.md'), 'fixed');
-  const original = fs.readFile, rejection = { code: 'EACCES' };
-  fs.readFile = async () => { throw rejection; }; syncBuiltinESMExports();
+  const original = fs.open, rejection = { code: 'EACCES' };
+  fs.open = async () => { throw rejection; }; syncBuiltinESMExports();
   try { assert.equal((await settled(createSkillLoader({ projectRoot: f.directory }).loadSkill('a.md'))).error, rejection); }
-  finally { fs.readFile = original; syncBuiltinESMExports(); }
+  finally { fs.open = original; syncBuiltinESMExports(); }
 });
 
 test('realpath checks both root and target, rejecting sibling-prefix and symlink escapes', async t => {
@@ -235,7 +235,8 @@ test('one 10-second budget includes redirects and stalled body even when a custo
 test('real execution uses remote default loader once across agent retries and never retries Skill failures', async t => {
   const f = await fixture(t, [agent(`skill:'${ref}',integrity:'${pin('instructions')}',retries:2`), end()]);
   let reads = 0, attempts = 0;
-  const runtime = host({ runAgent: async step => { attempts++; assert.equal(step.instruction, 'instructions'); if (attempts < 3) throw Error('retry'); return {}; }, validateResult: () => [] });
+  const runtime = host({ runAgent: async step => { attempts++; assert.equal(step.instruction, 'instructions'); if (attempts < 3) throw Error('retry'); return {}; },
+    authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }), validateResult: () => [] });
   const options = { projectRoot: f.directory, remoteSkillHosts: ['example.test'], fetch: async () => { reads++; return new Response('instructions'); } };
   await f.run(runtime, {}, options); assert.equal(reads, 1); assert.equal(attempts, 3);
   attempts = 0;

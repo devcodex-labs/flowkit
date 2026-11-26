@@ -172,7 +172,7 @@ export interface InteractiveRuntime {
   checkStep?: unknown;
 }
 export interface InteractiveCoordinator {
-  reserveDispatch(input:{runId:string;requestId:string;operationId:string}):Promise<{deadlineMs:number;dispatches:number}>;
+  reserveDispatch(input:{runId:string;requestId:string;operationId:string}):Promise<{deadlineMs:number;dispatches:number;providerRequests?:number}>;
   readonly policyHash: string;
   start(input: {
     programBytes: Uint8Array;
@@ -421,13 +421,15 @@ export type RunCheckpointV1 = {
   execution:{blockId:string;phase:'enter'|'prepare'|'dispatch-ready'|'awaiting'|'validate'|'commit'|'route'|'finished';
     activationSeq:number;agentStepCounter:number;controlStack:readonly Record<string,unknown>[];
     contextError:InteractiveContextError|null;
+    businessDeadlineMs?:number;
+    activityDeadlineMs?:number;
     regionCounters?:Record<string,number>;
     skillSnapshot?:{activation:number;nodeId:string;instruction:string};
     cancelledRequests?:readonly string[];
     unavailableParallelKeys?:readonly string[];
     parallel?:{nodeId:string;strategy:'all_succeeded'|'any';effectMode?:'retain'|'compensate';
       lanes:readonly Record<string,unknown>[];decision?:Record<string,unknown>;receipt?:Record<string,unknown>};
-    taskContext?:{deadlineMs:number;dispatches:number;reservations?:string[];
+    taskContext?:{deadlineMs:number;deadlineScope?:'activity';dispatches:number;providerRequests?:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
   publicOutput?:Record<string,unknown>;
@@ -652,9 +654,11 @@ export interface InteractiveRuntimeV1 {
 }
 
 export interface InteractivePolicyV1 {
+  /** Optional absolute run deadline in epoch milliseconds, including durable waits. */
+  businessDeadlineMs?:number;
   requiredBundleReviews?:readonly string[];
   professionalSkillPins?:ReadonlyArray<{nodeId:string;id:string;version:string;digest:string;source?:string}>;
-  taskPolicy?: Omit<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'> & {remoteSkillHosts?:string[]};
+  taskPolicy?: Omit<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'|'authorizeRetry'> & {remoteSkillHosts?:string[]};
   id:string;
   version:string;
   bindingManifest:Readonly<Record<string,{id:string;version:string;mode:'pure-local'|'trusted-read'}>>;
@@ -700,4 +704,4 @@ export declare function forkInteractiveRun(input:{source:RunViewerRef;revision:n
   runtime:InteractiveRuntimeV1,options:RunViewerOptions & {auth:TrustedHostContextV1}):Promise<InteractiveFrameV1>;
 export declare function cancelInteractiveRun(runId:string,reasonCode:string,options:InteractiveOptionsV1):Promise<PublicInteractiveTerminalFrame>;
 export declare function reserveInteractiveDispatch(input:{runId:string;requestId:string;operationId:string},
-  runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs:number;dispatches:number}>;
+  runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs:number;dispatches:number;providerRequests?:number}>;

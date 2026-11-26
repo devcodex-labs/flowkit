@@ -1,7 +1,7 @@
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { authorError, jsonBytes } from './host-budget.mjs';
 import { authorIdentity } from './host-target.mjs';
-import { validPlanAssumption } from './workflow-plan.mjs';
+import { validPlanAssumption, validPlanIssue } from './workflow-plan.mjs';
 
 const sectionBytes = 10000;
 const mergeBytes = 48000;
@@ -150,7 +150,7 @@ export function authorDocumentWork({ context, request, runModel, readStep, saveS
   async function stage(kind, id, instruction, input, validate) {
     const key = authorIdentity([sourceIdentity, kind, id, instruction, input]);
     const stored = readStep({ kind, id, sourceIdentity, key });
-    if (stored && (kind !== 'review' || stored.value.passed) && validate(stored.value)) return stored;
+    if (stored && (kind !== 'review' || stored.value?.passed) && validate(stored.value)) return stored;
     let first;
     for (let index = 0; index < 2; index++) {
       let result;
@@ -205,7 +205,8 @@ export function authorDocumentWork({ context, request, runModel, readStep, saveS
         value.nodes.every(node => node && ['id', 'kind', 'name', 'purpose'].every(key => typeof node[key] === 'string' && node[key].trim())) &&
         new Set(value.nodes.map(node => node.id)).size === value.nodes.length &&
         value.nodes.some(node => node.id === value.entryNodeId) && Array.isArray(value.coverage) &&
-        (value.assumptions === undefined || Array.isArray(value.assumptions) && value.assumptions.every(validPlanAssumption)));
+        (value.assumptions === undefined || Array.isArray(value.assumptions) && value.assumptions.every(validPlanAssumption)) &&
+        (value.unresolvedIssues === undefined || Array.isArray(value.unresolvedIssues) && value.unresolvedIssues.every(validPlanIssue)));
       if (outline.unresolvedIssues?.some(issue => issue.blocking)) return outline;
       const nodeIds = new Set(outline.nodes.map(node => node.id));
       const mappedIds = new Set(outline.coverage.map(row => row?.constraintId ?? row?.intentId));

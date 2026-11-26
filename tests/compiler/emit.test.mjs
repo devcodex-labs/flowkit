@@ -101,6 +101,7 @@ test('agent templates load explicit skills, preserve own schema/input/candidate/
     runAgent:async step=>{assert.equal(Object.hasOwn(step.input,'__proto__'),true);assert.equal(Object.hasOwn(step.input,'missing'),true);assert.deepEqual(step.missing,['__proto__','missing']);
       assert.equal(Object.hasOwn(step.resultSchema.properties,'__proto__'),true);assert.equal(step.overview.step,1);attempts++;return JSON.parse('{"__proto__":"value"}');},
     validateResult:()=>attempts===1?['retry']:[],
+    authorizeLegacyRetry:()=>({authorized:true,sideEffectStatus:'none'}),
     runVerification:async(_verifier,_name,ctx)=>{assert.equal(Object.getPrototypeOf(ctx.state),Object.prototype);assert.equal(Object.hasOwn(ctx.state,'__proto__'),true);return true;},
   });
   assert.equal(attempts,2);assert.equal(skillReads,1);

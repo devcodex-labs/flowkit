@@ -37,7 +37,7 @@ async function compileSnapshot(snapshot, options) {
   if (!result.diagnostics.some(item => item.severity === 'error')) {
     const entries = [[result.paths.codeFile, result.code]];
     if (options.mermaid !== false) entries.push([result.paths.mermaidFile, result.mermaid]);
-    await writeArtifacts(entries);
+    await writeArtifacts(entries, result.paths);
   }
   return { code: result.code, mermaid: result.mermaid, diagnostics: result.diagnostics };
 }

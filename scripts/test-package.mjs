@@ -48,7 +48,7 @@ try {
   if (process.platform !== 'win32') { const { chmod } = await import('node:fs/promises'); await chmod(path.join(runtime, runtimeName), 0o755); }
   const env = { ...process.env, PATH: runtime + path.delimiter + process.env.PATH };
   await writeFile(path.join(consumer, 'flowkit.config.mjs'), `if(process.version!==${JSON.stringify(process.version)})throw new Error('Wrong bin Node version');export default {trace:true,mermaid:false};`);
-  const compiled = path.join(consumer, 'sample.compiled.mjs'), expectedCode = await readFile(compiled);
+  const compiled = path.join(consumer, 'sample.workflow.ts.compiled.mjs'), expectedCode = await readFile(compiled);
   await rm(compiled);
   let compiledTime;
   for (const command of ['compile', 'check']) {

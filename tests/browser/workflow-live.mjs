@@ -89,6 +89,7 @@ test('Interactive browser follows parallel, pause, reconnect and two independent
       async runWorkflow(scope,{candidate,store}) {
         const execution={...scope,skillDirectory:dir};
         const host={hostProfile:candidate.manifest.hostProfile,runtime,authorizeExecution:({executionRef})=>executionRef==='browser-run',
+          resolveApplicableSafetyPolicies:()=>[],
           interactive:{...persistence,auth:worker,policy,startKey:scope.executionRef}};
         const started=await runApprovedCollectionWorkflow(store,execution,host,{privateInput:'keep-private-live-view'});
         runtimeOptions=(await bindApprovedInteractiveWorkflow(store,execution,host)).options;
@@ -100,7 +101,8 @@ test('Interactive browser follows parallel, pause, reconnect and two independent
     });
     const profile={id:'live-view',digest:artifactDigest('live-view')};
     const {candidate,diagnostics}=await prepareStandardSkill({file:spec,executionMode:'interactive-p2',collectionId:service.collectionId,
-      skillId:'delivery-review',name:'delivery-review',version:'1.0.0',description:'Live delivery review',buildId:'live-view',hostProfile:profile});
+      skillId:'delivery-review',name:'delivery-review',version:'1.0.0',description:'Live delivery review',buildId:'live-view',
+      hostProfile:profile,safetyPolicies:[]});
     assert.ok(candidate,JSON.stringify(diagnostics));
     graph=checkCandidate(candidate);
     assert.equal(graph.mode,'interactive-p2');
@@ -187,7 +189,8 @@ test('Interactive browser follows parallel, pause, reconnect and two independent
     persistence.close();
     persistence=open();
     runtimeOptions=(await bindApprovedInteractiveWorkflow(candidateStore,target,{
-      hostProfile:profile,runtime,authorizeExecution:()=>true,interactive:{...persistence,auth:worker,policy,startKey:target.executionRef},
+      hostProfile:profile,runtime,authorizeExecution:()=>true,resolveApplicableSafetyPolicies:()=>[],
+      interactive:{...persistence,auth:worker,policy,startKey:target.executionRef},
     })).options;
     view.options={...runtimeOptions,graphSnapshot:graph};
     const continued=await resume(started.runId,runtime,runtimeOptions);

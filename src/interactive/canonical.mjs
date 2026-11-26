@@ -36,18 +36,37 @@ export function canonicalBytes(input, maximumBytes = MAX_CHECKPOINT_BYTES) {
     throw new TypeError('Invalid canonical JSON size limit');
   }
   const seen = new Set();
+  const parts = [];
+  let remaining = maximumBytes;
+  function append(text) {
+    remaining -= Buffer.byteLength(text, 'utf8');
+    if (remaining < 0) throw new RangeError('Canonical JSON exceeds maximum bytes');
+    parts.push(text);
+  }
+  function appendString(value) {
+    if (value.length + 2 > remaining) throw new RangeError('Canonical JSON exceeds maximum bytes');
+    validUnicode(value);
+    if (Buffer.byteLength(value, 'utf8') + 2 > remaining) throw new RangeError('Canonical JSON exceeds maximum bytes');
+    // Slice on a code-point boundary so each quoted fragment has the same bytes as a single JSON string.
+    append('"');
+    for (let start = 0; start < value.length;) {
+      let end = Math.min(start + 4096, value.length);
+      const last = value.charCodeAt(end - 1);
+      if (end < value.length && last >= 0xd800 && last <= 0xdbff) end--;
+      append(JSON.stringify(value.slice(start, end)).slice(1, -1));
+      start = end;
+    }
+    append('"');
+  }
   function serialize(value, depth) {
     if (depth > 64) throw new TypeError('Maximum canonical JSON depth exceeded');
-    if (value === null || typeof value === 'boolean') return JSON.stringify(value);
-    if (typeof value === 'string') {
-      validUnicode(value);
-      return JSON.stringify(value);
-    }
+    if (value === null || typeof value === 'boolean') return append(JSON.stringify(value));
+    if (typeof value === 'string') return appendString(value);
     if (typeof value === 'number') {
       if (!Number.isFinite(value) || Object.is(value, -0)) {
         throw new TypeError('Non-canonical JSON number');
       }
-      return JSON.stringify(value);
+      return append(JSON.stringify(value));
     }
     if (!value || typeof value !== 'object' || nodeTypes.isProxy(value)) {
       throw new TypeError('Expected plain JSON value, not executable or proxy input');
@@ -68,34 +87,36 @@ export function canonicalBytes(input, maximumBytes = MAX_CHECKPOINT_BYTES) {
           || indices.some(key => !/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length)) {
           throw new TypeError('Sparse or extended JSON array');
         }
-        const parts = [];
+        append('[');
         for (let i = 0; i < value.length; i += 1) {
           const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
           if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) {
             throw new TypeError('Accessor or hidden JSON array value');
           }
-          parts.push(serialize(descriptor.value, depth + 1));
+          if (i > 0) append(',');
+          serialize(descriptor.value, depth + 1);
         }
-        return '[' + parts.join(',') + ']';
+        return append(']');
       }
-      const ordered = [...keys].sort();
-      const parts = [];
-      for (const key of ordered) {
-        validUnicode(key);
+      const ordered = keys.sort();
+      append('{');
+      for (const [index, key] of ordered.entries()) {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) {
           throw new TypeError('Accessor or hidden JSON object property');
         }
-        parts.push(JSON.stringify(key) + ':' + serialize(descriptor.value, depth + 1));
+        if (index > 0) append(',');
+        appendString(key);
+        append(':');
+        serialize(descriptor.value, depth + 1);
       }
-      return '{' + parts.join(',') + '}';
+      append('}');
     } finally {
       seen.delete(value);
     }
   }
-  const encoded = Buffer.from(serialize(input, 0), 'utf8');
-  if (encoded.byteLength > maximumBytes) throw new RangeError('Canonical JSON exceeds maximum bytes');
-  return encoded;
+  serialize(input, 0);
+  return Buffer.from(parts.join(''), 'utf8');
 }
 
 export function sha256Bytes(bytes) {

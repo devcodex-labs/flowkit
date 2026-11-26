@@ -25,6 +25,7 @@ action('inspect',{name:'Inspect',action:'inspect',next:'done'}),terminal('done',
       capacity: { maxPhysicalExecutions: 2, maxDrafts: 16, maxDraftBytes: 1048576, maxRetainedDraftBytes: 8388608,
         maxReceiptBytes: 8388608, maxTurnsPerDraft: 32 },
       authorization: { authorize: async ({ requestContext }) => requestContext.principalId === 'fixture-user',
+        resolveApplicableSafetyPolicies: () => [],
         observeReview: async ({ task }) => observed.has(task.execution.requestId) ?
           { passed: true, subjectId: 'fixture-review-step', executionId: task.execution.requestId } : null,
         verifyApproval: async () => ({ approved: false, subjectId: 'fixture-user', approvalId: 'none' }) },

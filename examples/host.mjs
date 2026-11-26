@@ -1,13 +1,14 @@
 import { evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 
 /** Bind real model, JSON Schema, approval and business services at the host boundary. */
-export function createRuntime({ agent, validate, approve, verify, act, trace }) {
+export function createRuntime({ agent, validate, approve, verify, act, authorizeLegacyRetry, trace }) {
   for (const [name, method] of Object.entries({ agent, validate, approve, verify, act })) {
     if (typeof method !== 'function') throw new TypeError(`${name} must be a function`);
   }
   return {
     isControlSignal, evalWhen,
     runAgent(step) { return agent(step); },
+    ...(authorizeLegacyRetry === undefined ? {} : { authorizeLegacyRetry }),
     // Use a complete validator for your schema dialect. Return [] or readable reasons.
     validateResult(schema, result) { return validate(schema, result); },
     runHuman(name, ctx) { return approve(name, ctx); },

@@ -6,6 +6,8 @@
 
 `@devcodex-labs/flowkit/host` 的 `createWorkflowAuthorHost(options)` 装配 namespace 自有的持久编写服务。随包 `dist/author/core/workflow.js` 由固定 Standard DSL 实际编译，配套 Mermaid 和 identity；Skill、SDK 和八个既有 MCP 工具共用同一流程。目标 Workflow 的业务运行另由 Host 授权。
 
+Author 审查候选时，宿主的 `authorization.resolveApplicableSafetyPolicies` 返回适用的 `{ nodeId, policyRef }` 完整清单。没有适用策略时返回 `[]`。策略修订使用新的 `policyRef`。运行已批准的 Workflow Skill 时，宿主也要提供 `resolveApplicableSafetyPolicies`。FlowKit 在启动及派发时比较当前清单与批准清单。
+
 沿用[内部安装权限](/guide/installation)，安装当前包后复制下例并执行 `node host.mjs`。这是完整固定响应例：实际创建 SQLite、运行核心、检查三文件、拒绝伪批准、关闭 Author，再独立运行本地测试产物。它不发布正式集合，不证明真实模型或原生宿主接入。
 
 ```js file="../../../examples/docs/author-host/host.mjs" title="host.mjs：受控接线示例"

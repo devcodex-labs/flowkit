@@ -6,5 +6,5 @@ const source = fileURLToPath(new URL('./', import.meta.url));
 const result = await compile(path.join(source, 'sample.workflow.js'));
 if (result.diagnostics.some(item => item.severity === 'error')) throw new Error(JSON.stringify(result.diagnostics));
 const target = path.join(source, 'deployment'); await mkdir(path.join(target, 'skills'), { recursive: true });
-for (const file of ['sample.workflow.js', 'sample.compiled.mjs', 'sample.mmd', 'host.mjs', 'package.json', 'skills/writer.md']) await copyFile(path.join(source, file), path.join(target, file));
+for (const file of ['sample.workflow.js', 'sample.workflow.js.compiled.mjs', 'sample.workflow.js.mmd', 'host.mjs', 'package.json', 'skills/writer.md']) await copyFile(path.join(source, file), path.join(target, file));
 console.log(`部署文件已准备：${target}`);

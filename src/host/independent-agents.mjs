@@ -31,6 +31,16 @@ export function createIndependentAgentAdapter({ scope, select, authorize, indepe
       let started = false;
       let released = false;
       let binding;
+      let physical;
+      let selection;
+      let cancellation;
+      const useBinding = operation => {
+        physical = Promise.resolve().then(() => {
+          signal.throwIfAborted();
+          return operation();
+        });
+        return during(signal, () => physical);
+      };
       const release = () => {
         if (released) return;
         released = true;
@@ -46,16 +56,18 @@ export function createIndependentAgentAdapter({ scope, select, authorize, indepe
       try {
         signal.throwIfAborted();
         if (![artifactHash, runId, nodeId].every(nonempty)) throw new Error('Task execution identity is incomplete');
-        binding = await during(signal, () => select({ scope, artifactHash, runId, nodeId, prepared, signal }));
+        const selected = useBinding(() => select({ scope, artifactHash, runId, nodeId, prepared, signal }));
+        selection = physical;
+        binding = await selected;
         if (!binding || !['subjectId', 'sessionId', 'workspaceRef', 'permissionRef'].every(key => nonempty(binding[key])) ||
           typeof binding.runAgentTask !== 'function' || binding.artifactHash !== artifactHash || binding.runId !== runId || binding.nodeId !== nodeId) {
           throw new Error('Host returned an incomplete or mismatched execution binding');
         }
-        const other = await during(signal, () => independentFrom(prepared));
+        const other = await useBinding(() => independentFrom(prepared));
         if (other && (binding.subjectId === other.subjectId || binding.sessionId === other.sessionId || binding.workspaceRef === other.workspaceRef)) {
           throw new Error('An independent review execution subject, session and workspace are required');
         }
-        if (await during(signal, () => authorize({ scope, artifactHash, runId, nodeId,
+        if (await useBinding(() => authorize({ scope, artifactHash, runId, nodeId,
           subjectId: binding.subjectId, sessionId: binding.sessionId, workspaceRef: binding.workspaceRef, permissionRef: binding.permissionRef, signal })) !== true) {
           throw new Error('Host denied the selected execution binding');
         }
@@ -67,23 +79,28 @@ export function createIndependentAgentAdapter({ scope, select, authorize, indepe
         signal.throwIfAborted();
         events.push({ type: 'host-execution-bound', subjectId: binding.subjectId, sessionId: binding.sessionId,
           workspaceRef: binding.workspaceRef, permissionRef: binding.permissionRef, artifactHash, runId, nodeId });
-        const pending = Promise.resolve().then(() => binding.runAgentTask(prepared, { ...context, signal }));
-        started = true;
-        pending.then(release, release);
-        const result = await during(signal, () => pending);
+        const result = await useBinding(() => {
+          started = true;
+          return binding.runAgentTask(prepared, { ...context, signal });
+        });
         signal.throwIfAborted();
         if (!result || !Array.isArray(result.events) || !['succeeded', 'failed', 'cancelled'].includes(result.status)) {
           throw new Error('Host execution returned an invalid Agent result');
         }
         return { ...result, events: [...events, ...result.events] };
       } catch (error) {
-        if (signal.aborted && typeof binding?.cancel === 'function') Promise.resolve().then(() => binding.cancel()).catch(() => {});
+        if (signal.aborted && (!binding || typeof binding.cancel === 'function')) {
+          cancellation = (binding ? Promise.resolve(binding) : selection)?.then(selected => selected?.cancel?.());
+        }
         if (context.signal?.aborted) return { status: 'cancelled', reason: 'Host cancelled the routed task',
           sideEffectStatus: started ? 'unknown' : 'none', events };
         return { status: 'failed', failure: { code: signal.aborted ? 'agent-deadline' : 'agent-binding-rejected',
           message: String(error?.message ?? error), retryable: false, sideEffectStatus: started ? 'unknown' : 'none' }, events };
       } finally {
-        if (!started) release();
+        // Logical cancellation can precede a resource-owning selector or the binding cleanup.
+        if (signal.aborted && cancellation) Promise.allSettled([physical, cancellation]).then(release);
+        else if (signal.aborted && physical) physical.then(release, release);
+        else release();
       }
     },
     releaseRun(artifactHash, runId) {

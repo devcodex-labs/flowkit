@@ -166,9 +166,13 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
               },
               usage: () => ({ ...db.prepare(`SELECT count(*) AS drafts,
                 coalesce(sum(CASE WHEN status!='expired' THEN length(CAST(payload AS BLOB)) ELSE 0 END),0) AS draftBytes,
-                coalesce(sum(CASE WHEN status='expired' THEN length(CAST(payload AS BLOB)) ELSE 0 END),0) AS tombstoneBytes
+                coalesce(sum(CASE WHEN status='expired' THEN length(CAST(payload AS BLOB)) ELSE 0 END),0) AS tombstoneBytes,
+                coalesce(sum(json_extract(payload,'$.activeExecution') IS NOT NULL),0) AS activeExecutionDrafts
                 FROM fk_author_drafts`).get(),
-                ...db.prepare('SELECT count(*) AS turns,coalesce(sum(length(CAST(payload AS BLOB))),0) AS receiptBytes FROM fk_author_turns').get() }),
+                ...db.prepare(`SELECT count(*) AS turns,coalesce(sum(length(CAST(payload AS BLOB))),0) AS receiptBytes,
+                  coalesce(sum(coalesce(json_extract(payload,'$.settlementReserveBytes'),0) +
+                    coalesce(json_extract(payload,'$.budget.receiptReserveBytes'),0)),0) AS settlementReserveBytes
+                  FROM fk_author_turns`).get() }),
               writeDraft(draft, expected) {
                 const payload = JSON.stringify(draft);
                 if (expected === null) db.prepare('INSERT INTO fk_author_drafts VALUES (?, ?, ?, ?, ?)').run(draft.id, draft.stateVersion, draft.contentRevision, draft.status, payload);

@@ -16,7 +16,7 @@ export async function prepare(destination, { publishLocator = true } = {}) {
   if (destination) await mkdir(deploymentDir); // Refuse to overwrite an existing delivery.
   await mkdir(path.join(deploymentDir, 'skills'));
   const hashes = {};
-  for (const file of ['host.mjs', 'sample.compiled.mjs', 'skills/writer.md']) {
+  for (const file of ['host.mjs', 'sample.workflow.js.compiled.mjs', 'skills/writer.md']) {
     await copyFile(path.join(here, file), path.join(deploymentDir, file));
     hashes[file] = createHash('sha256').update(await readFile(path.join(deploymentDir, file))).digest('hex');
   }

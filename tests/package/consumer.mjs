@@ -55,14 +55,14 @@ export default defineWorkflow({id:'installed',version:'1.0.0',name:'Installed',n
 await writeFile('sample.workflow.ts', source);
 const output = await api.compile('sample.workflow.ts', { trace: true, mermaid: false }); assert.deepEqual(output.diagnostics, []);
 assert.equal((await api.compileSource(source, { filename: 'virtual.workflow.ts', mermaid: false })).diagnostics.length, 0);
-const before = await stat('sample.compiled.mjs'); assert.deepEqual(await api.check('sample.workflow.ts', { trace: true, mermaid: false }), []); assert.equal((await stat('sample.compiled.mjs')).mtimeMs, before.mtimeMs);
+const before = await stat('sample.workflow.ts.compiled.mjs'); assert.deepEqual(await api.check('sample.workflow.ts', { trace: true, mermaid: false }), []); assert.equal((await stat('sample.workflow.ts.compiled.mjs')).mtimeMs, before.mtimeMs);
 for (const mode of ['source', 'aot', 'dump']) {
   const host = { isControlSignal: api.isControlSignal, evalWhen: api.evalWhen, runAgent: async step => { assert.equal(step.instruction, 'Installed Skill.'); return { answer: 42 }; }, validateResult: () => [], runAction: async (_id, _name, ctx) => { ctx.state.saved = true; } };
-  const result = await api.run(mode === 'aot' ? 'sample.compiled.mjs' : 'sample.workflow.ts', host, {}, { trace: true, ...(mode === 'dump' ? { dump: 'debug' } : {}) });
+  const result = await api.run(mode === 'aot' ? 'sample.workflow.ts.compiled.mjs' : 'sample.workflow.ts', host, {}, { trace: true, ...(mode === 'dump' ? { dump: 'debug' } : {}) });
   assert.equal(result.terminal, 'done'); assert.equal(result.state.answer, 42); assert.equal(result.state.saved, true); assert.equal(Object.hasOwn(result, 'error'), false);
 }
 assert.equal(api.evalWhen({ runtime: {}, state: { ready: true } }, 'ready'), true); assert.equal(api.isControlSignal({ control: true }), true);
-assert.equal(await readFile('sample.compiled.mjs', 'utf8'), output.code);
+assert.equal(await readFile('sample.workflow.ts.compiled.mjs', 'utf8'), output.code);
 
 
 assert.deepEqual(Object.keys(interactive),[

@@ -8,8 +8,7 @@ export function compilationPaths(filename, options = {}) {
   if (!relative || path.isAbsolute(relative) || relative.split(path.sep).includes('..')) {
     throw new TypeError('outDir must be the source directory or an ancestor of it');
   }
-  const source = relative.split(path.sep).map(encodeURIComponent).join('/');
-  const basename = path.basename(sourceFile).replace(/\.workflow\.(?:ts|js)$/, '');
-  return Object.freeze({ source, outDir, codeFile: path.join(outDir, `${basename}.compiled.mjs`),
-    mermaidFile: path.join(outDir, `${basename}.mmd`) });
+  const target = path.join(outDir, relative);
+  const source = encodeURIComponent(path.basename(sourceFile));
+  return Object.freeze({ source, outDir, codeFile: `${target}.compiled.mjs`, mermaidFile: `${target}.mmd` });
 }

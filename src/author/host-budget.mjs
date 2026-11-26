@@ -61,6 +61,11 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       (typeof operationKey !== 'string' || !operationKey || typeof supplied.toolName !== 'string' || !supplied.toolName))) throw authorError('author-executor', 'Tool binding requires trusted sideEffect, toolName and a stable write operationKey');
     const fingerprint = artifactDigest(JSON.stringify({ input, toolName: supplied.toolName ?? null }));
     let maximum, replay;
+    function releaseReceiptReserve(turn, receipt) {
+      if (receipt.receiptReserveBytes === undefined) return;
+      turn.budget.receiptReserveBytes -= receipt.receiptReserveBytes;
+      delete receipt.receiptReserveBytes;
+    }
     changeTurn((turn, state) => {
       check(turn);
       const { limits, used } = turn.budget;
@@ -80,6 +85,12 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       used[field]++; used.bytes += inputBytes + maximum;
       turn.budget.reservations[id] = { kind, inputBytes, outputReserved: maximum, status: 'reserved',
         sideEffect, sideEffectStatus: sideEffect === 'write' ? 'unknown' : 'none', operationKey: operationKey ?? null };
+      if (turn.settlementReserveBytes !== undefined) {
+        // Only Tool writes retain the response body in their durable operation receipt.
+        const reserve = sideEffect === 'write' ? maximum + 1024 : 768;
+        turn.budget.receiptReserveBytes = (turn.budget.receiptReserveBytes ?? 0) + reserve;
+        turn.budget.reservations[id].receiptReserveBytes = reserve;
+      }
       if (ledgerKey) turn.budget.toolOperations[ledgerKey] = { fingerprint, ownerScopeHash, operationKey, toolName: supplied.toolName,
         dispatchId: id, status: 'running', sideEffect };
     });
@@ -127,6 +138,10 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
         const receipt = turn.budget.reservations[id];
         receipt.status = receipt.status === 'unknown' ? 'late-completed' : 'completed'; receipt.outputBytes = result.size;
         receipt.sideEffectStatus = sideEffect === 'write' ? 'known' : 'none';
+        if (sideEffect === 'write' && turn.failure?.sideEffectStatus === 'unknown' &&
+            !Object.values(turn.budget.reservations).some(item => item.sideEffectStatus === 'unknown')) {
+          turn.failure.sideEffectStatus = 'known';
+        }
         receipt.resultHash = result.hash ?? artifactDigest(JSON.stringify(result.value) ?? 'null');
         if (kind === 'request') {
           receipt.usageStatus = result.usage ? 'observed' : 'unknown';
@@ -138,6 +153,7 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
         }
         turn.budget.used.bytes -= maximum - result.size;
         if (ledgerKey) Object.assign(turn.budget.toolOperations[ledgerKey], { status: 'completed', result: structuredClone(result.value) });
+        releaseReceiptReserve(turn, receipt);
       }, { settlement: true });
       return result;
     }, error => {
@@ -146,6 +162,7 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
         receipt.status = dispatched ? 'unknown' : 'not-sent';
         receipt.sideEffectStatus = dispatched && sideEffect === 'write' ? error.sideEffectStatus ?? 'unknown' : 'none';
         if (!dispatched) { turn.budget.used[field]--; turn.budget.used.bytes -= inputBytes + maximum; }
+        if (!dispatched || sideEffect !== 'write') releaseReceiptReserve(turn, receipt);
         if (ledgerKey) turn.budget.toolOperations[ledgerKey].status = receipt.status;
       }, { settlement: true });
       throw error;
@@ -212,6 +229,14 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       }
       throw authorError('author-unobserved', 'Execution bypassed the guarded model request port');
     },
-    check() { if (dispatchFailure) throw dispatchFailure.error; changeTurn(check, { read: true }); }
+    check(coreFailure) {
+      if (dispatchFailure) throw dispatchFailure.error;
+      changeTurn(turn => {
+        check(turn);
+        if (coreFailure && Object.values(turn.budget.reservations).some(item => item.sideEffectStatus !== 'none')) {
+          throw coreFailure;
+        }
+      }, { read: true });
+    }
   });
 }

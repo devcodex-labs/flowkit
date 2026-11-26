@@ -13,7 +13,8 @@ import { resolveTrustedProfessionalPin } from './professional-skills.mjs';
 import { executionContracts, pinExecutionContracts } from './execution-contracts.mjs';
 
 async function approvedWorkflow(store, { collectionId, skillId, candidateHash, skillDirectory, executionRef },
-  { hostProfile, authorizeExecution, resolveRunProfessionalSkill, hostExecutionContracts }) {
+  { hostProfile, authorizeExecution, resolveRunProfessionalSkill, hostExecutionContracts, resolveApplicableSafetyPolicies },
+  verifyStart = true) {
   if (typeof executionRef !== 'string' || !executionRef.trim() || typeof authorizeExecution !== 'function') {
     throw new Error('Host execution authorization is required');
   }
@@ -30,9 +31,19 @@ async function approvedWorkflow(store, { collectionId, skillId, candidateHash, s
     throw new Error('Current Host execution contracts differ from the approved Workflow Skill');
   }
   const workflowFile = path.join(path.resolve(skillDirectory), 'workflow.js');
-  const authorization = Object.freeze({ collectionId, skillId, candidateHash, executionRef, workflowFile, artifactHash: manifest.artifactHash });
-  const allowed = async () => await authorizeExecution(authorization) === true;
-  if (!await allowed()) throw new Error('Host denied Workflow Skill execution');
+  const safetyPolicies = Object.freeze(manifest.safetyPolicies.map(binding => Object.freeze({ ...binding })));
+  const authorization = Object.freeze({ collectionId, skillId, candidateHash, executionRef, workflowFile,
+    artifactHash: manifest.artifactHash, safetyPolicies });
+  const policyKeys = bindings => bindings.map(({ nodeId, policyRef }) => JSON.stringify([nodeId, policyRef])).sort();
+  const approvedPolicies = JSON.stringify(policyKeys(safetyPolicies));
+  const allowed = async () => {
+    if (await authorizeExecution(authorization) !== true) return false;
+    const applicable = await resolveApplicableSafetyPolicies?.(authorization);
+    return Array.isArray(applicable) && applicable.every(binding =>
+      typeof binding?.nodeId === 'string' && typeof binding.policyRef === 'string') &&
+      JSON.stringify(policyKeys(applicable)) === approvedPolicies;
+  };
+  if (verifyStart && !await allowed()) throw new Error('Host denied Workflow Skill execution');
   const bindings = manifest.professionalSkills;
   const checkPreparedSkills = (nodeId, preparedSkills) => assertPreparedProfessionalSkills(bindings, nodeId, preparedSkills);
   const policyPins = bindings.length ? { professionalSkillPins: bindings } : {};
@@ -88,7 +99,8 @@ function bindInteractive(approved, candidateHash, { runtime, interactive }) {
   const policyHash = sha256Bytes(canonicalBytes(policy));
   const auth = restrictInteractiveHostContext(interactive.auth, {
     async authorize(request) {
-      if (!await approved.allowed()) return false;
+      // The original operation is still entitled to settlement under its existing Run identity.
+      if (request.action !== 'operation:settle' && !await approved.allowed()) return false;
       if (request.action === 'run:create') return request.artifactHash === artifactHash;
       const checkpoint = await interactive.store.load(request.runId);
       if (checkpoint?.program.artifactHash !== artifactHash || checkpoint.policyIdentity.policyHash !== policyHash) return false;
@@ -101,6 +113,7 @@ function bindInteractive(approved, candidateHash, { runtime, interactive }) {
       return true;
     },
     async authorizeTask(request) {
+      if (!await approved.allowed()) return false;
       await approved.checkSources(interactive.signal, request.nodeId);
       return true;
     }
@@ -109,8 +122,13 @@ function bindInteractive(approved, candidateHash, { runtime, interactive }) {
   if (prepare && approved.hasSourcedPins) runtime = { ...runtime, prepareAgentTask: { ...prepare,
     implementation: approved.prepareWithPins(prepare.implementation) } };
   const authorize = runtime.authorizeAgentTask;
-  if (authorize) runtime = { ...runtime, authorizeAgentTask: { ...authorize, implementation(prepared, context) {
+  if (authorize) runtime = { ...runtime, authorizeAgentTask: { ...authorize, async implementation(prepared, context) {
     approved.checkPreparedSkills(prepared.task.node.id, prepared.skills);
+    try { await approved.checkSources(context.signal, prepared.task.node.id); }
+    catch (error) {
+      if (error.code !== 'FKA_DEPENDENCY_UNAVAILABLE') throw error;
+      return false;
+    }
     return authorize.implementation(prepared, context);
   } } };
   return { runtime, options: { ...interactive, auth, policy } };
@@ -118,7 +136,7 @@ function bindInteractive(approved, candidateHash, { runtime, interactive }) {
 
 /** Rebind the same approved workflow to a versioned Interactive Host before continuing an existing Run. */
 export async function bindApprovedInteractiveWorkflow(store, target, host) {
-  const approved = await approvedWorkflow(store, target, host);
+  const approved = await approvedWorkflow(store, target, host, false);
   return bindInteractive(approved, target.candidateHash, host);
 }
 
@@ -128,7 +146,6 @@ export async function runApprovedCollectionWorkflow(store, target, host, state, 
   const { manifest, workflowFile, checkPreparedSkills, policyPins } = approved;
   const { candidateHash } = target;
   let { runtime, interactive } = host;
-  await approved.checkSources(interactive?.signal ?? options?.signal);
   const stage = interactiveStageForMode(manifest.mode);
   if (stage && (stage !== 'P0-A' || interactive?.programRegistry)) {
     const bound = bindInteractive(approved, candidateHash, host);
@@ -144,13 +161,31 @@ export async function runApprovedCollectionWorkflow(store, target, host, state, 
     if (!interactive?.store || typeof runtime.authorizeAgentTask !== 'function') {
       throw new Error('Approved Interactive execution requires Host persistence and task authorization');
     }
-    const pinnedRuntime = {...runtime,authorizeAgentTask(prepared,context) {
+    const pinnedRuntime = {...runtime,async authorizeAgentTask(prepared,context) {
+      if (!await approved.allowed()) return false;
       checkPreparedSkills(prepared.task.node.id,prepared.skills);
+      await approved.checkSources(context.signal, prepared.task.node.id);
       return runtime.authorizeAgentTask(prepared,context);
     }};
     const api = createInteractiveCoordinator({store:interactive.store,runtime:pinnedRuntime,
       policy:{...interactive.policy,approvedSkillHash:candidateHash,...policyPins}});
     return api.start({programBytes:bytes,programIdentity,state,startKey:interactive.startKey,runId:interactive.runId});
   }
-  return runVerifiedArtifact(workflowFile, manifest.artifactHash, runtime, state, options, checkPreparedSkills);
+  const guardedMethods = new Set(['runAction', 'runAgent', 'runAgentTask']);
+  const originalRuntime = runtime;
+  runtime = new Proxy({}, {
+    get(_holder, key) {
+      const method = Reflect.get(originalRuntime, key, originalRuntime);
+      if (typeof method !== 'function') return method;
+      if (!guardedMethods.has(key)) return method.bind(originalRuntime);
+      return async (...args) => {
+        if (!await approved.allowed()) throw new Error('Current Host no longer authorizes the approved Workflow Skill');
+        return method.apply(originalRuntime, args);
+      };
+    }
+  });
+  return runVerifiedArtifact(workflowFile, manifest.artifactHash, runtime, state, options, async (nodeId, skills) => {
+    if (!await approved.allowed()) throw new Error('Current Host no longer authorizes the approved Workflow Skill');
+    checkPreparedSkills(nodeId, skills);
+  });
 }

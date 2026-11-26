@@ -38,6 +38,7 @@ function positive(value, fallback, label) {
 export function createBudget(policy, signal, persisted) {
   const deadlineMs = positive(persisted?.deadlineMs ?? policy.deadlineMs, Date.now() + 600000, 'deadlineMs');
   const maxDispatches = positive(policy.maxDispatches, 1024, 'maxDispatches');
+  const maxProviderRequests = positive(policy.maxProviderRequests, Number.MAX_SAFE_INTEGER, 'maxProviderRequests');
   const limits = policy.hostProfile?.resourceLimits;
   const maxResourceBytes = Math.min(positive(policy.maxResourceBytes, DESCRIPTION_MAX_BYTES, 'maxResourceBytes'),
     positive(limits?.maxResourceBytes, Number.MAX_SAFE_INTEGER, 'Host maxResourceBytes'));
@@ -45,12 +46,18 @@ export function createBudget(policy, signal, persisted) {
   const maxTaskBytes = Math.min(positive(policy.maxTaskBytes, 1048576, 'maxTaskBytes'),
     positive(limits?.maxTaskBytes, Number.MAX_SAFE_INTEGER, 'Host maxTaskBytes'));
   let used = persisted?.dispatches ?? 0;
+  let providerRequests = persisted?.providerRequests ?? 0;
   function check() {
     if (signal?.aborted) throw failure('cancelled', 'Task was cancelled', signal.reason);
     if (Date.now() >= deadlineMs) throw failure('node-deadline-exceeded', 'Task deadline exceeded');
   }
   return Object.freeze({ deadlineMs, maxResourceBytes, maxTotalResourceBytes, maxTaskBytes, check,
-    snapshot() { return {deadlineMs, dispatches: used}; },
+    snapshot() { return {deadlineMs, dispatches: used, ...(providerRequests ? { providerRequests } : {})}; },
+    dispatchProvider() {
+      check();
+      if (providerRequests >= maxProviderRequests) throw failure('provider-request-limit', 'Run provider request limit reached');
+      providerRequests++;
+    },
     dispatch() {
       check();
       if (used >= maxDispatches) throw failure('dispatch-limit', 'Run dispatch limit reached');
@@ -83,6 +90,10 @@ function validateResultEnvelope(value) {
   if (result.status === 'succeeded' && (!result.result || Array.isArray(result.result) || typeof result.result !== 'object')) {
     throw failure('invalid-result', 'Successful agent result must contain a JSON object');
   }
+  if (result.status === 'succeeded' && result.sideEffectStatus !== undefined &&
+      !['none', 'known', 'unknown'].includes(result.sideEffectStatus)) {
+    throw failure('invalid-result', 'Invalid successful Agent side-effect observation');
+  }
   if (result.status === 'failed' && (!result.failure || typeof result.failure.code !== 'string' ||
       typeof result.failure.message !== 'string' || typeof result.failure.retryable !== 'boolean' ||
       !['none', 'known', 'unknown'].includes(result.failure.sideEffectStatus))) {
@@ -100,6 +111,13 @@ function validateResultEnvelope(value) {
     for (const name of ['inputTokens', 'outputTokens', 'cachedInputTokens', 'toolCalls', 'durationMs']) {
       if (Object.hasOwn(usage, name) && (!Number.isSafeInteger(usage[name]) || usage[name] < 0)) {
         throw failure('invalid-result', `Invalid usage value: ${name}`);
+      }
+    }
+    if (Object.hasOwn(usage, 'tokenCoverage')) {
+      const coverage = usage.tokenCoverage;
+      if (!coverage || !['inputTokens', 'outputTokens', 'cachedInputTokens'].every(name =>
+        ['known', 'partial', 'unknown'].includes(coverage[name]))) {
+        throw failure('invalid-result', 'Invalid token coverage observation');
       }
     }
     if (Object.hasOwn(usage, 'cost') && (!usage.cost || !Number.isFinite(usage.cost.amount) || usage.cost.amount < 0 ||
@@ -161,19 +179,25 @@ export async function prepareTaskV2(task, runtime, policy, context, mode = 'stan
 
 /** Host calls handle actual preparation and dispatch; compiled code retains control and business writes. */
 export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedSkills) {
-  const { runtime, signal, state, runId } = ctx;
+  const { runtime, signal, runId } = ctx;
   const policy = runtime.taskPolicy ?? {};
-  let sharedBudget, taskSignal;
+  let sharedBudget;
   return async function runPreparedAgent(spec, step, checkStep, verifyStep) {
     if (!artifact || typeof runtime.runAgentTask !== 'function' || typeof runtime.validateResult !== 'function') {
       throw failure('capability-unavailable', 'Prepared task execution requires an artifact, runAgentTask and validateResult');
     }
     const budget = sharedBudget ??= createBudget(policy, signal);
     budget.check();
-    if (!taskSignal) {
-      const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647, budget.deadlineMs - Date.now())));
-      taskSignal = signal ? AbortSignal.any([signal, expires]) : expires;
+    const activityTimeoutMs = policy.activityTimeoutMs === undefined ? undefined :
+      positive(policy.activityTimeoutMs, undefined, 'activityTimeoutMs');
+    function activity() {
+      const deadlineMs = activityTimeoutMs === undefined ? budget.deadlineMs :
+        Math.min(budget.deadlineMs, Date.now() + Math.min(2147483647, activityTimeoutMs));
+      const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647, deadlineMs - Date.now())));
+      return { deadlineMs, taskSignal: signal ? AbortSignal.any([signal, expires]) : expires };
     }
+    let { deadlineMs, taskSignal } = activity();
+    const { state } = ctx;
     const input = snapshot(Object.fromEntries(spec.inputs.filter(key => Object.hasOwn(state, key)).map(key => [key, state[key]])));
     const missing = spec.inputs.filter(key => !Object.hasOwn(state, key));
     const activationId = randomUUID();
@@ -181,8 +205,13 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
       createDescriptionResources(spec.task.descriptionRefs ?? [], policy, options, budget, taskSignal));
     let reasons = [];
     let frozenManifest;
+    const checkState = () => {
+      if (ctx.state !== state) throw failure('state-replaced', 'Workflow State was replaced during Agent activation');
+    };
     for (let attempt = 1; attempt <= spec.retries + 1; attempt++) {
       budget.check();
+      if (attempt > 1 && activityTimeoutMs !== undefined) ({ deadlineMs, taskSignal } = activity());
+      checkState();
       const task = snapshot({
         protocolVersion: 2,
         workflow: { ...spec.workflow, ...artifact },
@@ -192,15 +221,15 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
         input,
         missing,
         outputSchema: spec.output,
-        execution: { activationId, requestId: randomUUID(), deadlineMs: budget.deadlineMs,
+        execution: { activationId, requestId: randomUUID(), deadlineMs,
           attempt, reasons, ...(spec.overview ? { overviewStep: step } : {}) }
       });
       validateSize(task, budget.maxTaskBytes, 'Task');
-      const context = Object.freeze({ signal: taskSignal, deadlineMs: budget.deadlineMs, budget, projectRoot: policy.projectRoot,
+      const context = Object.freeze({ signal: taskSignal, deadlineMs, budget, projectRoot: policy.projectRoot,
         hostProfile: policy.hostProfile, authorizationContextRef: policy.authorizationContextRef,
         descriptionResources });
       const prepared = await prepareTaskV2(task, runtime, policy, context);
-      checkPreparedSkills?.(task.node.id, prepared.skills);
+      if (checkPreparedSkills) await during(taskSignal, () => checkPreparedSkills(task.node.id, prepared.skills));
       const manifestHash = prepared.resourceManifest.manifestHash;
       if (frozenManifest !== undefined && manifestHash !== frozenManifest) {
         throw failure('invalid-preparation', 'Required resource identity changed within one activation');
@@ -210,33 +239,51 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
       const envelope = validateResultEnvelope(await during(taskSignal, () => runtime.runAgentTask(prepared, context)));
       runtime.recordAgentResult?.(task, envelope);
       budget.check();
+      async function authorizeRetry(reasons) {
+        const effect = envelope.status === 'failed' ? envelope.failure.sideEffectStatus : envelope.sideEffectStatus;
+        if (effect !== 'none' || typeof policy.authorizeRetry !== 'function' ||
+            await during(taskSignal, () => policy.authorizeRetry({ task, envelope, reasons: [...reasons], signal: taskSignal })) !== true) {
+          throw failure('retry-not-authorized', 'Agent redispatch requires Host authorization and observed no side effect');
+        }
+      }
       if (envelope.status === 'cancelled') throw failure('cancelled', envelope.reason);
       if (envelope.status === 'failed') {
         const outcome = envelope.failure;
         if (!outcome.retryable || outcome.sideEffectStatus !== 'none') throw failure(outcome.code, outcome.message);
         reasons = [outcome.message];
+        if (attempt <= spec.retries) await authorizeRetry(reasons);
         continue;
       }
       const result = envelope.result;
       reasons = runtime.validateResult(spec.output, result);
-      if (!Array.isArray(reasons) || !reasons.every(reason => typeof reason === 'string')) {
+      if (!Array.isArray(reasons)) {
         throw failure('invalid-result', 'validateResult must return validation messages');
       }
+      for (let index = 0; index < reasons.length; index++) {
+        if (!Object.hasOwn(reasons, index) || typeof reasons[index] !== 'string') {
+          throw failure('invalid-result', 'validateResult must return validation messages');
+        }
+      }
       if (!reasons.length && checkStep) {
-        const message = await checkStep({ id: spec.id, name: spec.name, attempt }, result, ctx);
+        const message = await during(taskSignal, () => checkStep({ id: spec.id, name: spec.name, attempt }, result, ctx));
         if (typeof message === 'string') reasons = [message];
         else if (message != null) throw failure('invalid-result', 'checkStep returned an invalid value');
       }
       if (!reasons.length && spec.verify !== null) {
         const candidate = { ...state, ...result };
-        if (!await verifyStep(spec.id, spec.verify, spec.name, { ...ctx, state: candidate })) reasons = [`verify ${spec.verify} failed`];
+        if (!await during(taskSignal, () => verifyStep(spec.id, spec.verify, spec.name, { ...ctx, state: candidate }))) {
+          reasons = [`verify ${spec.verify} failed`];
+        }
       }
       budget.check();
+      taskSignal.throwIfAborted();
+      checkState();
       if (!reasons.length) {
         // Wire snapshots are immutable, but a subsequent Action owns mutable business State.
         writeResult(state, structuredClone(result));
         return;
       }
+      if (attempt <= spec.retries) await authorizeRetry(reasons);
     }
     throw failure('attempt-limit', `${spec.name}: ${reasons.join('; ')}`);
   };

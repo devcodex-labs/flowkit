@@ -69,6 +69,7 @@ test('same instruction-following adapter accepts current Skills and exhausts wit
   const filename = path.join(temporary, 'legacy.workflow.js'); await writeFile(filename, source);
   const seen = [];
   const runtime = createRuntime({ agent: async step => { seen.push(step.instruction); return exampleAgent(step); }, validate: validateExample,
+    authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
     approve: async () => true, verify: async () => true, act: async () => {} });
   await assert.rejects(run(filename, runtime, { draft: 'Draft', evidence: 'Evidence' }, {
     projectRoot: temporary, remoteSkillHosts: ['skills.example.test'], fetch: async () => new Response(legacy),

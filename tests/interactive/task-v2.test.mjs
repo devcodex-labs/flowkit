@@ -24,7 +24,8 @@ inputs:['message','missing'],output:{type:'object',properties:{answer:{type:'str
 terminal('done',{name:'Done',status:'succeeded'})]});`;
 const skillDigest=artifactDigest('fixed skill');
 const hostProfile={schemaVersion:1,executionModes:['interactive-p0-a'],capabilities:{skillResourceLoading:'supported'}};
-async function fixture(t,{maxDispatches=3,deadlineMs=Date.now()+60000}={}) {
+async function fixture(t,{maxDispatches=3,maxProviderRequests,deadlineMs=Date.now()+60000,
+  activityTimeoutMs,businessDeadlineMs}={}) {
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-task-recovery-'));
   const file=path.join(dir,'task.workflow.js');
   await writeFile(file,source);await writeFile(path.join(dir,'notes.md'),'original instruction');
@@ -37,7 +38,10 @@ async function fixture(t,{maxDispatches=3,deadlineMs=Date.now()+60000}={}) {
     prepareAgentTask:async(task,context)=>{preparations++;return {protocolVersion:2,task,
       descriptionResources:context.descriptionResources,skills:[{logicalId:'inspect',resolvedVersion:'1.0.0',digest}]};},
     authorizeAgentTask:prepared=>allowed && prepared.skills[0].digest===skillDigest};
-  const policy={taskPolicy:{projectRoot:dir,hostProfile,maxDispatches,deadlineMs}};
+  const policy={taskPolicy:{projectRoot:dir,hostProfile,maxDispatches,deadlineMs,
+    ...(maxProviderRequests===undefined?{}:{maxProviderRequests}),
+    ...(activityTimeoutMs===undefined?{}:{activityTimeoutMs})},
+    ...(businessDeadlineMs===undefined?{}:{businessDeadlineMs})};
   const api=()=>createInteractiveCoordinator({store,runtime,policy});
   const opening={programBytes:Buffer.from(compiled.code),programIdentity:compiled.programIdentity,
     startKey:'once',runId:'original-run',state:{message:'hello',secret:'do not disclose'}};
@@ -47,6 +51,26 @@ async function fixture(t,{maxDispatches=3,deadlineMs=Date.now()+60000}={}) {
     allow(value){allowed=value;},digest(value){digest=value;},preparations:()=>preparations};
 }
 const receipt=(frame,result)=>({runId:frame.runId,requestId:frame.pending.requestId,nodeId:'worker',attempt:frame.pending.attempt,result});
+
+test('restored Task V2 attempts and accepted candidates keep their own activity window', async t => {
+  const businessDeadlineMs = Date.now() + 30_000;
+  const f = await fixture(t, { activityTimeoutMs: 5000, businessDeadlineMs });
+  const first = await f.api().start(f.opening);
+  const deadlineOf = frame => frame.pending.preparedTask.task.execution.deadlineMs;
+  f.restart();
+  assert.equal(deadlineOf(await f.api().resume({ runId: first.runId })), deadlineOf(first));
+  assert.equal(f.store.load(first.runId).businessDeadlineMs, businessDeadlineMs);
+  const second = await f.api().complete(receipt(first, {}));
+  assert.equal(second.pending.attempt, 2);
+  assert.ok(deadlineOf(second) > deadlineOf(first));
+  assert.ok(deadlineOf(second) < businessDeadlineMs);
+  f.runtime.validateResult = () => {
+    const accepted = f.store.load(second.runId);
+    assert.equal(accepted.candidate.activityDeadlineMs, deadlineOf(second));
+    return [];
+  };
+  assert.equal((await f.api().complete(receipt(second, { answer: 'done' }))).status, 'succeeded');
+});
 
 test('Task V2 restores exact Pending, Run, resources, input and budget from SQLite after source removal',async t=>{
   const f=await fixture(t);const waiting=await f.api().start(f.opening);
@@ -98,6 +122,7 @@ test('P0-A Author ships real three-file artifacts and diagrams remain static acr
   const f=await fixture(t);
   const options={file:f.file,collectionId:'team',skillId:'inspect',name:'inspect',description:'Inspect task',version:'1.0.0',
     hostProfile:{id:'local',digest:artifactDigest('profile')},buildId:'b7',executionMode:'interactive-p0-a',
+    safetyPolicies:[],
     professionalSkills:[{nodeId:'worker',id:'inspect',version:'1.0.0',digest:skillDigest}]};
   const {candidate}=await prepareStandardSkill(options);
   assert.deepEqual(Object.keys(candidate.files),['SKILL.md','workflow.js','workflow.mmd']);
@@ -154,7 +179,7 @@ function approvedP2Host(persistence, createAuth, hostProfile, taskPolicy, author
     authorizeAgentTask: binding('authorize', 'trusted-read', () => true),
   };
   const bindingManifest = Object.fromEntries(Object.entries(runtime).map(([key, { implementation, ...identity }]) => [key, identity]));
-  return { hostProfile, authorizeExecution, resolveRunProfessionalSkill, runtime, interactive: {
+  return { hostProfile, authorizeExecution, resolveApplicableSafetyPolicies: () => [], resolveRunProfessionalSkill, runtime, interactive: {
     ...persistence, startKey: 'signed-p2',
     auth: createAuth({ namespace: 'tasks', subjectId: 'local', authorize: () => true, authorizeTask: () => true }),
     policy: { id: 'signed-p2', version: '1', bindingManifest, disclosePolicyId: 'local', capabilityStage: 'P2',
@@ -174,6 +199,7 @@ test('public Host starts a signed P2 Program and restores the exact authorized S
     maxDispatches: 3, deadlineMs: Date.now() + 60000 };
   const compiled = await prepareStandardSkill({ file, collectionId: 'team', skillId: 'workflow', name: 'workflow',
     description: 'Inspect the message', version: '1.0.0', hostProfile: profile, buildId: 'signed-p2', executionMode: 'interactive-p2',
+    safetyPolicies: [],
     professionalSkills: [{ nodeId: 'worker', id: 'inspect', version: '1.0.0', digest: skill.manifest.digest, source: 'collection:team' }] });
   assert.ok(compiled.candidate, JSON.stringify(compiled.diagnostics));
   const key = newExportKey();
@@ -266,20 +292,21 @@ test('original absolute deadline remains expired after reopening the database',a
 });
 
 test('API continuation reservations persist across restart and reject calls beyond the original Run budget',async t=>{
-  const f=await fixture(t,{maxDispatches:2});const waiting=await f.api().start(f.opening);
+  const f=await fixture(t,{maxDispatches:1,maxProviderRequests:2});const waiting=await f.api().start(f.opening);
   let requests=0;
   const adapter=createApiAgentAdapter({scope:'tasks',model:'local-protocol-fixture',authorizeTool:()=>true,
     tools:[{name:'inspect',description:'Read pinned resource',sideEffect:'read',parameters:{type:'object'},validate:()=>[],execute:async()=>({ok:true})}],
     request:async()=>Response.json({id:'response-'+ ++requests,status:'completed',output:requests===1 ?
       [{type:'function_call',name:'inspect',call_id:'call',arguments:'{}'}] :
       [{type:'message',content:[{type:'output_text',text:'{"answer":"api"}'}]}]})});
-  const result=await adapter.runAgentTask(waiting.pending.preparedTask,{budget:{check(){},dispatch:reservation=>f.api().reserveDispatch({
+  const result=await adapter.runAgentTask(waiting.pending.preparedTask,{budget:{check(){},dispatchProvider:reservation=>f.api().reserveDispatch({
     runId:waiting.runId,requestId:waiting.pending.requestId,...reservation})}});
   assert.equal(result.status,'succeeded',JSON.stringify(result));assert.equal(requests,2);f.restart();
-  assert.equal(f.store.load(waiting.runId).taskContext.dispatches,2);
+  assert.equal(f.store.load(waiting.runId).taskContext.dispatches,1);
+  assert.equal(f.store.load(waiting.runId).taskContext.providerRequests,2);
   const id={runId:waiting.runId,requestId:waiting.pending.requestId};
-  assert.equal((await f.api().reserveDispatch({...id,operationId:`${id.requestId}:provider:1`})).dispatches,2);
-  await assert.rejects(f.api().reserveDispatch({...id,operationId:'new-provider-call'}),error=>error.kind==='dispatch-limit');
+  assert.equal((await f.api().reserveDispatch({...id,operationId:`${id.requestId}:provider:1`})).providerRequests,2);
+  await assert.rejects(f.api().reserveDispatch({...id,operationId:'new-provider-call'}),error=>error.kind==='provider-request-limit');
   assert.equal((await f.api().complete(receipt(waiting,result.result))).status,'succeeded');
 });
 
@@ -303,6 +330,7 @@ test('P0-A condition diagrams match both terminals and a diagram failure preserv
   await writeFile(f.file,text);
   const options={file:f.file,collectionId:'team',skillId:'workflow',name:'condition-flow',description:'Condition fixture',
     version:'1.0.0',hostProfile:{id:'local',digest:artifactDigest('host')},buildId:'final',executionMode:'interactive-p0-a',
+    safetyPolicies:[],
     professionalSkills:[{nodeId:'worker',id:'inspect',version:'1.0.0',digest:skillDigest}]};
   const candidate=(await prepareStandardSkill(options)).candidate;
   assert.match(candidate.files['workflow.mmd'],/Gate[\s\S]*Worker[\s\S]*Done[\s\S]*Failed/);

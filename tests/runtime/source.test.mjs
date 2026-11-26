@@ -59,10 +59,10 @@ test('the loaded function matches compile text and source execution never import
   const workflow = await loadWorkflowText(compiled.code);
   assert.equal(Function.prototype.toString.call(workflow), compiled.code.split('\n').slice(10).join('\n').slice(7, -1));
   const edited = "globalThis.__flowkitEditedArtifact=true;throw new Error('Never execute');";
-  await writeFile(path.join(f.directory, 'source.compiled.mjs'), edited);
+  await writeFile(path.join(f.directory, 'source.workflow.js.compiled.mjs'), edited);
   assert.equal((await f.run(host())).terminal, 'done');
   assert.equal(globalThis.__flowkitEditedArtifact, undefined);
-  assert.equal(await readFile(path.join(f.directory, 'source.compiled.mjs'), 'utf8'), edited);
+  assert.equal(await readFile(path.join(f.directory, 'source.workflow.js.compiled.mjs'), 'utf8'), edited);
   await writeFile(f.file, source([end('failed', 'failed')]));
   assert.equal((await f.run(host())).status, 'failed');
 });
@@ -87,7 +87,7 @@ test('pure input failures precede filesystem discovery and do not clone state', 
     for (const runtime of [undefined, null, [], {}, { isControlSignal: true }]) await assert.rejects(executeSource('source.workflow.js', runtime), TypeError);
     for (const state of [null, 1, true, [], () => {}]) await assert.rejects(executeSource('source.workflow.js', host(), state), TypeError);
     for (const options of [null, [], { unknown: true }, { signal: {} }, { trace: null }, { filename: undefined }]) await assert.rejects(executeSource('source.workflow.js', host(), {}, options), TypeError);
-    for (const file of [undefined, 1, '', 'source.compiled.mjs']) await assert.rejects(executeSource(file, host()), TypeError);
+    for (const file of [undefined, 1, '', 'source.workflow.js.compiled.mjs']) await assert.rejects(executeSource(file, host()), TypeError);
     assert.equal(calls, 0);
     await assert.rejects(executeSource('source.workflow.js', host()), error => error === failure);
     assert.equal(calls, 1);

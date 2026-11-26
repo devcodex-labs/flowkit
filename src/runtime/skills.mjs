@@ -1,7 +1,11 @@
-import { realpath, readFile } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { localSkillPath, remoteReference, remoteSkillURL, allowedSkillHost, validIntegrity, validAgentPath } from '../shared/skill-ref.mjs';
 import { readRemoteSkill, skillError } from './skill-remote.mjs';
+import { during } from './tasks.mjs';
+import { readRegularResource } from './task-resources.mjs';
+
+const maxLocalSkillBytes = 262144;
 
 const contained = (root, target) => {
   const relative = path.relative(root, target);
@@ -13,6 +17,7 @@ export function createSkillLoader(options = {}) {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
   const skillsRoot = options.skillsRoot ?? 'skills';
   const hosts = [...(options.remoteSkillHosts ?? [])];
+  const { signal } = options;
   const local = new Map(), remote = new Map();
   let canonicalRoot;
   const remember = (map, key, read) => {
@@ -29,13 +34,17 @@ export function createSkillLoader(options = {}) {
       const root = await canonicalRoot;
       const target = await realpath(path.resolve(projectRoot, reference));
       if (!contained(root, target)) throw skillError('FK_R011', 'Skill escapes project root');
-      bytes = await readFile(target);
+      bytes = await readRegularResource(target, maxLocalSkillBytes, signal);
     } catch (error) {
       if (['ENOENT', 'ENOTDIR'].includes(error?.code)) throw skillError('FK_R010', 'Local Skill is missing', error);
       throw error;
     }
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch (cause) { throw skillError('FK_R014', 'Skill is not valid UTF-8', cause); }
+  }
+  function loadLocal(reference) {
+    return signal ? during(signal, () => remember(local, reference, () => readLocal(reference))) :
+      remember(local, reference, () => readLocal(reference));
   }
   function loadSkill(reference, supplied) {
     try {
@@ -53,7 +62,7 @@ export function createSkillLoader(options = {}) {
       }
       if (!localSkillPath(reference) || hasIntegrity) throw skillError('FK_R011', 'Invalid local Skill reference or integrity');
       // The canonical root is fixed within this loader; distinct legal aliases keep distinct keys.
-      return remember(local, reference, () => readLocal(reference));
+      return loadLocal(reference);
     } catch (error) { return Promise.reject(error); }
   }
   function loadSkillByAgent(agent) {
@@ -62,7 +71,7 @@ export function createSkillLoader(options = {}) {
     const target = path.resolve(projectRoot, skillsRoot, `${agent}.md`);
     const reference = path.relative(projectRoot, target).split(path.sep).join('/');
     // Host root paths may contain characters forbidden in explicit DSL references.
-    return remember(local, reference, () => readLocal(reference));
+    return loadLocal(reference);
   }
   return { loadSkill, loadSkillByAgent };
 }

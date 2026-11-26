@@ -82,7 +82,7 @@ npx --no-install flowkit check sample.workflow.js
 node host.mjs
 ```
 
-编译生成 `sample.compiled.mjs` 和 `sample.mmd`；检查成功退出0，通常无输出。运行结果：
+编译生成 `sample.workflow.js.compiled.mjs` 和 `sample.workflow.js.mmd`；检查成功退出0，通常无输出。运行结果：
 
 ```json
 {

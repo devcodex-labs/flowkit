@@ -1195,7 +1195,7 @@ summary.contract-trigger::-webkit-details-marker {display:none}
   <div class="ac-shell">
     <header class="ac-header">
       <div class="ac-title-area"><div class="ac-kicker">FLOWKIT · ARTIFACT CENTER</div><h2>产物中心</h2><p id="acSubtitle">当前工作流的正式交付成果与确认版本</p></div>
-      <div class="ac-head-actions"><span class="ac-run-pill" id="acScope">未绑定运行</span><button type="button" class="ac-return" id="acReturn">↩ 返回流程图</button></div>
+      <div class="ac-head-actions"><span class="ac-run-pill" id="acScope" role="status">未绑定运行</span><button type="button" class="panel-btn" id="acRefresh" hidden>刷新产物</button><button type="button" class="ac-return" id="acReturn">↩ 返回流程图</button></div>
     </header>
     <div class="ac-stats" id="acStats"></div>
     <div class="ac-controls">
@@ -2805,8 +2805,13 @@ let artifactNode='';
 const artifactPageHistory=DATA.runView?.artifactAfter>0?[0]:[];
 let artifactRequest=null;
 let artifactRefreshPending=false;
+let artifactPreviouslyAuthorized=Array.isArray(DATA.runView?.artifacts);
+let artifactRetryTimer;
+let artifactRetries=0;
 function updateArtifactPager() {
   const run=DATA.runView;
+  $('acRefresh').hidden=!run?.artifactsUrl;
+  $('acRefresh').disabled=!!artifactRequest;
   $('acPager').hidden=!run?.artifactsUrl||(!artifactPageHistory.length&&run.artifactNext==null);
   $('acPrevious').disabled=!!artifactRequest?.paging||!run?.artifacts||!artifactPageHistory.length;
   $('acNext').disabled=!!artifactRequest?.paging||run?.artifactNext==null;
@@ -2831,6 +2836,8 @@ function closeArtifactReader() {
   readerContent.replaceChildren();
 }
 function stopArtifactRefresh() {
+  clearTimeout(artifactRetryTimer);
+  artifactRetries=0;
   artifactRequest?.controller.abort();
   artifactRequest=null;
   artifactRefreshPending=false;
@@ -2849,6 +2856,7 @@ async function loadArtifactPage(after,forward) {
   const request={controller:new AbortController(),paging};
   artifactRequest=request;
   artifactRefreshPending=false;
+  updateArtifactPager();
   if(paging) {
     updateArtifactPager();
     $('acPageStatus').textContent='正在加载…';
@@ -2858,6 +2866,9 @@ async function loadArtifactPage(after,forward) {
     const page=await readViewerJson(url,{after},signal);
     const run=DATA.runView;
     if(artifactRequest!==request||run?.artifactsUrl!==url)return;
+    clearTimeout(artifactRetryTimer);
+    artifactRetries=0;
+    artifactPreviouslyAuthorized=true;
     if(paging) {
       if(forward)artifactPageHistory.push(run.artifactAfter??0);
       else artifactPageHistory.pop();
@@ -2873,11 +2884,20 @@ async function loadArtifactPage(after,forward) {
     const run=DATA.runView;
     if(artifactRequest!==request||run?.artifactsUrl!==url)return;
     if([401,403,404].includes(error.status)) {
+      clearTimeout(artifactRetryTimer);
+      artifactRetries=0;
       Object.assign(run,{artifacts:null,artifactNext:null});
       closeArtifactReader();
       updateArtifactList();
       $('acScope').textContent='产物当前不可查看';
-    } else $('acScope').textContent='产物刷新暂不可用';
+    } else {
+      $('acScope').textContent='产物刷新暂不可用';
+      if(!paging&&(!error.status||error.status>=500)&&
+        ['succeeded','failed','errored','cancelled'].includes(run.status)&&artifactRetries<2) {
+        clearTimeout(artifactRetryTimer);
+        artifactRetryTimer=setTimeout(()=>void loadArtifactPage(after),1000*(++artifactRetries));
+      }
+    }
     $('acPageStatus').textContent=error.message;
   } finally {
     if(artifactRequest===request) {
@@ -2888,8 +2908,13 @@ async function loadArtifactPage(after,forward) {
   }
 }
 function refreshCurrentArtifacts() {
-  void loadArtifactPage(DATA.runView?.artifactAfter??0);
+  if(artifactPreviouslyAuthorized)void loadArtifactPage(DATA.runView?.artifactAfter??0);
 }
+$('acRefresh').onclick=()=>{
+  clearTimeout(artifactRetryTimer);
+  artifactRetries=0;
+  void loadArtifactPage(DATA.runView?.artifactAfter??0);
+};
 $('acPrevious').onclick=()=>void loadArtifactPage(artifactPageHistory.at(-1),false);
 $('acNext').onclick=()=>void loadArtifactPage(DATA.runView?.artifactNext,true);
 window.addEventListener('online',refreshCurrentArtifacts);

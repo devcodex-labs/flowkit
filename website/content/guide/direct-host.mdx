@@ -31,7 +31,7 @@ Runtime方法按节点选择。本例使用Agent、校验、审批和修订动�
 
 ## 交付边界
 
-完整步骤见[直接Host示例](/examples/direct-host)：编译者取得授权版本与源/Skill，生成模块，再把host.mjs、sample.compiled.mjs、skills/writer.md和delivery.json交给执行者。编译侧的prepare.mjs与FlowKit依赖不必交付到本例执行目录。
+完整步骤见[直接Host示例](/examples/direct-host)：编译者取得授权版本与源/Skill，生成模块，再把host.mjs、sample.workflow.js.compiled.mjs、skills/writer.md和delivery.json交给执行者。编译侧的prepare.mjs与FlowKit依赖不必交付到本例执行目录。
 
 生成文件可在交付目录打开阅读：入口为`export async function workflow(ctx)`，控制流由代码决定，Agent/审批/动作通过ctx.runtime调用；终点返回`{status, terminal}`。`host.mjs`中的调用及结果组装连接这些代码与真实业务输出。
 

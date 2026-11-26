@@ -44,7 +44,7 @@ export async function fixture(file, overrides = {}) {
           runtime: { validateResult: () => [], runAgentTask: prepared => ports.request({ stage: 'agent', prepared }) } };
       }
     },
-    authorization: { authorize: async () => true,
+    authorization: { authorize: async () => true, resolveApplicableSafetyPolicies: () => [],
       async observeReview({ task, result }) {
         if (!calls.some(call => call.prepared?.task.execution.requestId === task.execution.requestId) || result.result.passed !== true) return null;
         return { passed: true, subjectId: 'review-executor', executionId: task.execution.requestId };

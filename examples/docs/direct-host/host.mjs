@@ -11,14 +11,14 @@ export async function scenario() {
   assert.equal(flowkitPackageResolvable, false, 'Use the isolated prepare.mjs delivery, outside the compiler project');
   const delivery = JSON.parse(await readFile(new URL('./delivery.json', import.meta.url), 'utf8'));
   assert.equal(delivery.compilerVersion, '1.0.0', 'Review this reference Host before using another compiler version');
-  const files = ['host.mjs', 'sample.compiled.mjs', 'skills/writer.md'];
+  const files = ['host.mjs', 'sample.workflow.js.compiled.mjs', 'skills/writer.md'];
   assert.deepEqual(Object.keys(delivery.hashes).sort(), [...files].sort());
   for (const file of files) {
     const actual = createHash('sha256').update(await readFile(new URL(file, import.meta.url))).digest('hex');
     assert.equal(actual, delivery.hashes[file], `Delivery bytes changed: ${file}`);
   }
   // The trusted delivery channel, not this adjacent checksum file, establishes trust.
-  const { workflow } = await import(new URL('./sample.compiled.mjs', import.meta.url));
+  const { workflow } = await import(new URL('./sample.workflow.js.compiled.mjs', import.meta.url));
   const events = [], trace = [];
   const initial = { topic: 'FlowKit 入门' };
   const ctx = { state: { ...initial }, runId: 'direct-host-demo', runtime: {

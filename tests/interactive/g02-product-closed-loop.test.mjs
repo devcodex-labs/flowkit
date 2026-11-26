@@ -32,11 +32,11 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const workflowFile = fileURLToPath(new URL(
   '../../examples/g02/feature-review.workflow.js', import.meta.url));
 const compiledFile = fileURLToPath(new URL(
-  '../../examples/g02/feature-review.compiled.mjs', import.meta.url));
+  '../../examples/g02/feature-review.workflow.js.compiled.mjs', import.meta.url));
 const interactiveFile = fileURLToPath(new URL(
   '../../examples/g02/feature-review.interactive.mjs', import.meta.url));
 const mermaidFile = fileURLToPath(new URL(
-  '../../examples/g02/feature-review.mmd', import.meta.url));
+  '../../examples/g02/feature-review.workflow.js.mmd', import.meta.url));
 const editorialFile = fileURLToPath(new URL(
   '../../examples/editorial.workflow.js', import.meta.url));
 const skillsRoot = 'examples/g02/skills';
@@ -165,6 +165,7 @@ test('G02 Standard run covers success, gate-false, review-false and scripted ret
       isControlSignal,
       evalWhen,
       validateResult: validateG02Result,
+      authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
       async runAgent(step) {
         calls.push({id: step.id, attempt: step.attempt, missing: step.missing});
         assert.equal(Object.hasOwn(step, 'state'), false);

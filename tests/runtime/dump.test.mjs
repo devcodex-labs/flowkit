@@ -42,7 +42,7 @@ test('dump writes deterministic whole-text hash names, restores manual edits on 
   await api.run(f.file, runtime, {}, { projectRoot: f.directory, dump });
   assert.equal(await readFile(target, 'utf8'), code); assert.deepEqual(await readdir(dump), names);
   await api.compile(f.file);
-  await api.run(path.join(f.directory, 'source.compiled.mjs'), runtime, {}, { projectRoot: f.directory, dump }); assert.equal(calls, 3);
+  await api.run(path.join(f.directory, 'source.workflow.js.compiled.mjs'), runtime, {}, { projectRoot: f.directory, dump }); assert.equal(calls, 3);
   assert.deepEqual(await readdir(dump), names);
 });
 
@@ -173,7 +173,7 @@ test('pin tokens survive an in-flight import, registered unpinned URLs refuse lo
     }).toString() + ';';
     register('data:text/javascript;base64,' + Buffer.from(loader).toString('base64'), { data: { channel: hostHook }, transferList: [hostHook] });
     register(hook, { data: { channel: protocolHook }, transferList: [protocolHook] });
-    const code = await fs.readFile(path.join(directory, 'source.compiled.mjs'), 'utf8');
+    const code = await fs.readFile(path.join(directory, 'source.workflow.js.compiled.mjs'), 'utf8');
     const file = path.join(directory, 'pinned.run.mjs'); await fs.writeFile(file, code);
     const url = pathToFileURL(file); url.searchParams.set('flowkit-verified', 'formal-token-test');
     // An independent thread releases the host gate: Node24 may block its main loader caller.

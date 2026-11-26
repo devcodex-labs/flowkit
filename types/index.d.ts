@@ -63,6 +63,7 @@ export interface GraphSnapshotEdge {
 export interface Ctx { runtime: Runtime; state: Record<string, unknown>; signal?: AbortSignal; runId?: string; error?: unknown }
 export interface AgentStep {
   id: string; name: string; instruction: string;
+  activationId: string; requestId: string;
   input: Record<string, unknown>; missing: string[]; resultSchema: ObjectSchema;
   attempt: number; reasons: string[]; overview?: { step: number }; signal?: AbortSignal; runId?: string;
 }
@@ -123,13 +124,17 @@ export interface TaskPolicy {
   hostProfile?: HostCapabilityProfile;
   authorizationContextRef?: string;
   deadlineMs?: number;
+  activityTimeoutMs?: number;
   maxDispatches?: number;
+  maxProviderRequests?: number;
   maxResourceBytes?: number;
   maxTotalResourceBytes?: number;
   maxTaskBytes?: number;
   fetch?: typeof fetch;
   authorizeRemote?(url: string, signal: AbortSignal): boolean | Promise<boolean>;
   isImmutableResource?(url: string): boolean | Promise<boolean>;
+  authorizeRetry?(request: { readonly task: AgentTaskV2; readonly envelope: AgentExecutionResult;
+    readonly reasons: readonly string[]; readonly signal: AbortSignal }): boolean | Promise<boolean>;
 }
 export interface HostPreparationContext {
   readonly signal: AbortSignal;
@@ -140,12 +145,17 @@ export interface HostPreparationContext {
   readonly descriptionResources: readonly DescriptionResource[];
   readonly budget: { readonly deadlineMs: number; readonly maxResourceBytes: number;
     readonly maxTotalResourceBytes: number; readonly maxTaskBytes: number; check(): void;
-    dispatch(reservation?:{operationId:string}): void | Promise<unknown> };
+    dispatch(reservation?:{operationId:string}): void | Promise<unknown>;
+    dispatchProvider?(reservation:{operationId:string}): void | Promise<unknown> };
 }
 export type SideEffectStatus = 'none' | 'known' | 'unknown';
-interface ExecutionObservations { readonly events: readonly TaskJsonObject[]; readonly usage?: TaskJsonObject }
+type TokenCoverage = 'known' | 'partial' | 'unknown';
+type TaskUsageObservation = TaskJsonObject & {
+  readonly tokenCoverage?: Readonly<Record<'inputTokens' | 'outputTokens' | 'cachedInputTokens', TokenCoverage>>;
+};
+interface ExecutionObservations { readonly events: readonly TaskJsonObject[]; readonly usage?: TaskUsageObservation }
 export type AgentExecutionResult = ExecutionObservations & (
-  { readonly status: 'succeeded'; readonly result: TaskJsonObject } |
+  { readonly status: 'succeeded'; readonly result: TaskJsonObject; readonly sideEffectStatus?: SideEffectStatus } |
   { readonly status: 'failed'; readonly failure: { readonly code: string; readonly message: string;
     readonly retryable: boolean; readonly sideEffectStatus: SideEffectStatus } } |
   { readonly status: 'cancelled'; readonly reason: string; readonly sideEffectStatus: SideEffectStatus }
@@ -153,6 +163,11 @@ export type AgentExecutionResult = ExecutionObservations & (
 export interface Runtime {
   /** 业务方法只在对应节点出现时需要；isControlSignal始终必需。 */
   runAgent?(step: AgentStep): Promise<Record<string, unknown>>;
+  authorizeLegacyRetry?(request: { runId?: string; nodeId: string; step: number; attempt: number;
+    activationId: string; requestId: string;
+    reasons: readonly string[]; signal?: AbortSignal }):
+    { authorized: boolean; sideEffectStatus: SideEffectStatus } |
+    Promise<{ authorized: boolean; sideEffectStatus: SideEffectStatus }>;
   taskPolicy?: TaskPolicy;
   prepareAgentTask?(task: AgentTaskV2, context: HostPreparationContext): Promise<TaskPreparation>;
   runAgentTask?(task: PreparedAgentTask, context: HostPreparationContext): Promise<AgentExecutionResult>;

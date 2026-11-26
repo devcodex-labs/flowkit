@@ -101,6 +101,7 @@ test('agent execution uses own inputs and candidates, retries once, and commits 
   const initial = Object.create({ inherited: 1 }); Object.defineProperty(initial, '__proto__', { value: 1, enumerable: true });
   let loads = 0, attempts = 0, verified = 0;
   const runtime = host({ loadSkill: async () => { loads++; return 'instruction'; },
+    authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
     runAgent: async step => {
       attempts++; assert.equal(step.instruction, 'instruction'); assert.equal(step.overview.step, 1);
       assert.deepEqual(step.missing, ['inherited', 'missing']); assert.equal(Object.hasOwn(step.input, '__proto__'), true);
@@ -135,6 +136,7 @@ test('unprintable model rejections still exhaust retries with their original cau
   for (const cause of [Object.create(null), { message: Symbol('message') }, getter, conversion]) {
     let attempts = 0;
     const result = await settled(f.run(host({ loadSkill: async () => '', validateResult: () => assert.fail('No result'),
+      authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
       runAgent: async step => {
         attempts++; assert.equal(step.attempt, attempts);
         if (attempts === 1) assert.deepEqual(step.reasons, []);
@@ -150,6 +152,18 @@ test('unprintable model rejections still exhaust retries with their original cau
   let attempts = 0;
   const result = await settled(f.run(host({ loadSkill: async () => '', validateResult: () => [], runAgent: async () => { attempts++; throw control; } }), {}, { skillCheck: false }));
   assert.equal(result.error, control); assert.equal(attempts, 1); assert.equal(messageReads, 0);
+});
+
+test('a Legacy Agent requires an explicit Host decision and evidence of no effects before retry', async t => {
+  const f = await fixture(t, ["node('n',{name:'N',skill:'skills/a.md',output:{type:'object'},retries:1,next:'done'})", end()]);
+  for (const retry of [undefined, { authorized: true, sideEffectStatus: 'known' }]) {
+    let calls = 0;
+    const runtime = host({ loadSkill: async () => '', validateResult: () => ['invalid'],
+      runAgent: async () => { calls++; return {}; },
+      ...(retry && { authorizeLegacyRetry: () => retry }) });
+    await assert.rejects(f.run(runtime, {}, { skillCheck: false }), { code: 'FK_R004' });
+    assert.equal(calls, 1);
+  }
 });
 
 test('parallel any returns the shared state and late branches can still commit their distinct keys', async t => {

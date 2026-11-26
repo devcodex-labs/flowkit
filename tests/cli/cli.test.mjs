@@ -14,7 +14,7 @@ test('compile writes real artifacts and check is silent, read-only, and accepts 
   let result = f.invoke(['check', f.file]); assert.equal(result.status, 0); assert.equal(result.stdout, ''); assert.equal(result.stderr, '');
   assert.deepEqual(await readdir(f.directory), before);
   result = f.invoke(['compile', f.file]); assert.equal(result.status, 0); assert.equal(result.stdout, '');
-  const artifact = path.join(f.directory, 'source.compiled.mjs'), diagram = path.join(f.directory, 'source.mmd');
+  const artifact = path.join(f.directory, 'source.workflow.js.compiled.mjs'), diagram = path.join(f.directory, 'source.workflow.js.mmd');
   assert.match(await readFile(artifact, 'utf8'), /^\/\/ @generated/); assert.match(await readFile(diagram, 'utf8'), /flowchart/);
   const snapshots = await Promise.all([artifact, diagram, f.directory].map(async file => [await stat(file), file === f.directory ? null : await readFile(file)]));
   assert.equal(f.invoke(['check', f.file]).status, 0);
@@ -24,7 +24,7 @@ test('compile writes real artifacts and check is silent, read-only, and accepts 
 test('CLI compiles and checks real TypeScript syntax without changing artifacts during check', async t => {
   const f = await workspace(t); const file = path.join(f.directory, 'typed.workflow.ts');
   await writeFile(file, definition([end]).replace(']});', ']} as const);'));
-  const artifact = path.join(f.directory, 'typed.compiled.mjs');
+  const artifact = path.join(f.directory, 'typed.workflow.ts.compiled.mjs');
   let before;
   for (const command of ['compile', 'check']) {
     const result = f.invoke([command, file]); assert.equal(result.status, 0, result.stdout + result.stderr); assert.equal(result.stdout, '');
@@ -38,7 +38,7 @@ test('CLI compiles and checks real TypeScript syntax without changing artifacts 
 test('compile errors and check mismatches are exit1 with one JSON diagnostic per line', async t => {
   const f = await workspace(t, [remote(), "terminal('done',{name:'Done',status:'bad'})"]);
   await f.config("export default {remoteSkillHosts:['example.test']};");
-  const artifact = path.join(f.directory, 'source.compiled.mjs'); await writeFile(artifact, 'old');
+  const artifact = path.join(f.directory, 'source.workflow.js.compiled.mjs'); await writeFile(artifact, 'old');
   const rows = diagnostics(f.invoke(['compile', f.file]), 1);
   assert.ok(rows.some(row => row.code === 'FK_C059' && row.severity === 'warning'));
   assert.ok(rows.some(row => row.code === 'FK_C070' && row.severity === 'error'));
@@ -67,15 +67,15 @@ test('argument errors are one text line exit2 before evaluating configuration', 
 test('missing source, directory source and output I/O failures exit2 as single text lines', async t => {
   const f = await workspace(t); await mkdir(path.join(f.directory, 'directory.workflow.js'));
   for (const file of ['missing.workflow.js', 'directory.workflow.js']) { const result = f.invoke(['check', file]); assert.equal(result.status, 2); assert.equal(result.stdout.trimEnd().split('\n').length, 1); assert.throws(() => JSON.parse(result.stdout)); }
-  await mkdir(path.join(f.directory, 'source.compiled.mjs'));
+  await mkdir(path.join(f.directory, 'source.workflow.js.compiled.mjs'));
   const result = f.invoke(['compile', f.file]); assert.equal(result.status, 2); assert.equal(result.stdout.trimEnd().split('\n').length, 1);
-  assert.ok((await stat(path.join(f.directory, 'source.compiled.mjs'))).isDirectory());
+  assert.ok((await stat(path.join(f.directory, 'source.workflow.js.compiled.mjs'))).isDirectory());
   assert.equal((await readdir(f.directory)).filter(name => name.endsWith('.tmp')).length, 0);
 });
 
 test('configuration syntax, missing default, nonobjects, missing dependencies and directory paths have exact exit2 shape', async t => {
   const modules = ['export default {', 'export const trace=true;', 'export default null;', 'export default [];', 'export default 1;', 'export default ()=>({});', "import './absent.mjs';export default {};"];
-  for (const code of modules) { const f = await workspace(t); await f.config(code); configurationError(f.invoke(['compile', f.file])); await absent(path.join(f.directory, 'source.compiled.mjs')); }
+  for (const code of modules) { const f = await workspace(t); await f.config(code); configurationError(f.invoke(['compile', f.file])); await absent(path.join(f.directory, 'source.workflow.js.compiled.mjs')); }
   const f = await workspace(t); await mkdir(path.join(f.directory, 'flowkit.config.mjs')); configurationError(f.invoke(['check', f.file]));
 });
 
@@ -84,7 +84,7 @@ test('all eleven option types and unknown keys are validated before CLI override
   for (const value of invalid) {
     const f = await workspace(t); await f.config('export default ' + value + ';');
     configurationError(f.invoke(['compile', f.file, '--trace', '--no-mermaid', '--out-dir', '.', '--skills-root', 'skills', '--no-skill-check', '--remote-skill-host', 'ok.test']));
-    await absent(path.join(f.directory, 'source.compiled.mjs'));
+    await absent(path.join(f.directory, 'source.workflow.js.compiled.mjs'));
   }
 });
 
@@ -99,10 +99,10 @@ test('explicit false flags override true configuration and absent flags retain c
   const f = await workspace(t, [agent, end]);
   await f.config("export default {trace:false,mermaid:true,skillCheck:true,skillsRoot:'missing'};");
   let result = f.invoke(['compile', f.file, '--trace', '--no-mermaid', '--no-skill-check']); assert.equal(result.status, 0, result.stdout);
-  assert.match(await readFile(path.join(f.directory, 'source.compiled.mjs'), 'utf8'), /options: trace=on/); await absent(path.join(f.directory, 'source.mmd'));
+  assert.match(await readFile(path.join(f.directory, 'source.workflow.js.compiled.mjs'), 'utf8'), /options: trace=on/); await absent(path.join(f.directory, 'source.workflow.js.mmd'));
   await f.config("export default {trace:true,mermaid:false,skillCheck:false,skillsRoot:'missing'};");
   result = f.invoke(['compile', f.file, '--mermaid']); assert.equal(result.status, 0, result.stdout);
-  assert.match(await readFile(path.join(f.directory, 'source.compiled.mjs'), 'utf8'), /options: trace=on/); await access(path.join(f.directory, 'source.mmd'));
+  assert.match(await readFile(path.join(f.directory, 'source.workflow.js.compiled.mjs'), 'utf8'), /options: trace=on/); await access(path.join(f.directory, 'source.workflow.js.mmd'));
 });
 
 test('the first remote host flag replaces the whole configuration array rather than appending', async t => {
@@ -126,14 +126,14 @@ test('config import and source paths support Unicode, spaces, hash and percent c
   await writeFile(path.join(directory, 'flowkit.config.mjs'), 'export default {mermaid:false};');
   const file = path.join(directory, '示例 空格.workflow.js'); await writeFile(file, definition([end]));
   assert.equal(f.invoke(['compile', path.basename(file)], directory).status, 0);
-  await access(path.join(directory, '示例 空格.compiled.mjs')); await absent(path.join(directory, '示例 空格.mmd'));
+  await access(path.join(directory, '示例 空格.workflow.js.compiled.mjs')); await absent(path.join(directory, '示例 空格.workflow.js.mmd'));
 });
 
 test('configuration chdir cannot move relative outDir, source or inferred projectRoot fallback', async t => {
   const f = await workspace(t, [agent, end]); await mkdir(path.join(f.directory, 'other')); await mkdir(path.join(f.directory, 'skills')); await writeFile(path.join(f.directory, 'skills/writer.md'), 'instructions');
   await f.config("import {fileURLToPath} from 'node:url';process.chdir(fileURLToPath(new URL('./other/',import.meta.url)));export default {outDir:'.',mermaid:false};");
   const result = f.invoke(['compile', './source.workflow.js']); assert.equal(result.status, 0, result.stdout);
-  await access(path.join(f.directory, 'source.compiled.mjs')); assert.deepEqual(await readdir(path.join(f.directory, 'other')), []);
+  await access(path.join(f.directory, 'source.workflow.js.compiled.mjs')); assert.deepEqual(await readdir(path.join(f.directory, 'other')), []);
 });
 
 test('configuration throws remain one JSON line even with hostile error formatting', async t => {

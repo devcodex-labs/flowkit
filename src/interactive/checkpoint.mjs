@@ -53,6 +53,8 @@ export function encodeCheckpoint(cp) {
     policyIdentity,
     execution:{blockId:cp.blockId,phase,activationSeq:cp.activationSeq,agentStepCounter:cp.agentStepCounter??cp.activationSeq,
       controlStack:phase==='finished'?[]:cp.controlStack,contextError:cp.contextError??null,
+      ...(cp.businessDeadlineMs===undefined?{}:{businessDeadlineMs:cp.businessDeadlineMs}),
+      ...(cp.candidate?.activityDeadlineMs===undefined?{}:{activityDeadlineMs:cp.candidate.activityDeadlineMs}),
       ...(cp.taskContext?{taskContext:cp.taskContext}:{}),
       ...(cp.regionCounters?{regionCounters:cp.regionCounters}:{}),
       ...(phase!=='finished'&&cp.skillSnapshot?{skillSnapshot:cp.skillSnapshot}:{}),
@@ -107,7 +109,7 @@ export function decodeCheckpoint(cp) {
     || !keys(cp.policyIdentity,['id','version','policyHash','bindingManifestHash'],['skillManifestHash'])
     || ![cp.policyIdentity.id,cp.policyIdentity.version].every(text)
     || !keys(cp.execution,['blockId','phase','activationSeq','agentStepCounter','controlStack','contextError'],
-      ['taskContext','regionCounters','skillSnapshot','parallel','cancelledRequests','unavailableParallelKeys'])
+      ['taskContext','regionCounters','skillSnapshot','parallel','cancelledRequests','unavailableParallelKeys','businessDeadlineMs','activityDeadlineMs'])
     || !text(cp.execution.blockId) || !phases.has(cp.execution.phase)
     || !count(cp.execution.activationSeq) || !count(cp.execution.agentStepCounter)
     || cp.execution.agentStepCounter>cp.execution.activationSeq
@@ -154,10 +156,17 @@ export function decodeCheckpoint(cp) {
     || controlStack.at(-1)?.kind!=='agent' || skillSnapshot.activation!==controlStack.at(-1).activation
     || skillSnapshot.nodeId!==controlStack.at(-1).nodeId || !text(skillSnapshot.instruction)
     || skillSnapshot.instruction.length>128*1024)) throw invalid();
+  if (execution.businessDeadlineMs!==undefined &&
+      (!Number.isSafeInteger(execution.businessDeadlineMs) || execution.businessDeadlineMs<1)) throw invalid();
+  if (execution.activityDeadlineMs!==undefined &&
+      (!Number.isSafeInteger(execution.activityDeadlineMs) || execution.activityDeadlineMs<1 ||
+       !['validate','commit'].includes(phase))) throw invalid();
   if (execution.taskContext && (!object(execution.taskContext) || !count(execution.taskContext.dispatches) ||
     !Number.isSafeInteger(execution.taskContext.deadlineMs) || execution.taskContext.deadlineMs < 1 ||
+    execution.taskContext.deadlineScope!==undefined && execution.taskContext.deadlineScope!=='activity' ||
+    execution.taskContext.providerRequests!==undefined && !count(execution.taskContext.providerRequests) ||
     execution.taskContext.reservations && (!Array.isArray(execution.taskContext.reservations) ||
-      execution.taskContext.reservations.length>execution.taskContext.dispatches ||
+      execution.taskContext.reservations.length>(execution.taskContext.providerRequests??0) ||
       new Set(execution.taskContext.reservations).size!==execution.taskContext.reservations.length ||
       execution.taskContext.reservations.some(value=>!/^sha256:[0-9a-f]{64}$/.test(value))) ||
     execution.taskContext.active && (!text(execution.taskContext.active.activationId) ||
@@ -217,6 +226,7 @@ export function decodeCheckpoint(cp) {
         || cp.candidate.requestId!==accepted.requestId
         || hash(cp.candidate.result)!==hash(payload.result)))) throw invalid();
     candidate={kind:accepted.kind,requestId:accepted.requestId,nodeId:frame.nodeId,attempt:accepted.attempt,
+      ...(execution.activityDeadlineMs===undefined?{}:{activityDeadlineMs:execution.activityDeadlineMs}),
       submissionKind:succeeded?successKind:failureKind,validated:false,
       ...(succeeded?{result:payload.result}:{failure:Object.fromEntries(['message','retryable','sideEffectStatus','code']
         .filter(key=>Object.hasOwn(payload.failure??payload.error,key)).map(key=>[key,(payload.failure??payload.error)[key]]))})};
@@ -225,6 +235,7 @@ export function decodeCheckpoint(cp) {
       || !text(cp.candidate.requestId) || !object(cp.candidate.result)) throw invalid();
     const frame=controlStack.at(-1);
     candidate={...cp.candidate,nodeId:frame?.nodeId,attempt:frame?.attempt,submissionKind:'agent-result',validated:true};
+    if (execution.activityDeadlineMs!==undefined) candidate.activityDeadlineMs=execution.activityDeadlineMs;
   } else if (cp.candidate!==null) throw invalid();
 
   return {schemaVersion:1,namespace,runId,startKey,startIntentHash,revision,status,state,program,policyIdentity,
@@ -233,6 +244,7 @@ export function decodeCheckpoint(cp) {
     phase:phase==='finished'?blockId.slice(blockId.lastIndexOf('::')+2):phase,controlStack,activationSeq,agentStepCounter,contextError,
     candidate,receivedSubmission,lastTransitionId,stageCount:cp.limits.stageCount,receiptCount:cp.limits.receiptCount,
     ...(execution.taskContext?{taskContext:execution.taskContext}:{}),
+    ...(execution.businessDeadlineMs===undefined?{}:{businessDeadlineMs:execution.businessDeadlineMs}),
     ...(execution.regionCounters?{regionCounters:execution.regionCounters}:{}),
     ...(skillSnapshot?{skillSnapshot}:{}),
     ...(parallel?{parallel}:{}),

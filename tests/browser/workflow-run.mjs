@@ -47,6 +47,7 @@ test('browser shows an authorized Standard trace and a different persisted Inter
     await writeFile(file,source);
     const {candidate}=await prepareStandardSkill({file,executionMode,compilerOptions,collectionId:namespace,
       skillId:id,name:id,version:'1.0.0',description:id,buildId:id,
+      safetyPolicies:[],
       hostProfile:{id:namespace,digest:artifactDigest(namespace)}});
     assert.ok(candidate);
     return {file,candidate,graph:checkCandidate(candidate)};
@@ -117,7 +118,8 @@ test('browser shows an authorized Standard trace and a different persisted Inter
             requested.graphDigest===ref.graphDigest&&!!requestContext.principalId}:null
     });
     browser=await chromium.launch(process.env.FLOWKIT_BROWSER_CHANNEL?{channel:process.env.FLOWKIT_BROWSER_CHANNEL}:{});
-    const page=await browser.newPage({viewport:{width:1440,height:950}});
+    const browserContext=await browser.newContext({viewport:{width:1440,height:950}});
+    const page=await browserContext.newPage();
     const standardUrl=new URL('/runs/'+standardRef.runId,service.url).href;
     const runUrl=new URL('/runs/'+ref.runId,service.url).href;
     assert.equal((await page.goto(standardUrl)).status(),403);
@@ -256,6 +258,24 @@ test('browser shows an authorized Standard trace and a different persisted Inter
     assert.equal(await page.evaluate(()=>performance.timeOrigin),timeOrigin);
     assert.equal(await page.locator('#acSearch').inputValue(),'review-material');
     assert.equal(await page.locator('#acStatus').inputValue(),'latest');
+
+    allowArtifactIndex=false;
+    const deniedPage=await page.context().newPage();
+    await deniedPage.goto(page.url());
+    const deniedOrigin=await deniedPage.evaluate(()=>performance.timeOrigin);
+    await deniedPage.locator('#artifactCenterBtn').click();
+    await deniedPage.getByText('当前授权未提供产物索引。',{exact:true}).waitFor();
+    allowArtifactIndex=true;
+    let unavailable=0;
+    await deniedPage.route(/\/artifacts\?after=\d+$/,async route=>{
+      unavailable++;
+      await route.fulfill({status:503,contentType:'application/json',body:'{}'});
+    },{times:1});
+    await deniedPage.getByRole('button',{name:'刷新产物'}).click();
+    await deniedPage.locator('.ac-item').first().waitFor();
+    assert.equal(unavailable,1);
+    assert.equal(await deniedPage.evaluate(()=>performance.timeOrigin),deniedOrigin);
+    await deniedPage.close();
   } finally {
     await browser?.close();
     await service?.close();

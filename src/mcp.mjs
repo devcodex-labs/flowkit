@@ -8,7 +8,9 @@ import { hasLongAuthorMaterials } from './author/document-work.mjs';
 
 const id = z.string().min(1).max(256);
 const hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const response = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
+const response = text => ({ content: [{ type: 'text', text }] });
+const responseLimitCode = 'FKA_RESPONSE_LIMIT';
+const minimumErrorText = JSON.stringify({ error: { code: responseLimitCode } });
 
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
@@ -23,6 +25,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   if (![pageSize, maxBytes, maxResponseBytes,maxMetadataEntries].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new TypeError('MCP limits must be positive integers');
   }
+  if (maxResponseBytes < Buffer.byteLength(minimumErrorText)) throw new TypeError('MCP response budget must fit an error code');
   const allowed = new Set(collectionIds);
   const server = new McpServer({ name: 'flowkit', version: '1.0.0' }, workflowUi ? {
     instructions: 'Use flowkit_start_workflow to create a draft, then flowkit_prepare_workflow with a turn to clarify or compile. ' +
@@ -65,20 +68,39 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     return draft;
   }
 
+  function toolError(error) {
+    const code = typeof error?.code === 'string' ? error.code : 'FKA_HOST_OPERATION_FAILED';
+    let text;
+    try {
+      text = JSON.stringify({ error: { code, message: error?.message ?? String(error),
+        ...(error?.questions ? { questions: error.questions } : {}),
+        ...(error?.options ? { options: error.options, recommended: error.recommended } : {}) } });
+    } catch { /* The bounded fallback also covers non-JSON details from the Host. */ }
+    if (text === undefined || Buffer.byteLength(text) > maxResponseBytes) {
+      text = JSON.stringify({ error: { code, message: 'Tool response exceeds the Host response byte budget' } });
+      if (Buffer.byteLength(text) > maxResponseBytes) text = JSON.stringify({ error: { code } });
+      if (Buffer.byteLength(text) > maxResponseBytes) text = minimumErrorText;
+    }
+    return { ...response(text), isError: true };
+  }
+
   function tool(name, description, schema, invoke, readOnlyHint = false) {
     const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
     server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
       async (args, ctx) => {
         try {
-        const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
-        await access(name, input.collectionId, ctx);
-        const result = await invoke(input, ctx);
-        await access(name, input.collectionId, ctx);
-        if (Buffer.byteLength(JSON.stringify(result)) > maxResponseBytes) throw new Error('Tool response exceeds the Host response byte budget; read the committed draft through the Host');
-        return response(result);
+          const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
+          await access(name, input.collectionId, ctx);
+          const result = await invoke(input, ctx);
+          await access(name, input.collectionId, ctx);
+          const text = JSON.stringify(result);
+          if (Buffer.byteLength(text) > maxResponseBytes) {
+            throw Object.assign(new Error('Tool response exceeds the Host response byte budget; read the committed draft through the Host'),
+              { code: responseLimitCode });
+          }
+          return response(text);
         } catch (error) {
-          return { ...response({ error: { code: error.code ?? 'FKA_HOST_OPERATION_FAILED', message: error.message,
-            ...(error.questions ? { questions: error.questions } : {}), ...(error.options ? { options: error.options, recommended: error.recommended } : {}) } }), isError: true };
+          return toolError(error);
         }
       });
   }

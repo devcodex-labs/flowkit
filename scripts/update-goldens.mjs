@@ -8,7 +8,7 @@ import { compile } from '../dist/index.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),examples=path.join(root,'examples');
 const manifest=JSON.parse(await readFile(path.join(examples,'manifest.json'),'utf8'));
 const workflows=['editorial.workflow.js','shared-join.workflow.ts','remote.workflow.js'];
-const expected=[...workflows,...['editorial','shared-join','remote'].flatMap(name=>[`${name}.compiled.mjs`,`${name}.mmd`]),
+const expected=[...workflows,...workflows.flatMap(name=>[`${name}.compiled.mjs`,`${name}.mmd`]),
   'skills/writer.md','skills/style.md','skills/fact.md','host.mjs','demo.mjs','agent.mjs'].sort();
 assert.deepEqual(manifest.workflows.map(item=>item.source),workflows);
 assert.deepEqual(manifest.files.map(item=>item.path).sort(),expected);

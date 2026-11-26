@@ -26,7 +26,7 @@ async function prepareDump(target, code, digest) {
 export async function loadDumpWorkflow(code, filename, directory) {
   workflowFunctionText(code);
   const digest = hash(code);
-  const name = path.basename(filename).replace(/(?:\.workflow\.(?:ts|js)|\.compiled\.mjs)$/, '');
+  const name = path.basename(filename).replace(/\.compiled\.mjs$/, '').replace(/\.workflow\.(?:ts|js)$/, '');
   const target = path.join(directory, `${name}.${digest.slice(0, 12)}.run.mjs`);
   await prepareDump(target, code, digest);
   const base = pathToFileURL(target); base.searchParams.set('flowkit-verified', digest);

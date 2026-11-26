@@ -55,9 +55,9 @@ it does not need DNS or a running server.
 
 | Source | Behavior | Fixed artifacts |
 |---|---|---|
-| [editorial.workflow.js](editorial.workflow.js) | All eight node kinds; parallel object reviews; repair budget; human rejection; one publish join | [JavaScript](editorial.compiled.mjs), [Mermaid](editorial.mmd) |
-| [shared-join.workflow.ts](shared-join.workflow.ts) | TypeScript const definition; two branches share one save | [JavaScript](shared-join.compiled.mjs), [Mermaid](shared-join.mmd) |
-| [remote.workflow.js](remote.workflow.js) | Two HTTPS Skills pinned to raw bytes; each returns its own object schema | [JavaScript](remote.compiled.mjs), [Mermaid](remote.mmd) |
+| [editorial.workflow.js](editorial.workflow.js) | All eight node kinds; parallel object reviews; repair budget; human rejection; one publish join | [JavaScript](editorial.workflow.js.compiled.mjs), [Mermaid](editorial.workflow.js.mmd) |
+| [shared-join.workflow.ts](shared-join.workflow.ts) | TypeScript const definition; two branches share one save | [JavaScript](shared-join.workflow.ts.compiled.mjs), [Mermaid](shared-join.workflow.ts.mmd) |
+| [remote.workflow.js](remote.workflow.js) | Two HTTPS Skills pinned to raw bytes; each returns its own object schema | [JavaScript](remote.workflow.js.compiled.mjs), [Mermaid](remote.workflow.js.mmd) |
 
 `manifest.json` records source, Skill, host and artifact byte lengths/SHA-256, and
 the two remote SRI values. Changing Skill text requires updating the DSL SRI,
@@ -91,8 +91,9 @@ Run `node --test tests/runtime/golden.test.mjs` after building. The test verifie
 the manifest, recompiles into an isolated directory, compares every artifact,
 executes shared-join AOT on both paths, and exercises direct approval, repair,
 human rejection, exhausted verification budget and the old bare-true regression.
-Compilation writes `<name>.compiled.mjs` and `<name>.mmd` beside the source by
-default. `compileSource` also writes; use `check` for a read-only comparison.
+Compilation appends `.compiled.mjs` and `.mmd` to the full source filename.
+Both outputs keep the source's relative directory under the output root.
+`compileSource` also writes. Use `check` for a read-only comparison.
 
 ## Host boundary
 

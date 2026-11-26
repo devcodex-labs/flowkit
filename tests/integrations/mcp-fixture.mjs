@@ -35,6 +35,7 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
     }, async createSession(ports) { return { intentRuntime: { parse: intent => ports.request({ intent }) },
       runtime: { validateResult: () => [], runAgentTask: prepared => ports.request({ prepared }) } }; } },
     authorization: { authorize: async ({ requestContext: context }) => authorized && context.principalId !== 'denied',
+      resolveApplicableSafetyPolicies: () => [],
       async observeReview({ task, result }) { return calls.some(call => call.prepared?.task.execution.requestId === task.execution.requestId) && result.result.passed ?
         { passed: true, subjectId: 'fixture-executor', executionId: task.execution.requestId } : null; },
       async verifyApproval({ approvalRef, candidateHash }) { return { approved: approved.get(approvalRef) === candidateHash, subjectId: 'fixture-user', approvalId: approvalRef }; }
@@ -58,7 +59,8 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
       const snapshot = await stageCollectionForDiscovery(store,collectionId,path.join(path.dirname(file),'installed'));
       return runApprovedCollectionWorkflow(store,{collectionId,skillId,candidateHash,executionRef,
         skillDirectory:path.join(snapshot.directory,'skills','test-workflow')},
-        {hostProfile,authorizeExecution:()=>executionRef === 'fixture-execution',runtime:{isControlSignal,runAction:async()=>{}}});
+        {hostProfile,authorizeExecution:()=>executionRef === 'fixture-execution',resolveApplicableSafetyPolicies:()=>[],
+          runtime:{isControlSignal,runAction:async()=>{}}});
     },
     limits: { pageSize: 1, maxResourceBytes: 4096 } };
   const optionsFor = context => ({ ...authorHost.createMcpOptions(context, bindings), store });

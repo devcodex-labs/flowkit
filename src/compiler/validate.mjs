@@ -73,6 +73,7 @@ export function validateFields(literal, context) {
       });
     };
     if (!isWorkflowId(node.id)) emit('FK_C010', 'id', 'Node id must be kebab-case with at most 64 characters');
+    else if (node.id === 'constructor' || node.id === 'prototype') emit('FK_C010', 'id', 'Node id is reserved');
     if (ids.has(node.id)) emit('FK_C011', 'id', 'Duplicate node id');
     ids.add(node.id);
     if (!isWorkflowNodeName(node.name)) {

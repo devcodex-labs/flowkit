@@ -27,9 +27,10 @@ test('prints nested own special keys, source property order, strings and negativ
 test('resolves encoded source-relative headers while rejecting sibling or descendant output roots', () => {
   const filename=path.resolve('fixtures/中文 空格/a#b.workflow.ts');
   const result=compilationPaths(filename,{outDir:path.resolve('fixtures')});
-  assert.equal(result.source,'%E4%B8%AD%E6%96%87%20%E7%A9%BA%E6%A0%BC/a%23b.workflow.ts');
-  assert.equal(path.basename(result.codeFile),'a#b.compiled.mjs');
-  assert.equal(path.basename(result.mermaidFile),'a#b.mmd');
+  assert.equal(result.source,'a%23b.workflow.ts');
+  assert.equal(path.dirname(result.codeFile), path.dirname(filename));
+  assert.equal(path.basename(result.codeFile),'a#b.workflow.ts.compiled.mjs');
+  assert.equal(path.basename(result.mermaidFile),'a#b.workflow.ts.mmd');
   assert.throws(()=>compilationPaths(filename,{outDir:path.resolve('elsewhere')}),TypeError);
   assert.throws(()=>compilationPaths(filename,{outDir:path.join(path.dirname(filename),'child')}),TypeError);
 });

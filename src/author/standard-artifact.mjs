@@ -52,7 +52,7 @@ function resolveSkillPins(definition, pins) {
 export async function prepareStandardSkill({ file, collectionId, skillId, name, description, version,
   hostProfile, buildId, includeSource = false, professionalSkills = [], compilerOptions, plan: suppliedPlan,
   executionMode = suppliedPlan?.target.executionMode ?? 'standard',references={},documents=[],
-  safetyPolicies=[],verifySafetyPolicy, hostExecutionContracts }) {
+  safetyPolicies, verifySafetyPolicy, resolveApplicableSafetyPolicies, hostExecutionContracts }) {
   references=structuredClone(references);professionalSkills=structuredClone(professionalSkills);
   safetyPolicies=structuredClone(safetyPolicies);
   if (!workflowExecutionModes.includes(executionMode)) throw new TypeError('Unsupported Workflow Skill mode');
@@ -104,7 +104,31 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     });
   }
   const approvedSafety=[];
-  if(!Array.isArray(safetyPolicies))throw new TypeError('Host safety policies must be an array');
+  if (resolveApplicableSafetyPolicies) {
+    safetyPolicies = await resolveApplicableSafetyPolicies({ artifactHash: artifact.artifactHash,
+      hostProfile: profile, nodes: structuredClone(definition.nodes) });
+  }
+  if (!Array.isArray(safetyPolicies)) {
+    throw Object.assign(new Error('Host did not resolve the applicable safety policy set'), { code: 'FKA_SAFETY_POLICY_REQUIRED' });
+  }
+  const policyIds = new Set();
+  for (const binding of safetyPolicies) {
+    const node = graph.byId.get(binding?.nodeId);
+    const key = JSON.stringify([binding?.nodeId, binding?.policyRef]);
+    if (!node || !identifier(binding?.policyRef) || policyIds.has(key) ||
+        typeof verifySafetyPolicy !== 'function') {
+      throw Object.assign(new Error('Host safety policy must identify an exact node and policy'), { code: 'FKA_SAFETY_POLICY_REQUIRED' });
+    }
+    const subflows = graph.subflowBranches.get(node.id);
+    const members = subflows ? [...subflows.values()].flatMap(part => [...part]) : node.branches ?? [];
+    const branches = node.type === 'parallel' ? members.map(id => structuredClone(graph.byId.get(id))) : [];
+    if (await verifySafetyPolicy({ node: structuredClone(node), branches,
+      artifactHash:artifact.artifactHash, hostProfile:profile, policyRef:binding.policyRef }) !== true) {
+      throw Object.assign(new Error('A Host-approved safety policy is required for the exact artifact and node'), { code: 'FKA_SAFETY_POLICY_REQUIRED' });
+    }
+    policyIds.add(key);
+    approvedSafety.push({nodeId:node.id, policyRef:binding.policyRef});
+  }
   for(const node of definition.nodes) {
     if(node.type==='human' && !Number.isSafeInteger(node.maxRevisions)) {
       throw Object.assign(new Error('Author requires a finite maxRevisions for automated Human revision'), { code: 'FKA_HUMAN_LIMIT_REQUIRED', nodeId: node.id });
@@ -115,14 +139,10 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
       const member=graph.byId.get(id);
       return member?.type==='agent' || member?.type==='action'&&member.effect!=='read-only';
     })) {
-      const binding=safetyPolicies.find(item=>item?.nodeId===node.id);
-      if(!identifier(binding?.policyRef)||typeof verifySafetyPolicy!=='function'||await verifySafetyPolicy({
-        node:structuredClone(node),branches:branches.map(id=>structuredClone(graph.byId.get(id))),
-        artifactHash:artifact.artifactHash,hostProfile:profile,policyRef:binding.policyRef})!==true) {
+      if (!approvedSafety.some(binding => binding.nodeId === node.id)) {
         throw Object.assign(new Error('parallel.any with possible writes requires a Host-approved policy for the exact artifact'), {
           code: 'FKA_SAFETY_POLICY_REQUIRED', nodeId: node.id, artifactHash: artifact.artifactHash });
       }
-      approvedSafety.push({nodeId:node.id,policyRef:binding.policyRef});
     }
   }
   if (plan && (definition.nodes[0].id !== plan.entryNodeId || definition.nodes.length !== plan.nodes.length ||
@@ -181,7 +201,7 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
     ...(nodeDescriptions?.length ? { nodeDescriptions } : {}),
     ...(nodeExecutionContracts.length ? { nodeExecutionContracts } : {}),
     ...(documentEvidence.length?{documents:documentEvidence}:{}),
-    ...(approvedSafety.length?{safetyPolicies:approvedSafety}:{}),
+    safetyPolicies: approvedSafety,
     ...(plan ? { planRef: Object.freeze({ planId: plan.planId, revision: plan.revision, planHash: plan.planHash,
       effectiveIntentHash: plan.intentRef.effectiveIntentHash }) } : {}),
     files: Object.freeze(Object.fromEntries(Object.entries(files).map(([filename, body]) => [filename, artifactDigest(body)]))) });
@@ -214,6 +234,11 @@ export function checkCandidate({ files, manifest, hash }) {
     throw new TypeError('Workflow Skill candidate bytes or manifest differ');
   }
   const { graphSnapshotJson, workflowDefinition } = manifest;
+  if (!Array.isArray(manifest.safetyPolicies) || manifest.safetyPolicies.some(binding =>
+    !identifier(binding?.policyRef) || !workflowDefinition.nodes.some(node => node.id === binding.nodeId)) ||
+    new Set(manifest.safetyPolicies.map(({nodeId, policyRef}) => JSON.stringify([nodeId, policyRef]))).size !== manifest.safetyPolicies.length) {
+    throw new TypeError('Workflow Skill must declare its exact Host safety policy bindings');
+  }
   if (manifest.nodeDescriptions !== undefined) {
     const nodeIds = new Set(workflowDefinition.nodes.map(node => node.id));
     const notes = manifest.nodeDescriptions;

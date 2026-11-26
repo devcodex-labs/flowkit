@@ -14,6 +14,7 @@ export async function demo({ remote = false, reviewOk = true, rejectOnce = false
       return exampleAgent(step, { reviewOk });
     },
     validate: validateExample,
+    authorizeLegacyRetry: () => ({ authorized: true, sideEffectStatus: 'none' }),
     approve: async (_name, ctx) => {
       events.push('human');
       if (rejectOnce && approvals++ === 0) return { approved: false, comment: '请补充例子' };

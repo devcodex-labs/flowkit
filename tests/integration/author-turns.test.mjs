@@ -120,6 +120,7 @@ action('revise',{name:'Revise',action:'revise',next:'approve'}),terminal('done',
   f.options.execution.request = async input => ['dsl-source', 'dsl-repair'].includes(input.prepared?.task.node.id) ?
     (f.calls.push(input), agentResult({ rawText: input.prepared.task.node.id === 'dsl-source' ? 'broken' : text })) : request(input);
   f.options.authorization.verifySafetyPolicy = async binding => binding.artifactHash === compiled.artifact.artifactHash && binding.policyRef === 'exact-combined';
+  f.options.authorization.resolveApplicableSafetyPolicies = () => [{ nodeId: 'race', policyRef: 'exact-combined' }];
   const result = await advance(f, await f.start(), { safetyPolicies: [{ nodeId: 'race', policyRef: 'exact-combined' }] });
   assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
   assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'dsl-repair').length, 1);
@@ -889,6 +890,7 @@ export default defineWorkflow({id:'any',version:'1.0.0',name:'Any',nodes:[parall
       (f.calls.push(input), agentResult({ rawText: text })) : request(input);
     let policyChecks = 0;
     f.options.authorization.verifySafetyPolicy = async binding => { policyChecks++; assert.equal(binding.artifactHash, compiled.artifact.artifactHash); return variant === 'any-approved'; };
+    f.options.authorization.resolveApplicableSafetyPolicies = () => any ? [{ nodeId: 'race', policyRef: 'exact-policy' }] : [];
     const result = await advance(f, await f.start(), { choices: { executionMode: any ? 'standard' : 'interactive-p0-a' },
       safetyPolicies: any ? [{ nodeId: 'race', policyRef: 'exact-policy' }] : [] });
     assert.equal(result.status, variant === 'any-denied' ? 'needs-clarification' : 'candidate-ready', variant + JSON.stringify(result.diagnostics));

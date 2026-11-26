@@ -31,6 +31,7 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
     collectionId:'v45-browser',skillId:'software-delivery',name:'software-delivery',
     description:'V4.5 browser test',version:'1.0.0',executionMode:'interactive-p2',
     hostProfile:{id:'v45-browser',digest:artifactDigest('v45-browser')},buildId:'v45-browser',
+    safetyPolicies:[],
   };
   const {candidate}=await prepareStandardSkill(candidateOptions);
   assert.ok(candidate);

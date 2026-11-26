@@ -70,9 +70,9 @@ try {
       assert.match(file, /\.workflow\.(js|ts)$/);
       await execute(`${item.id}:compile:${file}`, [npm, 'exec', '--no', '--', 'flowkit', 'compile', file, ...flags], directory);
       await execute(`${item.id}:check:${file}`, [npm, 'exec', '--no', '--', 'flowkit', 'check', file, ...flags], directory);
-      const artifact = file.replace(/\.workflow\.(js|ts)$/, '.compiled.mjs');
+      const artifact = file + '.compiled.mjs';
       assert.ok((await readFile(path.join(directory, artifact), 'utf8')).includes(pkg.version));
-      assert.ok((await readFile(path.join(directory, file.replace(/\.workflow\.(js|ts)$/, '.mmd')), 'utf8')).length > 0);
+      assert.ok((await readFile(path.join(directory, file + '.mmd'), 'utf8')).length > 0);
     }
     for (const scenario of item.scenarios) {
       const output = await execute(`${item.id}:${scenario.entry}:${(scenario.args ?? []).join(',')}`, [scenario.entry, ...(scenario.args ?? [])], directory, scenario.exitCode ?? 0);
@@ -83,7 +83,7 @@ try {
     if (item.id === 'E08') {
       // A sibling of the consumer cannot resolve its node_modules or source files.
       const deployment = path.join(temporary, 'deployment'); await mkdir(path.join(deployment, 'skills'), { recursive: true });
-      for (const file of ['package.json', 'host.mjs', 'sample.workflow.js', 'sample.compiled.mjs', 'sample.mmd', 'skills/writer.md']) await copyFile(path.join(directory, 'deployment', file), path.join(deployment, file));
+      for (const file of ['package.json', 'host.mjs', 'sample.workflow.js', 'sample.workflow.js.compiled.mjs', 'sample.workflow.js.mmd', 'skills/writer.md']) await copyFile(path.join(directory, 'deployment', file), path.join(deployment, file));
       await execute('E08:independent-install', [npm, 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org/', '--cache', path.join(temporary, 'deployment-cache'), source], deployment);
       const deployedPackage = path.join(deployment, 'node_modules/@devcodex-labs/flowkit');
       assert.ok(!(await lstat(deployedPackage)).isSymbolicLink()); await verifyInstalledArchive(deployedPackage, await readFile(tarball));

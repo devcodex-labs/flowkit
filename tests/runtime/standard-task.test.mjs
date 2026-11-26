@@ -8,7 +8,7 @@ import { compileArtifact, isControlSignal, run, runArtifact } from '../../src/in
 
 const hash = value => `sha256:${createHash('sha256').update(value).digest('hex')}`;
 const integrity = value => `sha256-${createHash('sha256').update(value).digest('base64')}`;
-const success = (result = { ok: true }) => ({ status: 'succeeded', result, events: [] });
+const success = (result = { ok: true }) => ({ status: 'succeeded', result, sideEffectStatus: 'none', events: [] });
 const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
 const runtime = extra => ({
   isControlSignal,
@@ -38,6 +38,7 @@ test('description task runs with isolated declared input and commits only valida
   const tasks = [];
   const results = [];
   const out = await run(file, runtime({
+    taskPolicy: { authorizeRetry: () => true },
     recordAgentResult: (task, result) => results.push([task, result]),
     async runAgentTask(prepared) {
       const { task } = prepared;
@@ -88,6 +89,48 @@ test('refs-only task fixes ordered resource identities and requires explicit ins
   }));
   assert.equal(out.state.ok, true);
   assert.equal(calls.length, 1);
+});
+
+test('a replacement State is read at activation and a replacement during validation blocks commit', async t => {
+  const { file } = await sample(t, { description: 'Work' });
+  await writeFile(file, `
+import {defineWorkflow,action,node,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'state',name:'State',version:'1.0.0',nodes:[
+  action('replace',{name:'Replace',action:'replace',next:'work'}),
+  node('work',{name:'Work',description:'Check',inputs:['value'],output:{type:'object'},next:'done'}),
+  terminal('done',{name:'Done',status:'succeeded'})
+]});`);
+  const activated = { value: 'current' };
+  const later = { value: 'replacement' };
+  const host = runtime({
+    runAction(_action, _name, ctx) { ctx.state = activated; },
+    async runAgentTask({ task }) {
+      assert.deepEqual(task.input, { value: 'current' });
+      return success();
+    },
+    checkStep(_step, _result, ctx) { ctx.state = later; }
+  });
+  await assert.rejects(run(file, host, { value: 'old' }), { kind: 'state-replaced' });
+  assert.deepEqual(activated, { value: 'current' });
+  assert.deepEqual(later, { value: 'replacement' });
+});
+
+test('a cancelled check releases the Standard caller and a late value is never committed', async t => {
+  const { file } = await sample(t, { description: 'Work' });
+  const entered = Promise.withResolvers();
+  const late = Promise.withResolvers();
+  const controller = new AbortController();
+  let liveState;
+  const pending = run(file, runtime({ checkStep(_step, _result, ctx) {
+    liveState = ctx.state;
+    entered.resolve();
+    return late.promise;
+  } }), {}, { signal: controller.signal });
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  await entered.promise;
+  controller.abort();
+  try { await rejected; } finally { late.resolve(undefined); }
+  assert.equal(Object.hasOwn(liveState, 'ok'), false);
 });
 
 test('prepared task data rejects non-JSON inputs and leaves committed business data mutable by Actions', async t => {
@@ -185,7 +228,7 @@ test('Run dispatch limit and unknown side effects prevent uncontrolled retries',
   const fail = sideEffectStatus => ({ status: 'failed', events: [],
     failure: { code: 'provider-failure', message: 'Failed', retryable: true, sideEffectStatus } });
   await assert.rejects(run(file, runtime({
-    taskPolicy: { maxDispatches: 1 },
+    taskPolicy: { maxDispatches: 1, authorizeRetry: () => true },
     async runAgentTask() { calls++; return fail('none'); }
   })), { kind: 'dispatch-limit' });
   assert.equal(calls, 1);
@@ -226,7 +269,7 @@ test('the Host may not switch an approved Skill identity between attempts', asyn
   const { file } = await sample(t, { description: 'Work', requiredSkills: [{ id: 'reviewer' }], retries: 2 });
   let dispatched = 0;
   const host = runtime({
-    taskPolicy: { hostProfile: profile },
+    taskPolicy: { hostProfile: profile, authorizeRetry: () => true },
     async prepareAgentTask(task, context) {
       const version = dispatched ? '2.0.0' : '1.0.0';
       return { protocolVersion: 2, task, descriptionResources: context.descriptionResources,

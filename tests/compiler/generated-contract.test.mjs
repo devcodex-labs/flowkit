@@ -15,7 +15,34 @@ const compile=async(nodes,options={})=>{
 const load=async result=>(await import('data:text/javascript;base64,'+Buffer.from(result.code).toString('base64'))).workflow;
 const ctx=(runtime,state={})=>({runtime:{isControlSignal:error=>error?.control===true,evalWhen,...runtime},state});
 const agent="node('n',{name:'N',skill:'skills/a.md',output:{type:'object'},retries:1,next:'done'})";
-const base={loadSkill:async()=>'',validateResult:()=>[]};
+const base={loadSkill:async()=>'',validateResult:()=>[],
+  authorizeLegacyRetry:()=>({authorized:true,sideEffectStatus:'none'})};
+
+test('direct Legacy invocations share attempt identity with their Host without reusing it across runs', async () => {
+  const workflow = await load(await compile([agent, end]));
+  const activations = new Set();
+  for (const runId of [undefined, undefined, 'shared-business-id', 'shared-business-id']) {
+    const requests = [];
+    const context = ctx({ ...base,
+      runAgent: async ({ activationId, requestId, attempt }) => {
+        requests.push({ activationId, requestId, attempt });
+        return {};
+      },
+      validateResult: () => requests.length === 1 ? ['retry once'] : [],
+      authorizeLegacyRetry: ({ activationId, requestId, attempt }) => {
+        assert.deepEqual({ activationId, requestId, attempt }, requests[0]);
+        return { authorized: true, sideEffectStatus: 'none' };
+      }
+    });
+    if (runId !== undefined) context.runId = runId;
+    await workflow(context);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].activationId, requests[1].activationId);
+    assert.notEqual(requests[0].requestId, requests[1].requestId);
+    activations.add(requests[0].activationId);
+  }
+  assert.equal(activations.size, 4);
+});
 
 test('ten-line headers hash raw source bytes and the body minus exactly one final LF, repeatably',async()=>{
   const raw=Buffer.from('\uFEFF'+text([end]).replaceAll('\n','\r\n'));

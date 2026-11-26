@@ -117,6 +117,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     return result;
   } }, capabilityGraph: graph,
     verifySafetyPolicy: request => options.authorization.verifySafetyPolicy?.({ ...request, requestContext, signal }),
+    resolveApplicableSafetyPolicies: request => options.authorization.resolveApplicableSafetyPolicies?.({ ...request, requestContext, signal }),
     readDocumentUrl: options.readDocumentUrl && (url => ports.read({ url }, () => options.readDocumentUrl(url, { requestContext, signal }))) });
   const workspace = await mkdtemp(path.join(options.workRoot, '.flowkit-author-'));
   let reviewObservation;
@@ -601,6 +602,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     // terminal. Preserve the explicit technical recovery state in the Host.
     if (documentFailure) throw documentFailure;
     if (result.error?.outcome === 'needs-revision') throw result.error;
+    ports.check(result.error);
     if (documentWork) {
       result.state.documentSource = documentWork.manifest;
       result.state.documentRequest = documentRequest;

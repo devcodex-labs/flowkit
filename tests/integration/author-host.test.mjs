@@ -58,7 +58,7 @@ test('Author pins trusted callbacks, exports exact node notes and closes omitted
     skillDirectory:f.directory,executionRef:'check-exact-implementation' };
   await writeFile(path.join(f.directory,'workflow.js'),candidate.files['workflow.js']);
   let dispatched=0;
-  const host={hostProfile:candidate.manifest.hostProfile,authorizeExecution:()=>true,runtime:{
+  const host={hostProfile:candidate.manifest.hostProfile,authorizeExecution:()=>true,resolveApplicableSafetyPolicies:()=>[],runtime:{
     isControlSignal:()=>false,
     runAction(id,label,ctx){assert.equal(id,'inspect');dispatched++;ctx.state.report=[{ready:true}];}
   }};

@@ -97,6 +97,8 @@ export interface AuthorHostOptions {
       Promise<{ verified: boolean; draftId: string; turnId: string; attemptId: string; evidenceRef: string;
         physicalDone: boolean; noEffect?: boolean; resultHash?: string | null }>;
     verifySafetyPolicy?(binding: object): boolean | Promise<boolean>;
+    resolveApplicableSafetyPolicies?(scope: object): readonly {nodeId:string;policyRef:string}[] |
+      Promise<readonly {nodeId:string;policyRef:string}[]>;
     verifyImport?(binding: object): boolean | Promise<boolean>;
     reviewPolicy?: 'separate-pass' | 'independent-subject';
   };

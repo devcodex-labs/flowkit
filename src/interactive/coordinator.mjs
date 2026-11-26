@@ -323,6 +323,11 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     taskResourcePolicy:runtime.taskResourcePolicy,
   });
   const policySnapshot = copy(policy);
+  for (const value of [policySnapshot.businessDeadlineMs, policySnapshot.taskPolicy?.activityTimeoutMs]) {
+    if (value!==undefined && (!Number.isSafeInteger(value) || value<1)) {
+      throw new TypeError('Interactive business and activity time limits must be positive integers');
+    }
+  }
   const policyHash = fingerprint(policySnapshot);
   const policyIdentity=checkpointPolicy(policySnapshot,policyHash);
   const stageBudget = validStageCount(maxStagesPerCall);
@@ -370,25 +375,27 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
     }
     assertRuntime(program,execution);
-    const activeTasks=cp.parallel
-      ? publishedInteractivePending(cp).flatMap(task=>task.preparedTask?[task.preparedTask]:[])
-      : cp.taskContext?.active?[cp.taskContext.active.prepared]:[];
-    const p2WithoutDispatch=cp.program.implementedStage==='P2' && !activeTasks.length
-      && (!cp.parallel || cp.parallel.decision);
+    const activeTasks=publishedInteractivePending(cp).flatMap(task=>task.preparedTask?[task.preparedTask]:[]);
+    if (cp.phase==='dispatch-ready' && cp.prepared?.preparedTask) activeTasks.push(cp.prepared.preparedTask);
     const mustCloseExpiredParallel=cp.parallel && (cp.parallel.decision?.deadline
-      || !cp.parallel.decision && cp.taskContext?.deadlineMs<=Date.now());
-    if (!FINISHED.has(cp.status) && cp.taskContext && !runDeadlineExpired(cp) && !p2WithoutDispatch && !mustCloseExpiredParallel) {
-      const budget = createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext);
-      budget.check();
-      const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647,budget.deadlineMs-Date.now())));
-      const currentSignal = signal ? AbortSignal.any([signal,expires]) : expires;
+      || !cp.parallel.decision && cp.taskContext?.deadlineScope!=='activity' && cp.taskContext?.deadlineMs<=Date.now());
+    if (!FINISHED.has(cp.status) && cp.taskContext && activeTasks.length && !runDeadlineExpired(cp) && !mustCloseExpiredParallel) {
       for (const task of activeTasks) {
+        const deadlineMs = task.task.execution.deadlineMs;
+        if (deadlineMs <= Date.now()) {
+          if (!cp.parallel && cp.taskContext.deadlineScope !== 'activity') {
+            createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext).check();
+          }
+          continue;
+        }
+        const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647,deadlineMs-Date.now())));
+        const currentSignal = signal ? AbortSignal.any([signal,expires]) : expires;
         if (await during(currentSignal,()=>execution.authorizeAgentTask(
-          freezeDeep(copy(task)),{runId:cp.runId,signal:currentSignal,deadlineMs:budget.deadlineMs}))!==true) {
+          freezeDeep(copy(task)),{runId:cp.runId,signal:currentSignal,deadlineMs}))!==true) {
           throw failure('FK_I_HOST_DENIED','Pinned task resources are no longer authorized');
         }
       }
-      budget.check();
+      checkSignal();
     }
     if (!FINISHED.has(cp.status)) confirmCurrentBlock(cp,program);
     return program;
@@ -597,7 +604,11 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     if (node.metadata.task) {
       const policy = {...policySnapshot.taskPolicy, fetch:execution.taskResourcePolicy?.fetch,
         authorizeRemote:execution.taskResourcePolicy?.authorizeRemote,isImmutableResource:execution.taskResourcePolicy?.isImmutableResource};
-      const budget = createBudget(policySnapshot.taskPolicy ?? {}, signal, cp.taskContext);
+      const activityTimeoutMs = policy.activityTimeoutMs;
+      const deadline = activityTimeoutMs === undefined ? undefined : Math.min(
+        Date.now() + Math.min(2147483647, activityTimeoutMs), policy.deadlineMs ?? Infinity, cp.businessDeadlineMs ?? Infinity);
+      const budget = createBudget(policy, signal, deadline === undefined ? cp.taskContext :
+        { ...cp.taskContext, deadlineMs: deadline, deadlineScope: 'activity' });
       const timeout = AbortSignal.timeout(Math.max(1,Math.min(2147483647,budget.deadlineMs-Date.now())));
       const taskSignal = signal ? AbortSignal.any([signal,timeout]) : timeout;
       const activationId = 'activation:' + fingerprint([cp.runId,cp.artifactHash,frame.activation]).slice(7);
@@ -630,7 +641,8 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         requestId,attempt:frame.attempt,instruction:Array.isArray(node.metadata.task.description) ?
           node.metadata.task.description.join('\n') : node.metadata.task.description ?? '',input,missing,
         resultSchema:node.metadata.output,reasons:frame.reasons,preparedTask:prepared,
-        taskContext:{...cp.taskContext,...budget.snapshot(),active:{activationId,input,missing,prepared}}});
+        taskContext:{...cp.taskContext,...budget.snapshot(),
+          ...(deadline===undefined?{}:{deadlineScope:'activity'}),active:{activationId,input,missing,prepared}}});
     }
     const pin=program.interactiveProgram.identity.implementedStage!=='P0-A';
     const instruction = cp.skillSnapshot?.instruction ?? await execution.skillResolver(Object.freeze(copy({
@@ -744,6 +756,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       || Array.isArray(cp.candidate.result)) {
       return {kind:'validation-rejected',reasons:['Agent result must be object']};
     }
+    const candidateDeadline = cp.candidate.activityDeadlineMs;
+    const validationDeadline = Math.min(candidateDeadline ?? cp.taskContext?.deadlineMs ?? Infinity,
+      cp.businessDeadlineMs ?? Infinity);
+    if (validationDeadline <= Date.now()) return {kind:'deterministic-failure',causeCode:'FK_R004'};
     let reasons;
     try {
       reasons=execution.validateResult(schema,copy(cp.candidate.result));
@@ -753,8 +769,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       reasons=reasonsFromValidation(reasons);
       const evaluationIdentity={runId:cp.runId,requestId:cp.candidate.requestId,attempt:cp.candidate.attempt};
       const validationContext=()=> {
-        const budget=createBudget(policySnapshot.taskPolicy??{},signal,cp.taskContext);
-        const timeout=AbortSignal.timeout(Math.max(1,Math.min(2147483647,budget.deadlineMs-Date.now())));
+        const timeout=AbortSignal.timeout(Math.max(1,Math.min(2147483647,validationDeadline-Date.now())));
         return Object.freeze({signal:signal?AbortSignal.any([signal,timeout]):timeout});
       };
       if (!reasons.length && execution.checkStep) {
@@ -774,8 +789,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       }
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (validationDeadline <= Date.now()) return {kind:'deterministic-failure',causeCode:'FK_R004'};
       return {kind:'deterministic-failure',causeCode:'FK_I_VALIDATOR_CONTRACT'};
     }
+    if (validationDeadline <= Date.now()) return {kind:'deterministic-failure',causeCode:'FK_R004'};
     return reasons.length
       ? {kind:'validation-rejected',reasons}
       : {kind:'validation-passed',reasons:[]};
@@ -1039,6 +1056,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     scope.blockId=nodeId+'::validate';
     scope.receivedSubmission={payload:receivedPayload??submission};
     scope.candidate={kind:stepKind,requestId,nodeId,attempt,submissionKind:kind,
+      ...(active.pending.preparedTask ? { activityDeadlineMs: active.pending.preparedTask.task.execution.deadlineMs } : {}),
       ...(success?{result:submission.result}:{failure:submission.failure}),validated:false};
     const progress=await tickScopedGroup(cp,next,program,work);
     publishScoped(cp,next,work,progress);
@@ -1191,6 +1209,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       operationSafety='settled';
     }
     const candidate={kind:stepKind,requestId,nodeId,attempt,submissionKind:kind,
+      ...(current.pending.preparedTask ? { activityDeadlineMs: current.pending.preparedTask.task.execution.deadlineMs } : {}),
       ...(didSucceed?{result:submission.result}:{failure:submission.failure})};
     const evaluation=await validateCandidate({...cp,phase:'validate',blockId:nodeId+'::validate',candidate},program);
     const next=copy(cp);
@@ -1252,8 +1271,10 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
   }
 
   async function expireParallelAgents(cp,runExpired=false) {
-    if (!runExpired && (cp.status!=='waiting' || !cp.parallel || !cp.taskContext || cp.taskContext.deadlineMs>Date.now())) return null;
-    const expired=cp.parallel.lanes.filter(lane=>runExpired ? lane.pending : lane.pending?.preparedTask);
+    if (!runExpired && (cp.status!=='waiting' || !cp.parallel || !cp.taskContext)) return null;
+    const now=Date.now();
+    const expired=cp.parallel.lanes.filter(lane=>runExpired ? lane.pending :
+      lane.pending?.preparedTask?.task.execution.deadlineMs<=now);
     if (!runExpired && !expired.length) return null;
     const next=copy(cp);
     next.revision++;
@@ -1462,6 +1483,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       throw failure('FK_I_INVALID_OPERATION','Parallel any Actions require an explicit effect policy');
     }
     const initial=initialCheckpoint(store.namespace,runId,program,policyIdentity,stateSnapshot);
+    if (policySnapshot.businessDeadlineMs!==undefined) initial.businessDeadlineMs=policySnapshot.businessDeadlineMs;
     if (forkCheckpoint) {
       const {blockId,contextError,regionCounters,unavailableParallelKeys}=forkCheckpoint;
       Object.assign(initial,{blockId,contextError,
@@ -1606,6 +1628,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           receivedAt:new Date().toISOString(),...(stepKind==='human'?{humanProof}:{})},
         candidate:{kind:stepKind,requestId,nodeId,attempt,
           submissionKind:kind,
+          ...(pending.preparedTask ? { activityDeadlineMs: pending.preparedTask.task.execution.deadlineMs } : {}),
           ...(didSucceed?{result:submission.result}
             :{failure:submission.failure}),validated:false},
       };
@@ -1636,15 +1659,19 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       const cp=versioned ? await store.load(runId) : store.load(runId);
       if (!cp) throw failure('FK_I_RUN_NOT_FOUND','run is not accessible');
       await loadPinned(cp);
-      if (!publishedInteractivePending(cp).some(task=>task.requestId===requestId&&task.preparedTask) || !cp.taskContext) {
+      const pending=publishedInteractivePending(cp).find(task=>task.requestId===requestId&&task.preparedTask);
+      if (!pending || !cp.taskContext) {
         throw failure('FK_I_STALE_RECEIPT','Dispatch reservation requires the current Task V2 Pending');
       }
-      if (cp.taskContext.deadlineMs<=Date.now()) throw failure('FK_R004','Task dispatch deadline expired');
+      const deadlineMs=pending.preparedTask.task.execution.deadlineMs;
+      if (runDeadlineExpired(cp) || deadlineMs<=Date.now()) throw failure('FK_R004','Task dispatch deadline expired');
       const key=fingerprint([requestId,operationId]);
       const reservations=cp.taskContext.reservations ?? [];
-      if (reservations.includes(key)) return {deadlineMs:cp.taskContext.deadlineMs,dispatches:cp.taskContext.dispatches};
-      const budget=createBudget(policySnapshot.taskPolicy ?? {},signal,cp.taskContext);budget.dispatch();
-      const next={...cp,revision:cp.revision+1,taskContext:{...cp.taskContext,...budget.snapshot(),reservations:[...reservations,key]}};
+      const budget=createBudget(policySnapshot.taskPolicy ?? {},signal,{...cp.taskContext,deadlineMs});
+      if (reservations.includes(key)) return budget.snapshot();
+      budget.dispatchProvider();
+      const {dispatches,providerRequests}=budget.snapshot();
+      const next={...cp,revision:cp.revision+1,taskContext:{...cp.taskContext,dispatches,providerRequests,reservations:[...reservations,key]}};
       const saved=await casOrCapacityExit(cp,{runId,expectedRevision:cp.revision,nextCheckpoint:next,
         journalEntry:{kind:'dispatch-reserved',requestId,reservation:key}},
         {kind:'dispatch-reserved',requestId,reservation:key},{kind:'dispatch-reserved'});

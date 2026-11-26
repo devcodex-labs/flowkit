@@ -17,7 +17,7 @@ Agent 的输出不是一返回就进入 state。FlowKit 把生成、结构校验
 
 ## retries 计算的是额外重试次数
 
-`retries` 范围0–10，默认2。默认最多3次 runAgent 调用；设为0仍会执行第一次。attempt 从1递增；下一次的 reasons 提供上一次未通过的原因。重试并不自动回退外部写入，所以模型工具调用和业务副作用应具备幂等性。
+`retries` 范围 0–10，默认 2，最多调用三次。首次调用从 attempt 1 开始，下一次的 reasons 包含上一轮未通过的原因。Standard 每次重试都需要 Host 授权并确认上一轮无副作用。Legacy Agent 通过 `runtime.authorizeLegacyRetry` 返回 `{ authorized: true, sideEffectStatus: 'none' }`。Task V2 由 `runtime.taskPolicy.authorizeRetry` 作决定，FlowKit 同时检查已记录的副作用状态。
 
 下面是一组不依赖模型服务的可执行示例。先按[安装](/guide/installation)准备 ESM 项目，建立这些文件；Skill 放在指定子目录。
 
@@ -42,6 +42,6 @@ node host.mjs exhaust
 
 ## 哪些错误不会按普通生成失败处理
 
-runAgent 的普通拒绝会进入重试；控制信号由 runtime.isControlSignal 判定并原样传播。Skill 加载在重试循环之前，加载失败保留对应 Skill 错误，不包装为重试耗尽。非法宿主返回值需要修复契约，不能靠增加 retries 解决。
+runAgent 的普通拒绝在 Host 授权且证实无副作用时允许重试。控制信号由 `runtime.isControlSignal` 判定并原样传播。Skill 在重试循环之前加载，加载失败保留对应的 Skill 错误。非法宿主返回值按返回契约报错。
 
 耗尽错误的 cause 是有条件提供的：最近一次失败是捕获的异常时可以保留原因；单纯校验不通过不保证有 cause。错误处理优先检查 code/reasons，并允许 cause 缺失。更完整的宿主顺序见[接入自己的宿主](/guide/host-integration)，错误边界见[取消与错误传播](/guide/cancellation)。

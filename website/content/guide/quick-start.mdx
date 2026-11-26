@@ -47,8 +47,8 @@ npx --no-install flowkit check sample.workflow.js
 两条命令成功时退出码为0，通常不打印内容。PowerShell可紧接命令查看 `$LASTEXITCODE`，Bash可查看 `$?`。编译后目录多出：
 
 ```text
-sample.compiled.mjs   # 生成的可执行控制流
-sample.mmd            # Mermaid 流程图源码
+sample.workflow.js.compiled.mjs   # 生成的可执行控制流
+sample.workflow.js.mmd            # Mermaid 流程图源码
 ```
 
 用编辑器打开这两个文件，确认它们实际存在且可读。不要修改生成代码。`check` 会重新编译并比较已有的 compiled 文件，但不会创建产物；只有 `check` 成功不足以证明两个文件已经生成。

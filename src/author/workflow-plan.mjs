@@ -34,6 +34,12 @@ function authorContract(contract) {
 export const validNodeDescription = text => typeof text === 'string' && text.trim() === text && text.length > 0 && text.length <= 4096;
 export const validPlanAssumption = item => item && typeof item.id === 'string' &&
   typeof item.statement === 'string' && typeof item.requiresConfirmation === 'boolean';
+export const validPlanIssue = item => item && typeof item.id === 'string' && item.id.trim().length > 0 &&
+  typeof item.kind === 'string' && item.kind.length > 0 && typeof item.description === 'string' &&
+  item.description.trim().length > 0 && typeof item.blocking === 'boolean' &&
+  (item.options === undefined || Array.isArray(item.options) && item.options.every(option =>
+    typeof option?.value === 'string' && typeof option.label === 'string' && typeof option.reason === 'string')) &&
+  (item.recommended === undefined || typeof item.recommended === 'string');
 
 /** Find successful exits reachable without a declared producer for a required output. */
 export function missingRootOutputSources(definition, graph) {
@@ -72,8 +78,12 @@ export function missingRootOutputSources(definition, graph) {
           continue;
         }
         const writes = graph.writeSets.get(id).has(key);
+        const firstUnconditional = node.type === 'condition' ? node.branches.findIndex(branch => branch.when.trim() === 'true') : -1;
         for (const edge of graph.outgoing.get(id)) {
-          if (node.type === 'condition' && node.branches[Number(edge.path.split('/')[2])].when.trim() === 'false') continue;
+          if (node.type === 'condition') {
+            const index = Number(edge.path.split('/')[2]);
+            if (node.branches[index].when.trim() === 'false' || firstUnconditional !== -1 && index > firstUnconditional) continue;
+          }
           if (!writes || edge.role === 'action-failure' || edge.path === '/onError') pending.push(edge.to);
         }
       }
@@ -185,6 +195,9 @@ export function createWorkflowPlan(draft, intent, proposal, previous, sourceHash
   if (new Set(names).size !== names.length) throw new TypeError('WorkflowPlan node display names must be distinct');
   if (!Array.isArray(assumptions) || !assumptions.every(validPlanAssumption)) {
     throw new TypeError('Plan assumptions must declare id, statement and requiresConfirmation');
+  }
+  if (!Array.isArray(unresolvedIssues) || !unresolvedIssues.every(validPlanIssue)) {
+    throw new TypeError('Plan issues must declare id, kind, description and blocking');
   }
   const invalidId = nodes.find(node => !isWorkflowId(node.id));
   if (invalidId) throw new TypeError(`WorkflowPlan node ID ${JSON.stringify(invalidId.id)} must be kebab-case with at most ${WORKFLOW_ID_MAX_LENGTH} characters`);

@@ -65,7 +65,7 @@ async function fixture(t, text = source, close = () => {}) {
   const file = path.join(dir, 'example.workflow.js');
   await writeFile(file, text);
   return { dir, options: { file, collectionId: 'team-id', skillId: 'example-id', name: 'example',
-    description: 'Workflow: "Inspect"\n---', version: '1.0.0', hostProfile, buildId: 'test-build' } };
+    description: 'Workflow: "Inspect"\n---', version: '1.0.0', hostProfile, buildId: 'test-build', safetyPolicies: [] } };
 }
 
 test('an authored workflow cannot promise a required root output without a declared source', async t => {
@@ -578,8 +578,13 @@ test('approved collection generation exposes a two-layer tree and preserves prev
   const actions = [];
   const host = { hostProfile, authorizeExecution: ({ executionRef, artifactHash, collectionId }) =>
     executionRef === 'allow-run' && artifactHash === candidate.manifest.artifactHash && collectionId === id,
+  resolveApplicableSafetyPolicies: () => [],
   runtime: { isControlSignal, async runAction(action) { actions.push(action); } } };
   await assert.rejects(runApprovedCollectionWorkflow(store, { ...identity, executionRef: 'denied' }, host), /Host denied/);
+  await assert.rejects(runApprovedCollectionWorkflow(store, identity,
+    { ...host, resolveApplicableSafetyPolicies: undefined }), /Host denied/);
+  await assert.rejects(runApprovedCollectionWorkflow(store, identity,
+    { ...host, resolveApplicableSafetyPolicies: () => [{ nodeId: 'work', policyRef: 'new-version' }] }), /Host denied/);
   assert.deepEqual(actions, []);
   assert.equal((await runApprovedCollectionWorkflow(store, identity, host)).terminal, 'done');
   assert.deepEqual(actions, ['inspect']);
@@ -621,7 +626,7 @@ test('an approved Run refuses resource version or digest drift before delegating
       prepareAgentTask: async (task, context) => ({ protocolVersion: 2, task, descriptionResources: context.descriptionResources,
         skills: [{ logicalId: pin.id, resolvedVersion: pin.version, digest: returnedDigest }] }),
       runAgentTask: async () => { calls++; return { status: 'succeeded', result: {}, events: [] }; } };
-    const host = { hostProfile, authorizeExecution: () => true, runtime };
+    const host = { hostProfile, authorizeExecution: () => true, resolveApplicableSafetyPolicies: () => [], runtime };
     await assert.rejects(runApprovedCollectionWorkflow(store, target, host), /differ from the approved Run bindings/);
     assert.equal(calls, 0);
     returnedDigest = pin.digest;

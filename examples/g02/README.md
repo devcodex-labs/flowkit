@@ -5,7 +5,7 @@
 - 用户意图原文：[`user-intent.md`](user-intent.md)
 - 由 Grok Build 根据现有 DSL 生成的工作流：[`feature-review.workflow.js`](feature-review.workflow.js)
 - Skill 文本：[`skills/`](skills/)
-- Standard 编译产物（由官方 `flowkit compile` 生成）：[`feature-review.compiled.mjs`](feature-review.compiled.mjs)、可视化 [`feature-review.mmd`](feature-review.mmd)（Mermaid 只是图，不能代替 JS 执行）
+- Standard 编译产物（由官方 `flowkit compile` 生成）：[`feature-review.workflow.js.compiled.mjs`](feature-review.workflow.js.compiled.mjs)、可视化 [`feature-review.workflow.js.mmd`](feature-review.workflow.js.mmd)（Mermaid 只是图，不能代替 JS 执行）
 - Interactive 编译产物（由 `compileInteractive` 生成）：[`feature-review.interactive.mjs`](feature-review.interactive.mjs)
 - 操作脚本：[`run-standard.mjs`](run-standard.mjs)、[`run-interactive.mjs`](run-interactive.mjs)
 - 可重复测试：[`../../tests/interactive/g02-product-closed-loop.test.mjs`](../../tests/interactive/g02-product-closed-loop.test.mjs)
@@ -30,7 +30,7 @@ npm run build
 node --test tests/interactive/g02-product-closed-loop.test.mjs
 ```
 
-Standard 金标测试在临时目录编译同一份工作流，并将新生成的 JS 与提交中的 `feature-review.compiled.mjs` 比对。测试保持示例目录中的 JS 和 Mermaid 原样。请在重建产物前运行测试，以便检出已有的金标漂移。
+Standard 金标测试在临时目录编译同一份工作流，并将新生成的 JS 与提交中的 `feature-review.workflow.js.compiled.mjs` 比对。测试保持示例目录中的 JS 和 Mermaid 原样。请在重建产物前运行测试，以便检出已有的金标漂移。
 
 ## 重建并运行示例
 

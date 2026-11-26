@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fixture, context, intent, proposal, source } from './author-host-fixture.mjs';
-import { createApiAgentAdapter } from '../../dist/host.mjs';
+import { createApiAgentAdapter, createWorkflowAuthorHost } from '../../dist/host.mjs';
 import { createTurnPorts, newTurnBudget, budgetPolicy, jsonBytes } from '../../src/author/host-budget.mjs';
 import { authorInput } from '../../src/author/host-target.mjs';
 
@@ -73,6 +73,37 @@ test('I4 S93/S99: exact reservation boundary dispatches once; one byte less and 
     if (expected) { await ports.request(input); await assert.rejects(ports.request(input), /budget/); }
     else await assert.rejects(ports.request(input));
     assert.equal(calls, expected); assert.ok(turn.budget.used.requests <= 1);
+  }
+});
+
+test('a constrained SQLite receipt budget admits a write only when its outcome can survive reopening', async t => {
+  for (const [maxResponseBytes, admitted] of [[16_384, false], [4_096, true]]) {
+    const f = await setup(t, { capacity: { maxReceiptBytes: 12_288 }, budgetPolicy: { maxResponseBytes } });
+    let writes = 0;
+    f.options.execution.tool = async () => { writes++; return { receipt: 'record-written' }; };
+    f.options.execution.createSession = async ports => ({ intentRuntime: { parse: async () => {
+      await ports.tool({ value: 1 }, { sideEffect: 'write', toolName: 'update-record', operationKey: 'bounded-write' });
+      throw new Error('controlled failure after the completed tool');
+    } }, runtime: { validateResult: () => [], runAgentTask: () => assert.fail('no Agent dispatch expected') } });
+    const result = await turn(f);
+    assert.equal(writes, Number(admitted), JSON.stringify(result.diagnostics));
+    assert.equal(result.status === 'reconciliation-required', admitted,
+      JSON.stringify({ status: result.status, diagnostics: result.diagnostics }));
+    await f.host.close({ mode: 'drain' });
+    const reopened = await createWorkflowAuthorHost(f.options);
+    try {
+      const persisted = reopened.createMcpOptions().store.authorTransaction(state => state.readTurn(result.id, 'turn'));
+      const [entry] = Object.values(persisted.budget.toolOperations ?? {});
+      if (admitted) {
+        assert.equal(entry.status, 'completed');
+        assert.deepEqual(entry.result, { receipt: 'record-written' });
+        assert.equal(persisted.failure.sideEffectStatus, 'known');
+      } else {
+        assert.equal(entry, undefined);
+      }
+    } finally {
+      await reopened.close({ mode: 'drain' });
+    }
   }
 });
 

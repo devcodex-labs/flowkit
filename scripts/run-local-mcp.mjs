@@ -603,13 +603,14 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
         // The internal compile port returns a candidate with Program, Mermaid and GraphSnapshot.
         maxResponseBytes: 1024 * 1024 },
-      documentBudgetPolicy: { durationMs: config.authorTurnDurationMs ?? 900000, maxBytes: 48 * 1024 * 1024 },
+      documentBudgetPolicy: { durationMs: config.authorTurnDurationMs ?? 900000, maxRequests: 168, maxBytes: 48 * 1024 * 1024 },
       execution: model.execution,
       resolveImportSource({ sourceRef }) {
         const source = trustedImport(sourceRef);
         return source && { candidate: source.candidate, sourceRef, issuer: sourceIssuer(source) };
       },
       authorization: {
+        resolveApplicableSafetyPolicies: () => [],
         observeReview: model.observeReview,
         async authorize({ action, collectionId: target, requestContext, approvalRef, publicationId, draftId, signal }) {
           if (target !== collectionId || authorIdentity(requestContext) !== authorIdentity(context)) return false;

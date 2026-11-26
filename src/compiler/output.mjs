@@ -1,21 +1,73 @@
-import { mkdir, open, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 
 const writers = new Map();
+const outputAdmissions = new Map();
 
-/** Windows may reject overlapping replacements; serialize the same resolved output pair in this process. */
-export function writeArtifacts(entries) {
-  return serializeOutput(entries[0][0], () => replaceArtifacts(entries));
+/** Bind compilation output to its resolved directory and refuse a different source's existing artifact. */
+export function writeArtifacts(entries, paths) {
+  return serializeOutput(entries[0][0], () => writeMappedArtifacts(entries, paths), outputAdmissions);
+}
+
+async function writeMappedArtifacts(entries, { outDir, source }) {
+  await mkdir(outDir, { recursive: true });
+  const root = await realpath(outDir);
+  const relative = path.relative(outDir, path.dirname(entries[0][0]));
+  let directory = root;
+  for (const segment of relative ? relative.split(path.sep) : []) {
+    const child = path.join(directory, segment);
+    await mkdir(child).catch(error => { if (error.code !== 'EEXIST') throw error; });
+    directory = await realpath(child);
+    const inside = path.relative(root, directory);
+    if (path.isAbsolute(inside) || inside === '..' || inside.startsWith('..' + path.sep)) {
+      throw new TypeError('Compilation output escapes outDir');
+    }
+  }
+  const outputs = entries.map(([name, content]) => [path.join(directory, path.basename(name)), content]);
+  const target = outputs[0][0];
+  return serializeOutput(target, async () => {
+    const lock = target + '.flowkit-write-lock';
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try { await mkdir(lock); break; }
+      catch (error) {
+        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw error;
+        await delay(20);
+      }
+    }
+    let failed = false;
+    try {
+      const stat = await lstat(target).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      if (stat) {
+        if (!stat.isFile()) throw Object.assign(new TypeError('Compilation output is not a regular file'),
+          { code: stat.isDirectory() ? 'EISDIR' : 'EEXIST' });
+        const file = await open(target, 'r');
+        try {
+          const buffer = Buffer.alloc(4096);
+          const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+          const header = buffer.subarray(0, bytesRead).toString('utf8').split('\n', 3);
+          if (header[2] !== '// source: ' + source) throw new TypeError('Compilation output belongs to a different source');
+        } finally { await file.close(); }
+      }
+      return await replaceArtifacts(outputs);
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      await rmdir(lock).catch(error => { if (!failed) throw error; });
+    }
+  });
 }
 
 /** Share the complete inspect/replace critical section with dump writers. */
-export function serializeOutput(filename, publish) {
+export function serializeOutput(filename, publish, slots = writers) {
   const target = path.resolve(filename);
   const key = process.platform === 'win32' ? target.toLowerCase() : target;
-  const current = (writers.get(key) ?? Promise.resolve()).then(publish, publish);
-  writers.set(key, current);
-  const release = () => { if (writers.get(key) === current) writers.delete(key); };
+  const current = (slots.get(key) ?? Promise.resolve()).then(publish, publish);
+  slots.set(key, current);
+  const release = () => { if (slots.get(key) === current) slots.delete(key); };
   current.then(release, release);
   return current;
 }

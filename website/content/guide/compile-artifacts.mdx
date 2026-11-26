@@ -41,7 +41,7 @@ npx --no-install flowkit compile src/sample.workflow.js --out-dir .
 npx --no-install flowkit compile src/sample.workflow.js --out-dir dist
 ```
 
-第一条生成 demo/sample.compiled.mjs 和 sample.mmd，源引用保留 src/sample.workflow.js。第二条因 dist 是源码目录的兄弟目录而拒绝。需要部署到另一目录时，先在合法布局内编译，再复制整组源码、产物和 Skill；不要套用普通打包工具的 sibling dist 模式。
+第一条生成 `demo/src/sample.workflow.js.compiled.mjs` 和 `demo/src/sample.workflow.js.mmd`。产物相对输出根保留源目录与完整文件名，AOT 头字段从产物目录定位 `sample.workflow.js`。第二条因 `dist` 位于源码目录之外而拒绝。部署时一起复制源码、产物与 Skill。
 
 ## check 到底证明什么
 
@@ -58,7 +58,7 @@ const result = await compileSource(text, { filename: 'virtual.workflow.js' });
 console.log(result.diagnostics);
 ```
 
-filename 决定诊断路径、项目根查找和输出位置；即使没有 virtual.workflow.js，也可以完成编译。但随后执行 virtual.compiled.mjs 会验证物理源文件，因此部署前必须保存与编译时字节一致的源码。不要把虚拟编译成功理解为可脱离源码运行。
+filename 决定诊断路径、项目根查找和输出位置。即使没有 `virtual.workflow.js`，也可以完成虚拟编译。随后执行 `virtual.workflow.js.compiled.mjs` 时需要能读取字节与编译时一致的源文件。
 
 ## 日常修改流程
 

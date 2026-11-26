@@ -66,7 +66,7 @@ const goal = professional ? professionalGoal : v45Spec ? '按完整的 V4.5 软�
   contractCase ? contractCase.goal : readOnly ?
   '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
-  '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。Host 的 check-input 只读校验 employeeId、month、hours，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点，调用方从 Standard runArtifact 的 state.copyRef 读取结果。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
+  '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。公开 contract.input 声明必填的 employeeId（string）、month（string）和 hours（number）。Host 的 check-input 只读校验这三个字段，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点。调用方从 Standard runArtifact 的 state.copyRef 读取结果，省略 contract.output。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
 const base = path.resolve('.tmp');
 await mkdir(base, { recursive: true });
 const root = await mkdtemp(path.join(base, 'flowkit-codex-e2e-'));
@@ -113,7 +113,8 @@ async function verifyApprovedSkillRun(exported, saved) {
       } };
     const run = await runApprovedCollectionWorkflow(store, { collectionId: service.collectionId, skillId: saved.workflowId,
       candidateHash: candidate.hash, skillDirectory: exported.directory, executionRef: 'live-approved-delivery' },
-    { hostProfile: candidate.manifest.hostProfile, authorizeExecution: ({ candidateHash }) => candidateHash === candidate.hash, runtime },
+    { hostProfile: candidate.manifest.hostProfile, authorizeExecution: ({ candidateHash }) => candidateHash === candidate.hash,
+      resolveApplicableSafetyPolicies: () => [], runtime },
     { evidence: '候选已经通过独立复审。用户尚未确认当前候选版本。' }, { projectRoot: cwd });
     assert.equal(run.status, 'succeeded', JSON.stringify(run));
     assert.equal(run.publicOutput.decision, '等待确认');
@@ -129,7 +130,7 @@ async function testReferenceDelivery(tool) {
     file: 'examples/v45/software-delivery.workflow.js', collectionId: 'v45-reference', skillId: 'software-delivery',
     name: 'software-delivery', description: 'V4.5 software delivery reference', version: '1.0.0',
     hostProfile: { id: 'flowkit-local-authoring', digest: artifactDigest('flowkit-local-authoring-v1') },
-    buildId: 'v45-reference', executionMode: 'interactive-p2',
+    buildId: 'v45-reference', executionMode: 'interactive-p2', safetyPolicies: [],
   });
   const sourceGraph = checkCandidate(candidate);
   if (!importedFiles) assert.equal(sourceGraph.nodes.length, 140);
@@ -388,12 +389,14 @@ try {
     let candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-plan',
       expectedStateVersion: draft.stateVersion, input: v45Input ?? goal,
       target: { name: professional ? 'flowkit-delivery-review' : v45Spec ? 'v45-software-delivery' : contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
-    if (professional && candidate.status === 'needs-revision' && candidate.review.findings.length) {
-      console.log(JSON.stringify({ path: 'live-professional-review-rejected', candidateHash: candidate.candidate?.candidateHash,
+    const shortStandard = !referenceMode && !readOnly && !interactive && !contractCase && !v45Spec;
+    if (live && (professional || shortStandard) && candidate.status === 'needs-revision' && candidate.review.findings.length) {
+      console.log(JSON.stringify({ path: 'live-initial-review-rejected', candidateHash: candidate.candidate?.candidateHash,
         findings: candidate.review.findings }));
       candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-revise',
         expectedStateVersion: candidate.stateVersion,
-        input: '按本轮复审发现修订，保留发起时已给定的三条规则、输入输出契约和业务角色。只修改复审指出的问题。' } });
+        input: professional ? '按本轮复审发现修订，保留发起时已给定的三条规则、输入输出契约和业务角色。只修改复审指出的问题。' :
+          '按上一轮复审发现修订。保留原始任务的三个输入字段、回调、失败分支，以及从 state.copyRef 取结果的约定。' } });
     }
     assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
     assert.equal(Object.hasOwn(candidate.candidate, 'files'), false);
@@ -417,16 +420,25 @@ try {
       assert.equal(preview.executionBindings[0].skills[0].pendingApproval, true);
     } else assert.deepEqual(offline, preview);
     assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
-    if (v45Spec) {
-      assert.equal(offline.graph.nodes.length, 140);
-      const db = new DatabaseSync(path.join(root, 'state', 'local-mcp.sqlite'), { readOnly: true });
-      let publicKey;
-      try { publicKey = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get('export-key-v1').value).publicKey; }
+    if (live) {
+      const db = new DatabaseSync(path.join(root, 'state', 'author.sqlite'), { readOnly: true });
+      let receipt;
+      try { receipt = JSON.parse(db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(draft.id).payload).reviewReceipt; }
       finally { db.close(); }
+      assert.equal(receipt.candidateHash, identity.candidateHash);
+      assert.equal(receipt.reviewPolicy, 'separate-pass');
+      assert.equal(receipt.qualified, true);
+      assert.ok(receipt.observation?.executionId && receipt.observation.subjectId);
       const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
         [name, await readFile(path.join(exported.directory, name), 'utf8')])));
-      assert.equal(readPortableExport(files, exportTrust([publicKey])).candidate.hash, identity.candidateHash);
-      await writeFile(path.join(root, 'export-public-key.txt'), publicKey + '\n');
+      assert.equal(readPortableExport(files, exportTrust([service.exportPublicKey])).candidate.hash, identity.candidateHash);
+      console.log(JSON.stringify({ path: 'live-author-review-signature', candidateHash: identity.candidateHash,
+        reviewExecutionId: receipt.observation.executionId, reviewSubjectId: receipt.observation.subjectId,
+        signedFilesVerified: deliveryNames.length }));
+    }
+    if (v45Spec) {
+      assert.equal(offline.graph.nodes.length, 140);
+      await writeFile(path.join(root, 'export-public-key.txt'), service.exportPublicKey + '\n');
       console.log(JSON.stringify({ path: 'real-v45-author', ...identity, directory: exported.directory, nodes: offline.graph.nodes.length,
         graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, sourceSpecHash: artifactDigest(v45Input),
         exportPublicKeyFile: path.join(root, 'export-public-key.txt'), preapprovalRejected: true, wrongVersionRejected: true }));

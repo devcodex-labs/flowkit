@@ -48,8 +48,8 @@ test('the README quick-start module compiles unchanged through the public API', 
   const result = await api.compileSource(example, { filename: path.join(directory, 'sample.workflow.js') });
   assert.deepEqual(result.diagnostics, []);
   assert.ok(result.code.includes('export async function workflow(ctx)'));
-  assert.equal(await readFile(path.join(directory, 'sample.compiled.mjs'), 'utf8'), result.code);
-  assert.equal(await readFile(path.join(directory, 'sample.mmd'), 'utf8'), result.mermaid);
+  assert.equal(await readFile(path.join(directory, 'sample.workflow.js.compiled.mjs'), 'utf8'), result.code);
+  assert.equal(await readFile(path.join(directory, 'sample.workflow.js.mmd'), 'utf8'), result.mermaid);
 });
 
 test('API paths and default-root fallback stay bound to invocation cwd across asynchronous source reads', async t => {
@@ -66,8 +66,8 @@ await mkdir(path.join(project,'skills'));await writeFile(path.join(project,'skil
 await writeFile(path.join(project,'nested/source.workflow.js'),${JSON.stringify(source())});
 process.chdir(project);const compiling=api.compile('nested/source.workflow.js',{outDir:'.'});process.chdir(base);
 const first=await compiling;assert.deepEqual(first.diagnostics,[]);
-const artifact=path.join(project,'source.compiled.mjs');assert.equal(await readFile(artifact,'utf8'),first.code);
-await assert.rejects(stat(path.join(base,'source.compiled.mjs')),{code:'ENOENT'});
+const artifact=path.join(project,'nested/source.workflow.js.compiled.mjs');assert.equal(await readFile(artifact,'utf8'),first.code);
+await assert.rejects(stat(path.join(base,'source.workflow.js.compiled.mjs')),{code:'ENOENT'});
 await writeFile(artifact,first.code+' ');
 process.chdir(project);const checking=api.check('nested/source.workflow.js',{outDir:'.'});process.chdir(base);
 const differences=await checking;assert.deepEqual(differences.map(d=>d.code),['FK_R001']);assert.equal(differences[0].file,artifact);
@@ -86,7 +86,7 @@ try {
   }
 } finally {fsSync.statSync=originalStat;syncBuiltinESMExports();}
 process.chdir(project);const virtual=api.compileSource(${JSON.stringify(source())},{filename:'virtual/source.workflow.js',outDir:'.'});process.chdir(base);
-assert.deepEqual((await virtual).diagnostics,[]);assert.ok((await stat(path.join(project,'source.compiled.mjs'))).isFile());
+assert.deepEqual((await virtual).diagnostics,[]);assert.ok((await stat(path.join(project,'virtual/source.workflow.js.compiled.mjs'))).isFile());
 console.log('Invocation cwd, explicit roots, fallback, output and readonly comparison stay fixed.');`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, directory], { encoding: 'utf8', timeout: 30000 });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
@@ -100,14 +100,14 @@ test('compile writes deterministic code and diagram from raw BOM/CRLF source, re
   const first = await api.compile(file);
   assert.deepEqual(Object.keys(first), ['code', 'mermaid', 'diagnostics']);
   assert.deepEqual(first.diagnostics, []);
-  assert.equal(await readFile(path.join(directory, '中文 #demo.compiled.mjs'), 'utf8'), first.code);
-  assert.equal(await readFile(path.join(directory, '中文 #demo.mmd'), 'utf8'), first.mermaid);
+  assert.equal(await readFile(path.join(directory, '中文 #demo.workflow.ts.compiled.mjs'), 'utf8'), first.code);
+  assert.equal(await readFile(path.join(directory, '中文 #demo.workflow.ts.mmd'), 'utf8'), first.mermaid);
   assert.ok(first.code.includes(`sourceHash: sha256:${hash(raw)}`));
   assert.ok(first.code.split('\n')[2].includes('%23demo.workflow.ts'));
-  await writeFile(path.join(directory, '中文 #demo.compiled.mjs'), 'edited');
+  await writeFile(path.join(directory, '中文 #demo.workflow.ts.compiled.mjs'), first.code + '\n// edited');
   const second = await api.compile(file);
   assert.equal(second.code, first.code);
-  assert.equal(await readFile(path.join(directory, '中文 #demo.compiled.mjs'), 'utf8'), first.code);
+  assert.equal(await readFile(path.join(directory, '中文 #demo.workflow.ts.compiled.mjs'), 'utf8'), first.code);
   assert.ok(!(await readdir(directory)).some(name => name.endsWith('.tmp')));
 });
 
@@ -116,10 +116,9 @@ test('compileSource writes for a virtual filename and honors an ancestor output 
   const filename = path.join(directory, 'not-created', 'source.workflow.js');
   const result = await api.compileSource(source(), { filename, outDir: directory });
   await assert.rejects(stat(filename), { code: 'ENOENT' });
-  await assert.rejects(stat(path.dirname(filename)), { code: 'ENOENT' });
-  assert.equal(result.code.split('\n')[2], '// source: not-created/source.workflow.js');
-  assert.equal(await readFile(path.join(directory, 'source.compiled.mjs'), 'utf8'), result.code);
-  assert.equal(await readFile(path.join(directory, 'source.mmd'), 'utf8'), result.mermaid);
+  assert.equal(result.code.split('\n')[2], '// source: source.workflow.js');
+  assert.equal(await readFile(filename + '.compiled.mjs', 'utf8'), result.code);
+  assert.equal(await readFile(filename + '.mmd', 'utf8'), result.mermaid);
 });
 
 test('compiler errors leave existing artifacts untouched and never create missing output directories', async t => {
@@ -144,7 +143,7 @@ test('warnings permit writing without fetching remote Skills or running source/c
   const remote = "import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';export default defineWorkflow({id:'remote',version:'1.0.0',name:'Remote',nodes:[node('n',{name:'N',skill:'https://example.test/skill.md',output:{type:'object'},next:'done'}),terminal('done',{name:'Done',status:'succeeded'})]});";
   const result = await api.compileSource(remote, { filename, remoteSkillHosts: ['example.test'], fetch: () => assert.fail('No network') });
   assert.deepEqual(result.diagnostics.map(item => item.code), ['FK_C059']);
-  assert.ok(result.code.length); assert.ok((await stat(path.join(directory, 'remote.compiled.mjs'))).isFile());
+  assert.ok(result.code.length); assert.ok((await stat(path.join(directory, 'remote.workflow.js.compiled.mjs'))).isFile());
   const marker = '__flowkitApiSideEffect';
   assert.equal(globalThis[marker], undefined);
   const invalid = await api.compileSource(`globalThis.${marker}=1;\n${source()}`, { filename });
@@ -180,7 +179,7 @@ test('check reports a changed JS/header as R001 with exact artifact location and
   const file = path.join(directory, 'source.workflow.js');
   await writeFile(file, source());
   const compiled = await api.compile(file);
-  const artifact = path.join(directory, 'source.compiled.mjs');
+  const artifact = path.join(directory, 'source.workflow.js.compiled.mjs');
   for (const changed of [compiled.code.replace('// compiler:', '// changed compiler:'), compiled.code + ' ', 'invalid UTF8']) {
     await writeFile(artifact, changed === 'invalid UTF8' ? Buffer.from([255]) : changed);
     const before = await snapshot(directory);
@@ -268,9 +267,9 @@ test('legal unused options are validated but do not alter compile text or cause 
 test('filesystem failures remain original errors; failed rename cleans temporary files', async t => {
   const directory = await workspace(t);
   const filename = path.join(directory, 'source.workflow.js');
-  await mkdir(path.join(directory, 'source.compiled.mjs'));
+  await mkdir(path.join(directory, 'source.workflow.js.compiled.mjs'));
   await assert.rejects(api.compileSource(source(), { filename }), error => typeof error.code === 'string' && !error.code.startsWith('FK_'));
-  assert.deepEqual((await readdir(directory)).sort(), ['source.compiled.mjs']);
+  assert.deepEqual((await readdir(directory)).sort(), ['source.workflow.js.compiled.mjs']);
   await writeFile(filename, source());
   await assert.rejects(api.check(filename), error => typeof error.code === 'string' && !error.code.startsWith('FK_'));
 });
@@ -284,14 +283,14 @@ test('a failed second preparation preserves both old targets and cleans only own
   const original = fs.open;
   const failure = Object.assign(new Error('injected filesystem failure'), { code: 'ENOSPC' });
   let calls = 0;
-  t.mock.method(fs, 'open', (...args) => ++calls === 2 ? Promise.reject(failure) : original(...args));
+  t.mock.method(fs, 'open', (...args) => args[1] === 'wx' && ++calls === 2 ? Promise.reject(failure) : original(...args));
   syncBuiltinESMExports();
   try { await assert.rejects(api.compileSource(source('Changed'), { filename }), error => error === failure); }
   finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
   assert.equal(calls, 2);
   assert.deepEqual(await snapshot(directory), before);
   const recovered = await api.compileSource(source('Recovered'), { filename });
-  assert.equal(await readFile(path.join(directory, 'source.compiled.mjs'), 'utf8'), recovered.code);
+  assert.equal(await readFile(path.join(directory, 'source.workflow.js.compiled.mjs'), 'utf8'), recovered.code);
   assert.equal(await readFile(path.join(directory, '.user-owned.tmp'), 'utf8'), 'keep');
 });
 
@@ -299,9 +298,9 @@ test('concurrent compiler calls publish complete files without leaking temporary
   const directory = await workspace(t);
   const filename = path.join(directory, 'source.workflow.js');
   const results = await Promise.all(Array.from({ length: 6 }, () => api.compileSource(source(), { filename })));
-  assert.equal(await readFile(path.join(directory, 'source.compiled.mjs'), 'utf8'), results[0].code);
-  assert.equal(await readFile(path.join(directory, 'source.mmd'), 'utf8'), results[0].mermaid);
-  assert.deepEqual((await readdir(directory)).sort(), ['source.compiled.mjs', 'source.mmd']);
+  assert.equal(await readFile(path.join(directory, 'source.workflow.js.compiled.mjs'), 'utf8'), results[0].code);
+  assert.equal(await readFile(path.join(directory, 'source.workflow.js.mmd'), 'utf8'), results[0].mermaid);
+  assert.deepEqual((await readdir(directory)).sort(), ['source.workflow.js.compiled.mjs', 'source.workflow.js.mmd']);
 });
 
 test('write, sync and close failures preserve their original error and a queued successor recovers', async t => {
@@ -315,7 +314,7 @@ test('write, sync and close failures preserve their original error and a queued 
     let first = true;
     t.mock.method(fs, 'open', async (...args) => {
       const handle = await original(...args);
-      if (!first) return handle;
+      if (!first || args[1] !== 'wx') return handle;
       first = false;
       return Object.fromEntries(['writeFile', 'sync', 'close'].map(method => [method, async (...values) => {
         if (method === phase && method !== 'close') throw failure;
@@ -330,14 +329,14 @@ test('write, sync and close failures preserve their original error and a queued 
     assert.deepEqual(await snapshot(directory), before);
   }
   const failure = new Error('first writer'); let first = true;
-  t.mock.method(fs, 'open', (...args) => { if (first) { first = false; return Promise.reject(failure); } return original(...args); });
+  t.mock.method(fs, 'open', (...args) => { if (first && args[1] === 'wx') { first = false; return Promise.reject(failure); } return original(...args); });
   syncBuiltinESMExports();
   try {
     const failed = api.compileSource(source('Failed'), { filename });
     const queued = api.compileSource(source('Recovered'), { filename });
     await assert.rejects(failed, error => error === failure);
     const result = await queued;
-    assert.equal(await readFile(path.join(directory, 'source.compiled.mjs'), 'utf8'), result.code);
+    assert.equal(await readFile(path.join(directory, 'source.workflow.js.compiled.mjs'), 'utf8'), result.code);
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
   assert.ok(!(await readdir(directory)).some(name => name.endsWith('.tmp')));
 });

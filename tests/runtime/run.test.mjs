@@ -104,7 +104,7 @@ test('AOT accepts encoded Unicode filenames and checks original source and exact
   const f = await fixture(t, [act, end()]); const filename = path.join(f.directory, '中文 space.workflow.js');
   await writeFile(filename, await readFile(f.file));
   const compiled = await api.compile(filename); assert.deepEqual(compiled.diagnostics, []);
-  const artifact = path.join(f.directory, '中文 space.compiled.mjs'); let calls = 0;
+  const artifact = path.join(f.directory, '中文 space.workflow.js.compiled.mjs'); let calls = 0;
   const runtime = host({ runAction: async () => { calls++; } });
   await api.run(artifact, runtime, {}, { projectRoot: f.directory }); assert.equal(calls, 1);
   await writeFile(filename, (await readFile(filename, 'utf8')) + ' ');
@@ -119,7 +119,7 @@ test('AOT accepts encoded Unicode filenames and checks original source and exact
 
 test('AOT source paths reject raw and encoded lexical escapes without importing the artifact', async t => {
   const f = await fixture(t, [act, end()]); const compiled = await api.compile(f.file);
-  const artifact = path.join(f.directory, 'source.compiled.mjs');
+  const artifact = path.join(f.directory, 'source.workflow.js.compiled.mjs');
   for (const sourcePath of ['', '../source.workflow.js', '%2e%2e/source.workflow.js', '/source.workflow.js', 'C%3A/source.workflow.js', '//server/a.workflow.js', 'x%2F..%2Fa.workflow.js', 'x%5Ca.workflow.js', 'x%00.md']) {
     const code = compiled.code.replace(/^\/\/ source: .*$/m, `// source: ${sourcePath}`);
     await writeFile(artifact, code); await assert.rejects(api.run(artifact, host({ runAction: async () => assert.fail('No business') })), codeIs('FK_R001'));
@@ -127,16 +127,16 @@ test('AOT source paths reject raw and encoded lexical escapes without importing 
   for (const code of ['// short\n', compiled.code.replace('// sourceHash:', '// hiddenHash:')]) { await writeFile(artifact, code); await assert.rejects(api.run(artifact, host()), codeIs('FK_R001')); }
 });
 
-test('AOT follows source symlink ancestors normally even when the real source is outside artifact directory', async t => {
+test('compile rejects a linked output directory outside outDir before publishing', async t => {
   const f = await fixture(t, [end()]); const project = path.join(f.directory, 'project'), outside = path.join(f.directory, 'outside');
   await mkdir(project); await mkdir(outside); await writeFile(path.join(outside, 'ref.workflow.js'), await readFile(f.file));
   await symlink(outside, path.join(project, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
-  await api.compile(path.join(project, 'link/ref.workflow.js'), { outDir: project });
-  assert.equal((await api.run(path.join(project, 'ref.compiled.mjs'), host(), {}, { projectRoot: project })).terminal, 'done');
+  await assert.rejects(api.compile(path.join(project, 'link/ref.workflow.js'), { outDir: project }), /output escapes outDir/);
+  await assert.rejects(readFile(path.join(outside, 'ref.workflow.js.compiled.mjs')), { code: 'ENOENT' });
 });
 
 test('AOT executes the saved verified snapshot after the artifact is replaced and preserves other filesystem errors', async t => {
-  const f = await fixture(t, [act, end()]); const compiled = await api.compile(f.file), artifact = path.join(f.directory, 'source.compiled.mjs');
+  const f = await fixture(t, [act, end()]); const compiled = await api.compile(f.file), artifact = path.join(f.directory, 'source.workflow.js.compiled.mjs');
   const original = fs.readFile; let replaced = false, calls = 0;
   fs.readFile = async (...args) => {
     const bytes = await original(...args);

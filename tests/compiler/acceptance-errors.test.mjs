@@ -56,7 +56,7 @@ for (const file of files) {
       }
       if (spec.mode === 'stale-artifact') {
         const compiled = await compileSource(source, { ...options, filename: sourceFile }); assert.deepEqual(compiled.diagnostics, []);
-        if (!legal) await writeFile(path.join(project, 'case.compiled.mjs'), compiled.code + '\n// stale\n');
+        if (!legal) await writeFile(path.join(project, 'case.workflow.js.compiled.mjs'), compiled.code + '\n// stale\n');
         assert.deepEqual((await check(sourceFile, options)).map(item => item.code), legal ? [] : ['FK_R001']);
         continue;
       }

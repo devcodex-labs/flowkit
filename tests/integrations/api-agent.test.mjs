@@ -92,6 +92,35 @@ test('rate-limit retries share the same finite request budget and idempotency id
   assert.equal(ids[0], ids[1]);
 });
 
+test('Host token policy accepts an equal valid final response and reports explicit zero and missing usage', async () => {
+  async function run(usage, limit) {
+    const adapter = createApiAgentAdapter({ scope: 'usage-test', model: 'controlled-fixture',
+      limits: limit === undefined ? {} : { maxTotalTokens: limit },
+      request: async () => Response.json({ ...terminal(), usage }) });
+    return adapter.runAgentTask(prepared);
+  }
+  for (const observed of [9, 10]) {
+    assert.equal((await run({input_tokens: observed, output_tokens: 0}, 10)).status, 'succeeded');
+  }
+  assert.equal((await run({input_tokens: 11, output_tokens: 0}, 10)).failure.code, 'token-limit');
+  const unknown = await run({input_tokens: 0});
+  assert.equal(unknown.status, 'succeeded');
+  assert.deepEqual(unknown.usage.tokenCoverage, { inputTokens: 'known', outputTokens: 'unknown', cachedInputTokens: 'unknown' });
+  assert.equal(unknown.usage.providerRequests, 1);
+});
+
+test('both prepared input and full request limits fail before invoking the Provider', async () => {
+  for (const maxInputBytes of [16, 400]) {
+    let calls = 0;
+    const adapter = createApiAgentAdapter({ scope: 'input-test', model: 'controlled-fixture',
+      limits: { maxInputBytes }, request: async () => { calls++; return Response.json(terminal()); } });
+    const result = await adapter.runAgentTask(prepared);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure.code, 'size-limit');
+    assert.equal(calls, 0);
+  }
+});
+
 test('pure preassembled tasks work without tools while required tools and denied tools fail before execution', async () => {
   let requests = 0;
   const options = { scope: 'team', model: 'controlled-fixture', supportsTools: false,

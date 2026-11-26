@@ -12,7 +12,8 @@ const intent = { effective: { intents: [{ id: 'goal', goal: 'Done', children: []
 const host = await createWorkflowAuthorHost({ namespace: 'installed', storageFile: 'installed-author.sqlite', collectionIds: ['team'],
   capacity: { maxPhysicalExecutions: 2, maxDrafts: 16, maxDraftBytes: 1048576, maxRetainedDraftBytes: 8388608, maxReceiptBytes: 8388608, maxTurnsPerDraft: 32 },
   hostProfile: { id: 'controlled-installed-fixture', digest: hash }, defaults: { executionMode: 'standard' },
-  authorization: { authorize: async () => true, observeReview: async ({ task }) => ({ passed: true, subjectId: 'controlled-review', executionId: task.execution.requestId }),
+  authorization: { authorize: async () => true, resolveApplicableSafetyPolicies: () => [],
+    observeReview: async ({ task }) => ({ passed: true, subjectId: 'controlled-review', executionId: task.execution.requestId }),
     verifyApproval: async () => ({ approved: false, subjectId: 'user', approvalId: 'none' }) },
   execution: { async request(input) {
     if (input.intent) return intent;

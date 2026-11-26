@@ -119,8 +119,14 @@ export function analyzeGraph(literal, context) {
       && ['verification-failure','action-error'].includes(edge.role);
     region.hasFailureExit = false;
     if (kind === 'loop') own(region, stop, 'FK_C042');
-    const stack = [edges.find(edge => edge.from === (kind === 'loop' ? stop : node.id) &&
-      edge.role === (kind === 'loop' ? 'verification-failure' : 'human-reject'))];
+    const failureEdge = edges.find(edge => edge.from === (kind === 'loop' ? stop : node.id) &&
+      edge.role === (kind === 'loop' ? 'verification-failure' : 'human-reject'));
+    if (!failureEdge) {
+      report(kind === 'loop' ? 'FK_C042' : 'FK_C060', node.id, kind === 'loop' ? '/body' : '/onReject',
+        'Repair must begin with a declared failure route outside a leaf parallel group');
+      return region;
+    }
+    const stack = [failureEdge];
     const repair = new Set();
     while (stack.length) {
       const item = stack.pop();

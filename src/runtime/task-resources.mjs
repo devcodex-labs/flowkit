@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { open, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import { allowedSkillHost } from '../shared/skill-ref.mjs';
@@ -11,32 +12,43 @@ function contained(root, target) {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-async function readLocal(uri, projectRoot, limit) {
+export async function readRegularResource(target, limit, signal) {
+  signal?.throwIfAborted();
+  const expected = await lstat(target);
+  if (!expected.isFile()) throw skillError('FK_R011', 'Resource is not a regular file');
+  const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
+      throw skillError('FK_R011', 'Resource changed before it could be read');
+    }
+    if (stat.size > limit) throw skillError('FK_R014', `Resource exceeds ${limit} bytes`);
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+      signal?.throwIfAborted();
+      const chunk = Buffer.allocUnsafe(Math.min(65536, limit - received + 1));
+      const { bytesRead } = await file.read(chunk);
+      if (!bytesRead) break;
+      received += bytesRead;
+      if (received > limit) throw skillError('FK_R014', `Resource exceeds ${limit} bytes`);
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    signal?.throwIfAborted();
+    return Buffer.concat(chunks, received);
+  } finally {
+    await file.close();
+  }
+}
+
+async function readLocal(uri, projectRoot, limit, signal) {
   if (typeof projectRoot !== 'string' || !projectRoot || !localTextResource(uri)) {
     throw skillError('FK_R011', 'Description resource requires an authorized root and relative text path');
   }
   const root = await realpath(projectRoot);
   const target = await realpath(path.resolve(root, uri));
   if (!contained(root, target)) throw skillError('FK_R011', 'Description resource escapes the authorized root');
-  const file = await open(target, 'r');
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile()) throw skillError('FK_R011', 'Description resource is not a regular file');
-    if (stat.size > limit) throw skillError('FK_R014', `Description resource ${uri} has ${stat.size} bytes, maximum ${limit}`);
-    const chunks = [];
-    let received = 0;
-    for (;;) {
-      const chunk = Buffer.allocUnsafe(Math.min(65536, limit - received + 1));
-      const { bytesRead } = await file.read(chunk);
-      if (!bytesRead) break;
-      received += bytesRead;
-      if (received > limit) throw skillError('FK_R014', `Description resource ${uri} exceeds ${limit} bytes`);
-      chunks.push(chunk.subarray(0, bytesRead));
-    }
-    return Buffer.concat(chunks, received);
-  } finally {
-    await file.close();
-  }
+  return readRegularResource(target, limit, signal);
 }
 
 async function readRemote(ref, url, policy, options, budget, limit, signal) {
@@ -73,7 +85,7 @@ export async function createDescriptionResources(refs, policy, options, budget, 
     }
     const url = remoteTextResource(ref.uri);
     const bytes = url ? await readRemote(ref, url, policy, options, budget, limit, signal) :
-      await readLocal(ref.uri, policy.projectRoot, limit);
+      await readLocal(ref.uri, policy.projectRoot, limit, signal);
     budget.check();
     total += bytes.length;
     const digest = createHash('sha256').update(bytes).digest();

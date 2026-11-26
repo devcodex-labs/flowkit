@@ -7,6 +7,7 @@ export type { AuthorHostOptions, WorkflowAuthorHost, AuthorRequestContext, Autho
 export interface ApprovedWorkflowTarget { collectionId: string; skillId: string; candidateHash: string; skillDirectory: string; executionRef: string }
 export interface ApprovedWorkflowScope {
   collectionId: string; skillId: string; candidateHash: string; executionRef: string; workflowFile: string; artifactHash: string;
+  readonly safetyPolicies: readonly { readonly nodeId: string; readonly policyRef: string }[];
 }
 export interface ApprovedWorkflowStore {
   readVersion(collectionId: string, skillId: string, hash: string): Pick<AuthorCandidate, 'hash' | 'files'> &
@@ -17,6 +18,8 @@ export interface ApprovedWorkflowHostAuthority {
   hostProfile: { id: string; digest: string };
   hostExecutionContracts?: readonly HostExecutionContract[];
   authorizeExecution(scope: ApprovedWorkflowScope): boolean | Promise<boolean>;
+  resolveApplicableSafetyPolicies?(scope: ApprovedWorkflowScope):
+    ApprovedWorkflowScope['safetyPolicies'] | Promise<ApprovedWorkflowScope['safetyPolicies']>;
   resolveRunProfessionalSkill?(pin: { nodeId: string; id: string; version: string; digest: string; source: string },
     scope: ApprovedWorkflowScope & { signal?: AbortSignal }): { authorized: boolean; source: string; candidate: AuthorProfessionalSkill } | null |
     Promise<{ authorized: boolean; source: string; candidate: AuthorProfessionalSkill } | null>;

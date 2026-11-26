@@ -27,6 +27,10 @@ export async function readAOT(filename) {
   catch { throw invalid('Malformed source path encoding'); }
   if (!source || segments.some(segment => !segment || segment === '..' || /[\\/\0]/.test(segment)) || /^[A-Za-z]:/.test(segments[0])) throw invalid('Source path must remain relative');
   const directory = path.dirname(filename);
+  const expectedSource = path.basename(filename, '.compiled.mjs');
+  if (!/\.workflow\.(?:ts|js)$/.test(expectedSource) || source !== encodeURIComponent(expectedSource)) {
+    throw invalid('Source path does not match the compiled artifact location');
+  }
   const sourceFile = path.resolve(directory, ...segments);
   const relative = path.relative(directory, sourceFile);
   if (!relative || path.isAbsolute(relative) || relative.split(path.sep).includes('..')) throw invalid('Source escapes artifact directory');

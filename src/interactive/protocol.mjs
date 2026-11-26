@@ -11,6 +11,11 @@ export const interactiveModeForStage=stage=>'interactive-'+stage.toLowerCase();
 
 /** Sequential and all-succeeded runs cannot progress past their shared task budget. */
 export function runDeadlineExpired(cp, now=Date.now()) {
+  if (cp.businessDeadlineMs!==undefined && cp.businessDeadlineMs<=now) return true;
+  if (cp.taskContext?.deadlineScope==='activity') {
+    const prepared=cp.pending?.preparedTask ?? cp.prepared?.preparedTask;
+    return !cp.parallel && (cp.candidate?.activityDeadlineMs ?? prepared?.task.execution.deadlineMs)<=now;
+  }
   return ['P0-B','P1'].includes(cp.program.implementedStage) && cp.taskContext?.deadlineMs<=now;
 }
 

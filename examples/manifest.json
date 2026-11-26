@@ -11,18 +11,18 @@
   "workflows": [
     {
       "source": "editorial.workflow.js",
-      "code": "editorial.compiled.mjs",
-      "mermaid": "editorial.mmd"
+      "code": "editorial.workflow.js.compiled.mjs",
+      "mermaid": "editorial.workflow.js.mmd"
     },
     {
       "source": "shared-join.workflow.ts",
-      "code": "shared-join.compiled.mjs",
-      "mermaid": "shared-join.mmd"
+      "code": "shared-join.workflow.ts.compiled.mjs",
+      "mermaid": "shared-join.workflow.ts.mmd"
     },
     {
       "source": "remote.workflow.js",
-      "code": "remote.compiled.mjs",
-      "mermaid": "remote.mmd"
+      "code": "remote.workflow.js.compiled.mjs",
+      "mermaid": "remote.workflow.js.mmd"
     }
   ],
   "remoteSkills": [
@@ -44,12 +44,12 @@
       "sha256": "d85d218e0363c96af76a3c432c83113224b1bf4aaea292c93451521a91f11e8c"
     },
     {
-      "path": "editorial.compiled.mjs",
-      "bytes": 8621,
-      "sha256": "9bcd7649e7b8287d06fc12a8dd5229756d09950778223b557673facbf7d93611"
+      "path": "editorial.workflow.js.compiled.mjs",
+      "bytes": 10236,
+      "sha256": "5f52d692d04fb725801fb64d9b3d2487f36ca42db9adcabf77536ff24bf45d93"
     },
     {
-      "path": "editorial.mmd",
+      "path": "editorial.workflow.js.mmd",
       "bytes": 1236,
       "sha256": "849333d9a497a80ead3d0a1fe5ee012f66848a5daeef08b7d2e6490e2d1ddc3b"
     },
@@ -59,12 +59,12 @@
       "sha256": "0d0edeba0f6efba74eac863bbeb99068362a66f26c66464e11a3ef2064277547"
     },
     {
-      "path": "shared-join.compiled.mjs",
+      "path": "shared-join.workflow.ts.compiled.mjs",
       "bytes": 1302,
       "sha256": "efe191558ea98c5a5b38c9e4479ab80e942e9fc6739663d8eabbb3307de836b5"
     },
     {
-      "path": "shared-join.mmd",
+      "path": "shared-join.workflow.ts.mmd",
       "bytes": 227,
       "sha256": "f13d32dbaf453d96c0fb192b60c87fa936ce7ae77f2304e71458a729374c70b3"
     },
@@ -74,12 +74,12 @@
       "sha256": "a5a5f874342752d1afed9a7c0c3c2584be89210cf38170eb7ed2dfc717431d37"
     },
     {
-      "path": "remote.compiled.mjs",
-      "bytes": 5567,
-      "sha256": "9765a4a0b710eced7277618fd153e3f506451808c78c51a108e1795dfbc1ad78"
+      "path": "remote.workflow.js.compiled.mjs",
+      "bytes": 7182,
+      "sha256": "f550a0bdf3f0ebaf46fa4971bcfbecc493abcd04c76ef020674c1565a3414578"
     },
     {
-      "path": "remote.mmd",
+      "path": "remote.workflow.js.mmd",
       "bytes": 445,
       "sha256": "53dd3de750fcd94a0d6fe60161ef11f282c42c92f943a86e9e53c0d01425bf75"
     },
@@ -100,13 +100,13 @@
     },
     {
       "path": "host.mjs",
-      "bytes": 2073,
-      "sha256": "4c586c45dbb73dcd4a191eaaaade402a66f2f37b22b5c8503241d4f6db978d74"
+      "bytes": 2172,
+      "sha256": "c33ae6673031ee0e4798bcd3b800c9ef866a4e1db94a0d643ed9ba30354b8d51"
     },
     {
       "path": "demo.mjs",
-      "bytes": 2387,
-      "sha256": "772152a04456daa760cdfbf35c273c68363ce34dba13b135314747aeb5389772"
+      "bytes": 2469,
+      "sha256": "5c58e0a558a39964e4d400a3ad4fa31a2c77022d16b6f9b3afb9b33befa14adf"
     },
     {
       "path": "agent.mjs",

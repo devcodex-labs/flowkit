@@ -3,7 +3,7 @@ import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { run, compile, isControlSignal } from '@devcodex-labs/flowkit';
 await import('./deploy.mjs');
 const runtime = { isControlSignal, async runAgent(step) { return { draft: step.instruction.trim() }; }, validateResult(schema, value) { return typeof value?.draft === 'string' ? [] : ['draft']; } };
-const file = 'deployment/sample.compiled.mjs', source = 'deployment/sample.workflow.js';
+const file = 'deployment/sample.workflow.js.compiled.mjs', source = 'deployment/sample.workflow.js';
 const bytes = await readFile(source);
 assert.equal((await run(file, runtime)).status, 'succeeded');
 try {
