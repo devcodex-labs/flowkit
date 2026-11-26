@@ -1,6 +1,7 @@
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { isWorkflowId } from '../shared/contracts.mjs';
 import { canonicalBytes } from '../interactive/canonical.mjs';
+import { interactiveStageForMode } from '../interactive/protocol.mjs';
 import { parseWhen } from '../when/parser.mjs';
 import { evaluateWhenAst } from '../when/evaluate.mjs';
 
@@ -20,16 +21,30 @@ function resultRoutes(routes, id, reads, writes) {
       cases.length < 1 || cases.length > 64) throw mismatch(`Invalid result routes for Host action ${id}`);
   const seen = new Set();
   const checked = cases.map(item => {
-    const { value, next } = item ?? {};
-    const action = next?.kind === 'action' && text(next.id, 128);
-    const terminal = next?.kind === 'terminal' && ['succeeded', 'failed'].includes(next.status);
-    if (!scalar(value) || seen.has(value) || (!action && !terminal)) {
+    const { value, next, settlement } = item ?? {};
+    if (!scalar(value) || seen.has(value) || settlement !== undefined && !['applied', 'no-effect'].includes(settlement)) {
       throw mismatch(`Invalid or duplicate result route for Host action ${id}`);
     }
     seen.add(value);
-    return { value, next: action ? { kind: 'action', id: next.id } : { kind: 'terminal', status: next.status } };
+    return { value, next: routeTarget(next, id), ...(settlement === undefined ? {} : { settlement }) };
   });
   return { key, cases: checked };
+}
+
+function routeTarget(next, id) {
+  if (next?.kind === 'action' && text(next.id, 128)) return { kind: 'action', id: next.id };
+  if (next?.kind === 'terminal' && ['succeeded', 'failed'].includes(next.status)) {
+    return { kind: 'terminal', status: next.status };
+  }
+  throw mismatch(`Invalid route target for Host action ${id}`);
+}
+
+function matchesTarget(node, target) {
+  return node?.type === target.kind && (target.kind === 'action' ? node.action === target.id : node.status === target.status);
+}
+
+function describeTarget(target) {
+  return target.kind === 'action' ? `Action ${target.id}` : `${target.status} Terminal`;
 }
 
 function onlyReadsKey(ast, key) {
@@ -43,9 +58,13 @@ function onlyReadsKey(ast, key) {
   return true;
 }
 
-function checkResultRoutes(node, { key, cases }, nodes) {
+function checkResultRoutes(node, { key, cases }, nodes, settledSuccess) {
   const predicates = new Map();
-  for (const { value, next } of cases) {
+  for (const { value, next, settlement } of cases) {
+    if (settlement !== undefined && settlement !== settledSuccess) {
+      throw Object.assign(mismatch(`Node ${node.id}: ${key}=${JSON.stringify(value)} cannot use a normal receipt with ${settlement} settlement.`),
+        { nodeId: node.id });
+    }
     let successor = nodes.get(node.next);
     const visited = new Set();
     try {
@@ -62,10 +81,8 @@ function checkResultRoutes(node, { key, cases }, nodes) {
     } catch {
       successor = undefined;
     }
-    if (successor?.type !== next.kind ||
-        (next.kind === 'action' ? successor.action !== next.id : successor.status !== next.status)) {
-      const expected = next.kind === 'action' ? `Action ${next.id}` : `${next.status} Terminal`;
-      throw Object.assign(mismatch(`Node ${node.id}: with ${key} set to ${JSON.stringify(value)}, its compiled normal route must reach ${expected}.`),
+    if (!matchesTarget(successor, next)) {
+      throw Object.assign(mismatch(`Node ${node.id}: with ${key} set to ${JSON.stringify(value)}, its compiled normal route must reach ${describeTarget(next)}.`),
         { nodeId: node.id });
     }
   }
@@ -76,20 +93,22 @@ export function executionContracts(input = []) {
   if (!Array.isArray(input) || input.length > 96) throw mismatch('Expected a bounded Host execution contract catalog');
   const seen = new Set();
   const entries = input.map(data => {
-    const { id, version, kind, implementationDigest, effect, reads, writes, roles = [], rules, resultRoutes: routes } = data ?? {};
+    const { id, version, kind, implementationDigest, effect, reads, writes, roles = [], rules,
+      resultRoutes: routes, noEffectFailureRoute } = data ?? {};
     const key = JSON.stringify([kind, id]);
     if (seen.has(key) || !text(id, 128) || !text(version, 80) || !hash.test(implementationDigest ?? '') ||
         !['action', 'verification'].includes(kind) ||
         !keyList(roles) || roles.some(role => !isWorkflowId(role)) ||
         !Array.isArray(rules) || rules.length < 1 || rules.length > 48 || !rules.every(rule => text(rule, 1000)) ||
         (kind === 'action' ? !['read-only', 'write'].includes(effect) || !keyList(reads) || !keyList(writes)
-          : effect !== undefined || reads !== undefined || writes !== undefined || routes !== undefined)) {
+          : effect !== undefined || reads !== undefined || writes !== undefined || routes !== undefined || noEffectFailureRoute !== undefined)) {
       throw mismatch('Invalid or duplicate Host execution contract for ' + String(id));
     }
     seen.add(key);
     const contract = { id, version, kind, implementationDigest, roles: names(roles), rules: [...rules],
       ...(kind === 'action' ? { effect, reads: names(reads), writes: names(writes),
-        ...(routes === undefined ? {} : { resultRoutes: resultRoutes(routes, id, reads, writes) }) } : {}) };
+        ...(routes === undefined ? {} : { resultRoutes: resultRoutes(routes, id, reads, writes) }),
+        ...(noEffectFailureRoute === undefined ? {} : { noEffectFailureRoute: routeTarget(noEffectFailureRoute, id) }) } : {}) };
     return { ...contract, digest: artifactDigest(canonicalBytes(contract, 65536)) };
   });
   canonicalBytes(entries, 131072);
@@ -98,6 +117,8 @@ export function executionContracts(input = []) {
 
 export function pinExecutionContracts(definition, catalog, roles = [], mode = 'standard') {
   if (!catalog.length) return [];
+  const stage = interactiveStageForMode(mode);
+  const ledgerBacked = stage !== undefined && stage !== 'P0-A';
   const byCapability = new Map(catalog.map(item => [JSON.stringify([item.kind, item.id]), item]));
   const roleByNode = new Map(roles.map(({ nodeId, id }) => [nodeId, id]));
   const nodes = new Map(definition.nodes.map(node => [node.id, node]));
@@ -115,7 +136,15 @@ export function pinExecutionContracts(definition, catalog, roles = [], mode = 's
       if (mode === 'standard' && !node.writes?.includes(binding.resultRoutes.key)) {
         throw mismatch(`Node ${node.id} must declare a write to its checked result key ${binding.resultRoutes.key}`);
       }
-      checkResultRoutes(node, binding.resultRoutes, nodes);
+      const settledSuccess = ledgerBacked ? binding.effect === 'write' ? 'applied' : 'no-effect' : undefined;
+      checkResultRoutes(node, binding.resultRoutes, nodes, settledSuccess);
+    }
+    if (binding.noEffectFailureRoute) {
+      // A reconciled failed receipt cannot populate state for a Condition on the normal path.
+      if (!ledgerBacked || !matchesTarget(nodes.get(node.onError), binding.noEffectFailureRoute)) {
+        throw Object.assign(mismatch(`Node ${node.id}: a reconciled failed receipt with no external effect requires Interactive Action.onError to reach ${describeTarget(binding.noEffectFailureRoute)} directly.`),
+          { nodeId: node.id });
+      }
     }
     return { nodeId: node.id, id, version: binding.version, digest: binding.digest };
   });

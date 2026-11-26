@@ -184,6 +184,10 @@ Host 可配置可信的 `hostExecutionContracts`，为 Action 和 Verification �
 
 如果某个回调结果必须进入指定步骤，可在受信 Action 契约声明 `resultRoutes`。例如 `{ key: "outcome", cases: [{ value: "closed", next: { kind: "action", id: "notify" } }] }` 要求回调产出 `closed` 后的实际路径调度 `notify`。也可以声明 `{ kind: "terminal", status: "succeeded" }`。Author 从正常后继按编译顺序求值 Condition，经过的谓词只能依赖这个标量键。Interactive 可用回调声明的读取键或写入键，Standard 使用声明的写入键。应使用实际实现返回的值。校验范围是声明的案例及其下一步，完整实现和其他业务路径仍由复审与宿主实测核对。
 
+`resultRoutes` 对应成功回执。Interactive P0-B、P1、P2 可以在案例中显式提供 `settlement`。有写入的 Action 成功回执要求 `applied`，只读 Action 成功回执要求 `no-effect`。业务结果的名字由 Host 定义，进入正常后继取决于回执与实际结算一致。
+
+对于执行器已对账且未产生外部效果的失败，可在受信合同声明 `noEffectFailureRoute: { kind: "terminal", status: "failed" }`，也可指定下一项 Action。Author 要求现有 `Action.onError` 直接到达目标。Host 用 `no-effect` 结算并提交匹配的失败回执，注明 `origin: "executor"`、`sideEffectStatus: "none"` 和业务错误码。失败回执不会写入正常结果状态。实际资格仍由 SDK 检查。
+
 如果 `flowkit_prepare_workflow` 返回 `running`，用原草稿 ID 调用 `flowkit_get_workflow_draft` 查看进度和结果。连接断开重开后可继续查询。Host 重启导致状态需要对账时，先执行恢复工具，再用同一版本的材料继续草稿。已完成且输入身份匹配的分段结果可以续用。当前候选通过全部复审并得到确认后，仍使用现有的三文件导出。
 
 本机服务嵌入应用时，宿主通过 `readAuthoringMaterial` 绑定其材料目录和读取许可，确认后用 `runWorkflow` 绑定实际 SDK 执行能力。调用 `flowkit_run_workflow` 时提供已批准候选摘要和由宿主批准的 `executionRef`。普通本机配置仍可用既有 SDK 在独立宿主运行。设计引用不代表运行授权。

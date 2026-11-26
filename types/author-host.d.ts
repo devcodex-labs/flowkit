@@ -46,12 +46,15 @@ export interface AuthorDraftView {
   diagnostics?: Array<{ code?: string; message?: string; [key: string]: unknown }>;
   [key: string]: unknown;
 }
+type HostActionRouteTarget = { kind: 'action'; id: string } | { kind: 'terminal'; status: 'succeeded' | 'failed' };
+
 export type HostExecutionContract = { id: string; version: string; implementationDigest: string;
   roles?: readonly string[]; rules: readonly string[] } & (
   { kind: 'action'; effect: 'read-only' | 'write'; reads: readonly string[]; writes: readonly string[];
     resultRoutes?: { key: string; cases: ReadonlyArray<{ value: string | number | boolean | null;
-      next: { kind: 'action'; id: string } | { kind: 'terminal'; status: 'succeeded' | 'failed' } }> } } |
-  { kind: 'verification'; effect?: never; reads?: never; writes?: never; resultRoutes?: never });
+      settlement?: 'applied' | 'no-effect'; next: HostActionRouteTarget }> };
+    noEffectFailureRoute?: HostActionRouteTarget } |
+  { kind: 'verification'; effect?: never; reads?: never; writes?: never; resultRoutes?: never; noEffectFailureRoute?: never });
 
 export interface AuthorHostOptions {
   hostExecutionContracts?: readonly HostExecutionContract[];

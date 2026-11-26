@@ -111,6 +111,48 @@ test('compiled action dispatch must match trusted result cases, including branch
   assert.throws(()=>executionContracts([duplicate]),{code:'FKA_EXECUTION_CONTRACT'});
 });
 
+test('ledger-backed Author contracts check normal settlements and the separate onError edge', async () => {
+  const mode='interactive-p0-b';
+  const identity={ version:'1', kind:'action', effect:'write', reads:[], rules:['Isolated write callback.'] };
+  const notify={ ...identity, id:'notify', writes:[], implementationDigest:artifactDigest('notify') };
+  const save={ ...identity, id:'save', writes:['outcome'], implementationDigest:artifactDigest('save'),
+    resultRoutes:{ key:'outcome', cases:[
+      { value:'saved', settlement:'applied', next:{ kind:'action',id:'notify' } },
+      { value:'denied', settlement:'applied', next:{ kind:'terminal',status:'failed' } }
+    ] }, noEffectFailureRoute:{ kind:'terminal',status:'failed' } };
+  const catalog=executionContracts([save,notify]);
+  const plan={ entryNodeId:'save', nodes:[
+    { id:'save',kind:'action',name:'Save',options:{ action:'save', effect:'write', writes:['outcome'], next:'choose' } },
+    { id:'choose',kind:'condition',name:'Choose',options:{ branches:[
+      { when:"outcome === 'saved'",next:'notify' }, { when:'true',next:'failed' }
+    ] } },
+    { id:'notify',kind:'action',name:'Notify',options:{ action:'notify', effect:'write', next:'done' } },
+    { id:'done',kind:'terminal',name:'Done',options:{ status:'succeeded' } },
+    { id:'failed',kind:'terminal',name:'Failed',options:{ status:'failed' } }
+  ] };
+  const draft={ target:{ name:'receipt-routes',version:'1.0.0' }, choices:{ executionMode:mode } };
+  async function compile(onError) {
+    const proposal=structuredClone(plan);
+    if (onError) proposal.nodes[0].options.onError=onError;
+    const result=await materializePlan(draft,proposal,{ filename:'receipt-routes.workflow.js' });
+    assert.ok(result.definition,JSON.stringify(result.diagnostics));
+    return result.definition;
+  }
+  for (const onError of [undefined,'done']) {
+    const definition=await compile(onError);
+    assert.throws(()=>pinExecutionContracts(definition,catalog,[],mode),
+      { code:'FKA_EXECUTION_CONTRACT',nodeId:'save',message:/onError.*failed Terminal/ });
+  }
+  const definition=await compile('failed');
+  assert.equal(pinExecutionContracts(definition,catalog,[],mode)[0].digest,catalog[0].digest);
+  const impossible=structuredClone(save);
+  impossible.resultRoutes.cases[1].settlement='no-effect';
+  assert.throws(()=>pinExecutionContracts(definition,executionContracts([impossible,notify]),[],mode),
+    { code:'FKA_EXECUTION_CONTRACT',nodeId:'save',message:/denied.*normal receipt.*no-effect/ });
+  assert.throws(()=>pinExecutionContracts(definition,catalog,[],'interactive-p0-a'),
+    { code:'FKA_EXECUTION_CONTRACT',nodeId:'save' });
+});
+
 test('long-document fallback retries malformed assumptions, completes omitted coverage and preserves gaps', async () => {
   const calls=[];
   const work=authorDocumentWork({context:{materials:[{id:'spec',title:'Contract',content:'Constraint text.\n'.repeat(1600)}]},
