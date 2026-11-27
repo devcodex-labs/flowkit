@@ -38,6 +38,8 @@ Host 接入的 `ApiHostOptions`、`IndependentAgentOptions` 和 `CompilationCach
 | `CapabilitySupport`、`HostCapabilityProfile`、`TaskPolicy`、`HostPreparationContext` | Host 能力、授权、限制及本地 Prepare 上下文 |
 | `SideEffectStatus`、`AgentExecutionResult` | 成功或失败结果、实际观察到的事件与 Usage |
 
+`AgentTaskV2.execution.deadlineMs` 和 `HostPreparationContext.deadlineMs` 在有显式期限时提供。Host 在缺省时仍可使用 `signal` 接收取消。
+
 ## DSL 数据类型
 
 | 导出类型 | 含义 |
@@ -49,7 +51,7 @@ Host 接入的 `ApiHostOptions`、`IndependentAgentOptions` 和 `CompilationCach
 | DeepReadonly | 递归只读映射，描述构造器返回的定义 |
 | Retries | 0–10整数联合 |
 | MaxIterations | 1–100整数联合 |
-| AgentOptions | name/output与可选inputs/retries/verify/overview/integrity/next；agent/skill至少一个 |
+| AgentOptions | `name`、`output` 必需。指令来源可用 `agent`、`skill`、`description` 或指令 `descriptionRefs`。适用限制见 [Agent 节点](/dsl/agent) |
 | ActionOptions | name/action 必需，支持 reads/writes/effect/next。Interactive 普通 Action 和子流程 Action 可声明 `onError`。 |
 | VerificationOptions | name/verifier必需，onSuccess/onFailure上下文决定 |
 | ParallelOptions | name、至少2项branches元组、join.strategy/next |

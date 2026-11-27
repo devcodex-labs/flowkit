@@ -685,6 +685,9 @@ export function createSqliteCheckpointStore(file, {namespace} = {}) {
           const accepted=next.receivedSubmission??laneReceipt;
           const candidate=next.candidate??laneReceipt;
           const pending=publishedInteractivePending(current).find(task=>task.requestId===journal.requestId);
+          if (pending?.preparedTask?.task.execution.deadlineMs<=Date.now()) {
+            throw failure('FK_I_RUN_DEADLINE','Task deadline expired before acceptance');
+          }
           if (current.status!=='waiting' || (next.phase!=='validate'&&laneReceipt?.acceptedRevision!==next.revision)
             || candidate?.requestId!==journal.requestId
             || candidate?.nodeId!==journal.nodeId || candidate?.attempt!==journal.attempt

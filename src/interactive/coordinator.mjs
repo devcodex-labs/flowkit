@@ -646,6 +646,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       if (saved && prepared.resourceManifest.manifestHash !== saved.prepared.resourceManifest.manifestHash) {
         throw failure('FK_I_PROGRAM_MISMATCH','Prepared task resources changed within the activation');
       }
+      checkTaskDeadline(budget.deadlineMs);
       if (await during(taskSignal,()=>execution.authorizeAgentTask(prepared,context)) !== true) {
         throw failure('FK_I_HOST_DENIED','Host denied Task V2 preparation');
       }
@@ -1114,7 +1115,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           if (prepared.taskContext) next.taskContext=prepared.taskContext;
         } catch (error) {
           if (signal?.aborted) throw error;
-          const code=error?.code==='FK_I_PARALLEL_INPUT'?error.code:'FK_I_PARALLEL_PREPARE';
+          const code=['FK_R004','FK_I_PARALLEL_INPUT'].includes(error?.code)?error.code:'FK_I_PARALLEL_PREPARE';
           if (next.parallel.strategy==='all_succeeded') {
             const event=internalEvent(cp,'deterministic-failure',{error:{code}});
             const {proposal}=advanceSafely(cp,program,event);
@@ -1258,7 +1259,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         operationSafety='no-effect';
       } catch (error) {
         if (signal?.aborted) throw error;
-        rejectLane(error.code==='FK_I_PARALLEL_INPUT'?error.code:'FK_I_PARALLEL_PREPARE');
+        rejectLane(['FK_R004','FK_I_PARALLEL_INPUT'].includes(error?.code)?error.code:'FK_I_PARALLEL_PREPARE');
       }
     } else if (evaluation.kind==='validation-passed'||evaluation.kind==='external-passed') {
       lane.status='succeeded';

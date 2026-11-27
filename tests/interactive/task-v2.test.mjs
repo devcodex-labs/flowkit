@@ -42,7 +42,7 @@ async function fixture(t,{maxDispatches=3,maxProviderRequests,deadlineMs=Date.no
     ...(maxProviderRequests===undefined?{}:{maxProviderRequests}),
     ...(activityTimeoutMs===undefined?{}:{activityTimeoutMs})},
     ...(businessDeadlineMs===undefined?{}:{businessDeadlineMs})};
-  const api=()=>createInteractiveCoordinator({store,runtime,policy});
+  const api=(backend=store)=>createInteractiveCoordinator({store:backend,runtime,policy});
   const opening={programBytes:Buffer.from(compiled.code),programIdentity:compiled.programIdentity,
     startKey:'once',runId:'original-run',state:{message:'hello',secret:'do not disclose'}};
   t.after(async()=>{store.close();await rm(dir,{recursive:true,force:true});});
@@ -101,6 +101,25 @@ test('an expired pending Task V2 reaches a durable task-deadline terminal after 
   assert.equal(out.terminal.causeCode,'FK_R004');
   assert.equal(f.store.load(frame.runId).revision,out.revision);
   await assert.rejects(f.api().complete(receipt(frame,{answer:'not committed'})),{code:'FK_I_STALE_RECEIPT'});
+});
+
+test('SQLite rechecks the activity deadline inside the receipt transaction',async t=>{
+  let clock=Date.now();
+  t.mock.method(Date,'now',()=>clock);
+  const f=await fixture(t,{omitDeadline:true,activityTimeoutMs:60000});
+  const frame=await f.api().start(f.opening);
+  const deadline=frame.pending.preparedTask.task.execution.deadlineMs;
+  const store={...f.store,compareAndSwap(input) {
+    if(input.journalEntry.kind==='receipt-accepted')clock=deadline+1;
+    return f.store.compareAndSwap(input);
+  }};
+  await assert.rejects(f.api(store).complete(receipt(frame,{answer:'expired at commit'})),
+    {code:'FK_I_STALE_RECEIPT'});
+  const after=f.store.load(frame.runId);
+  assert.equal(after.status,'errored');
+  assert.equal(after.terminal.causeCode,'FK_R004');
+  assert.equal(after.receiptCount,0);
+  assert.equal(Object.hasOwn(after.state,'answer'),false);
 });
 
 test('durable Human wait and the following legacy Agent outlive an earlier Task V2 window', async t => {
