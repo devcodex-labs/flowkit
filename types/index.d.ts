@@ -112,12 +112,7 @@ export interface HostCapabilityProfile {
   readonly capabilities: Readonly<Partial<Record<'modelExecution' | 'toolCalling' | 'nativeSkillDiscovery' |
     'skillResourceLoading' | 'fileAccess' | 'terminalExecution' | 'networkAccess' | 'durableResume' |
     'humanApproval' | 'trustedReceipt', CapabilitySupport>>>;
-  readonly supportedNodeKinds?: readonly string[];
-  readonly resourceLimits?: { readonly maxTaskBytes?: number; readonly maxResourceBytes?: number; readonly maxToolCalls?: number;
-    readonly maxToolRounds?: number; readonly nodeDeadlineMs?: number };
-  readonly profileHash?: string;
-  readonly policyHash?: string;
-  readonly verifiedAt?: string;
+  readonly resourceLimits?: { readonly maxTaskBytes?: number; readonly maxResourceBytes?: number };
 }
 export interface TaskPolicy {
   projectRoot?: string;

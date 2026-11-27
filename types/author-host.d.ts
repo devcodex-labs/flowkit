@@ -24,7 +24,7 @@ export interface AuthorCandidate {
 export interface AuthorProfessionalSkill {
   files: Record<string, string>; hash: string;
   manifest: { kind: 'professional'; collectionId: string; skillId: string; name: string; version: string; description: string;
-    digest: string; files: Record<string, string> };
+    format?: 'codex-native'; digest: string; files: Record<string, string> };
 }
 export interface AuthorProfessionalCatalogScope {
   requestContext: AuthorRequestContext; signal: AbortSignal;
@@ -103,6 +103,13 @@ export interface AuthorHostOptions {
     reviewPolicy?: 'separate-pass' | 'independent-subject';
   };
   capabilityGraph?: object | ((context: { requestContext: AuthorRequestContext; signal: AbortSignal }) => object | Promise<object>);
+  discoverCapabilities?(scope: { input: string; graph: object; context: unknown; requestContext: AuthorRequestContext; signal: AbortSignal;
+    request: (input: unknown, options?: { signal?: AbortSignal }) => Promise<unknown>;
+    readDocumentUrl?: (url: string) => Promise<{ url: string; bytes: Uint8Array }> }): Promise<{
+      selection: unknown;
+      documents?: { text: string; evidence: { capabilityId: string; documentId: string; revision: string; contentHash: string;
+        source: { type: 'url'; url: string } | { type: 'file'; path: string } } }[];
+    }>;
   resolveCapabilityGraphContext?(context: { requestContext: AuthorRequestContext; signal: AbortSignal }):
     { facts?: Record<string, string | number | boolean>; notes?: string } |
     Promise<{ facts?: Record<string, string | number | boolean>; notes?: string } | undefined> | undefined;
@@ -116,7 +123,10 @@ export interface AuthorHostOptions {
       verifyApplicability(need: { id: string; description: string }, candidate: AuthorProfessionalSkill): Promise<boolean | null> }): Promise<{
       complete?: boolean; denied?: boolean; occupied?: boolean; matches?: Array<{ candidate: AuthorProfessionalSkill; source: string; approved: true }> }>;
   };
-  resolveProfessionalSkill?(pin: object, context: AuthorProfessionalCatalogScope): Promise<{ id: string; version: string; digest: string; source?: string; approved: boolean } | null>;
+  resolveProfessionalSkill?(pin: object, context: AuthorProfessionalCatalogScope): Promise<{
+    id: string; version: string; digest: string; source?: string; approved: boolean;
+    reviewMaterial?: { text: string; contentHash: string };
+  } | null>;
   resolveAuthoringInput?: FlowkitMcpOptions['resolveAuthoringInput'];
 }
 export interface AuthorDiscoveryMapping {
@@ -131,6 +141,7 @@ export interface AuthorTurnInput {
   choices?: AuthorChoices; contextSnapshot?: unknown; baseline?: unknown; baselineId?: string; confirmedConstraintIds?: string[];
   safetyPolicies?: Array<{ nodeId: string; policyRef: string }>; retryRef?: string;
   confirmedPlanHash?: string;
+  reconfirmIntentBaseline?: boolean;
   target?: Partial<AuthorTarget>;
 }
 export interface AuthorCandidateIdentity { draftId: string; candidateHash: string; previousHash: string | null }

@@ -40,7 +40,9 @@ export function exportTrust(keys = []) {
 
 export function canExportPortable({ files, manifest }) {
   return Object.keys(files).length === candidateFiles.length && candidateFiles.every(name => Object.hasOwn(files, name)) &&
-    manifest.professionalSkills.every(pin => !!pin.source) && !manifest.documents?.length && !manifest.safetyPolicies?.length;
+    manifest.professionalSkills.every(pin => !!pin.source) && !manifest.safetyPolicies?.length &&
+    (manifest.documents ?? []).every(({ source }) => source.type === 'url' &&
+      /^https:\/\/raw\.githubusercontent\.com\/devcodex-labs\/flowkit\/[a-f0-9]{40}\/website\/content\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mdx$/.test(source.url));
 }
 
 export function publicDelivery(candidate, key, viewLayout) {
@@ -106,7 +108,7 @@ export async function deliveryMatches(directory, hashes, names = deliveryNames) 
   }
 }
 
-export async function commitDelivery(root, directory, files, hashes, names = deliveryNames) {
+export async function commitDelivery(root, directory, files, hashes, names = deliveryNames, beforePublish) {
   await mkdir(root, { recursive: true });
   if (await deliveryMatches(directory, hashes, names)) return;
   try { await lstat(directory); throw new Error('Export directory conflicts with existing files'); }
@@ -114,6 +116,7 @@ export async function commitDelivery(root, directory, files, hashes, names = del
   const stage = await mkdtemp(path.join(root, '.flowkit-export-'));
   try {
     for (const name of names) await writeFile(path.join(stage, name), files[name], { flag: 'wx' });
+    beforePublish?.();
     try { await rename(stage, directory); }
     catch (error) { if (!(await deliveryMatches(directory, hashes, names))) throw error; }
   } finally {

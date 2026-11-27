@@ -321,6 +321,7 @@ export async function createWorkflowAuthorHost(supplied) {
       const request = clone({ input: input.input, contextSnapshot: input.contextSnapshot ?? null,
         ...(input.candidateHash === undefined ? {} : { candidateHash: input.candidateHash }),
         ...(input.confirmedPlanHash ? { confirmedPlanHash: input.confirmedPlanHash } : {}),
+        ...(input.reconfirmIntentBaseline === true ? { reconfirmIntentBaseline: true } : {}),
         ...(input.baseline === undefined ? {} : { baseline: input.baseline, baselineId: input.baselineId }),
         ...(input.confirmedConstraintIds ? { confirmedConstraintIds: input.confirmedConstraintIds } : {}),
         safetyPolicies: input.safetyPolicies ?? [] });
@@ -396,6 +397,11 @@ export async function createWorkflowAuthorHost(supplied) {
         const awaitingAnswer = draft.status === 'needs-clarification' &&
           (request.input !== previousInput || draft.questions.some(({ id }) => id !== 'execution-mode' && id !== 'target-version'));
         const afterFailure = draft.status === 'failed' || draft.status === 'needs-revision';
+        if (request.reconfirmIntentBaseline && (input.kind === 'review-only' || Object.hasOwn(request, 'baseline') ||
+            request.confirmedPlanHash || !draft.intentBaseline || draft.status !== 'needs-revision' ||
+            !draft.diagnostics.some(item => item.code === 'FKA_INTENT_BASELINE_REVIEW_REQUIRED'))) {
+          throw authorError('author-conflict', 'Only a draft awaiting Intent baseline review can reconfirm its baseline');
+        }
         const rejection = input.kind === 'review-only' ? undefined : activeReviewRejection(draft);
         const reviewRevision = rejection ? select(rejection, ['candidateHash', 'findings']) :
           input.kind !== 'review-only' && !draft.candidate && (awaitingAnswer || afterFailure) ? lastTurn?.reviewRevision : undefined;

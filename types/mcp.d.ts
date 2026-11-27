@@ -29,11 +29,13 @@ export interface FlowkitMcpOptions {
   applyCollectionPlan?(plan: { destination: { id: string } }, approvalRef: string, context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
   runWorkflow?(scope: { namespace: string; collectionId: string; skillId: string; candidateHash: string; executionRef: string; requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<unknown>;
   queueAuthoringTurn?(input: AuthorTurnInput, context: AuthorRequestContext): Promise<AuthorDraftView>;
+  nativeSkillDiscovery?: boolean;
   workflowUi?: {
     defaultCollectionId: string;
     present(draft: AuthorDraftView, context?: AuthorRequestContext): unknown;
     recover?(input: { draftId: string; expectedStateVersion: number }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
     review(result: Awaited<ReturnType<WorkflowAuthorHost['reviewCandidate']>>): unknown;
+    matchCapability?(input: { goal: string }, context: AuthorRequestContext, signal: AbortSignal): Promise<unknown>;
     authoringMaterials?(scope: { input: AuthorTurnInput; sources?: FlowkitMaterialSource[]; draft: AuthorDraftView },
       context: AuthorRequestContext, signal: AbortSignal): Promise<AuthorTurnInput>;
     design?(input: { collectionId: string; requestId: string; title: string; resumeToken?: string } &

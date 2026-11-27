@@ -17,6 +17,8 @@ import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canExportPortable, commitDelivery, deliveryMatches, deliveryNames, escapeHtml, exportTrust, newExportKey, publicDelivery,
   readPortableExport } from './local-mcp-artifacts.mjs';
 import { localModel } from './local-mcp-model.mjs';
+import { createLocalCodexSkills } from './local-codex-skills.mjs';
+import { createLocalCapabilityGraph } from './local-capability-graph.mjs';
 import { defaultLayout, viewerHash, workflowPage, workflowRunArtifacts, workflowRunPage, workflowRunProgress, workflowTracePage } from './workflow-viewer.mjs';
 import { listInteractiveForkPoints } from '../src/interactive/index.mjs';
 import { generateLayout, layoutContractHash } from './workflow-viewer/auto-layout.mjs';
@@ -177,7 +179,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
   }
   const untrustedReason = '接收实例尚未信任或无法核对该导出公钥。请核对公钥后重新登记文件。';
   const storeFile = path.join(dataDir, 'author.sqlite');
-  let authorHost, server, modelWorkspace;
+  let authorHost, server, modelWorkspace, localGraph;
   let storageClosed = false;
   const recoveryProofs = new Map();
   const layoutAbort = new AbortController();
@@ -192,25 +194,34 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     storageClosed = true;
     try {
       data.close();
+      await localGraph?.registry.close();
       if (modelWorkspace) await rmdir(modelWorkspace);
     } finally { releaseLease(); }
   };
   try {
     const exportKey = get('export-key-v1') ?? insert('export-key-v1', newExportKey());
     const provider = config.authorProvider ?? 'codex';
+    const nativeSkills = config.codexSkillsWorkspace === undefined ? undefined : await createLocalCodexSkills({
+      workspace: config.codexSkillsWorkspace, root: path.join(dataDir, 'codex-skill-generations'),
+      collection: collectionPlan.destination, get, put,
+      readManaged: id => binding.store.readActive(collectionId, id)
+    });
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
     const model = dependencies.modelBinding ?? localModel({ provider, timeoutMs: config.authorTaskTimeoutMs,
       model: process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'], apiKey: process.env.OPENAI_API_KEY, workspace: modelWorkspace });
+    if (config.capabilityGraph !== undefined && typeof config.capabilityGraph !== 'boolean') throw new TypeError('capabilityGraph must be a boolean');
+    if (config.capabilityGraph) localGraph = await createLocalCapabilityGraph(resourceReadTimeoutMs);
     const modelLayoutCalls = new Set();
-    async function planLayout(input) {
+    async function runLocalModel(operation, signal) {
       while (modelLayoutCalls.size >= capacity.maxPhysicalExecutions) await Promise.race(modelLayoutCalls);
-      input.signal.throwIfAborted();
-      const request = Promise.resolve().then(() => model.planLayout(input));
+      signal.throwIfAborted();
+      const request = Promise.resolve().then(operation);
       const settled = request.then(() => undefined, () => undefined);
       modelLayoutCalls.add(settled);
       try { return await request; }
       finally { modelLayoutCalls.delete(settled); }
     }
+    const planLayout = input => runLocalModel(() => model.planLayout(input), input.signal);
     const selectedLayoutKey = hash => 'preview-layout-selection:' + viewerHash + ':' + hash;
     const baseLayoutRevision = hash => artifactDigest(JSON.stringify(['layout-initial', viewerHash, hash]));
     const layoutRevisionOf = hash => get(selectedLayoutKey(hash))?.revision ?? baseLayoutRevision(hash);
@@ -357,6 +368,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     }
 
     const designTurnTimeout = { code: 'FKA_DESIGN_TURN_TIMEOUT', message: 'Design turn timed out' };
+    const designModelTimeout = { code: 'FKA_DESIGN_MODEL_TIMEOUT', message: 'Design model request timed out' };
     const designInterrupted = { code: 'FKA_DESIGN_INTERRUPTED', message: 'The local Host stopped the Design turn' };
 
     async function createDesign({ requestId, title, materials, sources, resumeToken }, requestContext, signal) {
@@ -366,7 +378,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const key = 'design:' + artifactDigest(requestId).slice(7);
       const owner = designOwner(requestContext);
       const identity = authorIdentity([provider, process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'] ?? null]);
-      const record = resumeToken === undefined
+      let record = resumeToken === undefined
         ? insert(key, { materialHash, title, selection, owner, identity }) : get(key);
       if (!record) throw materialError('FKA_DESIGN_RESUME_UNAVAILABLE', 'No Design attempt is available to resume');
       if (record.materialHash !== materialHash || record.owner && record.owner !== owner ||
@@ -374,15 +386,31 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           record.selection && authorIdentity(record.selection) !== authorIdentity(selection)) {
         throw new Error('Design request ID already belongs to different source material');
       }
+      // Rename is the irreversible boundary. A restart can find the published bytes
+      // before the final SQLite write, even after the attempt's admission deadline.
+      const prepared = record.attempt?.commitAdmitted && record.prepared;
+      if (!record.result && prepared && !designRequests.has(key)) {
+        const { value, summary } = prepared;
+        const matches = await deliveryMatches(value.directory, value.hashes, designNames(value));
+        const current = get(key);
+        if (matches && !designRequests.has(key) && current.attempt?.id === record.attempt.id) {
+          record = { materialHash, title, selection, owner, identity, summary, result: value };
+          put(key, record);
+        } else {
+          record = current;
+        }
+      }
       const result = record.result;
       if (!result) {
         const running = { status: 'running', requestId };
+        const active = designRequests.get(key);
+        if (active?.outcome) return { ...active.outcome, requestId, draining: true };
         // Keep physical ownership until the operation (including the Codex child) actually settles.
         if (!designRequests.has(key)) {
           let { attempt } = record;
-          if (attempt?.status === 'running' && attempt.deadlineMs <= Date.now()) {
+          if (attempt?.status === 'running' && (attempt.observed || attempt.deadlineMs <= Date.now())) {
             // An expired attempt may have been left behind by an abrupt process exit.
-            attempt = { ...attempt, status: 'timed-out', error: designTurnTimeout };
+            attempt = { ...attempt, ...(attempt.observed ?? { status: 'timed-out', error: designTurnTimeout }) };
             put(key, { ...record, attempt });
           }
           if (attempt && attempt.status !== 'running') {
@@ -408,13 +436,28 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           const deadline = remaining > 0 ? AbortSignal.timeout(remaining) :
             AbortSignal.abort(new DOMException(designTurnTimeout.message, 'TimeoutError'));
           const workSignal = AbortSignal.any([deadline, layoutAbort.signal]);
+          const job = { outcome: undefined, publishing: false, pending: undefined };
+          function observe(status, error) {
+            if (job.publishing || job.outcome) return;
+            job.outcome = { status, error };
+            attempt = { ...attempt, observed: job.outcome };
+            put(key, { ...get(key), attempt });
+          }
+          const observeHostAbort = () => {
+            if (deadline.aborted && workSignal.reason === deadline.reason) observe('timed-out', designTurnTimeout);
+            else if (layoutAbort.signal.aborted) observe('interrupted', designInterrupted);
+          };
+          workSignal.addEventListener('abort', observeHostAbort, { once: true });
+          if (workSignal.aborted) observeHostAbort();
           const pending = Promise.resolve().then(async () => {
             workSignal.throwIfAborted();
             let prepared = get(key).prepared;
             if (!prepared) {
               const original = new Map(materials.map(material => [material.id, artifactDigest(material.content)]));
               const sections = await collectDesignSections({ title, materials, signal: workSignal,
-                modelIdentity: identity, plan: input => model.planDesign(input),
+                modelIdentity: identity, plan: input => model.planDesign({
+                  ...input, onTimeout: () => observe('timed-out', designModelTimeout)
+                }),
                 load: section => get(key + ':' + section),
                 save: (section, receipt) => put(key + ':' + section, receipt),
                 async authorize(ids) {
@@ -480,17 +523,33 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               }
             }
             workSignal.throwIfAborted();
-            await commitDelivery(exportDir, value.directory, files, value.hashes, designNames(value));
+            await commitDelivery(exportDir, value.directory, files, value.hashes, designNames(value), () => {
+              workSignal.throwIfAborted();
+              if (Date.now() >= attempt.deadlineMs) {
+                observe('timed-out', designTurnTimeout);
+                throw new Error(designTurnTimeout.message);
+              }
+              attempt = { ...attempt, commitAdmitted: true };
+              put(key, { ...get(key), attempt });
+              job.publishing = true;
+            });
             put(key, { materialHash, title, selection, owner, identity, summary, result: value });
             return value;
-          }).catch(error => {
+          }).catch(async error => {
             const { attempt: _active, ...current } = get(key);
-            let outcome;
-            if (error?.code === 'FKA_DESIGN_MODEL_TIMEOUT') {
-              outcome = { status: 'timed-out', error: { code: error.code, message: 'Design model request timed out' } };
-            } else if (deadline.aborted && workSignal.reason === deadline.reason) {
+            if (job.publishing && current.prepared) {
+              const { value, summary } = current.prepared;
+              if (await deliveryMatches(value.directory, value.hashes, designNames(value))) {
+                put(key, { materialHash, title, selection, owner, identity, summary, result: value });
+                return value;
+              }
+            }
+            let outcome = job.outcome;
+            if (!outcome && error?.code === 'FKA_DESIGN_MODEL_TIMEOUT') {
+              outcome = { status: 'timed-out', error: designModelTimeout };
+            } else if (!outcome && deadline.aborted && workSignal.reason === deadline.reason) {
               outcome = { status: 'timed-out', error: designTurnTimeout };
-            } else if (layoutAbort.signal.aborted && workSignal.reason === layoutAbort.signal.reason) {
+            } else if (!outcome && layoutAbort.signal.aborted && workSignal.reason === layoutAbort.signal.reason) {
               outcome = { status: 'interrupted', error: designInterrupted };
             }
             if (outcome) {
@@ -501,9 +560,13 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               designFailures.set(key, error);
             }
             throw error;
-          }).finally(() => designRequests.delete(key));
+          }).finally(() => {
+            workSignal.removeEventListener('abort', observeHostAbort);
+            designRequests.delete(key);
+          });
           void pending.catch(() => {});
-          designRequests.set(key, pending);
+          job.pending = pending;
+          designRequests.set(key, job);
         }
         return running;
       }
@@ -618,6 +681,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     const professionalSkillCatalog = {
       collection: localProfessionalSkills.collection,
       async search(scope) {
+        if (nativeSkills) return nativeSkills.search(scope);
         const local = await localProfessionalSkills.search(scope);
         const external = await dependencies.professionalSkillCatalog?.search(scope);
         if (!external) return local;
@@ -631,14 +695,24 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     };
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       hostExecutionContracts: dependencies.hostExecutionContracts,
-      capabilityGraph: dependencies.capabilityGraph,
+      discovery: nativeSkills?.discovery ?? dependencies.discovery,
+      capabilityGraph: dependencies.capabilityGraph ?? localGraph?.registry,
+      discoverCapabilities: dependencies.discoverCapabilities ?? (dependencies.capabilityGraph ? undefined : localGraph?.discoverAuthor),
       resolveCapabilityGraphContext: dependencies.resolveCapabilityGraphContext,
       initialCapabilityIds: dependencies.initialCapabilityIds,
       initialDocuments: dependencies.initialDocuments,
-      readDocumentUrl: dependencies.readDocumentUrl,
+      readDocumentUrl: dependencies.readDocumentUrl ?? localGraph?.readDocumentUrl,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
       professionalSkillCatalog,
       async resolveProfessionalSkill(pin, scope) {
+        if (pin.source?.startsWith('codex-skill:')) {
+          const resolved = await nativeSkills?.resolve(pin, scope);
+          if (!resolved) return null;
+          const text = resolved.candidate.files['SKILL.md'];
+          if (text.length > 24000) return null;
+          return { id: pin.id, version: pin.version, digest: pin.digest, source: pin.source, approved: true,
+            reviewMaterial: { text, contentHash: resolved.candidate.manifest.files['SKILL.md'] } };
+        }
         if (pin.source !== undefined && pin.source !== skillSource) return dependencies.resolveProfessionalSkill?.(pin, scope);
         const candidate = binding.store.readProfessionalVersion(collectionId, pin.id, pin.version);
         if (!candidate || candidate.manifest.digest !== pin.digest) return null;
@@ -989,7 +1063,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const candidate = binding.store.readVersion(scope.collectionId, scope.skillId, scope.candidateHash);
       if (!candidate) throw new Error('No approved Workflow Skill at the requested identity');
       const graph=checkCandidate(candidate);
-      const result=await dependencies.runWorkflow(scope, { candidate, store: binding.store });
+      const result=await dependencies.runWorkflow(scope, { candidate, store: binding.store,
+        ...(nativeSkills ? { resolveProfessionalSkill: nativeSkills.resolve } : {}) });
       if (graph.mode==='standard' || !result?.runId || !dependencies.resolveRunViewer) return result;
       try {
         const view=await resolveRunBinding(result.runId);
@@ -1005,7 +1080,13 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       }
     });
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
-      { ...binding, ...(runWorkflow ? { runWorkflow } : {}), workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present, authoringMaterials,
+      { ...binding, nativeSkillDiscovery: Boolean(nativeSkills), ...(runWorkflow ? { runWorkflow } : {}),
+        workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present, authoringMaterials,
+        ...(localGraph ? { matchCapability: ({ goal }, _context, signal) => {
+          const shared = signal ? AbortSignal.any([signal, layoutAbort.signal]) : layoutAbort.signal;
+          return localGraph.match(goal, { signal: shared, request: (body, { signal: selected }) =>
+            runLocalModel(() => model.execution.request(body, { signal: selected }), selected) });
+        } } : {}),
         ...(model.planDesign ? { design: createDesign } : {}),
         ...(model.planLayout ? { relayout: relayoutCandidate } : {}) } } : null);
 
@@ -1295,7 +1376,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           server.closeAllConnections();
           await new Promise(resolve => server.close(resolve));
         }
-        await Promise.allSettled([...designRequests.values(), ...layoutRequests.values()]);
+        await Promise.allSettled([...Array.from(designRequests.values(), job => job.pending), ...layoutRequests.values(), ...modelLayoutCalls]);
         const outcome = await authorHost.close({ mode: 'cancel' });
         if (outcome.closed) await closeStorage();
         return outcome;

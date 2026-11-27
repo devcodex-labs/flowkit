@@ -1,5 +1,5 @@
 // Keep references on the reviewed documentation snapshot rather than the moving main branch.
-const documentationCommit = '171c087bc07ef1e259556d8bddf9deb37d7b3b54';
+const documentationCommit = '88e841f6d42b3780f27385aca02685720aaab340';
 
 function document(id, page) {
   return {
@@ -16,13 +16,13 @@ function document(id, page) {
  * workflow runtime is created by FlowKit.
  */
 export const flowkitProvider = Object.freeze({
-  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.6',
+  schemaVersion: 1, providerId: 'flowkit', name: 'FlowKit', version: '1.0.7',
   description: 'Compile declarative JavaScript/TypeScript workflows and run them with an explicit host Runtime.',
   capabilities: [
     {
-      id: 'define-workflow', name: 'Define workflow',
-      description: 'Declare a workflow using the static FlowKit DSL.',
-      whenToUse: 'A host needs a statically analyzable workflow definition.',
+      id: 'define-workflow', name: 'Author or define a workflow',
+      description: 'Turn natural-language requirements into a reviewable Workflow Skill candidate, or declare a static FlowKit DSL workflow.',
+      whenToUse: 'The user describes a new workflow or revises a candidate before review and approval.',
       usage: { instructions: 'Use literal JS/TS DSL. Author Hosts use /host.createWorkflowAuthorHost with guarded execution, exact review and user approval. Author targets Standard and Interactive P0-A, P0-B, P1 or P2. Declare the external effect of every Interactive Action explicitly when authoring. A read-only Action may write workflow state. Graph discovers and documents capabilities.' },
       documents: [
         document('flowkit-doc-dsl', 'dsl/index'),
@@ -57,9 +57,9 @@ export const flowkitProvider = Object.freeze({
       ],
     },
     {
-      id: 'run-workflow', name: 'Run workflow',
-      description: 'Execute a verified workflow using a caller-provided host Runtime.',
-      whenToUse: 'A host has authorized the workflow and supplied its business methods.',
+      id: 'run-workflow', name: 'Run or resume a workflow',
+      description: 'Execute a verified workflow or resume a waiting Interactive Run with its original identity and checkpoint.',
+      whenToUse: 'The Host authorizes execution, or the user wants to continue an existing Interactive Run after an answer or wait.',
       usage: { instructions: 'The Host authorizes and executes. Use runArtifact for approved Standard workflow.js bytes, or run for DSL/AOT. Interactive start/resume preserves the original Run, prepared resources and budget. Host API tools and independent execution subjects remain Host-owned; Graph never dispatches them.' },
       relations: { requires: ['define-workflow'] },
       documents: [
@@ -70,6 +70,14 @@ export const flowkitProvider = Object.freeze({
         document('flowkit-doc-interactive', 'guide/interactive'),
         document('flowkit-doc-interactive-api', 'reference/interactive'),
       ],
+    },
+    {
+      id: 'deliver-workflow-skill', name: 'Deliver an approved Workflow Skill',
+      description: 'Export an approved workflow for delivery, or add its verified and independently approved Workflow Skill to the destination collection.',
+      whenToUse: 'The workflow candidate has been reviewed and the user wants to export or install it as a Workflow Skill.',
+      usage: { instructions: 'Use the exact candidate hash and existing Host review, export and add operations. The Host authorizes the destination. Discovery does not approve or publish a candidate.' },
+      documents: [document('flowkit-doc-authoring', 'guide/workflow-authoring'),
+        document('flowkit-doc-host', 'guide/host-integration')],
     },
     {
       id: 'render-mermaid', name: 'Render Mermaid',

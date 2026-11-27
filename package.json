@@ -84,8 +84,11 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@devcodex/capability-graph": "2.1.1",
+    "@devcodex/intent-runtime": "2.0.4",
     "@modelcontextprotocol/client": "2.4.0",
     "playwright": "1.65.1",
+    "schema-dsl": "3.0.4",
     "tar": "7.5.22",
     "typescript": "5.0.4"
   }

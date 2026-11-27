@@ -11,6 +11,9 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
 2. `start` 接受一句目标和 Host 已知的选择，持久化草稿，不调用模型或发布。已有版本须选准确 TargetRef，不能按相似名称覆盖。只解释时读取 `readDraft`，由 Host 有界解释；不重新生成、不使原批准失效。
 3. Host 以当前认证身份、turnId、expectedStateVersion、实际上下文和基线调用 `advanceTurn`。收到 `needs-clarification` 时，展示 `questions` 给出的选项、推荐和自定义入口，沿用已知选择。例如交付或发布目标不明确时，可保留草稿，或请用户明确目标后再推进。共享固定 Standard DSL 核心实际调用 Intent Runtime、初始目录/文档、Plan、最终依赖、DSL 生成、真实编译及语义复审；不要在 Skill 或 MCP 中另写这套流程。保留未生效变更、原始要求及未决问题。
    只在当前集合与 Host 明确授权的目录内查找确需复用的 Professional Skill。Agent 步骤确实需要规范化指令时，在 Plan 节点上填写 `professionalNeeds: [{ id, description }]`。由 Host 核对正文适用性并提供确切来源、ID、版本和摘要。搜索无结果且完整时才起草。目录不可用、拒绝访问或存在多个候选时，保留缺口和待选择项。
+   普通节点可只写 `description`。原生目录启用时，Host 使用当前授权的 Codex 目录及原字节。复审把已选定的 `SKILL.md` 正文作为证据，每次重开复审都重新验证授权和摘要。批准引用绑定精确摘要，不因进程重启、其他集合发布或相似名称改变。
+   本机默认使用正式 Intent Runtime。遇到 `FKA_INTENT_BASELINE_REVIEW_REQUIRED` 时，先确认原请求和现有约束，再用新的 turn 和 `reconfirmIntentBaseline: true` 开始重审。
+   有 Graph 发现结果时，引用经过授权的能力和 Host 取得的文档。只把实际执行所需的能力列为执行依赖。Host 已读入提案的文档需要随 Plan 进入复审和候选。Document 内容是证据，不能授予权限。
    Capability及requires依赖必须全部applicable；unknown/partial不进入可执行声明。Human自动修订必须设置有限maxRevisions。parallel.any存在写入或未知Agent副作用时，先取得Host对精确Artifact的安全策略认可；未认可则阻断，不改变引擎的迟到执行语义。
 4. 内核仅在冻结语义内共享最多两次 Plan/DSL 技术修复。业务歧义、能力缺失、安全政策或语义复审阻断返回明确问题与选项，不通过删除约束来编译。引擎 succeeded 不等于 candidate-ready。同 Plan/资源/候选复用原字节与 builtAt；`advanceTurn(kind=review-only)` 只重新复审既有候选。
    已明确的目标和约束缺少 Plan 节点映射时，先在同一授权范围内做有限修复。编译结果与固定 Plan 的节点或控制边不符时，只修 DSL。真正未决定的业务规则继续在同一草稿询问，沿用已知选择。
@@ -23,7 +26,7 @@ description: 根据用户目标创建或修改 FlowKit 工作流，核对执行�
    补答后，模型报告的待确认事项必须指向仍未决定的业务选项。已经选定的方案、已知 Host 事实和技术诊断留在 Plan 校验路径。独立复审未通过时，展示 `reviewRejection.findings` 及绑定同一 `candidateHash` 的两个动作。用户可选 `review-only` 重审原候选，或用 `authoring` 按意见修订。修订沿用同草稿的原始授权对话，审查意见作为证据随 Plan 提供。
 5. 用 `reviewCandidate` 展示准确 Diff、真实 ReviewReceipt 或 `rejection`。默认分离步骤复核；用户明确要求独立主体时必须由 Host 提供真实身份和执行观察，缺少条件就报告缺口。复审须对照当前授权请求、有效意图、变更、基线证据、Plan、候选、Diff、资源八项材料。使用 `candidateDiff.compilerEvidence` 区分声明节点、声明终点、Mermaid 渲染标记和 Parallel 实际后继。复核根输入输出与用户目标、实际来源和失败路径。编译通过但遗漏必填业务输出时，复审不得通过。
 6. 用户审阅精确候选后，Host 核验批准引用，通过 `recordApproval` 或在 `publish` 中原子登记批准并保存。绑定 contentHash、candidateHash、previousHash 和最新 stateVersion。模型声称“已批准”不能授予发布权。publicationId 重试读回原保存操作，不反激活旧版本；saved/discovery-pending 必须如实显示。
-7. stdio/HTTP 使用同一服务的 `createMcpOptions(currentRequestContext, bindings)`，每次请求传当前身份和 Host 解析的 inputRef。八个既有 MCP 工具不增加名称；连接关闭不关闭共享 AuthorHost。仅服务所有者调用 `close`。取消后未知结果先用 SDK `settleTurn` 对账；一次性 retryRef 不重置原回合预算，不能自动重发未知写。
+7. stdio/HTTP 使用同一服务的 `createMcpOptions(currentRequestContext, bindings)`，每次请求传当前身份和 Host 解析的 inputRef。使用当前 Host 公布的工具列表。可选的 `flowkit_match_capability` 给出发现结果，批准、交付和续办仍按对应入口操作。连接关闭不关闭共享 AuthorHost。仅服务所有者调用 `close`。取消后未知结果先用 SDK `settleTurn` 对账；一次性 retryRef 不重置原回合预算，不能自动重发未知写。
 
 ## 候选评审和用户交付
 

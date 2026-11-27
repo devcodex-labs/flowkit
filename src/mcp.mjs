@@ -14,7 +14,7 @@ const minimumErrorText = JSON.stringify({ error: { code: responseLimitCode } });
 
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
-  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, limits = {} }) {
+  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, nativeSkillDiscovery = false, limits = {} }) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
@@ -143,7 +143,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       });
   }
 
-  tool('flowkit_collection', 'Read one bounded page of approved collection metadata.', { collectionId: id,cursor:z.string().optional() },
+  if (!nativeSkillDiscovery) tool('flowkit_collection', 'Read one bounded page of approved collection metadata.', { collectionId: id,cursor:z.string().optional() },
     ({ collectionId,cursor }) => { const { collection, skills } = catalog(collectionId);
       const offset=cursor===undefined?0:Number(cursor);
       if(!Number.isSafeInteger(offset)||offset<0||cursor!==undefined&&String(offset)!==cursor)throw new Error('Invalid Skill cursor');
@@ -153,6 +153,9 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         ...(offset+pageSize<skills.length?{nextCursor:String(offset+pageSize)}:{})};
       if(Buffer.byteLength(JSON.stringify(page))>maxBytes)throw new Error('Collection page exceeds the metadata byte budget');
       return page; }, true);
+  if (workflowUi?.matchCapability) tool('flowkit_match_capability', 'Find an authorized FlowKit capability for a goal. Discovery does not execute a workflow.',
+    { collectionId: id, goal: z.string().trim().min(1).max(65536) },
+    ({ goal }, ctx) => workflowUi.matchCapability({ goal }, requestContext, ctx.signal), true);
   tool('flowkit_start_workflow', 'Start a workflow draft using known collection choices.', {
     collectionId: id, requestId: id, operation: z.enum(['create', 'update', 'import']), goal: z.string().min(1).max(maxBytes),
     targetRef: z.union([z.object({ collectionId: id, skillId: id, baseArtifactHash: hash, baseVersion: id }).strict(),
@@ -166,6 +169,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const turn = z.object({
     draftId: id, turnId: id, expectedStateVersion: z.number().int().positive(), input: z.string().min(1).max(maxBytes),
     kind: z.enum(['authoring', 'review-only']).optional(), candidateHash: hash.optional(), confirmedPlanHash: hash.optional(),
+    reconfirmIntentBaseline: z.boolean().optional(),
     choices: z.object({ executionMode: z.enum(workflowExecutionModes).optional() }).strict().optional(),
     target: z.object({ name: id.optional(), version: id.optional() }).strict().optional()
   }).strict();
@@ -231,7 +235,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   if (workflowUi) {
-    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Create one source-backed offline project design HTML. Poll running with the same request ID and sources. After a timeout or interruption, submit the returned resumeToken only to explicitly continue.',
+    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Create one source-backed offline project design HTML. Poll running or draining with the same request ID and sources. Continue only with the resumeToken returned after physical cleanup.',
       { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(material.strict()).min(1).optional(),
         resumeToken: id.optional(),
         sources: z.array(z.discriminatedUnion('kind', [material.extend({ kind: z.literal('text') }).strict(),
@@ -332,7 +336,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       return resources;
     }
   };
-  new SkillsExtension({ source, baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' } }).attach(server);
+  if (!nativeSkillDiscovery) new SkillsExtension({ source, baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' } }).attach(server);
   return server;
 }
 

@@ -14,7 +14,7 @@ test('Provider declares real public capabilities with stable graph IDs', () => {
   assert.equal(flowkitProvider.providerId, 'flowkit');
   assert.equal(flowkitProvider.schemaVersion, 1);
   assert.deepEqual(flowkitProvider.capabilities.map(item => item.id),
-    ['define-workflow', 'compile-workflow', 'check-workflow', 'run-workflow', 'render-mermaid']);
+    ['define-workflow', 'compile-workflow', 'check-workflow', 'run-workflow', 'deliver-workflow-skill', 'render-mermaid']);
   for (const capability of flowkitProvider.capabilities) {
     assert(capability.documents.length);
     assert.equal(new Set(capability.documents.map(document => document.id)).size, capability.documents.length);
@@ -24,10 +24,12 @@ test('Provider declares real public capabilities with stable graph IDs', () => {
     }
     assert.doesNotMatch(capability.usage.instructions, /https:\/\//);
   }
-  const [define, compile, check, run, render] = flowkitProvider.capabilities;
+  const [define, compile, check, run, deliver, render] = flowkitProvider.capabilities;
   assert.equal(define.relations, undefined);
   for (const capability of [compile, check, run]) assert.deepEqual(capability.relations.requires, ['define-workflow']);
   assert.deepEqual(render.relations.requires, ['compile-workflow']);
+  assert.equal(deliver.relations, undefined);
+  assert.match(deliver.whenToUse, /export or install/);
   assert.deepEqual(compile.documents[0], check.documents[0]);
   assert.deepEqual(compile.documents[0], render.documents[0]);
 });

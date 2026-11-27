@@ -12,13 +12,14 @@ import { deliveryNames, exportTrust, newExportKey, publicDelivery, readPortableE
 import { readWorkflowPageData } from './workflow-viewer.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from '../tests/integrations/local-mcp-fixture.mjs';
 import { createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
-  start, complete } from '@devcodex-labs/flowkit/interactive';
+  start, complete, resume } from '@devcodex-labs/flowkit/interactive';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canonicalBytes } from '../src/interactive/canonical.mjs';
 import { checkCandidate, prepareStandardSkill } from '../src/author/standard-artifact.mjs';
 import { openLocalSkillStore } from '../src/author/local-skill-store.mjs';
 import { createApiAgentAdapter, runApprovedCollectionWorkflow } from '../dist/host.mjs';
 import { localModel } from './local-mcp-model.mjs';
+import { createLocalCodexSkills } from './local-codex-skills.mjs';
 import { authorContractCases, verifyAuthorContractExport } from './test-author-contract-cases.mjs';
 
 const token = randomBytes(32).toString('hex');
@@ -29,7 +30,9 @@ const fixtureIndex = process.argv.indexOf('--layout-fixture');
 const fixtureDirectory = fixtureIndex < 0 ? null : process.argv[fixtureIndex + 1];
 const layoutValidation = process.argv.includes('--verify-model-layout');
 const relayoutValidation = process.argv.includes('--verify-relayout');
-const professional = process.argv.includes('--verify-professional');
+const nativeProfessional = process.argv.includes('--verify-native-professional');
+const professional = nativeProfessional || process.argv.includes('--verify-professional');
+const capabilityGraph = process.argv.includes('--capability-graph');
 const openai = process.argv.includes('--openai');
 const referenceMode = process.argv.includes('--reference') || !!fixtureDirectory;
 const longTurnMs = 660000;
@@ -73,7 +76,9 @@ const professionalGoal = [
   '复审未通过时返回「等待复审」，复审通过但用户尚未确认时返回「等待确认」，复审和用户确认都完成时返回「可以导出」。',
   'Agent 从工作流调用方获得 evidence，只读评估，不执行导出或调用外部工具。Agent 返回的 JSON 只含 decision。'
 ].join('\n');
-const goal = professional ? professionalGoal : v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
+const goal = professional ? professionalGoal + (capabilityGraph ?
+  '\n在冻结提案前，查阅已授权 FlowKit 能力图谱的 workflow-authoring 指南，并把指南作为提案和独立复审的设计依据。' : '') :
+  v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
   contractCase ? contractCase.goal : readOnly ?
   '起草 Interactive P0-B 工单校验工作流，严格按 Host 提供的 read-ticket 与 check-ticket 契约编排。正常读取回执返回 ticketOutcome。工单找到后调用 check-ticket，校验通过则成功，否则失败。工单不存在时直接失败并跳过校验。只编排这两个回调，无外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
@@ -83,8 +88,20 @@ await mkdir(base, { recursive: true });
 const root = await mkdtemp(path.join(base, 'flowkit-codex-e2e-'));
 const cwd = path.join(root, 'workspace');
 await mkdir(cwd);
+const nativeSkillBody = '---\r\nname: delivery-review\r\ndescription: 只读复核一条 FlowKit 候选交付记录。\r\n---\r\n\r\n' +
+  '作为交付复核员，只读评估工作流调用方提供的一条 FlowKit 候选交付记录，唯一输入是字符串 evidence。' +
+  '复审未通过时，decision 为「等待复审」。复审通过但用户尚未确认时，decision 为「等待确认」。' +
+  '复审通过且用户已经确认时，decision 为「可以导出」。只返回一个仅含字符串字段 decision 的 JSON 对象。' +
+  '不要执行导出、修改记录、调用外部工具或使用其他输入。\r\n';
+if (nativeProfessional) {
+  const directory = path.join(cwd, '.agents', 'skills', 'delivery-review');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'SKILL.md'), nativeSkillBody);
+}
 const service = await startLocalMcp({
   listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
+  ...(nativeProfessional ? { codexSkillsWorkspace: cwd } : {}),
+  ...(capabilityGraph ? { capabilityGraph: true } : {}),
   ...(v45Spec || layoutValidation || professional ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: longTurnMs } : {}),
   ...(openai ? { authorProvider: 'openai' } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
@@ -112,6 +129,9 @@ async function verifyApprovedSkillRun(exported, saved) {
     } });
   const store = openLocalSkillStore(path.join(root, 'state', 'author.sqlite'), () => false, () => false, { namespace: 'flowkit-local' });
   try {
+    const nativeResolver = nativeProfessional ? await createLocalCodexSkills({ workspace: cwd,
+      root: path.join(root, 'state', 'codex-skill-generations'), collection: { id: service.collectionId } }) : undefined;
+    if (nativeResolver) assert.match(pin.source, /^codex-skill:/);
     const taskPolicy = { projectRoot: cwd, maxDurationMs: 150000, hostProfile: { schemaVersion: 1, hostId: provider, hostVersion: '1.0.0',
       adapterId: 'responses', adapterVersion: '1.0.0', executionModes: ['standard'], capabilities: { skillResourceLoading: 'supported' } } };
     const runtime = { isControlSignal: () => false, validateResult: () => [], taskPolicy,
@@ -121,12 +141,13 @@ async function verifyApprovedSkillRun(exported, saved) {
         assert.equal(skill.resolvedVersion, pin.version);
         assert.equal(skill.digest, pin.digest);
         assert.match(skill.files['SKILL.md'], /等待确认/);
+        if (nativeResolver) assert.equal(skill.files['SKILL.md'], nativeSkillBody);
         return adapter.runAgentTask(prepared, context);
       } };
     const run = await runApprovedCollectionWorkflow(store, { collectionId: service.collectionId, skillId: saved.workflowId,
       candidateHash: candidate.hash, skillDirectory: exported.directory, executionRef: 'live-approved-delivery' },
     { hostProfile: candidate.manifest.hostProfile, authorizeExecution: ({ candidateHash }) => candidateHash === candidate.hash,
-      resolveApplicableSafetyPolicies: () => [], runtime },
+      resolveApplicableSafetyPolicies: () => [], runtime, ...(nativeResolver ? { resolveRunProfessionalSkill: nativeResolver.resolve } : {}) },
     { evidence: '候选已经通过独立复审。用户尚未确认当前候选版本。' }, { projectRoot: cwd });
     assert.equal(run.status, 'succeeded', JSON.stringify(run));
     assert.equal(run.publicOutput.decision, '等待确认');
@@ -250,7 +271,8 @@ async function runExport(directory) {
   const stage = readOnly ? 'P0-B' : 'P2';
   assert.equal(program.interactiveProgram.identity.implementedStage, stage);
   const namespace='cli-export';
-  const persistence=createSqliteInteractivePersistence(path.join(root,'run.sqlite'),{namespace});
+  const database=path.join(root,'run.sqlite');
+  let persistence=createSqliteInteractivePersistence(database,{namespace});
   const auth=createInteractiveHostContext({namespace,subjectId:'fixture',authorize:()=>true,authorizeTask:()=>true});
   const options={...persistence,auth,policy:{id:'cli-export',version:'1',
     canonicalizationVersion:'jcs-rfc8785-v1',capabilityStage:stage,disclosePolicyId:'test',bindingManifest:{}}};
@@ -275,8 +297,22 @@ async function runExport(directory) {
         assert.equal((await persistence.operationController.claim(claim, auth)).readOnly, true);
         const found = ticketOutcome === 'found';
         const result = { set: { ticketOutcome, ...(found ? { ticket: { id: 'test-ticket' } } : {}) } };
-        await persistence.operationController.settle({ runId: frame.runId, operationKey, inputHash,
-          effect: 'no-effect', evidenceHash: artifactDigest(startKey), result }, auth);
+        const settlement = { runId: frame.runId, operationKey, inputHash,
+          effect: 'no-effect', evidenceHash: artifactDigest(startKey), result };
+        const saved = await persistence.operationController.settle(settlement, auth);
+        if (startKey === 'check-passed') {
+          persistence.close();
+          persistence=createSqliteInteractivePersistence(database,{namespace});
+          Object.assign(options,persistence);
+          Object.assign(runOptions,persistence);
+          const resumed = await resume(frame.runId,{},runOptions);
+          assert.equal(resumed.runId,frame.runId);
+          assert.equal(resumed.pending[0]?.requestId,read.requestId);
+          assert.deepEqual(await persistence.operationController.load({runId:frame.runId,operationKey},auth),saved);
+          assert.deepEqual(await persistence.operationController.settle(settlement,auth),saved);
+          console.log(JSON.stringify({path:'interactive-resume',runId:resumed.runId,requestId:read.requestId,
+            originalRun:true,repeatedSettlement:true,storageReopened:true}));
+        }
         frame = await complete({ runId: frame.runId, requestId: read.requestId, operationKey,
           kind: 'action', outcome: 'succeeded', result }, {}, runOptions);
         if (found) {
@@ -375,13 +411,13 @@ async function withAppServer(env, test) {
       process_.stdin.write('{"jsonrpc":"2.0","method":"initialized"}\n');
       const { thread } = await call('thread/start', { cwd, ephemeral: true });
       const { data } = await call('mcpServerStatus/list', { threadId: thread.id });
-      const flowkit = data.find(item => Object.hasOwn(item.tools ?? {}, 'flowkit_collection'));
+      const flowkit = data.find(item => Object.hasOwn(item.tools ?? {}, 'flowkit_start_workflow'));
       const tool = async (name, args = {}, expectError = false) => {
         const out = await call('mcpServer/tool/call', { threadId: thread.id, server: flowkit.name, tool: name, arguments: args });
         assert.equal(out.isError === true, expectError, JSON.stringify(out));
         if (!expectError) return JSON.parse(out.content[0].text);
       };
-      await test({ data, flowkit, tool });
+      await test({ data, flowkit, tool, call });
     })()]);
   } finally {
     process_.stdin.end();
@@ -401,7 +437,8 @@ try {
   await withAppServer(directEnv, async ({ flowkit, tool }) => {
     assert.ok(flowkit);
     assert.equal(Boolean(flowkit.pluginId), false);
-    assert.equal((await tool('flowkit_collection')).collection.id, service.collectionId);
+    if (nativeProfessional) assert.equal(Object.hasOwn(flowkit.tools, 'flowkit_collection'), false);
+    else assert.equal((await tool('flowkit_collection')).collection.id, service.collectionId);
     if (referenceMode) {
       saved = await testReferenceDelivery(tool);
       return;
@@ -439,7 +476,7 @@ try {
     if (professional) {
       assert.deepEqual(offline.graph, preview.graph);
       assert.deepEqual(offline.layout, preview.layout);
-      assert.equal(preview.executionBindings[0].skills[0].pendingApproval, true);
+      assert.equal(preview.executionBindings[0].skills[0].pendingApproval ?? false, !nativeProfessional);
     } else assert.deepEqual(offline, preview);
     assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
     if (live) {
@@ -453,7 +490,13 @@ try {
       assert.ok(receipt.observation?.executionId && receipt.observation.subjectId);
       const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
         [name, await readFile(path.join(exported.directory, name), 'utf8')])));
-      assert.equal(readPortableExport(files, exportTrust([service.exportPublicKey])).candidate.hash, identity.candidateHash);
+      const verified = readPortableExport(files, exportTrust([service.exportPublicKey])).candidate;
+      assert.equal(verified.hash, identity.candidateHash);
+      if (capabilityGraph) {
+        const evidence = verified.manifest.documents?.find(item => item.documentId === 'flowkit-doc-authoring');
+        assert.ok(evidence?.revision && evidence.contentHash && evidence.source?.url, JSON.stringify(verified.manifest.documents));
+        console.log(JSON.stringify({ path: 'live-graph-author-document', ...evidence, candidateHash: verified.hash }));
+      }
       console.log(JSON.stringify({ path: 'live-author-review-signature', candidateHash: identity.candidateHash,
         reviewExecutionId: receipt.observation.executionId, reviewSubjectId: receipt.observation.subjectId,
         signedFilesVerified: deliveryNames.length, ...(readOnly ? { exportPublicKey: service.exportPublicKey } : {}) }));
@@ -477,6 +520,7 @@ try {
     assert.deepEqual(await tool('flowkit_add_workflow', add), saved);
     if (professional) {
       await verifyApprovedSkillRun(exported, saved);
+      if (nativeProfessional) return;
       const material = (await readFile('website/content/guide/workflow-authoring.mdx', 'utf8')).split('\n## 用 Author 准备 Workflow Skill')[0].slice(0, 12000);
       const source = { id: 'flowkit-guide', title: 'FlowKit 工作流编写指南', content: material };
       const designInput = { requestId: 'real-guide-map', title: 'FlowKit 本机起草、复审与交付', materials: [source] };
@@ -509,8 +553,16 @@ try {
   const { marketplace, selector } = await buildCodexMarketplace(root, { url: service.url });
   await codex(['plugin','marketplace','add',marketplace,'--json'], pluginEnv);
   await codex(['plugin','add',selector,'--json'], pluginEnv);
-  await withAppServer(pluginEnv, async ({ flowkit, tool }) => {
+  await withAppServer(pluginEnv, async ({ flowkit, tool, call }) => {
     assert.equal(flowkit?.pluginId, selector);
+    if (nativeProfessional) {
+      const { data } = await call('skills/list', { cwds: [cwd], forceReload: true });
+      const names = data.flatMap(page => page.skills.map(skill => skill.name));
+      assert.ok(names.includes('flowkit-delivery-review'), JSON.stringify(names));
+      assert.ok(names.includes('delivery-review'), JSON.stringify(names));
+      console.log(JSON.stringify({ path: 'approved-native-skill-discovery', names, candidateHash: saved.candidateHash }));
+      return;
+    }
     const data = await tool('flowkit_collection');
     if (professional) assert.ok(data.skills.some(item => item.candidateHash === saved.candidateHash));
     else assert.deepEqual(data.skills.map(({ candidateHash }) => candidateHash), [saved.candidateHash]);

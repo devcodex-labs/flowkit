@@ -42,6 +42,9 @@ export async function bindProfessionalNeeds(proposal, { catalog, collection, req
           throw new TypeError('Catalog matches must identify an approved Skill and authorized source');
         }
         checkProfessionalSkill(candidate);
+        if (candidate.manifest.format === 'codex-native' && !source.startsWith('codex-skill:')) {
+          throw new TypeError('An existing native Skill must bind to its exact Codex source');
+        }
         return match;
       });
       let matched = selection === undefined && matches.length === 1 ? matches[0] : matches.find(({ source, candidate: { manifest } }) =>

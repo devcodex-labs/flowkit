@@ -35,19 +35,22 @@ export function checkProfessionalSkill({ files, manifest, hash }) {
   const names = Object.keys(files);
   const identity = value => typeof value === 'string' && value.trim() && !/\s/.test(value);
   const entry = skillDocument(manifest.name, manifest.description, '');
-  if (manifest.kind !== 'professional' || !identity(manifest.collectionId) || !identity(manifest.skillId) ||
+  const native = manifest.format === 'codex-native';
+  if (manifest.kind !== 'professional' || (manifest.format !== undefined && !native) ||
+    !identity(manifest.collectionId) || !identity(manifest.skillId) ||
     !isSemVer(manifest.version) || !Object.hasOwn(files, 'SKILL.md') ||
     names.length !== new Set(names.map(name => name.toLowerCase())).size ||
     names.length !== Object.keys(manifest.files).length ||
     names.some(file => file !== 'SKILL.md' && !professionalResource(file) || typeof files[file] !== 'string' ||
       artifactDigest(files[file]) !== manifest.files[file]) ||
-    !files['SKILL.md'].startsWith(entry.slice(0, -1)) ||
+    (!native && !files['SKILL.md'].startsWith(entry.slice(0, -1))) ||
     manifest.digest !== artifactDigest(JSON.stringify(manifest.files)) || hash !== artifactDigest(JSON.stringify(manifest))) {
     throw new TypeError('Professional Skill candidate bytes or manifest differ');
   }
 }
 
 export function publishProfessionalSkill(candidate, receipts, host) {
+  if (candidate.manifest.format === 'codex-native') throw new TypeError('An existing native Skill stays in its Host catalog');
   return publishReviewedCandidate(candidate, receipts, host, checkProfessionalSkill);
 }
 
@@ -61,7 +64,8 @@ export async function resolveTrustedProfessionalPin(store, pin, { collectionId, 
   if (resolved?.authorized !== true || !resolved.candidate || resolved.source !== pin.source) return null;
   const { candidate } = resolved;
   const { collectionId: origin, skillId, version, digest } = candidate.manifest;
-  if (skillId !== pin.id || version !== pin.version || digest !== pin.digest ||
+  if ((candidate.manifest.format === 'codex-native' && !pin.source.startsWith('codex-skill:')) ||
+      skillId !== pin.id || version !== pin.version || digest !== pin.digest ||
       pin.source.startsWith('collection:') && pin.source !== 'collection:' + origin) return null;
   try { checkProfessionalSkill(candidate); } catch { return null; }
   return { logicalId: skillId, resolvedVersion: version, digest, source: pin.source, files: { ...candidate.files } };

@@ -21,6 +21,7 @@ import { prepareStandardSkill } from '../../src/author/standard-artifact.mjs';
 import { bindProfessionalNeeds } from '../../src/author/workflow-professional-bindings.mjs';
 import { prepareProfessionalSkill } from '../../src/author/professional-skills.mjs';
 import { openLocalSkillStore } from '../../src/author/local-skill-store.mjs';
+import { flowkitProvider } from '../../src/integrations/capability-graph.mjs';
 import { openOfflineWorkflowDependencies, runApprovedCollectionWorkflow, sealOfflineWorkflowDependencies } from '../../src/host.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from './local-mcp-fixture.mjs';
 
@@ -52,74 +53,117 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
   assert.deepEqual(mcp.mcpServers.flowkit, { type: 'http', url, bearer_token_env_var: 'FLOWKIT_MCP_TOKEN' });
 });
 
-test('local Intent sends workflow scope guidance separately from raw materials and preserves acceptance facts', async () => {
-  const input = { input: 'The workflow must ask for business approval. The tester will validate recovery.', context: { revision: '30' } };
-  const intent = { effective: { intents: [{ id: 'work', goal: 'Perform the change', children: [], constraints: [],
-    references: [{ id: 'receipt', kind: 'entity', ref: null, resolved: false }] }],
-    constraints: [
-      { id: 'approval', text: 'Ask for business approval', kind: 'requirement', scope: { type: 'intent', intentId: 'work' } },
-      { id: 'input', text: 'Preserve input', kind: 'prohibition', scope: { type: 'global' } },
-      { id: 'order', text: 'Read first', kind: 'requirement', scope: { type: 'phase', intentId: 'work' } },
-      { id: 'record', text: 'Record the receipt', kind: 'preference', scope: { type: 'target', intentId: 'work', referenceId: 'receipt' } }
-    ],
-    relations: [], unresolved: [], coverage: 'complete' },
-  turn: { changes: [], facts: { externalAcceptance: ['The tester will validate recovery'] } }, issues: [], inferences: [], evidence: [] };
-  let status = 'completed', result = intent;
+test('a portable signature covers fixed public FlowKit design evidence and excludes other documentation', async () => {
+  const capability = flowkitProvider.capabilities.find(item => item.id === 'define-workflow');
+  const document = capability.documents.find(item => item.id === 'flowkit-doc-authoring');
+  const evidence = { capabilityId: 'flowkit::define-workflow', documentId: document.id,
+    revision: artifactDigest('fixed-provider-revision'), contentHash: artifactDigest('authorized guide bytes'), source: document.source };
+  const key = newExportKey();
+  const trust = exportTrust([key.publicKey]);
+  const prepare = async source => {
+    const { candidate, diagnostics } = await prepareStandardSkill({ file: path.resolve('examples/docs/conditional-routing/sample.workflow.js'),
+      collectionId: 'doc-evidence', skillId: 'portable', name: 'portable', description: 'Verify design evidence', version: '1.0.0',
+      hostProfile: { id: 'fixed', digest: artifactDigest('fixed host') }, buildId: 'portable-references', safetyPolicies: [],
+      documents: [{ ...evidence, source }], compilerOptions: { skillCheck: false } });
+    assert.ok(candidate, JSON.stringify(diagnostics));
+    return candidate;
+  };
+  const candidate = await prepare(evidence.source);
+  const signed = publicDelivery(candidate, key);
+  const imported = readPortableExport(signed, trust).candidate;
+  assert.equal(imported.hash, candidate.hash);
+  assert.deepEqual(imported.manifest.documents, [evidence]);
+  for (const source of [{ type: 'file', path: 'private.md' }, { type: 'url', url: 'https://private.example/guide.mdx' },
+    { type: 'url', url: evidence.source.url + '?credential=fixture' }]) {
+    assert.deepEqual(readPortableExport(publicDelivery(await prepare(source), key), trust), {});
+  }
+});
+
+test('the default local Author uses the formal Intent SDK for validation and stable baselines', async () => {
+  const source = { root: 'input', pointer: '' };
+  const messages = Object.fromEntries(['changed', 'notApplicable', 'noValue', 'noDeclaration', 'explicitNull', 'invalid',
+    'open', 'mixed', 'semanticUnknown', 'unresolved', 'relationConflict'].map(key => [key, 'Interpret the supplied evidence.']));
+  const base = {
+    version: 'candidate-2', kind: 'request', normalizedInput: 'Inspect one record.', relatedKeys: ['inspect'],
+    historyCoverage: 'complete', usedHistory: false, messages,
+    nodes: [{ key: 'inspect', parentKey: null, priorRef: null, domain: 'records', action: 'inspect', target: 'record',
+      goal: 'Inspect one record', understanding: 'clear', optional: null, expectedOutput: [], sources: [source] }],
+    constraints: [], references: [], relations: [], priorTargets: [],
+    changes: [{ operation: 'add', effect: 'applied', targetKind: 'intent', targetKey: 'inspect', conditionKey: null,
+      description: 'Inspect one record', sources: [source], deltaHints: [] }],
+    observations: [], issues: [], inferences: [], evidence: [], suggestions: []
+  };
+  let result = base, status = 'completed', requests = 0;
   const model = localModel({ provider: 'openai', model: 'fixture', apiKey: 'fixture',
     async fetcher(_url, options) {
+      requests++;
       const request = JSON.parse(options.body);
       const [instructions, material] = request.input;
       assert.equal(request.max_output_tokens, 8192);
       assert.equal(instructions.role, 'developer');
-      assert.match(instructions.content, /Keep requirements explicitly assigned.*external acceptance tester in turn\.facts/);
-      assert.match(instructions.content, /A Human approval that the workflow itself must request.*workflow constraint/);
-      assert.deepEqual(material, { role: 'user', content: JSON.stringify(input) });
+      assert.match(instructions.content, /candidate-2/);
+      assert.match(instructions.content, /A Human decision required before a business action is a workflow constraint/);
+      assert.equal(material.role, 'user');
+      assert.ok(JSON.parse(material.content));
       return Response.json({ status, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] }] });
     } });
-  assert.deepEqual(await model.execution.request({ flowkitIntent: input }), intent);
-  for (const mutate of [
-    result => { result.effective.constraints[0].scope = { intentId: 'work' }; },
-    result => { result.effective.constraints[3].scope.referenceId = 'unknown'; },
-    result => { result.effective.intents[0].constraints.push(result.effective.constraints[0]); },
-    result => { result.effective.intents.push(result.effective.intents[0]); },
-    result => { result.turn.changes=[{operation:'confirm',effect:'applied',target:{kind:'constraint',id:'input'}}]; },
-    result => { result.turn.changes=[{operation:'confirm',effect:'applied',sourceRefs:[]}]; },
-    result => { result.turn.changes=[{operation:'confirm',effect:'applied',target:null,sourceRefs:[]}]; },
-    result => { result.evidence=[{target:'/effective/constraints/0',sourceRefs:[null]}]; },
-    result => { result.issues=[{sourceRefs:{root:'input'}}]; },
-    result => { result.issues=[{questions:[{question:'Choose',optionIds:'invalid'}]}]; }
+  const { intentRuntime } = await model.execution.createSession({ request: model.execution.request });
+  assert.equal(intentRuntime.usesOfficialIntent, true);
+  const input = { input: 'Inspect one record.', output: { evidence: true } };
+  const first = await intentRuntime.parse(input);
+  assert.equal(first.effective.intents.length, 1);
+  const userId = first.effective.intents[0].id;
+  result = structuredClone(base);
+  result.kind = 'amendment';
+  result.usedHistory = true;
+  result.nodes[0].priorRef = { root: 'baseline', pointer: '/intents/0' };
+  result.changes[0].operation = 'modify';
+  assert.equal((await intentRuntime.parse({ ...input, baseline: first.effective })).effective.intents[0].id, userId);
+  const beforeInvalidBaseline = requests;
+  await assert.rejects(intentRuntime.parse({ ...input, baseline: { intents: [], coverage: 'complete' } }),
+    { code: 'INPUT_INVALID', details: { path: '/baseline' } });
+  assert.equal(requests, beforeInvalidBaseline);
+
+  const issue = optionKeys => ({ key: 'decision', ownerKey: null, fieldTarget: null, code: 'CHOOSE_RECORD', category: 'ambiguity',
+    message: 'Choose a record.', sources: [source], candidates: [
+      { key: 'first', description: 'First record', intentKey: null, sources: [source] },
+      { key: 'second', description: 'Second record', intentKey: null, sources: [source] }],
+    questions: [{ question: 'Which record?', optionKeys }] });
+  for (const corrupt of [
+    value => { value.changes[0].targetKey = null; },
+    value => { Object.assign(value.changes[0], { operation: 'confirm', targetKey: 'unknown' }); },
+    value => { value.nodes[0].sources[0].root = 'unknown'; },
+    value => { value.issues = [issue(['first', 'second'])]; value.issues[0].questions[0].question = 5; },
+    value => { value.issues = [issue(['first', 'nonexistent'])]; },
+    value => { value.changes[0].sources = []; },
+    value => { delete value.version; }
   ]) {
-    result = structuredClone(intent);
-    mutate(result);
-    await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INVALID' });
+    result = structuredClone(base);
+    corrupt(result);
+    await assert.rejects(intentRuntime.parse(input), { code: 'MODEL_OUTPUT_INVALID' });
   }
-  result=structuredClone(intent);
-  result.turn.changes=[{operation:'confirm',effect:'applied',target:{kind:'constraint',id:'input'},sourceRefs:[{root:'input'}]}];
-  assert.deepEqual(await model.execution.request({flowkitIntent:input}),result);
   status = 'incomplete';
-  await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INCOMPLETE' });
+  await assert.rejects(intentRuntime.parse(input), { code: 'MODEL_OUTPUT_INCOMPLETE' });
 });
 
-test('the local model deadline includes direct Intent response bodies and receives the caller signal',async () => {
-  const caller=new AbortController();
-  const keepAlive=setTimeout(()=>{},200);
+test('the local model deadline covers the formal Intent response body', async () => {
+  const keepAlive = setTimeout(() => {}, 200);
   try {
     let signal;
-    const model=localModel({provider:'openai',model:'fixture',apiKey:'fixture',timeoutMs:15,
-      async fetcher(_url,options) {
-        signal=options.signal;
-        return new Response(new ReadableStream({start(controller) {
-          signal.addEventListener('abort',()=>controller.error(signal.reason),{once:true});
-        }}));
-      }});
-    await assert.rejects(model.execution.request({flowkitIntent:{input:'Inspect'}},{signal:caller.signal}),{name:'TimeoutError'});
-    assert.equal(signal.aborted,true);
-    await assert.rejects(model.execution.request({flowkitIntent:{input:'Inspect'}},{signal:AbortSignal.abort()}),{name:'AbortError'});
-    let forwarded;
-    const session=await model.execution.createSession({request:(_input,options)=>{forwarded=options.signal;}});
-    await session.intentRuntime.parse({input:'Inspect'},{signal:caller.signal});
-    assert.equal(forwarded,caller.signal);
-  } finally { clearTimeout(keepAlive); }
+    const model = localModel({ provider: 'openai', model: 'fixture', apiKey: 'fixture', timeoutMs: 15,
+      async fetcher(_url, options) {
+        signal = options.signal;
+        return new Response(new ReadableStream({ start(controller) {
+          signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+        } }));
+      } });
+    const { intentRuntime } = await model.execution.createSession({ request: model.execution.request });
+    await assert.rejects(intentRuntime.parse({ input: 'Inspect' }), { code: 'FKA_AUTHOR_MODEL_TIMEOUT' });
+    assert.equal(signal.aborted, true);
+    await assert.rejects(intentRuntime.parse({ input: 'Inspect' }, { signal: AbortSignal.abort() }), { code: 'REQUEST_ABORTED' });
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test('the local Author drafts only after catalog lookup, publishes the approved Skill with the workflow, and reuses it', async t => {

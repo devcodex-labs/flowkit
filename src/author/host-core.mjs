@@ -164,6 +164,19 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
   const clarify = (message, questions) => Object.assign(authorError('author-resource', message), { outcome: 'needs-clarification', questions });
+  async function readProfessionalSkill(pin) {
+    const skill = await ports.read({ professionalSkill: pin }, () => options.resolveProfessionalSkill?.(pin, { requestContext, signal }));
+    if (!skill || skill.approved !== true || skill.id !== pin.id || skill.version !== pin.version || skill.digest !== pin.digest ||
+        pin.source !== undefined && skill.source !== pin.source) return null;
+    const exact = { id: skill.id, version: skill.version, digest: skill.digest, approved: true,
+      ...(skill.source === undefined ? {} : { source: skill.source }) };
+    if (exact.source?.startsWith('codex-skill:')) {
+      const { text, contentHash } = skill.reviewMaterial ?? {};
+      if (typeof text !== 'string' || text.length > 24000 || artifactDigest(text) !== contentHash) return null;
+      exact.reviewMaterial = { text, contentHash };
+    }
+    return { ...exact, nodeId: pin.nodeId, ...(pin.lookup ? { lookup: pin.lookup } : {}) };
+  }
   const observed = (operation, stage) => ports.observeModel(() => {
     const pending = Promise.resolve().then(operation);
     track(pending);
@@ -247,7 +260,21 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       for (const item of draft.candidate.manifest.documents ?? []) {
         await author.readDocument({ ...item, ...(item.source.type === 'url' ? { url: item.source.url } : {}) });
       }
-      ctx.state.resourceSnapshot = draft.resources;
+      const nativePins = draft.candidate.manifest.professionalSkills.filter(pin => pin.source?.startsWith('codex-skill:'));
+      if (!nativePins.length) ctx.state.resourceSnapshot = draft.resources;
+      else {
+        const retained = draft.resources?.professionalSkills ?? [];
+        const verified = [];
+        for (const pin of nativePins) {
+          const prior = retained.find(item => item.nodeId === pin.nodeId && item.id === pin.id);
+          const current = await readProfessionalSkill({ ...pin, ...(prior?.lookup ? { lookup: prior.lookup } : {}) });
+          if (!current) throw clarify('The approved native Professional Skill is unavailable for review',
+            [question('missing-professional-skill', `Restore access to the exact Professional Skill for ${pin.id}`, ['review-access', 'cancel'])]);
+          verified.push(current);
+        }
+        ctx.state.resourceSnapshot = { ...draft.resources, professionalSkills: [
+          ...retained.filter(item => !item.source?.startsWith('codex-skill:')), ...verified] };
+      }
     },
     async parseIntent(ctx) {
       const authorization = { ...turn.reviewAuthorization, ...turn.request };
@@ -281,7 +308,14 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
       context = await prepareDocuments(context, input);
       if (documentWork) ctx.state.authorizedRequest.contextSnapshot = context;
-      const baseline = Object.hasOwn(authorization, 'baseline') ? authorization.baseline : continuation ? undefined : draft.intentBaseline;
+      const reconfirmBaseline = turn.request.reconfirmIntentBaseline === true;
+      let baseline = Object.hasOwn(authorization, 'baseline') ? authorization.baseline : draft.intentBaseline;
+      if (reconfirmBaseline || (continuation && !session.intentRuntime.usesOfficialIntent && !Object.hasOwn(authorization, 'baseline'))) {
+        baseline = undefined;
+      }
+      if (reconfirmBaseline) {
+        context = { suppliedContext: context, priorIntentInterpretation: draft.intentBaseline, initialRequest: draft.goal };
+      }
       const mayRepairIntentOutput = draft.operation === 'create' && (!draft.candidate || !!turn.reviewRevision) && !baseline;
       const request = { input,
         context: draftContext ? { currentDraft: draftContext, suppliedContext: context ?? null } : context,
@@ -302,9 +336,21 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
             'The model did not identify a concrete business decision. Continue on this draft with the answers already saved.'),
           { outcome: 'needs-revision' });
         } catch (error) {
+          if (baseline === draft.intentBaseline && baseline && session.intentRuntime.usesOfficialIntent &&
+              error.code === 'INPUT_INVALID' && error.stage === 'input' && error.details?.path === '/baseline') {
+            throw Object.assign(authorError('FKA_INTENT_BASELINE_REVIEW_REQUIRED',
+              'This draft has an older Intent baseline. Start a new authoring turn with reconfirmIntentBaseline after reviewing the original request.'), {
+              outcome: 'needs-revision', cause: error
+            });
+          }
           if (!mayRepairIntentOutput || !isIntentModelOutputError(error)) throw error;
           ports.retryIntentOutput(error);
-          if (!attempt) continue;
+          if (!attempt) {
+            if (session.intentRuntime.usesOfficialIntent && Array.isArray(error.details?.violations)) {
+              request.context = { suppliedContext: request.context ?? null, recognitionFeedback: error.details.violations };
+            }
+            continue;
+          }
           throw Object.assign(authorError(error.code,
             'The model could not interpret the saved input. Continue on this draft without re-entering your answers.'),
           { outcome: 'needs-revision', cause: error });
@@ -330,10 +376,16 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       for (const pin of pins) documents.push(await author.readDocument(pin));
       const guide = await ports.read({ bundledAuthorGuide: true }, () => readFile(new URL('./flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8'));
       if (artifactDigest(guide) !== options.coreIdentity.guideHash) throw authorError('author-resource', 'Bundled Author guide differs from the built core identity');
-      const ids = options.initialCapabilityIds ?? ['flowkit::compile-workflow'];
-      const match = graph && ids.length ? await readGraphContext() : undefined;
+      const ids = options.initialCapabilityIds ?? [];
+      const match = graph && (ids.length || options.discoverCapabilities) ? await readGraphContext() : undefined;
+      const discovery = graph && options.discoverCapabilities ? await options.discoverCapabilities({
+        input: ctx.state.authorizedRequest.input, graph, context: match, requestContext, signal, request: ports.request,
+        readDocumentUrl: options.readDocumentUrl && (url => ports.read({ url }, () => options.readDocumentUrl(url, { requestContext, signal })))
+      }) : undefined;
+      if (discovery?.documents) documents.push(...discovery.documents);
       const catalog = graph && ids.length ? await graph.getCapabilities({ ids, ...(match === undefined ? {} : { context: match }) }) : null;
       ctx.state.catalogSnapshot = { documents, catalog: catalog ?? null,
+        ...(discovery ? { discovery: discovery.selection } : {}),
         generalDocumentation: { text: guide, contentHash: artifactDigest(guide), source: 'bundled-author-guide' },
         hostProfile: options.hostProfile, choices: draft.choices,
         ...(trustedContracts.length ? { hostExecutionContracts: trustedContracts } : {}) };
@@ -371,8 +423,18 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         if (draft.plan?.intentRef?.effectiveIntentHash === planningIntent.intentRef.effectiveIntentHash &&
           draft.plan.intentRef.changeSetHash === planningIntent.intentRef.changeSetHash) planningIntent.intentRef = draft.plan.intentRef;
         const confirmedSource = ctx.state.confirmedPlan && draft.plan.sourceHash;
-        if (!ctx.state.confirmedPlan && Array.isArray(proposal.resourceRequirements)) {
-          proposal.resourceRequirements = proposal.resourceRequirements.map(({ lookup: _lookup, needId: _needId, selection: _selection, ...pin }) => pin);
+        if (!ctx.state.confirmedPlan) {
+          const documents = ctx.state.catalogSnapshot.documents.map(({ evidence }) => {
+            const { capabilityId, documentId, revision, contentHash, source } = evidence;
+            return { kind: 'document', capabilityId, documentId, revision, contentHash,
+              ...(source.type === 'url' ? { url: source.url } : {}) };
+          });
+          const requirements = proposal.resourceRequirements ?? [];
+          if (Array.isArray(requirements)) {
+            proposal.resourceRequirements = [...requirements.filter(pin => pin.kind !== 'document' ||
+              !documents.some(document => document.capabilityId === pin.capabilityId && document.documentId === pin.documentId))
+              .map(({ lookup: _lookup, needId: _needId, selection: _selection, ...pin }) => pin), ...documents];
+          }
         }
         const declaredDecisions = (proposal.unresolvedIssues ?? []).filter(item => item.blocking);
         const assumedDecision = (proposal.assumptions ?? []).some(item => item.requiresConfirmation);
@@ -473,14 +535,13 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           selected.push({ nodeId, id, version, digest, source, draft: true, lookup });
           continue;
         }
-        const skill = await ports.read({ professionalSkill: pin }, () => options.resolveProfessionalSkill?.(pin, { requestContext, signal }));
-        if (!skill || skill.approved !== true || skill.id !== pin.id || skill.version !== pin.version || skill.digest !== pin.digest ||
-            pin.source !== undefined && skill.source !== pin.source) {
+        const skill = await readProfessionalSkill(pin);
+        if (!skill) {
           if (pin.required === false) continue;
           ctx.state.resourceSnapshot = { ready: false, gap: pin, options: ['create', 'review', 'approve-existing'] };
           ctx.state.questions = [question('missing-professional-skill', `Select an approved exact Professional Skill for ${pin.id}`, ['create-review-approve', 'select-existing'])]; return;
         }
-        selected.push({ ...skill, nodeId: pin.nodeId, ...(pin.lookup ? { lookup: pin.lookup } : {}) });
+        selected.push(skill);
       }
       ctx.state.resourceSnapshot = { ready: capabilities.supported, capabilities, documents,
         catalogIdentity: authorIdentity(ctx.state.catalogSnapshot),
