@@ -1,5 +1,5 @@
 // Keep references on the reviewed documentation snapshot rather than the moving main branch.
-const documentationCommit = '30441a7934aa74bc3e869c35eac53cc4095ecf15';
+const documentationCommit = '3f3f4abd983c3c1859b6f81d5d931f129f48fede';
 
 function document(id, page) {
   return {
