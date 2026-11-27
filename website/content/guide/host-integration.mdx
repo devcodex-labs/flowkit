@@ -101,7 +101,7 @@ settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提�
 
 Author 可选接入 Host 已授权的 Capability Graph。`capabilityGraph` 可按当前认证上下文选择 Graph 实例。`resolveCapabilityGraphContext` 单独返回适用性所需的 `facts` 和可选 `notes`，供目录预选、计划解析和资源绑定共用。Host 可提供 `initialCapabilityIds` 及任务所需的 `initialDocuments`，远端材料由 `readDocumentUrl` 对精确 URL 授权读取并校验固定版本。没有外部依赖的工作流可独立使用 Author。
 
-`flowkit_collection` 和协商的 Skills 发现按 `pageSize` 分页；使用 `nextCursor` 获取下一页。默认最多枚举 10000 条 metadata，可用 `maxMetadataEntries` 调整，每页还受 `maxResourceBytes` 限制。内置 Store 从 metadata 查询取得目录，只为选中页读取批准版本正文；自定义 Store 应提供 `readCollectionMetadata` 以避免全量正文装配。缩小集合范围可降低上下文与存储读取压力。
+对非原生 MCP 消费者，`flowkit_collection` 和协商的 Skills 发现按 `pageSize` 分页，使用 `nextCursor` 获取下一页。默认最多枚举 10000 条 metadata，可用 `maxMetadataEntries` 调整，每页还受 `maxResourceBytes` 限制。内置 Store 从 metadata 查询取得目录，只为选中页读取批准版本正文。自定义 Store 应提供 `readCollectionMetadata` 以避免全量正文装配。启用本机原生发现后，由指定工作区的 Codex 目录裁定发现和来源。
 
 `@devcodex-labs/flowkit/mcp` 提供 `createFlowkitMcpServer`、`connectFlowkitStdio` 和 `createFlowkitHttpHandler`。Host 为每个连接或请求绑定项目 namespace、可访问集合、同一 Author 服务和批准版本存储。每次工具或资源操作均调用 Host 授权函数。
 

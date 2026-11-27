@@ -1370,9 +1370,9 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 
 ### FK_C050 · 缺少 Agent 指令来源 {#FK_C050}
 
-级别为 **error**。节点缺少 `agent`、`skill` 和非空 `description` 时触发。
+级别为 **error**。当节点既没有 `agent` 或 `skill`，也没有非空 `description` 或可用的 `instruction` 说明引用时触发。
 
-填写 `agent`、显式 `skill` 或非空 `description`。同时给出 `agent` 和 `skill` 时，路径以 `skill` 为准。
+填写 `agent`、显式 `skill`、非空 `description`，或包含 `role: 'instruction'` 的 `descriptionRefs`。`description` 可为字符串或说明数组。仅包含 `reference` 或 `evidence` 的引用仍需另行提供指令。填写 `agent` 和 `skill` 时，路径以 `skill` 为准。
 
 错误源码（保存为case.workflow.js）：
 

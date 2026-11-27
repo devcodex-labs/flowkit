@@ -53,11 +53,21 @@ bearer_token_env_var = "FLOWKIT_MCP_TOKEN"
 | `dataDir`、`exportDir` | `.flowkit/data`、`flowkit-exports`。分别存放隔离的候选状态与导出文件 |
 | `mcpTokenEnv` | `FLOWKIT_MCP_TOKEN`。指定服务读取 MCP 凭证的环境变量名，客户端用同一凭证 |
 | `authorProvider`、`authorModelEnv` | `codex`、`FLOWKIT_AUTHOR_MODEL`。Codex 采用 CLI 登录态，`openai` 采用配置的 Responses 模型和 `OPENAI_API_KEY` |
+| `codexSkillsWorkspace` | 可选。授权 Codex 仓库的绝对目录。启用后用 Codex 的原生目录发现，批准的集合发布到该工作区的 `.agents/skills`，并保留集合入口及两类同级 Skill |
+| `capabilityGraph` | 默认关闭。`true` 注册 FlowKit Provider。用 `flowkit_match_capability` 查找起草、批准后交付、执行或恢复入口 |
 | `authorTaskTimeoutMs`、`authorTurnDurationMs` | 模型请求默认 `90000`。Author 普通回合默认 `240000`，长文档默认 `900000` |
 | `designTurnDurationMs`、`resourceReadTimeoutMs` | 项目设计回合默认 `240000`。Run 产物读取、设计材料和证据再核验以及预览 Skill 复核的读取窗口默认 `90000` |
 | `trustedExportKeys` | 接收方接受的签名公钥。撤销源授权时，从该列表移除并重启接收服务 |
 
-使用 OpenAI Responses 时，将服务配置中的 `authorProvider` 改为 `openai`，在服务环境中提供 `OPENAI_API_KEY` 和 `FLOWKIT_AUTHOR_MODEL`。操作仍使用同一个 MCP 入口。已有编译工作流由 SDK 或 Host 提供运行模型和授权。宿主角色、数据、业务回调、Task V2 资源预算及授权目录随 Host 配置传入。
+默认 Author 使用正式 Intent Runtime SDK，模型传输仍由本机 Host 控制。使用 OpenAI Responses 时，将服务配置中的 `authorProvider` 改为 `openai`，在服务环境中提供 `OPENAI_API_KEY` 和 `FLOWKIT_AUTHOR_MODEL`。操作仍使用同一个 MCP 入口。已有编译工作流由 SDK 或 Host 提供运行模型和授权。宿主角色、数据、业务回调、Task V2 资源预算及授权目录随 Host 配置传入。
+
+草稿若收到 `FKA_INTENT_BASELINE_REVIEW_REQUIRED`，请核对原请求与现有约束，再用新 turn ID 和 `reconfirmIntentBaseline: true` 提交复核后的输入。旧草稿的结构作为参考，候选仍需重新通过复审。已批准的 Workflow Skill 和 Run 回执按原身份读取。
+
+原生模式保留工作区中普通 `SKILL.md` 的字节及可移植文本资源。专业节点通过当前 Codex 目录选择精确来源与摘要。复审读取精确正文作为证据，重开复审时重新检查授权和摘要。普通描述节点直接编排。`codexSkillsWorkspace` 启用时，本机连接由 Codex 提供目录，MCP 的集合分页和 Skills 扩展供独立非原生消费者使用。
+
+签名的三件导出可携带指向固定 Git 提交的 FlowKit 公开站点文档证据。接收端添加时仍核对来源、精确摘要和本地授权。文档是设计与复审的依据，批准的工作流只加载其实际运行所需的依赖。
+
+Graph 发现给出当前授权范围的建议。起草时 Host 首次读取实际使用的 Provider 文档，将 revision、来源和字节摘要交给 Author，随 Plan 和候选复审。交付继续从批准候选的导出或添加入口操作，继续 Interactive Run 仍需已有 Run 身份和其执行 Host。Graph 的匹配不会产生这些效果。
 
 [Host 接入](./host-integration) · [Interactive 持久运行](./interactive)
 
@@ -171,7 +181,11 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 用项目或功能材料梳理流程时，可以请宿主调用 `flowkit_create_design_diagram`，只提供本次允许模型读取的文字材料。项目材料按 UTF-8 范围处理，整图不设节点、关系或缺口总数门槛。首次生成返回 `status: "running"`。使用相同 `requestId`、标题和来源查询，客户端连接可独立关闭。设计完成后返回 `status: "ready"` 及单份离线 `design.html`。
 
-本机 Host 的 `authorTaskTimeoutMs` 覆盖单次模型请求及其正文。项目设计尝试的总时限由 `designTurnDurationMs` 决定。到期后返回 `status: "timed-out"`，`error.code` 区分 `FKA_DESIGN_MODEL_TIMEOUT` 和 `FKA_DESIGN_TURN_TIMEOUT`。本机服务主动停止共享任务时，可读到 `status: "interrupted"`。普通轮询会读到原状态。明确续办时，使用相同请求、同一标题及材料，并附该状态返回的 `resumeToken`。相同凭据只能开启一次新尝试，已核对且仍获授权的分片会被复用。客户端仅停止等待时，共享 Design 可继续运行。业务方在运行已生成的工作流时独立声明业务截止，FlowKit Runtime 执行该规则。
+本机 Host 的 `authorTaskTimeoutMs` 管实际模型请求。普通 Intent 请求的到期诊断为 `FKA_AUTHOR_MODEL_TIMEOUT`。Design 尝试创建后由 `designTurnDurationMs` 计时。初次材料准入由调用方和 Host 读端口负责，`resourceReadTimeoutMs` 适用于已有资源的读取和再核验。
+
+轮询会在逻辑到期后返回 `timed-out`，或在 Host 停止时返回 `interrupted`。Design 的 `error.code` 区分单次模型请求与整轮截止。若响应仍为 `draining: true`，请用同一请求继续查询。物理清理结束后才会返回 `resumeToken`，用于原请求同一标题和材料的显式续办。令牌只能开启一次新尝试，仍获授权的分片会被复用。
+
+最终文件发布前检查本轮截止。已经实际发布的结果通过原身份补齐回执。客户端停止等待时，共享 Design 可继续运行。业务方在运行已生成的工作流时声明独立的业务截止，由 FlowKit Runtime 执行。
 
 打开大型图时，同一画布展示项目总览和已有的跨块关系。点击块可原位展开，点击跨块连线可看每条原始关系的起止节点、条件和材料依据。用工具栏搜索名称或标识可直接定位文件里的节点。总览或子流程可分层排版，模型的单次布局预算应用到每层任务。MCP 回执通过 `layoutSource` 标明采用模型、采用部分模型或使用本地回退。原始节点、关系和待确认项保存在同一个离线文件中。静态图采用工作流详情组件显示取证说明和字段空态。需要推进实际任务时，用经授权的设计引用起草并复审可执行候选。节点详情内的来源分组标识是设计引用可用的 `groupId`。
 
@@ -219,6 +233,7 @@ node scripts/test-local-mcp-codex.mjs --live --verify-professional --openai
 | flowkit::compile-workflow | [compile/compileSource](/reference/sdk#compile)、[配置](/reference/options)、[产物](/guide/compile-artifacts) | code/可选Mermaid/diagnostics；compileSource接收DSL文本和filename，不接收自然语言，也不自动保存源码 |
 | flowkit::check-workflow | [check](/reference/sdk#check)、[CLI](/reference/cli)、[诊断](/troubleshooting/compiler) | 只读诊断；没有compiled文件时无错误不等于已经构建；不比较Mermaid |
 | flowkit::run-workflow | [Runtime](/reference/runtime)、[SDK](/reference/sdk#run)、[直接模块](/guide/direct-host)、[Interactive选型](/guide/interactive) | Host显式提供执行能力；不同接口层不混用。CLI没有run命令 |
+| flowkit::deliver-workflow-skill | [Workflow Author](/guide/workflow-authoring)、[Host 接入](/guide/host-integration) | 导出已确认候选，或由接收方核验并独立批准后加入集合 |
 | flowkit::render-mermaid | [编译产物](/guide/compile-artifacts)、[工作流模型](/guide/workflow-model) | 从合法DSL生成控制流图；不反向生成DSL，也不证明实际执行正确 |
 
 取得Provider、listCatalog/getCapabilities/resolve和关闭Graph的方法见[能力声明](/guide/capability-provider)。Graph的requires表示能力依赖，不是工作流后继；解析成功不执行依赖或业务函数。DSL的agent是Skill映射，不能直接填图谱能力ID充当已有模型执行器。

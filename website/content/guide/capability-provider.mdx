@@ -12,10 +12,11 @@ FlowKit 通过 `@devcodex-labs/flowkit/capability-graph` 导出 `flowkitProvider
 
 | ID | 含义 |
 |---|---|
-| `flowkit::define-workflow` | 使用静态 JS/TS DSL 定义工作流 |
+| `flowkit::define-workflow` | 根据自然语言生成可复审候选，或使用静态 JS/TS DSL 定义工作流 |
 | `flowkit::compile-workflow` | 编译生成可执行 JS 与 Mermaid |
 | `flowkit::check-workflow` | 检查定义及已有编译产物 |
-| `flowkit::run-workflow` | 由显式提供的宿主 Runtime 执行 |
+| `flowkit::run-workflow` | 由宿主 Runtime 执行，或保留原身份继续等待中的 Interactive Run |
+| `flowkit::deliver-workflow-skill` | 导出经确认的候选，或经接收方独立批准后添加精确 Workflow Skill |
 | `flowkit::render-mermaid` | 生成工作流可视化 |
 
 ## 用 Graph 查询
@@ -39,7 +40,7 @@ Graph 的 `requires` 表示能力前置关系（例如 `render-mermaid` 需要 `
 
 ## 版本、权限与限制
 
-Provider 声明版本、FlowKit 包版本、Graph SDK 版本和查询 `revision` 分别记录。Provider 声明版本以安装包的 flowkitProvider.version 为准，适用开发中的 FlowKit 1.0.0。保留现有5项能力，不把 Agent 执行交给 Graph。`allowedProviders` 限定可见来源。`getCapabilities` 和 `resolve` 返回声明和关系，执行由提供绑定的宿主负责。描述型任务见[Runtime 契约](/reference/runtime#standard-task)，持久恢复见[Interactive 接入](/guide/interactive)，工具循环/独立主体/容量管理见[Host 接入](/guide/host-integration)。
+Provider 声明版本、FlowKit 包版本、Graph SDK 版本和查询 `revision` 分别记录。Provider 声明版本以安装包的 flowkitProvider.version 为准，适用开发中的 FlowKit 1.0.0。`allowedProviders` 限定可见来源。`getCapabilities` 和 `resolve` 返回声明和关系，执行由提供绑定的宿主负责。描述型任务见[Runtime 契约](/reference/runtime#standard-task)，持久恢复见[Interactive 接入](/guide/interactive)，工具循环/独立主体/容量管理见[Host 接入](/guide/host-integration)。
 
 如需将已解析能力绑定到业务操作，参见[宿主消费示例](/examples/capability-graph)。所有模型、动作权限和外部 IO 均由宿主提供。
 
@@ -56,8 +57,8 @@ Provider 声明版本、FlowKit 包版本、Graph SDK 版本和查询 `revision`
 
 ## 根据任务取得完整使用说明
 
-五项声明是任务目录，不是全部字段或节点组合清单。按[编写工作流与能力选型](/guide/workflow-authoring)逐项找到参数、合法组合、模式、必要Host文件、错误和业务验收；仅拿到能力ID或requires不能推断流程已能执行。
+这些声明以用户任务为粒度。按[编写工作流与能力选型](/guide/workflow-authoring)核对参数、模式、Host 文件、错误和业务验收。宿主仍需校验批准与所需的运行资源。
 
 特别注意：八类节点属于Standard；Interactive P0-A只接受其已实现子集，使用[独立Host契约](/guide/interactive)。运行依赖由Host提供，getContext等桥接默认值与类型见[API参考](/reference/sdk#createCapabilityGraphActionAdapter)。
 
-Provider 内的能力 ID 是局部名，查询使用表中的 `flowkit::…` 完整 ID。网站可访问性、私有包取得和运行权限分别核实。遇到文档缺失、版本不符或缺少绑定，请先查明所缺条件。后续自然语言 Author 将按目标版本消费这些文档。
+Provider 内的能力 ID 是局部名，查询使用表中的 `flowkit::…` 完整 ID。网站可访问性、私有包取得和运行权限分别核实。本机 Host 显式启用 Graph 后可按目标发现能力，授权首读需要的文档并绑定到 Author Plan、复审与候选。文档缺失、版本不符或缺少绑定时，先补齐具体条件。
