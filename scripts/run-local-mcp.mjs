@@ -356,14 +356,19 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       if (selected) await resolveSources(selected, requestContext, signal);
     }
 
-    async function createDesign({ requestId, title, materials, sources }, requestContext, signal) {
+    const designTurnTimeout = { code: 'FKA_DESIGN_TURN_TIMEOUT', message: 'Design turn timed out' };
+    const designInterrupted = { code: 'FKA_DESIGN_INTERRUPTED', message: 'The local Host stopped the Design turn' };
+
+    async function createDesign({ requestId, title, materials, sources, resumeToken }, requestContext, signal) {
       const selection = sources ?? materials.map(item => ({ kind: 'text', ...item }));
       materials = (await resolveSources(selection, requestContext, signal, false)).materials;
       const materialHash = artifactDigest(JSON.stringify([title, materials]));
       const key = 'design:' + artifactDigest(requestId).slice(7);
       const owner = designOwner(requestContext);
       const identity = authorIdentity([provider, process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'] ?? null]);
-      const record = insert(key, { materialHash, title, selection, owner, identity });
+      const record = resumeToken === undefined
+        ? insert(key, { materialHash, title, selection, owner, identity }) : get(key);
+      if (!record) throw materialError('FKA_DESIGN_RESUME_UNAVAILABLE', 'No Design attempt is available to resume');
       if (record.materialHash !== materialHash || record.owner && record.owner !== owner ||
           !record.result && record.identity && record.identity !== identity ||
           record.selection && authorIdentity(record.selection) !== authorIdentity(selection)) {
@@ -371,18 +376,40 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       }
       const result = record.result;
       if (!result) {
+        const running = { status: 'running', requestId };
+        // Keep physical ownership until the operation (including the Codex child) actually settles.
         if (!designRequests.has(key)) {
+          let { attempt } = record;
+          if (attempt?.status === 'running' && attempt.deadlineMs <= Date.now()) {
+            // An expired attempt may have been left behind by an abrupt process exit.
+            attempt = { ...attempt, status: 'timed-out', error: designTurnTimeout };
+            put(key, { ...record, attempt });
+          }
+          if (attempt && attempt.status !== 'running') {
+            if (resumeToken !== attempt.id) return { status: attempt.status, requestId, error: attempt.error, resumeToken: attempt.id };
+            attempt = undefined;
+          } else if (resumeToken !== undefined) {
+            if (attempt) return running;
+            throw materialError('FKA_DESIGN_RESUME_UNAVAILABLE', 'No Design attempt is available to resume');
+          }
           const failure = designFailures.get(key);
           if (failure) {
             designFailures.delete(key);
             throw failure;
           }
           if (designRequests.size >= capacity.maxPhysicalExecutions) throw new Error('Design Author capacity is busy');
+          signal?.throwIfAborted();
+          layoutAbort.signal.throwIfAborted();
           const durationMs = config.designTurnDurationMs ?? 240_000;
-          const expiresAt = performance.now() + durationMs;
-          const deadline = AbortSignal.timeout(durationMs);
+          attempt ??= { id: randomUUID(), status: 'running', deadlineMs: Date.now() + durationMs };
+          put(key, { ...record, attempt });
+          const remaining = attempt.deadlineMs - Date.now();
+          const expiresAt = performance.now() + remaining;
+          const deadline = remaining > 0 ? AbortSignal.timeout(remaining) :
+            AbortSignal.abort(new DOMException(designTurnTimeout.message, 'TimeoutError'));
           const workSignal = AbortSignal.any([deadline, layoutAbort.signal]);
           const pending = Promise.resolve().then(async () => {
+            workSignal.throwIfAborted();
             let prepared = get(key).prepared;
             if (!prepared) {
               const original = new Map(materials.map(material => [material.id, artifactDigest(material.content)]));
@@ -440,7 +467,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
                 layoutSource, provider: sections[0].provider, model: sections[0].model,
                 requestId: sections[0].requestId, sourceCount: design.sources.length, sectionCount: sections.length };
               prepared = { files, value, summary: design, excerptIds:excerpts.map(item=>item.rangeId) };
-              put(key, { materialHash, title, selection, owner, identity, prepared });
+              put(key, { materialHash, title, selection, owner, identity, attempt, prepared });
             }
             const { files, value, summary } = prepared;
             await resolveDesignMaterials({ title, selection, materialHash }, requestContext, workSignal);
@@ -448,7 +475,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               const range=summary.ranges.find(item=>item.id===rangeId);
               const source=summary.sources.find(item=>item.id===range?.sourceId);
               if (!source || await approveExcerpt(source,range,requestContext,workSignal)!==true) {
-                put(key, { materialHash, title, selection, owner, identity });
+                put(key, { materialHash, title, selection, owner, identity, attempt });
                 throw materialError('FKA_MATERIAL_UNAVAILABLE','Permission for the prepared design excerpt changed');
               }
             }
@@ -457,7 +484,19 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             put(key, { materialHash, title, selection, owner, identity, summary, result: value });
             return value;
           }).catch(error => {
-            if (!deadline.aborted && !layoutAbort.signal.aborted) {
+            const { attempt: _active, ...current } = get(key);
+            let outcome;
+            if (error?.code === 'FKA_DESIGN_MODEL_TIMEOUT') {
+              outcome = { status: 'timed-out', error: { code: error.code, message: 'Design model request timed out' } };
+            } else if (deadline.aborted && workSignal.reason === deadline.reason) {
+              outcome = { status: 'timed-out', error: designTurnTimeout };
+            } else if (layoutAbort.signal.aborted && workSignal.reason === layoutAbort.signal.reason) {
+              outcome = { status: 'interrupted', error: designInterrupted };
+            }
+            if (outcome) {
+              put(key, { ...current, attempt: { ...attempt, ...outcome } });
+            } else {
+              put(key, current);
               if (designFailures.size >= capacity.maxDrafts) designFailures.delete(designFailures.keys().next().value);
               designFailures.set(key, error);
             }
@@ -466,7 +505,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           void pending.catch(() => {});
           designRequests.set(key, pending);
         }
-        return { status: 'running', requestId };
+        return running;
       }
       signal?.throwIfAborted();
       if (selection.some(source => source.kind === 'material')) {

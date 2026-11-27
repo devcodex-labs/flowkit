@@ -488,7 +488,7 @@ try {
         if (Date.now() >= designDeadline) throw new Error('Project design did not finish before the acceptance deadline');
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
-      assert.equal(design.status, 'ready');
+      assert.equal(design.status, 'ready', JSON.stringify(design));
       assert.ok(design.requestId);
       assert.deepEqual(await readdir(design.directory), ['design.html']);
       const view = readWorkflowPageData(await readFile(path.join(design.directory, 'design.html'), 'utf8'));

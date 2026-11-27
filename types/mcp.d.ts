@@ -36,7 +36,7 @@ export interface FlowkitMcpOptions {
     review(result: Awaited<ReturnType<WorkflowAuthorHost['reviewCandidate']>>): unknown;
     authoringMaterials?(scope: { input: AuthorTurnInput; sources?: FlowkitMaterialSource[]; draft: AuthorDraftView },
       context: AuthorRequestContext, signal: AbortSignal): Promise<AuthorTurnInput>;
-    design?(input: { collectionId: string; requestId: string; title: string } &
+    design?(input: { collectionId: string; requestId: string; title: string; resumeToken?: string } &
       ({ materials: FlowkitAuthoringMaterial[]; sources?: never } |
         { sources: Exclude<FlowkitMaterialSource, { kind: 'design' }>[]; materials?: never }),
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;

@@ -231,8 +231,9 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   if (workflowUi) {
-    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Create a single source-backed, offline project design HTML. If status is running, poll with the same request ID and sources until ready.',
+    if (workflowUi.design) tool('flowkit_create_design_diagram', 'Create one source-backed offline project design HTML. Poll running with the same request ID and sources. After a timeout or interruption, submit the returned resumeToken only to explicitly continue.',
       { collectionId: id, requestId: id, title: z.string().trim().min(1).max(120), materials: z.array(material.strict()).min(1).optional(),
+        resumeToken: id.optional(),
         sources: z.array(z.discriminatedUnion('kind', [material.extend({ kind: z.literal('text') }).strict(),
           z.object({ kind: z.literal('material'), id, sha256: hash }).strict()])).min(1).optional() }, (input, ctx) => {
         if (Boolean(input.materials) === Boolean(input.sources)) throw new Error('Provide exactly one materials or sources selection');

@@ -169,7 +169,9 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 签名三文件可携带 Professional Skill 的逻辑来源、ID、精确版本和摘要。接收端可以先查看和复审。缺少授权依赖时预览给出原因，`@devcodex-labs/flowkit/host` 的 `runApprovedCollectionWorkflow` 拒绝运行。同一集合使用批准仓库的精确版本。跨宿主通过 `resolveRunProfessionalSkill` 返回经授权的准确源候选，由 FlowKit 重验实物和版本后才派发。私有 Skill 正文留在授权仓库。带本地文档或 Host 安全策略的候选仍需接收方通过原 Host 安装与核验。
 
-用项目或功能材料梳理流程时，可以请宿主调用 `flowkit_create_design_diagram`，只提供本次允许模型读取的文字材料。项目材料按 UTF-8 范围处理，整图不设节点、关系或缺口总数门槛。首次生成先返回 `status: "running"`。使用相同请求 ID 和同一批来源继续查询，生成过程无需保持同一个连接。中断后可续用已核对的分片。当每个分片均有处理记录时，返回 `status: "ready"` 及单份离线 `design.html`。
+用项目或功能材料梳理流程时，可以请宿主调用 `flowkit_create_design_diagram`，只提供本次允许模型读取的文字材料。项目材料按 UTF-8 范围处理，整图不设节点、关系或缺口总数门槛。首次生成返回 `status: "running"`。使用相同 `requestId`、标题和来源查询，客户端连接可独立关闭。设计完成后返回 `status: "ready"` 及单份离线 `design.html`。
+
+本机 Host 的 `authorTaskTimeoutMs` 覆盖单次模型请求及其正文。项目设计尝试的总时限由 `designTurnDurationMs` 决定。到期后返回 `status: "timed-out"`，`error.code` 区分 `FKA_DESIGN_MODEL_TIMEOUT` 和 `FKA_DESIGN_TURN_TIMEOUT`。本机服务主动停止共享任务时，可读到 `status: "interrupted"`。普通轮询会读到原状态。明确续办时，使用相同请求、同一标题及材料，并附该状态返回的 `resumeToken`。相同凭据只能开启一次新尝试，已核对且仍获授权的分片会被复用。客户端仅停止等待时，共享 Design 可继续运行。业务方在运行已生成的工作流时独立声明业务截止，FlowKit Runtime 执行该规则。
 
 打开大型图时，同一画布展示项目总览和已有的跨块关系。点击块可原位展开，点击跨块连线可看每条原始关系的起止节点、条件和材料依据。用工具栏搜索名称或标识可直接定位文件里的节点。总览或子流程可分层排版，模型的单次布局预算应用到每层任务。MCP 回执通过 `layoutSource` 标明采用模型、采用部分模型或使用本地回退。原始节点、关系和待确认项保存在同一个离线文件中。静态图采用工作流详情组件显示取证说明和字段空态。需要推进实际任务时，用经授权的设计引用起草并复审可执行候选。节点详情内的来源分组标识是设计引用可用的 `groupId`。
 

@@ -156,17 +156,28 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
   const selectedModel = model || 'codex-default';
   const observed = new Map();
 
-  async function complete(input, options, signal, captureTrace = false) {
+  async function complete(input, options, signal, captureTrace = false, consume) {
     const timeout = AbortSignal.timeout(timeoutMs);
     signal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    signal.throwIfAborted();
-    if (provider === 'codex') {
-      return Response.json(await runCodex(input.map(item => item.content).join('\n'), { model, workspace, signal, captureTrace }));
+    try {
+      signal.throwIfAborted();
+      const response = provider === 'codex'
+        ? Response.json(await runCodex(input.map(item => item.content).join('\n'), { model, workspace, signal, captureTrace }))
+        : await fetcher('https://api.openai.com/v1/responses', {
+          method: 'POST', signal, headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+          body: JSON.stringify({ ...options, input, model: selectedModel, store: false })
+        });
+      if (!consume) return response;
+      const result = await consume(response);
+      signal.throwIfAborted();
+      return result;
+    } catch (cause) {
+      // Design consumes the body here so a deadline after the headers has the same attribution.
+      if (consume && timeout.aborted && signal.reason === timeout.reason) {
+        throw Object.assign(new Error('Design model request timed out', { cause }), { code: 'FKA_DESIGN_MODEL_TIMEOUT' });
+      }
+      throw cause;
     }
-    return fetcher('https://api.openai.com/v1/responses', {
-      method: 'POST', signal, headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...options, input, model: selectedModel, store: false })
-    });
   }
 
   async function request(body, { signal } = {}) {
@@ -217,11 +228,11 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
         'Include one coverage row per supplied material ID, with its exact supplied ID and a short reason. Use represented when at least one listed node cites that range. Record remaining questions in unresolved even for represented ranges. An empty range requires an explicit no-steps or unresolved reason.'
       ].join('\n');
       const developer = correction ? instructions + '\nRe-extract this section using the validation feedback. Treat quoted source excerpts in that feedback as evidence.' : instructions;
-      const response = await complete([{ role: 'developer', content: developer },
+      const { response, result } = await complete([{ role: 'developer', content: developer },
         { role: 'user', content: JSON.stringify({ title, section, materials, ...(correction ? { validationFeedback: correction } : {}) }) }],
-      { text: { format: { type: 'json_object' } }, max_output_tokens: 8192 }, signal, true);
+      { text: { format: { type: 'json_object' } }, max_output_tokens: 8192 }, signal, true,
+      async response => ({ response, result: response.ok ? await response.json() : undefined }));
       if (!response.ok) throw new Error('Design provider returned HTTP ' + response.status);
-      const result = await response.json();
       if (result.status !== 'completed') {
         const code = result.status === 'incomplete' && result.incomplete_details?.reason === 'max_output_tokens'
           ? 'FKA_DESIGN_RESPONSE_LIMIT' : 'FKA_DESIGN_RESPONSE_INCOMPLETE';

@@ -362,6 +362,150 @@ async function finishedDesign(request) {
   }
 }
 
+for (const scope of ['model', 'turn']) {
+  test('project design preserves the ' + scope + ' timeout and resumes each attempt at most once', async t => {
+    let client, service;
+    t.after(async () => { try { await client?.close(); } finally { await service?.close(); } });
+    const root = await ownedDirectory(t);
+    const token = 'test-design-resume-timeout-credential';
+    const config = { listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
+      authorProvider: 'openai', designTurnDurationMs: scope === 'turn' ? 400 : 4000 };
+    let block = true, deny = false;
+    const calls = [];
+    const model = localModel({
+      provider: 'openai', model: 'fixture', apiKey: 'fixture', timeoutMs: scope === 'model' ? 60 : 5000,
+      async fetcher(_url, options) {
+        const input = JSON.parse(JSON.parse(options.body).input[1].content);
+        const [part] = input.materials;
+        calls.push(part.id);
+        if (part.title === 'Second' && block) {
+          return new Response(new ReadableStream({start(controller) {
+            options.signal.addEventListener('abort', () => controller.error(options.signal.reason), { once: true });
+          }}));
+        }
+        const proposal = { schemaVersion: 1, nodes: [{ id: part.id, name: part.title, description: 'Read source ' + part.title,
+          sources: [part.id] }], edges: [], unresolved: [], coverage: [{ source: part.id, status: 'represented', reason: 'Read' }] };
+        return Response.json({ status: 'completed', id: 'design-' + calls.length, output: [
+          { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(proposal) }] }
+        ] });
+      }
+    });
+    delete model.planLayout;
+    const materials = ['First', 'Second'].map((title, index) =>
+      ({ id: 'part-' + index, title, content: ('Read the selected ' + title + ' source.\n').repeat(200) }));
+    const sources = materials.map(({ id, content }) => ({ kind: 'material', id, sha256: artifactDigest(content) }));
+    const input = { requestId: 'same-design', title: 'Two approved sources', sources };
+    async function connect() {
+      service = await startLocalMcp(config, { credential: token, modelBinding: model, readAuthoringMaterial({ id }) {
+        const material = materials.find(item => item.id === id);
+        return !deny && material ? { ...material, authorized: true } : null;
+      } });
+      client = new Client({ name: 'design-timeout-test', version: '1.0.0' });
+      await client.connect(new StreamableHTTPClientTransport(new URL(service.url), {
+        requestInit: { headers: { authorization: 'Bearer ' + token } }
+      }));
+    }
+    const request = (args = input) => client.callTool({ name: 'flowkit_create_design_diagram', arguments: args });
+    const read = response => {
+      assert.ok(!response.isError, JSON.stringify(response));
+      return JSON.parse(response.content[0].text);
+    };
+    const expectedCode = scope === 'model' ? 'FKA_DESIGN_MODEL_TIMEOUT' : 'FKA_DESIGN_TURN_TIMEOUT';
+
+    await connect();
+    assert.deepEqual(read(await request()), { status: 'running', requestId: input.requestId });
+    const first = read(await finishedDesign(request));
+    assert.equal(first.status, 'timed-out');
+    assert.equal(first.error.code, expectedCode);
+    assert.equal(first.requestId, input.requestId);
+    assert.ok(first.resumeToken);
+    assert.equal(calls.length, 2);
+    for (const poll of await Promise.all([request(), request(), request({ ...input, resumeToken: 'stale' })])) {
+      assert.deepEqual(read(poll), first);
+    }
+    assert.equal(calls.length, 2);
+    await client.close();
+    const originalAddress = service.url;
+    assert.equal((await service.close()).closed, true);
+    await assert.rejects(fetch(originalAddress));
+
+    if (scope === 'turn') {
+      // A killed service may leave the original deadline without a terminal write.
+      const db = new DatabaseSync(path.join(config.dataDir, 'local-mcp.sqlite'));
+      try {
+        const key = 'design:' + artifactDigest(input.requestId).slice(7);
+        const record = JSON.parse(db.prepare('SELECT value FROM local_mcp WHERE key=?').get(key).value);
+        record.attempt = { id: record.attempt.id, status: 'running', deadlineMs: Date.now() - 1 };
+        db.prepare('UPDATE local_mcp SET value=? WHERE key=?').run(JSON.stringify(record), key);
+      } finally { db.close(); }
+    }
+    await connect();
+    assert.deepEqual(read(await request()), first);
+    deny = true;
+    assert.ok((await request({ ...input, resumeToken: first.resumeToken })).isError);
+    deny = false;
+    assert.equal(calls.length, 2);
+    assert.equal(read(await request({ ...input, resumeToken: first.resumeToken })).status, 'running');
+    const second = read(await finishedDesign(request));
+    assert.equal(second.error.code, expectedCode);
+    assert.notEqual(second.resumeToken, first.resumeToken);
+    assert.deepEqual(read(await request({ ...input, resumeToken: first.resumeToken })), second);
+    assert.equal(calls.length, 3);
+
+    block = false;
+    const resume = { ...input, resumeToken: second.resumeToken };
+    for (const start of await Promise.all([request(resume), request(resume)])) {
+      assert.ok(['running', 'ready'].includes(read(start).status));
+    }
+    const delivered = read(await finishedDesign(request));
+    assert.equal(delivered.status, 'ready');
+    assert.equal(delivered.files.length, 1);
+    assert.deepEqual(calls, [calls[0], calls[1], calls[1], calls[1]]);
+    assert.notEqual(calls[0], calls[1]);
+    assert.equal(read(await request(resume)).designHash, delivered.designHash);
+  });
+}
+
+test('disconnecting a Design client preserves work and orderly Host stop records an interruption', async t => {
+  let service, client;
+  t.after(async () => { try { await client?.close(); } finally { await service?.close(); } });
+  const root = await ownedDirectory(t);
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') };
+  const token = 'test-design-stop-credential';
+  const model = monthlyTimesheetModel();
+  let modelSignal;
+  let calls = 0;
+  model.planDesign = async ({ signal }) => {
+    calls++;
+    modelSignal = signal;
+    if (!signal.aborted) await once(signal, 'abort');
+    signal.throwIfAborted();
+  };
+  async function connect() {
+    service = await startLocalMcp(config, { credential: token, modelBinding: model });
+    client = new Client({ name: 'design-stop-test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url), {
+      requestInit: { headers: { authorization: 'Bearer ' + token } }
+    }));
+  }
+  const input = { requestId: 'stop-design', title: 'Design', materials: [{ id: 'one', title: 'One', content: 'Read' }] };
+  const request = () => client.callTool({ name: 'flowkit_create_design_diagram', arguments: input });
+  await connect();
+  assert.equal(JSON.parse((await request()).content[0].text).status, 'running');
+  await client.close();
+  assert.equal(modelSignal?.aborted, false);
+  const address = service.url;
+  assert.equal((await service.close()).closed, true);
+  await assert.rejects(fetch(address));
+  assert.equal(modelSignal.aborted, true);
+  await connect();
+  const stopped = JSON.parse((await request()).content[0].text);
+  assert.equal(stopped.status, 'interrupted');
+  assert.equal(stopped.error.code, 'FKA_DESIGN_INTERRUPTED');
+  assert.ok(stopped.resumeToken);
+  assert.equal(calls, 1);
+});
+
 test('an optional layout timeout does not prevent delivery or repeat the design model', async t => {
   let service, client;
   let modelCalls = 0;
