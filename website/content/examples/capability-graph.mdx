@@ -41,6 +41,8 @@ node verify.mjs
 
 `verify.mjs` 覆盖成功、依赖解析、未知环境、不适用、跨 Provider 未授权和缺少绑定。Graph 的 `match()` 需要显式的 `ModelExecutor`，本示例不额外调用模型。
 
+本机 MCP 启用 `capabilityGraph` 后，可以用 `flowkit_match_capability` 按目标主动查找。起草任务需要先发现能力或读取图谱文档时，在 `flowkit_prepare_workflow` 的 `turn` 传 `useCapabilityGraph: true`。普通起草省略该字段。已保存的选择随草稿延续，可在新一轮传 `false` 撤回。
+
 继续阅读[FlowKit Provider 能力声明](/guide/capability-provider)、[宿主接入](/guide/host-integration)和[SDK 参考](/reference/sdk)。
 
 若复用到自己的业务，先核[完整桥接参数/默认值](/reference/sdk#createCapabilityGraphActionAdapter)：本例主动提供getContext，省略时默认空上下文，不能期待Graph自动从state补facts。bindings的key是DSL action字段；适配器复制绑定后，业务授权/副作用/重试仍由Host控制。通过图谱发现后编写流程的阅读顺序见[作者指南](/guide/workflow-authoring)。

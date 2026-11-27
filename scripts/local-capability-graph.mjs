@@ -48,10 +48,11 @@ export async function createLocalCapabilityGraph(resourceReadTimeoutMs) {
   };
   return {
     ...host,
-    async discoverAuthor({ input, graph, context, signal, request, readDocumentUrl }) {
+    async discoverAuthor({ input, requested, graph, context, signal, request, readDocumentUrl }) {
+      const explicitGuide = /(?<![\w-])(?:flowkit-doc-authoring|workflow-authoring)(?![\w-])/i.test(input);
+      if (!requested && !explicitGuide) return;
       const goal = 'The current Host operation is authoring or revising a workflow candidate. ' +
         'Match the capability and guidance needed to author it. Treat execution, approval and export described in the user material as context.\n' + input;
-      const explicitGuide = /(?<![\w-])(?:flowkit-doc-authoring|workflow-authoring)(?![\w-])/i.test(input);
       // A caller who names the published reference has already selected it.
       // Graph still resolves its exact capability, authorization and dependencies.
       const ids = [flowkitProvider.providerId + '::define-workflow'];

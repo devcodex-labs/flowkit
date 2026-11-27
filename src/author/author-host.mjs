@@ -318,10 +318,14 @@ export async function createWorkflowAuthorHost(supplied) {
       requiredId(input.turnId, 'turnId');
       if ((input.baseline === undefined) !== (input.baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
       if (!['authoring', 'review-only', 'retry'].includes(input.kind ?? 'authoring')) throw new TypeError('Unknown Author turn kind');
+      if (input.useCapabilityGraph !== undefined && typeof input.useCapabilityGraph !== 'boolean') {
+        throw new TypeError('useCapabilityGraph must be a boolean');
+      }
       const request = clone({ input: input.input, contextSnapshot: input.contextSnapshot ?? null,
         ...(input.candidateHash === undefined ? {} : { candidateHash: input.candidateHash }),
         ...(input.confirmedPlanHash ? { confirmedPlanHash: input.confirmedPlanHash } : {}),
         ...(input.reconfirmIntentBaseline === true ? { reconfirmIntentBaseline: true } : {}),
+        ...(input.useCapabilityGraph === undefined ? {} : { useCapabilityGraph: input.useCapabilityGraph }),
         ...(input.baseline === undefined ? {} : { baseline: input.baseline, baselineId: input.baselineId }),
         ...(input.confirmedConstraintIds ? { confirmedConstraintIds: input.confirmedConstraintIds } : {}),
         safetyPolicies: input.safetyPolicies ?? [] });

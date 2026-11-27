@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
 import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
+import { createLocalCodexSkills } from '../../scripts/local-codex-skills.mjs';
 import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
 import { localModel } from '../../scripts/local-mcp-model.mjs';
 import { defaultLayout, readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
@@ -164,6 +165,125 @@ test('the local model deadline covers the formal Intent response body', async ()
   } finally {
     clearTimeout(keepAlive);
   }
+});
+
+test('local Graph search is opt-in per draft and an explicit search fails closed', async t => {
+  let service, client;
+  t.after(async () => { await client?.close(); await service?.close(); });
+  const root = await ownedDirectory(t);
+  const token = 'fixture-graph-discovery-credential';
+  const model = monthlyTimesheetModel();
+  const execute = model.execution.request;
+  let searches = 0, reads = 0, available = false;
+  model.execution.request = async input => {
+    if (!input.flowkitCapabilityMatch) return execute(input);
+    searches++;
+    if (!available) throw new Error('Graph selector is unavailable');
+    return { decision: 'selected', ids: ['flowkit::define-workflow'] };
+  };
+  service = await startLocalMcp({
+    listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'), capabilityGraph: true
+  }, { credential: token, modelBinding: model,
+    async readDocumentUrl(url) { reads++; return { url, bytes: Buffer.from('# Control guide') }; }
+  });
+  client = new Client({ name: 'graph-discovery-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+  async function tool(name, args) {
+    const result = await client.callTool({ name, arguments: args });
+    assert.ok(!result.isError, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  }
+  async function draft(name, input, useCapabilityGraph) {
+    const opened = await tool('flowkit_start_workflow', { requestId: name, operation: 'create', goal: input });
+    return tool('flowkit_prepare_workflow', { turn: { draftId: opened.id, turnId: name, input,
+      expectedStateVersion: opened.stateVersion, target: { name }, useCapabilityGraph } });
+  }
+  const input = 'Review the timesheet and verify the copy.';
+  const ordinary = await draft('ordinary-graph-enabled', input);
+  assert.equal(ordinary.status, 'candidate-ready', JSON.stringify(ordinary.diagnostics));
+  assert.deepEqual([searches, reads], [0, 0]);
+  const unavailable = await draft('required-graph-unavailable', input, true);
+  assert.equal(unavailable.status, 'failed');
+  assert.equal(unavailable.diagnostics[0].code, 'CG_MODEL_UNAVAILABLE');
+  assert.deepEqual([searches, reads], [1, 0]);
+  available = true;
+  const selected = await draft('required-graph-available', input, true);
+  assert.equal(selected.status, 'candidate-ready', JSON.stringify(selected.diagnostics));
+  assert.equal(searches, 2);
+  assert.ok(reads > 0);
+  const beforeNamedGuide = reads;
+  const named = await draft('named-guide', input + ' Consult the workflow-authoring guide.');
+  assert.equal(named.status, 'candidate-ready', JSON.stringify(named.diagnostics));
+  assert.equal(searches, 2);
+  assert.ok(reads > beforeNamedGuide);
+  const beforeOptOut = reads;
+  const optedOut = await draft('skip-guide', input + ' Do not consult workflow-authoring.', false);
+  assert.equal(optedOut.status, 'candidate-ready', JSON.stringify(optedOut.diagnostics));
+  assert.deepEqual([searches, reads], [2, beforeOptOut]);
+
+  const continued = await tool('flowkit_prepare_workflow', { turn: { draftId: selected.id, turnId: 'continue-graph',
+    expectedStateVersion: selected.stateVersion, input } });
+  assert.equal(continued.status, 'candidate-ready', JSON.stringify(continued.diagnostics));
+  assert.equal(searches, 3);
+  assert.ok(reads > beforeOptOut);
+  const beforeWithdrawal = reads;
+  const withdrawn = await tool('flowkit_prepare_workflow', { turn: { draftId: continued.id, turnId: 'withdraw-graph',
+    expectedStateVersion: continued.stateVersion, input, useCapabilityGraph: false } });
+  assert.equal(withdrawn.status, 'candidate-ready', JSON.stringify(withdrawn.diagnostics));
+  assert.deepEqual([searches, reads], [3, beforeWithdrawal]);
+
+  await client.close(); await service.close();
+  service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'empty-state'),
+    exportDir: path.join(root, 'empty-exports'), capabilityGraph: true },
+  { credential: token, modelBinding: model, discoverCapabilities: async () => undefined });
+  client = new Client({ name: 'empty-graph-discovery-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+  const empty = await draft('required-graph-without-result', input, true);
+  assert.equal(empty.status, 'needs-clarification', JSON.stringify(empty.diagnostics));
+  assert.ok(empty.questions.some(({ id }) => id === 'capability-graph'));
+});
+
+test('native Skill search checks same-purpose alternatives and refuses to draft from an incomplete search', async t => {
+  const root = await ownedDirectory(t);
+  const collection = { id: 'team', name: 'team-workflows', directory: 'team-workflows' };
+  const entries = [];
+  async function addSkill(name, description, body) {
+    const folder = path.join(root, '.agents', 'skills', name);
+    await mkdir(folder, { recursive: true });
+    const file = path.join(folder, 'SKILL.md');
+    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n---\n${body}\n`, 'utf8');
+    entries.push({ name, description, path: file, scope: 'repo' });
+  }
+  const description = 'Validate artifact digests before publication.';
+  const body = 'Compare the artifact digest with the approved digest before release.';
+  await addSkill('release-guard', description, body);
+  const native = await createLocalCodexSkills({ workspace: root, root: path.join(root, 'generated'),
+    collection, readCatalog: async () => ({ skills: entries }) });
+  const calls = [];
+  async function verifyApplicability(_need, candidate) {
+    calls.push(candidate.manifest.skillId);
+    return candidate.files['SKILL.md'].includes(body);
+  }
+  const need = { id: 'release-preflight', description: 'Verify the workflow digest against its approval before release.' };
+  const proposal = { nodes: [{ id: 'review', kind: 'agent', options: {}, professionalNeeds: [need] }] };
+  let draftCount = 0;
+  const scope = { catalog: native, collection, read: (_input, run) => run(), drafts: new Map(),
+    selectionFor: () => undefined, verifyApplicability, draftSkill: () => { draftCount++; return 'Drafted duplicate'; } };
+  const result = await bindProfessionalNeeds(proposal, scope);
+  assert.equal(result.resourceRequirements[0].id, 'release-guard');
+  assert.equal(result.resourceRequirements[0].lookup.resolution, 'reuse-approved');
+  assert.deepEqual(calls, ['release-guard']);
+  assert.equal(draftCount, 0);
+  for (let i = 0; i < 4; i++) await addSkill('unrelated-' + i, 'Unrelated procedure ' + i, 'Alternate body.');
+  const incomplete = await bindProfessionalNeeds(proposal, scope);
+  assert.equal(incomplete.unresolvedIssues[0].blocking, true);
+  assert.equal(incomplete.resourceRequirements.length, 0);
+  assert.equal(draftCount, 0);
+  assert.deepEqual(calls, ['release-guard']);
+  const exact = await native.search({ id: 'release-guard', description, verifyApplicability });
+  assert.equal(exact.complete, true);
+  assert.equal(exact.matches[0].candidate.manifest.skillId, 'release-guard');
+  assert.deepEqual(calls, ['release-guard', 'release-guard']);
 });
 
 test('the local Author drafts only after catalog lookup, publishes the approved Skill with the workflow, and reuses it', async t => {

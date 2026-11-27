@@ -103,13 +103,13 @@ export interface AuthorHostOptions {
     reviewPolicy?: 'separate-pass' | 'independent-subject';
   };
   capabilityGraph?: object | ((context: { requestContext: AuthorRequestContext; signal: AbortSignal }) => object | Promise<object>);
-  discoverCapabilities?(scope: { input: string; graph: object; context: unknown; requestContext: AuthorRequestContext; signal: AbortSignal;
+  discoverCapabilities?(scope: { input: string; requested?: boolean; graph: object; context: unknown; requestContext: AuthorRequestContext; signal: AbortSignal;
     request: (input: unknown, options?: { signal?: AbortSignal }) => Promise<unknown>;
     readDocumentUrl?: (url: string) => Promise<{ url: string; bytes: Uint8Array }> }): Promise<{
       selection: unknown;
       documents?: { text: string; evidence: { capabilityId: string; documentId: string; revision: string; contentHash: string;
         source: { type: 'url'; url: string } | { type: 'file'; path: string } } }[];
-    }>;
+    } | undefined>;
   resolveCapabilityGraphContext?(context: { requestContext: AuthorRequestContext; signal: AbortSignal }):
     { facts?: Record<string, string | number | boolean>; notes?: string } |
     Promise<{ facts?: Record<string, string | number | boolean>; notes?: string } | undefined> | undefined;
@@ -142,6 +142,7 @@ export interface AuthorTurnInput {
   safetyPolicies?: Array<{ nodeId: string; policyRef: string }>; retryRef?: string;
   confirmedPlanHash?: string;
   reconfirmIntentBaseline?: boolean;
+  useCapabilityGraph?: boolean;
   target?: Partial<AuthorTarget>;
 }
 export interface AuthorCandidateIdentity { draftId: string; candidateHash: string; previousHash: string | null }

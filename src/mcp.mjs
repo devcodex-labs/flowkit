@@ -170,6 +170,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     draftId: id, turnId: id, expectedStateVersion: z.number().int().positive(), input: z.string().min(1).max(maxBytes),
     kind: z.enum(['authoring', 'review-only']).optional(), candidateHash: hash.optional(), confirmedPlanHash: hash.optional(),
     reconfirmIntentBaseline: z.boolean().optional(),
+    useCapabilityGraph: z.boolean().optional().describe('Request authorized capability discovery before planning when the task needs it.'),
     choices: z.object({ executionMode: z.enum(workflowExecutionModes).optional() }).strict().optional(),
     target: z.object({ name: id.optional(), version: id.optional() }).strict().optional()
   }).strict();

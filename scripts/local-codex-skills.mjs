@@ -14,6 +14,7 @@ const optionalStat = file => lstat(file).catch(error => {
   if (error.code !== 'ENOENT') throw error;
 });
 const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+const maxAlternativeBodies = 4;
 
 /** Ask a separate Codex App Server for its native catalog, without waiting on the calling agent. */
 function codexSkills(workspace, signal) {
@@ -97,7 +98,7 @@ async function nativeCandidate(entry, file, collection) {
 }
 
 /** Adapt the authority of one explicitly authorized workspace to the existing publication and Skill ports. */
-export async function createLocalCodexSkills({ workspace, root, collection, get, put, readManaged }) {
+export async function createLocalCodexSkills({ workspace, root, collection, get, put, readManaged, readCatalog = codexSkills }) {
   if (typeof workspace !== 'string' || !path.isAbsolute(workspace)) throw new TypeError('codexSkillsWorkspace must be an absolute directory');
   const cwd = await realpath(workspace);
   const agents = path.join(cwd, '.agents');
@@ -138,7 +139,7 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
   }
 
   async function list(signal) {
-    const page = await codexSkills(cwd, signal);
+    const page = await readCatalog(cwd, signal);
     if (page.errors?.length || !Array.isArray(page.skills)) throw new Error('Codex reported an incomplete Skill catalog');
     const entries = [];
     for (const entry of page.skills) {
@@ -158,7 +159,7 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
       readMapping: ({ signal }) => withMapping(async () => {
         const mapping = await mapped();
         if (!mapping) return null;
-        const page = await codexSkills(cwd, signal);
+        const page = await readCatalog(cwd, signal);
         if (!page.skills?.some(skill => path.resolve(skill.path) === path.join(mapping.target, 'SKILL.md'))) {
           throw new Error('Codex has not observed the active collection mapping');
         }
@@ -197,21 +198,31 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
       try {
         const entries = await list(signal);
         const normalize = value => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
-        const relevant = entries.filter(({ entry }) => entry.name === id || normalize(entry.description) === normalize(description));
-        const matches = [];
-        let occupied = false;
-        for (const { entry, file, source, managed } of relevant) {
-          signal?.throwIfAborted();
-          const stored = managed ? readManaged?.(entry.name) : undefined;
-          if (managed && stored?.manifest.kind !== 'professional') continue;
-          if (stored && stored.manifest.files['SKILL.md'] !== artifactDigest(await readFile(file))) return { complete: false };
-          const candidate = stored ?? await nativeCandidate(entry, file, collection);
-          occupied ||= entry.name === id;
-          const applicable = await verifyApplicability({ id, description }, candidate);
-          if (typeof applicable !== 'boolean') return { complete: false };
-          if (applicable) matches.push({ candidate, source, approved: true });
+        const purpose = normalize(description);
+        const preferred = [], alternatives = [];
+        for (const item of entries) {
+          const { entry } = item;
+          const group = entry.name === id || normalize(entry.description) === purpose ? preferred : alternatives;
+          group.push(item);
         }
-        return { complete: true, occupied, matches };
+        let occupied = false;
+        for (const group of [preferred, alternatives]) {
+          if (group === alternatives && group.length > maxAlternativeBodies) return { complete: false };
+          const matches = [];
+          for (const { entry, file, source, managed } of group) {
+            signal?.throwIfAborted();
+            const stored = managed ? readManaged?.(entry.name) : undefined;
+            if (managed && stored?.manifest.kind !== 'professional') continue;
+            if (stored && stored.manifest.files['SKILL.md'] !== artifactDigest(await readFile(file))) return { complete: false };
+            const candidate = stored ?? await nativeCandidate(entry, file, collection);
+            occupied ||= entry.name === id;
+            const applicable = await verifyApplicability({ id, description }, candidate);
+            if (typeof applicable !== 'boolean') return { complete: false };
+            if (applicable) matches.push({ candidate, source, approved: true });
+          }
+          if (matches.length) return { complete: true, occupied, matches };
+        }
+        return { complete: true, occupied, matches: [] };
       } catch (error) {
         if (signal?.aborted) throw error;
         return { complete: false };

@@ -279,6 +279,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     async parseIntent(ctx) {
       const authorization = { ...turn.reviewAuthorization, ...turn.request };
       ctx.state.authorizedRequest = structuredClone(authorization);
+      if (!Object.hasOwn(authorization, 'useCapabilityGraph') && typeof draft.authorizedRequest?.useCapabilityGraph === 'boolean') {
+        ctx.state.authorizedRequest.useCapabilityGraph = draft.authorizedRequest.useCapabilityGraph;
+      }
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
       ctx.state.authorizedRequest.choices = draft.choices;
       if (supportsNodeOptions && options.useNodeOptionsForNewDrafts && draft.operation !== 'import' && !draft.candidate) {
@@ -377,11 +380,18 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       const guide = await ports.read({ bundledAuthorGuide: true }, () => readFile(new URL('./flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8'));
       if (artifactDigest(guide) !== options.coreIdentity.guideHash) throw authorError('author-resource', 'Bundled Author guide differs from the built core identity');
       const ids = options.initialCapabilityIds ?? [];
-      const match = graph && (ids.length || options.discoverCapabilities) ? await readGraphContext() : undefined;
-      const discovery = graph && options.discoverCapabilities ? await options.discoverCapabilities({
-        input: ctx.state.authorizedRequest.input, graph, context: match, requestContext, signal, request: ports.request,
+      const requested = ctx.state.authorizedRequest.useCapabilityGraph;
+      const discover = graph && options.discoverCapabilities && requested !== false;
+      const match = graph && (ids.length || discover) ? await readGraphContext() : undefined;
+      const discovery = discover ? await options.discoverCapabilities({
+        input: ctx.state.authorizedRequest.draftInputs?.join('\n\n') ?? ctx.state.authorizedRequest.input, requested,
+        graph, context: match, requestContext, signal, request: ports.request,
         readDocumentUrl: options.readDocumentUrl && (url => ports.read({ url }, () => options.readDocumentUrl(url, { requestContext, signal })))
       }) : undefined;
+      if (requested === true && !discovery) {
+        throw clarify('Capability Graph discovery is unavailable for this Host',
+          [question('capability-graph', 'Connect an authorized Graph catalog or revise the discovery requirement', ['configure-host', 'revise'])]);
+      }
       if (discovery?.documents) documents.push(...discovery.documents);
       const catalog = graph && ids.length ? await graph.getCapabilities({ ids, ...(match === undefined ? {} : { context: match }) }) : null;
       ctx.state.catalogSnapshot = { documents, catalog: catalog ?? null,
