@@ -98,9 +98,9 @@ export async function startLocalMcp(config, dependencies = {}) {
   const exportDir = path.resolve(config.exportDir ?? 'flowkit-exports');
   const credential = dependencies.credential ?? process.env[config.mcpTokenEnv ?? 'FLOWKIT_MCP_TOKEN'];
   const collectionName = config.defaultCollection ?? 'flowkit-workflows';
-  const authorTimeouts = [config.authorTaskTimeoutMs, config.authorTurnDurationMs];
-  if (authorTimeouts.some(value => value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2147483647))) {
-    throw new TypeError('Author task and turn timeouts must be positive integer milliseconds within the timer range');
+  const timeouts = [config.authorTaskTimeoutMs, config.authorTurnDurationMs, config.designTurnDurationMs, config.resourceReadTimeoutMs];
+  if (timeouts.some(value => value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2147483647))) {
+    throw new TypeError('Local service timeouts must be positive integer milliseconds within the timer range');
   }
   if (host !== '127.0.0.1' || !Number.isInteger(port) || port < 0 || port > 65535 ||
       !/^\/[a-z][a-z0-9-]*$/.test(mcpPath) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
@@ -119,6 +119,7 @@ export async function startLocalMcp(config, dependencies = {}) {
 
 async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespace, workspaceId, dataDir,
   exportDir, credential, collectionName, releaseLease, trustedExports }) {
+  const resourceReadTimeoutMs = config.resourceReadTimeoutMs ?? 90_000;
   const data = new DatabaseSync(path.join(dataDir, 'local-mcp.sqlite'));
   data.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS local_mcp (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;');
   const get = key => {
@@ -377,7 +378,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
             throw failure;
           }
           if (designRequests.size >= capacity.maxPhysicalExecutions) throw new Error('Design Author capacity is busy');
-          const durationMs = config.authorTurnDurationMs ?? 240_000;
+          const durationMs = config.designTurnDurationMs ?? 240_000;
           const expiresAt = performance.now() + durationMs;
           const deadline = AbortSignal.timeout(durationMs);
           const workSignal = AbortSignal.any([deadline, layoutAbort.signal]);
@@ -415,7 +416,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
                   const scope = projectDesignLayoutGraph(rawScope);
                   const needsModel = scope.nodes.length > 1 || scope.referenceEdges.length > 0;
                   if (needsModel) modelScopes++;
-                  const arrangement = needsModel ? await arrange(scope, config.authorTaskTimeoutMs ?? 60_000) : undefined;
+                  const arrangement = needsModel ? await arrange(scope, 60_000) : undefined;
                   if (arrangement?.layout) arranged++;
                   const layout = arrangement?.layout ?? defaultLayout(scope);
                   const packed = packDesignScope(id, scope, layout, Boolean(arrangement?.layout));
@@ -496,7 +497,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       if (cached) return cached;
       let pending = layoutRequests.get(key);
       if (!pending && !layoutAbort.signal.aborted && layoutRequests.size < capacity.maxPhysicalExecutions) {
-        const deadline = optionalDeadline ?? AbortSignal.timeout(config.authorTurnDurationMs ?? 240_000);
+        const deadline = optionalDeadline ?? AbortSignal.timeout(240_000);
         const signal = AbortSignal.any([layoutAbort.signal, deadline]);
         pending = Promise.resolve().then(async () => {
           const result = await generateLayout(graph, defaultLayout(graph), planLayout, signal);
@@ -1036,7 +1037,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         url.pathname==='/runs/'+ref+'/'+action && req.method==='GET' && dependencies.resolveRunViewer) {
         if (!operator(req)) return json(res,403,{error:'请先建立本机操作员会话。'});
         const runId=decodeURIComponent(ref);
-        const signal=AbortSignal.timeout(config.authorTaskTimeoutMs??90000);
+        const signal=AbortSignal.timeout(resourceReadTimeoutMs);
         try {
           const view=await resolveRunBinding(runId);
           if (!view || view.standardTrace) return json(res,404,{error:'运行或产物不可用。'});
@@ -1129,7 +1130,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         const selected=record.selection?.filter(item=>item.id===source.id);
         if (selected?.length!==1) return json(res,404,{error:'此导出仅保留来源引用。'});
         try {
-          const signal=AbortSignal.timeout(config.authorTaskTimeoutMs??90000);
+          const signal=AbortSignal.timeout(resourceReadTimeoutMs);
           const {materials}=await resolveSources(selected,context,signal,false);
           const evidence=designEvidence(source,materials[0],range);
           return evidence?json(res,200,evidence):json(res,413,{error:'原文件较大，请从节点选择具体证据片段。'});
@@ -1144,7 +1145,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         if (!entry || record.owner && record.owner !== designOwner(context)) return json(res, 403, { error: 'Invalid design link' });
         if (!designNames(entry).includes(action)) return json(res, 404, { error: 'Design file is unavailable' });
         if (record.selection?.some(source => source.kind === 'material')) {
-          const signal = AbortSignal.timeout(config.authorTaskTimeoutMs ?? 90000);
+          const signal = AbortSignal.timeout(resourceReadTimeoutMs);
           try { await resolveDesignMaterials(record, context, signal); }
           catch { return json(res, 403, { error: 'Design materials are unavailable' }); }
         }
@@ -1168,7 +1169,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           const unavailable = [];
           if (current && trustedDraft(draft) && (draft.operation === 'import' || draft.savedReceipt)) {
             const scope = { collectionId, candidateHash: draft.candidate.hash, requestContext: context,
-              signal: AbortSignal.timeout(config.authorTaskTimeoutMs ?? 90000) };
+              signal: AbortSignal.timeout(resourceReadTimeoutMs) };
             for (const pin of draft.candidate.manifest.professionalSkills.filter(item => item.source)) {
               const resolved = await resolveTrustedProfessionalPin(binding.store, pin, { collectionId,
                 resolve: dependencies.resolveRunProfessionalSkill, scope }).catch(() => null);

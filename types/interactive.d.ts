@@ -160,7 +160,7 @@ export interface InteractiveSkillDescriptor {
 export interface InteractiveRuntime {
   prepareAgentTask?: Runtime['prepareAgentTask'];
   /** Recheck current authorization and exact pinned resource availability on every resume/disclosure/receipt. */
-  authorizeAgentTask?: (task: PreparedAgentTask, context: {runId?:string;signal?:AbortSignal;deadlineMs:number}) => boolean|Promise<boolean>;
+  authorizeAgentTask?: (task: PreparedAgentTask, context: {runId?:string;signal?:AbortSignal;deadlineMs?:number}) => boolean|Promise<boolean>;
   taskResourcePolicy?: Pick<TaskPolicy,'fetch'|'authorizeRemote'|'isImmutableResource'>;
   skillResolver?: (descriptor: InteractiveSkillDescriptor) => string|Promise<string>;
   validateResult?: (schema: Record<string,unknown>, result: unknown) => string[];
@@ -172,7 +172,7 @@ export interface InteractiveRuntime {
   checkStep?: unknown;
 }
 export interface InteractiveCoordinator {
-  reserveDispatch(input:{runId:string;requestId:string;operationId:string}):Promise<{deadlineMs:number;dispatches:number;providerRequests?:number}>;
+  reserveDispatch(input:{runId:string;requestId:string;operationId:string}):Promise<{deadlineMs?:number;dispatches:number;providerRequests?:number}>;
   readonly policyHash: string;
   start(input: {
     programBytes: Uint8Array;
@@ -429,7 +429,7 @@ export type RunCheckpointV1 = {
     unavailableParallelKeys?:readonly string[];
     parallel?:{nodeId:string;strategy:'all_succeeded'|'any';effectMode?:'retain'|'compensate';
       lanes:readonly Record<string,unknown>[];decision?:Record<string,unknown>;receipt?:Record<string,unknown>};
-    taskContext?:{deadlineMs:number;deadlineScope?:'activity';dispatches:number;providerRequests?:number;reservations?:string[];
+    taskContext?:{deadlineMs?:number;deadlineScope?:'activity';dispatches:number;providerRequests?:number;reservations?:string[];
       active?:{activationId:string;input:Record<string,unknown>;missing:string[];prepared:PreparedAgentTask}}};
   state:Record<string,unknown>;
   publicOutput?:Record<string,unknown>;
@@ -705,4 +705,4 @@ export declare function forkInteractiveRun(input:{source:RunViewerRef;revision:n
   runtime:InteractiveRuntimeV1,options:RunViewerOptions & {auth:TrustedHostContextV1}):Promise<InteractiveFrameV1>;
 export declare function cancelInteractiveRun(runId:string,reasonCode:string,options:InteractiveOptionsV1):Promise<PublicInteractiveTerminalFrame>;
 export declare function reserveInteractiveDispatch(input:{runId:string;requestId:string;operationId:string},
-  runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs:number;dispatches:number;providerRequests?:number}>;
+  runtime:InteractiveRuntimeV1,options:InteractiveOptionsV1):Promise<{deadlineMs?:number;dispatches:number;providerRequests?:number}>;

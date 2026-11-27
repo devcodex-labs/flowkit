@@ -162,7 +162,7 @@ export function decodeCheckpoint(cp) {
       (!Number.isSafeInteger(execution.activityDeadlineMs) || execution.activityDeadlineMs<1 ||
        !['validate','commit'].includes(phase))) throw invalid();
   if (execution.taskContext && (!object(execution.taskContext) || !count(execution.taskContext.dispatches) ||
-    !Number.isSafeInteger(execution.taskContext.deadlineMs) || execution.taskContext.deadlineMs < 1 ||
+    execution.taskContext.deadlineMs!==undefined && (!Number.isSafeInteger(execution.taskContext.deadlineMs) || execution.taskContext.deadlineMs < 1) ||
     execution.taskContext.deadlineScope!==undefined && execution.taskContext.deadlineScope!=='activity' ||
     execution.taskContext.providerRequests!==undefined && !count(execution.taskContext.providerRequests) ||
     execution.taskContext.reservations && (!Array.isArray(execution.taskContext.reservations) ||

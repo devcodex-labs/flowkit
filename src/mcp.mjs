@@ -89,8 +89,27 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   }
 
   const draftResponses = new Set(['flowkit_start_workflow', 'flowkit_prepare_workflow', 'flowkit_get_workflow_draft', 'flowkit_recover_workflow']);
+  function responseError(name, input, result, error) {
+    let recovery, sideEffectStatus;
+    if (name === 'flowkit_publish_candidate' && result?.publicationId === input.publicationId && result.status === 'saved') {
+      recovery = { draftId: input.draftId, publicationId: input.publicationId };
+      sideEffectStatus = 'known';
+    } else if (name === 'flowkit_run_workflow') {
+      recovery = { executionRef: input.executionRef };
+      sideEffectStatus = 'unknown';
+    } else if (name === 'flowkit_apply_collection_plan') {
+      recovery = { planRef: input.planRef };
+      sideEffectStatus = 'unknown';
+    } else if (draftResponses.has(name) && typeof result?.id === 'string') {
+      recovery = { draftId: result.id };
+    }
+    return toolError(Object.assign(new Error(error?.message ?? String(error), {cause:error}), {
+      code: error?.code, retryable: false, sideEffectStatus
+    }), recovery);
+  }
+
   const accessDenied = new Error('FlowKit access denied for this collection');
-  function tool(name, description, schema, invoke, readOnlyHint = false) {
+  function tool(name, description, schema, invoke, readOnlyHint = false, readAfterAuthorization) {
     const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
     server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
       async (args, ctx) => {
@@ -106,20 +125,20 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         // A failed invocation can also have executed before access was revoked.
         if (!await allowed()) return toolError(accessDenied);
         if (Object.hasOwn(outcome, 'error')) return toolError(outcome.error);
+        let { result } = outcome;
+        if (readAfterAuthorization) {
+          try { result = await readAfterAuthorization(result,input,ctx); }
+          catch (error) { return toolError(error); }
+        }
         try {
-          const { result } = outcome;
           const text = JSON.stringify(result);
           if (Buffer.byteLength(text) > maxResponseBytes) {
-            const isDraft = draftResponses.has(name) && typeof result?.id === 'string';
-            const message = isDraft ?
-              'Tool response exceeds the Host response byte budget; read the committed draft through the Host' :
-              'Tool response exceeds the Host response byte budget';
-            return toolError(Object.assign(new Error(message), { code: responseLimitCode, retryable: false }),
-              isDraft ? { draftId: result.id } : undefined);
+            const error = Object.assign(new Error('Tool response exceeds the Host response byte budget'), {code:responseLimitCode});
+            return responseError(name,input,result,error);
           }
           return response(text);
         } catch (error) {
-          return toolError(error);
+          return responseError(name,input,result,error);
         }
       });
   }
@@ -171,12 +190,14 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       }
       return draftView(await author().advanceTurn(input, requestContext));
     });
-  tool('flowkit_review_candidate', 'Read the exact candidate difference, review receipt or rejected review findings.',
-    { collectionId: id, draftId: id, candidateHash: hash, previousHash: hash.nullable() }, async ({ collectionId, ...input }, ctx) => {
+  tool('flowkit_review_candidate', 'Read candidate review evidence, or the exact saved receipt when publicationId is supplied.',
+    { collectionId: id, draftId: id, candidateHash: hash, previousHash: hash.nullable(), publicationId: id.optional() }, async ({ collectionId, ...input }, ctx) => {
       await exactDraft(collectionId, input.draftId, ctx.signal);
+      if (input.publicationId !== undefined) return null;
       const review = await author().reviewCandidate(input, requestContext, ctx.signal);
       return workflowUi ? workflowUi.review(review) : review;
-    }, true);
+    }, true, (review,input,ctx) => input.publicationId === undefined
+      ? review : author().readPublication(input,requestContext,ctx.signal));
   tool('flowkit_publish_candidate', 'Publish an exact candidate after Host review and approval verification.',
     { collectionId: id, draftId: id, expectedStateVersion: z.number().int().positive(), publicationId: id,
       candidateHash: hash, previousHash: hash.nullable(), reviewRef: id, approvalRef: id },

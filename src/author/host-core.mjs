@@ -13,7 +13,7 @@ import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { authorError, isIntentModelOutputError } from './host-budget.mjs';
 import { authorIdentity } from './host-target.mjs';
 import { evalWhen } from '../when/evaluate.mjs';
-import { createBudget, during, prepareTaskV2 } from '../runtime/tasks.mjs';
+import { activityDeadline, checkTaskDeadline, createBudget, during, prepareTaskV2, taskDeadlineSignal } from '../runtime/tasks.mjs';
 import { authorDocumentWork } from './document-work.mjs';
 
 function clarificationQuestions(draft, intent, continuation, answered) {
@@ -170,24 +170,30 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     return pending;
   }, stage);
   function documents(context, request) {
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(2147483647, deadlineMs - Date.now())));
-    const taskSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    const budget = createBudget({ ...policy, deadlineMs, maxTaskBytes: Math.min(192000,
-      policy.maxTaskBytes ?? Infinity, turn.budget.limits.maxBytes), maxDispatches, hostProfile: options.hostProfile }, taskSignal);
+    // Author identity is used for approvals; execution limits belong to the Host's session.
+    const executionPolicy = { ...policy, deadlineMs, maxTaskBytes: Math.min(192000,
+      policy.maxTaskBytes ?? Infinity, turn.budget.limits.maxBytes), maxDispatches };
+    const budget = createBudget(executionPolicy, signal);
     const { workflowId: id, version, artifactHash, programAbiVersion, semanticsVersion, compilerVersion } = options.coreIdentity;
     const workflow = { id, version, artifactHash, programAbiVersion, semanticsVersion, compilerVersion };
     const work = authorDocumentWork({ context, request, ...documentSteps,
       async runModel(kind, description, input) {
+        const activity = activityDeadline(budget.deadlineMs, policy.activityTimeoutMs);
+        const taskSignal = taskDeadlineSignal(activity, signal);
         const requestId = randomUUID();
         const task = { protocolVersion: 2, workflow,
           run: { runId: turn.attemptId }, node: { id: 'document-' + kind, name: 'Author document ' + kind },
           task: { description }, input, missing: [], outputSchema: { type: 'object' },
-          execution: { requestId, activationId: requestId, attempt: 1, reasons: [], deadlineMs: budget.deadlineMs } };
-        const taskContext = { signal: taskSignal, budget, hostProfile: options.hostProfile, deadlineMs: budget.deadlineMs, descriptionResources: [] };
+          execution: { requestId, activationId: requestId, attempt: 1, reasons: [], deadlineMs: activity } };
+        const taskContext = { signal: taskSignal, budget, hostProfile: policy.hostProfile, deadlineMs: activity,
+          projectRoot: policy.projectRoot, authorizationContextRef: policy.authorizationContextRef, descriptionResources: [] };
+        const prepared = await prepareTaskV2(task, session.runtime, executionPolicy, taskContext);
+        checkTaskDeadline(activity);
         budget.dispatch();
-        const prepared = await prepareTaskV2(task, session.runtime, taskContext, taskContext);
         const response = await during(taskSignal,
           () => observed(() => session.runtime.runAgentTask(prepared, taskContext), 'document-' + kind));
+        checkTaskDeadline(activity);
+        taskSignal.throwIfAborted();
         if (response?.status !== 'succeeded') throw authorError(response?.failure?.code ?? 'FKA_DOCUMENT_MODEL',
           `Document ${kind} failed: ${response?.failure?.message ?? 'the Host did not return a model result'}`);
         return { value: response.result, execution: { requestId, usage: response.usage ?? null } };

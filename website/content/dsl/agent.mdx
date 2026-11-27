@@ -13,7 +13,8 @@ Standard 描述型任务使用 `description`、`descriptionRefs` 和 `requiredSk
 | `name` | 必需string | 显示名称，遵守公共节点规则 |
 | `agent` | string，可选 | 默认映射到 `skillsRoot/agent.md` |
 | `skill` | string，可选 | 显式本地路径或HTTPS URL；优先于agent |
-| `description` | string，可选 | 非空的任务说明，可作为独立指令来源 |
+| `description` | string 或 string[]，可选 | 非空的任务说明，可作为独立指令来源 |
+| `descriptionRefs` | 说明引用数组，可选 | `role: 'instruction'` 的引用也可单独提供指令来源。描述型任务使用 Task V2 |
 | `output` | 必需对象Schema | 顶层type必须为object，properties若存在必须为对象 |
 | `inputs` | string[]，默认[] | 从state选择键；非空且不重复的条目 |
 | `retries` | 整数0–10，默认2 | 额外重试次数，总尝试数为retries+1 |
@@ -39,7 +40,7 @@ runAgent 普通拒绝可以重试；控制信号原样传播。校验/业务方�
 
 ## 常见非法配置
 
-缺少 `agent`、`skill` 和非空 `description`：[FK_C050](/troubleshooting/compiler#FK_C050)；output写成字符串或type:array：[FK_C054](/troubleshooting/compiler#FK_C054)；retries:11：[FK_C055](/troubleshooting/compiler#FK_C055)；inputs重复/空项：[FK_C056](/troubleshooting/compiler#FK_C056)；并行成员写next：[FK_C021](/troubleshooting/compiler#FK_C021)。分别恢复说明来源、对象Schema、合法次数、唯一输入键和由join统一后继，再执行 compile/check。
+[FK_C050](/troubleshooting/compiler#FK_C050) 表示缺少 `agent`、`skill`、非空 `description` 或可用的指令 `descriptionRefs`。另见 [FK_C054](/troubleshooting/compiler#FK_C054) 的对象 Schema、[FK_C055](/troubleshooting/compiler#FK_C055) 的重试次数、[FK_C056](/troubleshooting/compiler#FK_C056) 的输入键及 [FK_C021](/troubleshooting/compiler#FK_C021) 的并行后继。按相应规则修订后运行 compile/check。
 
 需要完整重试与失败输出时阅读[结果校验与重试](/guide/validation-retries)。Skill约束见[本地 Skill](/guide/local-skills)和[远程 Skill](/guide/remote-skills)。
 

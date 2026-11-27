@@ -185,10 +185,19 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       operationSignal.throwIfAborted();
       return result.value;
     } catch (error) {
+      let observedEffect;
       changeTurn(turn => {
         const receipt = turn.budget.reservations[id];
         if (receipt.status === 'reserved') receipt.status = 'unknown';
+        observedEffect = receipt.sideEffectStatus;
       }, { settlement: true });
+      // Port failures must expose the same conservative effect status as the durable reservation.
+      if (sideEffect === 'write' && (error?.sideEffectStatus !== observedEffect ||
+          observedEffect !== 'none' && error?.retryable === true)) {
+        throw Object.assign(new Error(error?.message ?? String(error), { cause: error }), {
+          name: error?.name ?? 'Error', code: error?.code, reasonCode: error?.reasonCode,
+          retryable: observedEffect === 'none' && error?.retryable === true, sideEffectStatus: observedEffect });
+      }
       throw error;
     }
   }

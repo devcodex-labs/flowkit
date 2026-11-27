@@ -18,9 +18,9 @@ P2 支持持久并行的 `any`。首个经可信校验并完成状态提交的�
 
 Task V2 的 `description`、`descriptionRefs` 和 `requiredSkills` 可用于 P0-A Agent。`compileInteractive` 的 `code`、`mermaid` 与 `programIdentity` 来自同一次静态分析；Author 可据此交付 `SKILL.md`、`workflow.js` 和 `workflow.mmd`。默认不附源码，执行不依赖 Author。
 
-Host 提供 `prepareAgentTask` 和 `authorizeAgentTask`。前者返回完整准备结果，后者检查当前权限及固定资源是否仍可用。恢复、任务披露和新回执接纳前均复核。检查点保存原输入、资源摘要、当前尝试的期限及累计派发，恢复沿用同次尝试的值。P0-B 及后续模式可用 `businessDeadlineMs` 指定整个 Run 的期限，用 `taskPolicy.activityTimeoutMs` 约束当前 Task V2 尝试。没有业务期限时，上一活动的期限不会截断后继 Human 等待或后续活动。版本化 API 的两个回调使用 `trusted-read` 描述符并列入 `bindingManifest`。
+Host 提供 `prepareAgentTask` 和 `authorizeAgentTask`。前者返回完整准备结果，后者检查当前权限及固定资源是否仍可用。恢复、任务披露和新回执接纳前均复核。检查点保存原输入、资源摘要、已声明的当前尝试期限及累计派发，恢复沿用同次尝试的值。业务方用 `businessDeadlineMs` 指定整个 Run 的期限，Host 用 `taskPolicy.activityTimeoutMs` 约束当前 Task V2 尝试。省略期限允许合法地长期等待，上一活动的期限不会截断后继 Human。尝试到期和业务到期分别记入持久状态。既有回执和已派发操作的对账沿用原身份。版本化 API 的两个回调使用 `trusted-read` 描述符并列入 `bindingManifest`。
 
-普通 API 工具循环的额外请求应绑定到 Host 的持久预算：同步协调器/Trusted Host 调用 `reserveDispatch({runId,requestId,operationId})`，版本化入口使用 `reserveInteractiveDispatch`。将该操作接入执行器的 `context.budget.dispatch`；相同 operationId 幂等，超预算或过期请求拒绝。Host 保管工具业务回执和待对账记录，未知副作用不能通过重试消除。
+普通 API 工具循环的额外请求应绑定到 Host 的持久预算。同步协调器/Trusted Host 调用 `reserveDispatch({runId,requestId,operationId})`，版本化入口使用 `reserveInteractiveDispatch`。将该操作接入执行器的 `context.budget.dispatchProvider({operationId})`。相同 operationId 幂等，超预算或过期请求拒绝。Host 保管工具业务回执和待对账记录。
 
 Task V2 失败回执应提供 `retryable` 和 `sideEffectStatus`；只有明确可重试且副作用为 `none` 才允许有限重试。授权后仍不可跳过独立的结果 Schema 校验。静态图不含业务输入、运行日志或恢复事件。
 

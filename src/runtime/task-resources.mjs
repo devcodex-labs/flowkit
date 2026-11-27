@@ -70,7 +70,7 @@ async function readRemote(ref, url, policy, options, budget, limit, signal) {
     throw skillError('FK_R013', 'Remote description requires a digest or a host-verified immutable reference');
   }
   return readRemoteSkill(url, ref.integrity, { fetch: policy.fetch, signal }, {
-    maxBytes: limit, timeoutMs: Math.max(1, Math.min(10000, budget.deadlineMs - Date.now())), authorize,
+    maxBytes: limit, timeoutMs: Math.max(1, Math.min(10000, (budget.deadlineMs ?? Infinity) - Date.now())), authorize,
     parseRemote: remoteTextResource, validLocal: localTextResource, textOnly: true, rawBytes: true
   });
 }

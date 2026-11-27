@@ -144,6 +144,21 @@ test('HTTP tool errors expose only authorized effect classifications and bounded
   assert.deepEqual((await callError(start)).recovery, limited.recovery);
   fixture.options.limits.maxResponseBytes = Buffer.byteLength(JSON.stringify({ error: { code: 'FKA_RESPONSE_LIMIT' } }));
   assert.deepEqual(await callError(start), { code: 'FKA_RESPONSE_LIMIT' });
+  fixture.options.limits.maxResponseBytes=512;
+  let writes=0;
+  fixture.options.runWorkflow=async ({executionRef})=>{
+    writes++;
+    return executionRef==='serialization'?{payload:1n}:{payload:'x'.repeat(1000)};
+  };
+  for (const [executionRef,code] of [['limit','FKA_RESPONSE_LIMIT'],['serialization','FKA_HOST_OPERATION_FAILED']]) {
+    const failure=await callError({name:'flowkit_run_workflow',arguments:{collectionId:'test-collection',
+      skillId:'review',candidateHash:'sha256:'+'1'.repeat(64),executionRef}});
+    assert.equal(failure.code,code);
+    assert.equal(failure.retryable,false);
+    assert.equal(failure.sideEffectStatus,'unknown');
+    assert.deepEqual(failure.recovery,{executionRef});
+  }
+  assert.equal(writes,2);
 });
 
 test('real HTTP MCP authenticates requests and returns R-03 S03 clarification before preparing or publishing', async t => {
@@ -214,13 +229,35 @@ test('real HTTP MCP authenticates requests and returns R-03 S03 clarification be
   const refused=await client.callTool({name:'flowkit_publish_candidate',arguments:{...publication,approvalRef:'denied'}});
   assert.equal(refused.isError,true);
   fixture.approve('fixture-approved', candidate.hash);
+  fixture.options.limits.maxResponseBytes=235;
   const published=await client.callTool({name:'flowkit_publish_candidate',arguments:{...publication,approvalRef:'fixture-approved'}});
-  assert.equal(published.isError,undefined);
+  assert.equal(published.isError,true);
+  const publicationError=JSON.parse(published.content[0].text).error;
+  assert.equal(publicationError.code,'FKA_RESPONSE_LIMIT');
+  assert.equal(publicationError.sideEffectStatus,'known');
+  assert.equal(publicationError.retryable,false);
+  assert.deepEqual(publicationError.recovery,{draftId:ready.id,publicationId:'publication'});
+  const recovered=await client.callTool({name:'flowkit_review_candidate',arguments:{...identity,publicationId:'publication'}});
+  assert.equal(recovered.isError,undefined,JSON.stringify(recovered));
+  const saved=JSON.parse(recovered.content[0].text);
+  assert.equal(saved.status,'saved');
+  assert.equal(saved.candidateHash,candidate.hash);
+  assert.equal(saved.publicationId,'publication');
+  assert.equal(saved.generation,undefined);
+  assert.equal(saved.storeId,undefined);
+  delete fixture.options.limits.maxResponseBytes;
   const executed=await client.callTool({name:'flowkit_run_workflow',arguments:{collectionId:'test-collection',skillId:ready.target.skillId,candidateHash:candidate.hash,executionRef:'fixture-execution'}});
   assert.equal(executed.isError,undefined);
   assert.equal(JSON.parse(executed.content[0].text).terminal,'done');
   const allResources = await client.listResources();
   assert.equal(allResources.resources.length, 2);
+  const collectionAuthorization=fixture.options.authorize;
+  let checks=0;
+  fixture.options.authorize=async()=>{if(++checks===2)fixture.revoke();return true;};
+  const receiptDenied=await client.callTool({name:'flowkit_review_candidate',arguments:{...identity,publicationId:'publication'}});
+  assert.equal(receiptDenied.isError,true);
+  assert.ok(!receiptDenied.content[0].text.includes(candidate.hash));
+  fixture.options.authorize=collectionAuthorization;
   fixture.revoke();
   const denied = await client.callTool({ name: 'flowkit_collection', arguments: { collectionId: 'test-collection' } });
   assert.equal(denied.isError, true);

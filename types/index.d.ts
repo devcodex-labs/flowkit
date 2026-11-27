@@ -82,7 +82,7 @@ export interface AgentTaskV2 {
   readonly missing: readonly string[];
   readonly outputSchema: ObjectSchema;
   readonly execution: { readonly activationId: string; readonly requestId: string; readonly attempt: number;
-    readonly reasons: readonly string[]; readonly deadlineMs: number; readonly overviewStep?: number };
+    readonly reasons: readonly string[]; readonly deadlineMs?: number; readonly overviewStep?: number };
 }
 export interface DescriptionResource { readonly uri: string; readonly role: 'instruction' | 'reference' | 'evidence';
   readonly content: string; readonly byteLength: number; readonly digest: string }
@@ -138,12 +138,12 @@ export interface TaskPolicy {
 }
 export interface HostPreparationContext {
   readonly signal: AbortSignal;
-  readonly deadlineMs: number;
+  readonly deadlineMs?: number;
   readonly projectRoot?: string;
   readonly hostProfile?: HostCapabilityProfile;
   readonly authorizationContextRef?: string;
   readonly descriptionResources: readonly DescriptionResource[];
-  readonly budget: { readonly deadlineMs: number; readonly maxResourceBytes: number;
+  readonly budget: { readonly deadlineMs?: number; readonly maxResourceBytes: number;
     readonly maxTotalResourceBytes: number; readonly maxTaskBytes: number; check(): void;
     dispatch(reservation?:{operationId:string}): void | Promise<unknown>;
     dispatchProvider?(reservation:{operationId:string}): void | Promise<unknown> };

@@ -8,6 +8,10 @@ export function createIndependentAgentAdapter({ scope, select, authorize, indepe
   if (!nonempty(scope) || typeof select !== 'function' || typeof authorize !== 'function' || typeof independentFrom !== 'function') {
     throw new TypeError('Independent Agent routing requires a Host scope, selector and authorization');
   }
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits) ||
+      Reflect.ownKeys(limits).some(key => !['maxConcurrent', 'maxSessions', 'timeoutMs'].includes(key))) {
+    throw new TypeError('Unknown Independent Agent limit field');
+  }
   const { maxConcurrent = 4, maxSessions = 64, timeoutMs = 30000 } = limits;
   if (![maxConcurrent, maxSessions, timeoutMs].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new TypeError('Host execution limits must be positive integers');

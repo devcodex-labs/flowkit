@@ -54,6 +54,9 @@ export async function createWorkflowAuthorHost(supplied) {
   requiredId(options.namespace, 'namespace');
   if (!Array.isArray(options.collectionIds) || !options.collectionIds.length || options.collectionIds.some(id => !id)) throw new TypeError('Authorized collection IDs are required');
   if (typeof options.authorization?.authorize !== 'function') throw new TypeError('Current-request Host authorization is required');
+  if (typeof options.authorization.resolveApplicableSafetyPolicies !== 'function') {
+    throw new TypeError('An applicable safety policy resolver is required for AuthorHost');
+  }
   if (typeof options.execution?.request !== 'function' || typeof options.execution?.createSession !== 'function') {
     throw authorError('author-executor', 'FKA_HOST_BINDING_MISSING: independently responsive execution and guarded request ports are required');
   }
@@ -295,6 +298,19 @@ export async function createWorkflowAuthorHost(supplied) {
       const draft = read(input.draftId);
       await authorize('read', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
       return view(draft);
+    },
+    async readPublication(input, currentRequestContext, signal) {
+      const draft = read(input.draftId);
+      requiredId(input.publicationId, 'publicationId');
+      await authorize('read', draft.collectionId, currentRequestContext, signal,
+        { draftId: draft.id, publicationId: input.publicationId });
+      const saved = Object.hasOwn(draft.publications, input.publicationId) ? draft.publications[input.publicationId] : null;
+      if (!saved || saved.candidateHash !== input.candidateHash || saved.previousHash !== input.previousHash) {
+        throw authorError('author-conflict', 'Publication receipt does not match the exact candidate');
+      }
+      const currentActive = store.readActive(draft.collectionId, draft.target.skillId)?.hash ?? null;
+      return clone({ ...select(saved, ['publicationId', 'draftId', 'candidateHash', 'status', 'discovery']),
+        isCurrent: currentActive === saved.candidateHash });
     },
     async advanceTurn(input, currentRequestContext, signal, admitted) {
       const initial = read(input.draftId);

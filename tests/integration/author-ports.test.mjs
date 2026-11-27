@@ -36,6 +36,56 @@ test('Author keeps explicitly tighter Host task limits and rejects misspelled tu
   assert.deepEqual(seen, [{ deadlineMs, maxTaskBytes: 100_000 }]);
 });
 
+test('document work keeps Host limits during preparation and rejects a result past the activity window', async t => {
+  for (const maxTaskBytes of [1024,64000]) {
+    let clock=Date.now();
+    const f=await setup(t,{useNodeOptionsForNewDrafts:true,documentTask(_kind,input){
+      clock+=1001;
+      return {sectionId:input.id,classification:'mixed',rules:['Inspect'],links:[]};
+    }});
+    await f.register();
+    const makeSession=f.options.execution.createSession;
+    const now=t.mock.method(Date,'now',()=>clock);
+    const seen={prepare:[],run:[]};
+    f.options.execution.createSession=async ports=>{
+      const session=await makeSession(ports);
+      return {...session,runtime:{...session.runtime,
+        taskPolicy:{deadlineMs:clock+60000,activityTimeoutMs:1000,
+          hostProfile:{resourceLimits:{maxTaskBytes,maxResourceBytes:512}}},
+        async prepareAgentTask(task,context) {
+          seen.prepare.push(task.input.id);
+          assert.equal(context.budget.maxTaskBytes,maxTaskBytes);
+          assert.equal(context.budget.maxResourceBytes,512);
+          assert.equal(task.execution.deadlineMs,clock+1000);
+          return {protocolVersion:2,task,descriptionResources:[],skills:[]};
+        },
+        async runAgentTask(prepared, taskContext) {
+          seen.run.push(prepared.task.input.id);
+          return session.runtime.runAgentTask(prepared, taskContext);
+        }}};
+    };
+    try {
+      const draft=await f.start();
+      const result=await f.host.advanceTurn({draftId:draft.id,expectedStateVersion:draft.stateVersion,turnId:'long',
+        input:'Inspect',contextSnapshot:{materials:[{id:'audit',title:'Long document',content:'Read the synthetic record.\n'.repeat(1000)}]}},context);
+      assert.notEqual(result.status,'candidate-ready');
+      assert.equal(result.diagnostics[0]?.code,'FK_R004',JSON.stringify({maxTaskBytes,seen,diagnostics:result.diagnostics}));
+      if (maxTaskBytes===1024) assert.deepEqual(seen,{prepare:[],run:[]});
+      else {
+        assert.ok(seen.run.length>0);
+        assert.deepEqual(seen.run,seen.prepare);
+        assert.equal(new Set(seen.run).size,seen.run.length);
+      }
+    } finally { now.mock.restore(); }
+  }
+});
+
+test('AuthorHost reports a missing safety resolver at construction', async t => {
+  const f=await setup(t);
+  await assert.rejects(createWorkflowAuthorHost({...f.options,authorization:{...f.options.authorization,
+    resolveApplicableSafetyPolicies:undefined}}), /safety policy resolver is required/);
+});
+
 test('I4 S45/S93/S94/S97: actual API adapter 429 retries charge each real guarded dispatch once inside the durable shared budget', async t => {
   const f = await setup(t, { budgetPolicy: { maxRequests: 5 } }); let requests = 0; const observed = new Set();
   f.options.execution.request = async body => {
@@ -105,7 +155,14 @@ test('failed processing of a dispatched write result stays unknown across SQLite
     f.options.execution.tool = async () => { writes++; return makeOutput(); };
     f.options.execution.createSession = async ports => ({
       intentRuntime: { parse: async () => {
-        await ports.tool({ value: 1 }, { sideEffect: 'write', toolName: 'update-record', operationKey: kind });
+        try {
+          await ports.tool({ value: 1 }, { sideEffect: 'write', toolName: 'update-record', operationKey: kind });
+        } catch (error) {
+          assert.equal(error.code,diagnostic);
+          assert.equal(error.sideEffectStatus,'unknown');
+          assert.equal(error.retryable,false);
+          throw error;
+        }
         assert.fail('unusable output must stop the turn');
       } },
       runtime: { validateResult: () => [], runAgentTask: () => assert.fail('no Agent dispatch expected') }

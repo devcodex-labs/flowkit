@@ -81,14 +81,45 @@ test('local Intent sends workflow scope guidance separately from raw materials a
     result => { result.effective.constraints[0].scope = { intentId: 'work' }; },
     result => { result.effective.constraints[3].scope.referenceId = 'unknown'; },
     result => { result.effective.intents[0].constraints.push(result.effective.constraints[0]); },
-    result => { result.effective.intents.push(result.effective.intents[0]); }
+    result => { result.effective.intents.push(result.effective.intents[0]); },
+    result => { result.turn.changes=[{operation:'confirm',effect:'applied',target:{kind:'constraint',id:'input'}}]; },
+    result => { result.turn.changes=[{operation:'confirm',effect:'applied',sourceRefs:[]}]; },
+    result => { result.turn.changes=[{operation:'confirm',effect:'applied',target:null,sourceRefs:[]}]; },
+    result => { result.evidence=[{target:'/effective/constraints/0',sourceRefs:[null]}]; },
+    result => { result.issues=[{sourceRefs:{root:'input'}}]; },
+    result => { result.issues=[{questions:[{question:'Choose',optionIds:'invalid'}]}]; }
   ]) {
     result = structuredClone(intent);
     mutate(result);
     await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INVALID' });
   }
+  result=structuredClone(intent);
+  result.turn.changes=[{operation:'confirm',effect:'applied',target:{kind:'constraint',id:'input'},sourceRefs:[{root:'input'}]}];
+  assert.deepEqual(await model.execution.request({flowkitIntent:input}),result);
   status = 'incomplete';
   await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INCOMPLETE' });
+});
+
+test('the local model deadline includes direct Intent response bodies and receives the caller signal',async () => {
+  const caller=new AbortController();
+  const keepAlive=setTimeout(()=>{},200);
+  try {
+    let signal;
+    const model=localModel({provider:'openai',model:'fixture',apiKey:'fixture',timeoutMs:15,
+      async fetcher(_url,options) {
+        signal=options.signal;
+        return new Response(new ReadableStream({start(controller) {
+          signal.addEventListener('abort',()=>controller.error(signal.reason),{once:true});
+        }}));
+      }});
+    await assert.rejects(model.execution.request({flowkitIntent:{input:'Inspect'}},{signal:caller.signal}),{name:'TimeoutError'});
+    assert.equal(signal.aborted,true);
+    await assert.rejects(model.execution.request({flowkitIntent:{input:'Inspect'}},{signal:AbortSignal.abort()}),{name:'AbortError'});
+    let forwarded;
+    const session=await model.execution.createSession({request:(_input,options)=>{forwarded=options.signal;}});
+    await session.intentRuntime.parse({input:'Inspect'},{signal:caller.signal});
+    assert.equal(forwarded,caller.signal);
+  } finally { clearTimeout(keepAlive); }
 });
 
 test('the local Author drafts only after catalog lookup, publishes the approved Skill with the workflow, and reuses it', async t => {
@@ -356,7 +387,7 @@ test('an optional layout timeout does not prevent delivery or repeat the design 
   };
   const token = 'test-design-layout-timeout';
   service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'),
-    exportDir: path.join(root, 'exports'), authorTurnDurationMs: 600 }, { credential: token, modelBinding: model });
+    exportDir: path.join(root, 'exports'), designTurnDurationMs: 600 }, { credential: token, modelBinding: model });
   client = new Client({ name: 'flowkit-design-timeout-test', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
   const arguments_ = { requestId: 'design-layout-timeout', title: 'Request', materials: [{ id: 'guide', title: 'Guide', content: 'Read' }] };

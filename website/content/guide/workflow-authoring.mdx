@@ -30,7 +30,7 @@ codex login status
 }
 ```
 
-复杂流程可选设 `authorTaskTimeoutMs`（单次模型任务，默认 90000 毫秒）和 `authorTurnDurationMs`（完整起草或复审回合，默认 240000 毫秒）。两项都使用正整数毫秒。宿主与 Codex 客户端各有自己的等待时间，调长宿主预算时也要让客户端的 `tool_timeout_sec` 覆盖整个回合。
+本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制实际模型传输（默认 90000 毫秒），用 `authorTurnDurationMs` 控制 Author 回合（普通默认 240000，长文档默认 900000）。项目设计回合和资源读取另用 `designTurnDurationMs` 与 `resourceReadTimeoutMs`。这些配置使用正整数毫秒。Codex 客户端的 `tool_timeout_sec` 控制客户端等待，生成工作流的业务截止由业务方在执行时声明。
 
 ```powershell
 npm run mcp:local -- --config ./flowkit-mcp.local.json
@@ -53,7 +53,8 @@ bearer_token_env_var = "FLOWKIT_MCP_TOKEN"
 | `dataDir`、`exportDir` | `.flowkit/data`、`flowkit-exports`。分别存放隔离的候选状态与导出文件 |
 | `mcpTokenEnv` | `FLOWKIT_MCP_TOKEN`。指定服务读取 MCP 凭证的环境变量名，客户端用同一凭证 |
 | `authorProvider`、`authorModelEnv` | `codex`、`FLOWKIT_AUTHOR_MODEL`。Codex 采用 CLI 登录态，`openai` 采用配置的 Responses 模型和 `OPENAI_API_KEY` |
-| `authorTaskTimeoutMs`、`authorTurnDurationMs` | `90000`、`240000`。单次模型任务与整个 Author 回合的时间上限 |
+| `authorTaskTimeoutMs`、`authorTurnDurationMs` | 模型请求默认 `90000`。Author 普通回合默认 `240000`，长文档默认 `900000` |
+| `designTurnDurationMs`、`resourceReadTimeoutMs` | 项目设计回合默认 `240000`。Run 产物读取、设计材料和证据再核验以及预览 Skill 复核的读取窗口默认 `90000` |
 | `trustedExportKeys` | 接收方接受的签名公钥。撤销源授权时，从该列表移除并重启接收服务 |
 
 使用 OpenAI Responses 时，将服务配置中的 `authorProvider` 改为 `openai`，在服务环境中提供 `OPENAI_API_KEY` 和 `FLOWKIT_AUTHOR_MODEL`。操作仍使用同一个 MCP 入口。已有编译工作流由 SDK 或 Host 提供运行模型和授权。宿主角色、数据、业务回调、Task V2 资源预算及授权目录随 Host 配置传入。

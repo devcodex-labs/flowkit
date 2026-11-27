@@ -11,8 +11,11 @@ export const interactiveModeForStage=stage=>'interactive-'+stage.toLowerCase();
 
 /** A durable wait is bounded by the Run deadline, not a previous Agent's budget. */
 export function runDeadlineExpired(cp, now=Date.now()) {
-  if (cp.businessDeadlineMs!==undefined && cp.businessDeadlineMs<=now) return true;
-  if (cp.taskContext?.deadlineScope!=='activity') return false;
+  return cp.businessDeadlineMs!==undefined && cp.businessDeadlineMs<=now;
+}
+
+/** Use the saved attempt's deadline, including checkpoints written before scope was recorded. */
+export function attemptDeadlineExpired(cp, now=Date.now()) {
   const prepared=cp.pending?.preparedTask ?? cp.prepared?.preparedTask;
   return !cp.parallel && (cp.candidate?.activityDeadlineMs ?? prepared?.task.execution.deadlineMs)<=now;
 }

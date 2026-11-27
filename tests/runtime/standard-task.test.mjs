@@ -62,6 +62,24 @@ test('description task runs with isolated declared input and commits only valida
   assert.equal(results.length, 2);
 });
 
+test('unconfigured Standard task has no deadline and still applies a Host activity window when set', async t => {
+  const { file } = await sample(t, { description:'Inspect the result' });
+  let clock=Date.now();
+  t.mock.method(Date,'now',()=>clock);
+  const result=await run(file,runtime({async runAgentTask({task},context) {
+    assert.equal(Object.hasOwn(task.execution,'deadlineMs'),false);
+    assert.equal(context.budget.deadlineMs,undefined);
+    clock+=600001;
+    return success();
+  }}),{});
+  assert.equal(result.state.ok,true);
+  await assert.rejects(run(file,runtime({taskPolicy:{activityTimeoutMs:1000},async runAgentTask({task}) {
+    assert.equal(task.execution.deadlineMs,clock+1000);
+    clock+=1001;
+    return success();
+  }}),{}),{code:'FK_R004',kind:'node-deadline-exceeded'});
+});
+
 test('refs-only task fixes ordered resource identities and requires explicit instruction', async t => {
   const { dir, file } = await sample(t, { descriptionRefs: [
     { uri: 'instruction.md', role: 'instruction' }, { uri: 'reference.txt' }, { uri: 'evidence.md', role: 'evidence' }

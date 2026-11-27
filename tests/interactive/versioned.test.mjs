@@ -1039,7 +1039,9 @@ terminal('done'`));
   assert.equal((await inputsCfg.auth.readTerminalResult(invalidInputs.resultRef,inputsCfg)).causeCode,'FK_I_PARALLEL_INPUT');
 });
 
-test('P2 seals the winner across process death and gates the next step on loser reconciliation and compensation',async t=>{
+for (const expires of [false,true]) test(expires
+  ? 'P2 business expiry preserves sealed loser compensation before terminating without committing the winner'
+  : 'P2 seals the winner across process death and gates the next step on loser reconciliation and compensation',async t=>{
   const f=await fixture(t);
   const file=path.join(f.dir,'parallel-writes.workflow.js');
   await writeFile(file,`import {defineWorkflow,parallel,action,terminal} from '@devcodex-labs/flowkit/dsl';
@@ -1049,8 +1051,10 @@ action('winner-write',{name:'Primary',action:'primary-write',writes:['winner']})
 action('loser-write',{name:'Alternate',action:'alternate-write',writes:['loser']}),
 terminal('done',{name:'Done',status:'succeeded'})
 ]});`);
+  const deadline=Date.now()+60000;
   const cfg={...f.options,auth:context({authorizeTask:()=>true}),
-    policy:{...policy,capabilityStage:'P2',parallelEffectMode:'compensate',bindingManifest:{}}};
+    policy:{...policy,capabilityStage:'P2',parallelEffectMode:'compensate',bindingManifest:{},
+      ...(expires?{businessDeadlineMs:deadline}:{})}};
   await assert.rejects(start(file,{}, {},{...cfg,policy:{...cfg.policy,parallelEffectMode:'retain-not-specified'}}),
     /Interactive policy/);
   const missingPolicy={...cfg.policy};
@@ -1100,6 +1104,8 @@ terminal('done',{name:'Done',status:'succeeded'})
     await assert.rejects(operations.claim(alt,cfg.auth),{code:'FK_I_STALE_RECEIPT'});
     await assert.rejects(operations.claimCompensation({runId:frame.runId,operationKey:main.operationKey},cfg.auth),
       {code:'FK_I_OPERATION_CONFLICT'});
+    if (expires) t.mock.method(Date,'now',()=>deadline+1);
+    assert.equal((await resume(frame.runId,{},cfg)).pauseReason,'reconciliation');
     const losingResult={set:{loser:'alternate'}};
     await operations.settle(record(alt,losingResult),cfg.auth);
     await assert.rejects(complete({kind:'action',runId:frame.runId,requestId:loser.requestId,
@@ -1131,9 +1137,11 @@ terminal('done',{name:'Done',status:'succeeded'})
     await operations.settleCompensation({...compensation,compensationKey:recovery.compensation.key,
       evidenceHash:sha256Bytes(Buffer.from('released alternate reservation'))},cfg.auth);
     const terminal=await resume(frame.runId,{},cfg);
-    assert.equal(terminal.status,'succeeded');
+    assert.equal(terminal.status,expires?'errored':'succeeded');
     assert.deepEqual(terminal.cancelledRequests,[loser.requestId]);
-    assert.deepEqual((await cfg.auth.readTerminalResult(terminal.resultRef,cfg)).state,{baseline:true,winner:'selected'});
+    const persisted=await cfg.auth.readTerminalResult(terminal.resultRef,cfg);
+    assert.deepEqual(persisted.state,expires?{baseline:true}:{baseline:true,winner:'selected'});
+    if (expires) assert.equal(persisted.causeCode,'FK_R004');
     assert.deepEqual(external.prepare('SELECT value FROM effects').all().map(row=>row.value),['selected']);
   } finally {external.close();}
 });

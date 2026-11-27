@@ -89,6 +89,27 @@ function parseIntent(value) {
     if (!isId(relation?.id) || relationIds.has(relation.id) || !intents.has(relation.fromId) || !intents.has(relation.toId)) throw invalid();
     relationIds.add(relation.id);
   }
+  const hasSourceRefs = refs => Array.isArray(refs) && refs.every(ref => ref && isId(ref.root));
+  for (const change of result.turn.changes) {
+    if (!change || typeof change !== 'object' || Array.isArray(change) ||
+        (change.sourceRefs !== undefined && !hasSourceRefs(change.sourceRefs))) throw invalid();
+    if (change.operation === 'confirm' && change.effect === 'applied') {
+      const target = change.target;
+      if (!target || !isId(target.kind) || !isId(target.id)) throw invalid();
+      if (target.kind === 'constraint' && (!constraintIds.has(target.id) || !hasSourceRefs(change.sourceRefs))) throw invalid();
+    }
+  }
+  for (const entry of result.evidence) {
+    if (!entry || !isId(entry.target) || !hasSourceRefs(entry.sourceRefs)) throw invalid();
+  }
+  for (const issue of result.issues) {
+    if (!issue || typeof issue !== 'object' || Array.isArray(issue) ||
+        (issue.sourceRefs !== undefined && !hasSourceRefs(issue.sourceRefs))) throw invalid();
+    if (issue.questions !== undefined && (!Array.isArray(issue.questions) || issue.questions.some(question =>
+      !question || (question.optionIds !== undefined && (!Array.isArray(question.optionIds) || !question.optionIds.every(isId)))))) throw invalid();
+    if (issue.candidates !== undefined && (!Array.isArray(issue.candidates) || issue.candidates.some(candidate =>
+      !candidate || !isId(candidate.id) || typeof candidate.description !== 'string'))) throw invalid();
+  }
   return result;
 }
 
@@ -114,9 +135,12 @@ function runCodex(input, { model, workspace, signal, captureTrace }) {
       if (event.type === 'item.completed' && event.item.type === 'agent_message') output = event.item.text;
       if (event.type === 'turn.completed') { completed = true; usage = event.usage ?? {}; }
     });
-    child.once('error', reject);
+    let processError;
+    child.once('error', error => { processError = error; });
     child.once('close', code => {
-      if (code || !output || unexpected || !completed || captureTrace && !threadId) {
+      // An AbortError can precede exit; keep the physical slot until the pipes close.
+      if (processError || signal?.aborted) reject(processError ?? signal.reason);
+      else if (code || !output || unexpected || !completed || captureTrace && !threadId) {
         reject(new Error('Codex model did not complete a bounded JSON response without tools'));
       }
       else resolve({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: jsonText(output) }] }],
@@ -133,6 +157,9 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
   const observed = new Map();
 
   async function complete(input, options, signal, captureTrace = false) {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    signal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    signal.throwIfAborted();
     if (provider === 'codex') {
       return Response.json(await runCodex(input.map(item => item.content).join('\n'), { model, workspace, signal, captureTrace }));
     }
@@ -219,11 +246,9 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
     },
     requestForExecution(body, { signal }) { return complete(body.input, body, signal, true); },
     async planLayout({ guide, input, signal }) {
-      const deadline = AbortSignal.timeout(timeoutMs);
       const response = await complete([{ role: 'developer', content: guide },
         { role: 'user', content: JSON.stringify(input) }],
-      { text: { format: { type: 'json_object' } }, max_output_tokens: 8192 },
-      signal ? AbortSignal.any([signal, deadline]) : deadline, true);
+      { text: { format: { type: 'json_object' } }, max_output_tokens: 8192 }, signal, true);
       if (!response.ok) throw new Error('Layout provider returned HTTP ' + response.status);
       const result = await response.json();
       if (result.status !== 'completed') throw new Error('Layout provider did not complete');
@@ -238,7 +263,7 @@ export function localModel({ provider, model, apiKey, workspace, timeoutMs = 900
       async createSession(ports) {
         const adapter = createApiAgentAdapter({ scope: 'flowkit-local', model: selectedModel, request: ports.request,
           supportsTools: false, limits: { maxOutputTokens: 8192, maxTotalTokens: 64000, timeoutMs } });
-        return { intentRuntime: { parse: ({ signal: _signal, ...input }) => ports.request({ flowkitIntent: input }) },
+        return { intentRuntime: { parse: (input, { signal } = {}) => ports.request({ flowkitIntent: input }, { signal }) },
           runtime: { validateResult: () => [], async runAgentTask(prepared, context) {
             const result = await adapter.runAgentTask(prepared, context);
             const task = prepared.task;

@@ -97,7 +97,7 @@ export interface AuthorHostOptions {
       Promise<{ verified: boolean; draftId: string; turnId: string; attemptId: string; evidenceRef: string;
         physicalDone: boolean; noEffect?: boolean; resultHash?: string | null }>;
     verifySafetyPolicy?(binding: object): boolean | Promise<boolean>;
-    resolveApplicableSafetyPolicies?(scope: object): readonly {nodeId:string;policyRef:string}[] |
+    resolveApplicableSafetyPolicies(scope: object): readonly {nodeId:string;policyRef:string}[] |
       Promise<readonly {nodeId:string;policyRef:string}[]>;
     verifyImport?(binding: object): boolean | Promise<boolean>;
     reviewPolicy?: 'separate-pass' | 'independent-subject';
@@ -140,6 +140,9 @@ export interface WorkflowAuthorHost {
   start(input: AuthorStartInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   advanceTurn(input: AuthorTurnInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   readDraft(input: { draftId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
+  readPublication(input: AuthorCandidateIdentity & { publicationId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<{
+    publicationId: string; draftId: string; candidateHash: string; status: string; discovery: string; isCurrent: boolean
+  }>;
   reviewCandidate(input: AuthorCandidateIdentity, context: AuthorRequestContext, signal?: AbortSignal): Promise<{
     diff: unknown; receipt: AuthorDraftView['reviewReceipt']; rejection?: AuthorReviewRejection
   }>;

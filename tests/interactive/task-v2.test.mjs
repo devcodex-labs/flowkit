@@ -25,7 +25,7 @@ terminal('done',{name:'Done',status:'succeeded'})]});`;
 const skillDigest=artifactDigest('fixed skill');
 const hostProfile={schemaVersion:1,executionModes:['interactive-p0-a'],capabilities:{skillResourceLoading:'supported'}};
 async function fixture(t,{maxDispatches=3,maxProviderRequests,deadlineMs=Date.now()+60000,
-  activityTimeoutMs,businessDeadlineMs}={}) {
+  activityTimeoutMs,businessDeadlineMs,omitDeadline=false}={}) {
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-task-recovery-'));
   const file=path.join(dir,'task.workflow.js');
   await writeFile(file,source);await writeFile(path.join(dir,'notes.md'),'original instruction');
@@ -38,7 +38,7 @@ async function fixture(t,{maxDispatches=3,maxProviderRequests,deadlineMs=Date.no
     prepareAgentTask:async(task,context)=>{preparations++;return {protocolVersion:2,task,
       descriptionResources:context.descriptionResources,skills:[{logicalId:'inspect',resolvedVersion:'1.0.0',digest}]};},
     authorizeAgentTask:prepared=>allowed && prepared.skills[0].digest===skillDigest};
-  const policy={taskPolicy:{projectRoot:dir,hostProfile,maxDispatches,deadlineMs,
+  const policy={taskPolicy:{projectRoot:dir,hostProfile,maxDispatches,...(omitDeadline?{}:{deadlineMs}),
     ...(maxProviderRequests===undefined?{}:{maxProviderRequests}),
     ...(activityTimeoutMs===undefined?{}:{activityTimeoutMs})},
     ...(businessDeadlineMs===undefined?{}:{businessDeadlineMs})};
@@ -51,6 +51,57 @@ async function fixture(t,{maxDispatches=3,maxProviderRequests,deadlineMs=Date.no
     allow(value){allowed=value;},digest(value){digest=value;},preparations:()=>preparations};
 }
 const receipt=(frame,result)=>({runId:frame.runId,requestId:frame.pending.requestId,nodeId:'worker',attempt:frame.pending.attempt,result});
+
+test('an unbounded Task V2 resumes across the former default and persists no artificial timestamp', async t => {
+  const f=await fixture(t,{omitDeadline:true});
+  const frame=await f.api().start(f.opening);
+  assert.equal(Object.hasOwn(frame.pending.preparedTask.task.execution,'deadlineMs'),false);
+  assert.equal(Object.hasOwn(f.store.load(frame.runId).taskContext,'deadlineMs'),false);
+  const reserved=await f.api().reserveDispatch({runId:frame.runId,requestId:frame.pending.requestId,operationId:'provider-1'});
+  assert.deepEqual(reserved,{dispatches:1,providerRequests:1});
+  const later=Date.now()+600001;
+  f.restart();
+  t.mock.method(Date,'now',()=>later);
+  assert.equal((await f.api().resume({runId:frame.runId})).status,'waiting');
+  assert.equal((await f.api().complete(receipt(frame,{answer:'done'}))).status,'succeeded');
+});
+
+test('an expired current Task V2 progresses atomically and an accepted receipt still replays exactly',async t=>{
+  let clock=Date.now();
+  const f=await fixture(t,{deadlineMs:clock+30000,activityTimeoutMs:5000});
+  const frame=await f.api().start(f.opening);
+  const submission=receipt(frame,{answer:'late validation'});
+  const deadline=frame.pending.preparedTask.task.execution.deadlineMs;
+  t.mock.method(Date,'now',()=>clock);
+  f.runtime.validateResult=()=>{
+    clock=deadline+1;
+    return [];
+  };
+  const out=await f.api().complete(submission);
+  assert.equal(out.status,'errored');
+  assert.equal(out.terminal.causeCode,'FK_R004');
+  assert.equal(Object.hasOwn(out.state,'answer'),false);
+  f.restart();
+  const duplicate=await f.api().complete(submission);
+  assert.equal(duplicate.duplicate,true);
+  assert.equal(duplicate.acceptedRevision,out.acceptedRevision);
+  assert.equal(duplicate.status,'errored');
+});
+
+test('an expired pending Task V2 reaches a durable task-deadline terminal after reopen',async t=>{
+  const f=await fixture(t);
+  const frame=await f.api().start(f.opening);
+  const time=frame.pending.preparedTask.task.execution.deadlineMs+1;
+  f.restart();
+  let clock=time-5;
+  t.mock.method(Date,'now',()=>clock);
+  f.runtime.authorizeAgentTask=async()=>{clock=time;return true;};
+  const out=await f.api().resume({runId:frame.runId});
+  assert.equal(out.status,'errored');
+  assert.equal(out.terminal.causeCode,'FK_R004');
+  assert.equal(f.store.load(frame.runId).revision,out.revision);
+  await assert.rejects(f.api().complete(receipt(frame,{answer:'not committed'})),{code:'FK_I_STALE_RECEIPT'});
+});
 
 test('durable Human wait and the following legacy Agent outlive an earlier Task V2 window', async t => {
   const dir=await mkdtemp(path.join(tmpdir(),'flowkit-human-activity-'));
@@ -326,7 +377,9 @@ test('original absolute deadline remains expired after reopening the database',a
   const f=await fixture(t,{deadlineMs:Date.now()+2000});const waiting=await f.api().start(f.opening);
   const original=f.store.load(waiting.runId).taskContext.deadlineMs;
   await delay(Math.max(1,original-Date.now()+30));f.restart();
-  await assert.rejects(f.api().resume({runId:waiting.runId}),error=>error.kind==='node-deadline-exceeded');
+  const expired=await f.api().resume({runId:waiting.runId});
+  assert.equal(expired.status,'errored');
+  assert.equal(expired.terminal.causeCode,'FK_R004');
   assert.equal(f.store.load(waiting.runId).taskContext.deadlineMs,original);
   assert.equal(f.store.load(waiting.runId).receiptCount,0);
 });

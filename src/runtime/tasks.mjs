@@ -4,6 +4,8 @@ import { DESCRIPTION_MAX_BYTES, isSemVer } from '../shared/task-spec.mjs';
 import { artifactDigest, professionalSkillFileHashes } from '../shared/artifact-identity.mjs';
 import { createDescriptionResources } from './task-resources.mjs';
 
+const deadlineSignals = new WeakMap();
+const maximumTimerDelay = 2147483647;
 const failure = (kind, message, cause) => Object.assign(new Error(`FK_R004 ${message}`, { cause }),
   { code: 'FK_R004', kind });
 
@@ -36,7 +38,8 @@ function positive(value, fallback, label) {
 }
 
 export function createBudget(policy, signal, persisted) {
-  const deadlineMs = positive(persisted?.deadlineMs ?? policy.deadlineMs, Date.now() + 600000, 'deadlineMs');
+  const deadline = persisted?.deadlineMs ?? policy.deadlineMs;
+  const deadlineMs = deadline == null ? undefined : positive(deadline, undefined, 'deadlineMs');
   const maxDispatches = positive(policy.maxDispatches, 1024, 'maxDispatches');
   const maxProviderRequests = positive(policy.maxProviderRequests, Number.MAX_SAFE_INTEGER, 'maxProviderRequests');
   const limits = policy.hostProfile?.resourceLimits;
@@ -49,10 +52,11 @@ export function createBudget(policy, signal, persisted) {
   let providerRequests = persisted?.providerRequests ?? 0;
   function check() {
     if (signal?.aborted) throw failure('cancelled', 'Task was cancelled', signal.reason);
-    if (Date.now() >= deadlineMs) throw failure('node-deadline-exceeded', 'Task deadline exceeded');
+    checkTaskDeadline(deadlineMs);
   }
   return Object.freeze({ deadlineMs, maxResourceBytes, maxTotalResourceBytes, maxTaskBytes, check,
-    snapshot() { return {deadlineMs, dispatches: used, ...(providerRequests ? { providerRequests } : {})}; },
+    snapshot() { return {...(deadlineMs === undefined ? {} : {deadlineMs}), dispatches: used,
+      ...(providerRequests ? { providerRequests } : {})}; },
     dispatchProvider() {
       check();
       if (providerRequests >= maxProviderRequests) throw failure('provider-request-limit', 'Run provider request limit reached');
@@ -65,10 +69,65 @@ export function createBudget(policy, signal, persisted) {
     } });
 }
 
+export function checkTaskDeadline(deadlineMs) {
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+    throw failure('node-deadline-exceeded', 'Task deadline exceeded');
+  }
+}
+
+/** A Host-selected activity window may tighten any explicit enclosing deadline. */
+export function activityDeadline(deadlineMs, activityTimeoutMs) {
+  if (activityTimeoutMs === undefined) return deadlineMs;
+  return Math.min(deadlineMs ?? Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER,
+    Date.now() + positive(activityTimeoutMs, undefined, 'activityTimeoutMs'));
+}
+
+/** Provide a signal without creating a deadline when none was declared. */
+export function taskDeadlineSignal(deadlineMs, signal) {
+  if (deadlineMs === undefined) return signal ?? new AbortController().signal;
+  const remaining = deadlineMs - Date.now();
+  let combined;
+  if (remaining <= maximumTimerDelay) {
+    const timeout = remaining <= 0 ? AbortSignal.abort(new DOMException('Task deadline exceeded', 'TimeoutError')) :
+      AbortSignal.timeout(remaining);
+    combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    deadlineSignals.set(combined,{deadlineMs,parent:signal});
+  } else {
+    const controller = new AbortController();
+    combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    deadlineSignals.set(combined,{deadlineMs,parent:signal,controller});
+    scheduleLongDeadline(new WeakRef(combined),deadlineMs);
+  }
+  return combined;
+}
+
+function scheduleLongDeadline(ref,deadlineMs) {
+  const signal=ref.deref();
+  if (!signal || signal.aborted) return;
+  const remaining=deadlineMs-Date.now();
+  if (remaining<=0) {
+    deadlineSignals.get(signal).controller.abort(new DOMException('Task deadline exceeded','TimeoutError'));
+    return;
+  }
+  // A long timer should not keep the finished attempt or its parent alive.
+  const timer=setTimeout(()=>{
+    ref.deref()?.removeEventListener('abort',stop);
+    scheduleLongDeadline(ref,deadlineMs);
+  },Math.min(remaining,maximumTimerDelay)).unref();
+  const stop=()=>clearTimeout(timer);
+  signal.addEventListener('abort',stop,{once:true});
+}
+
+function abortReason(signal) {
+  const timing=deadlineSignals.get(signal);
+  return timing && !timing.parent?.aborted && Date.now()>=timing.deadlineMs
+    ? Object.assign(failure('node-deadline-exceeded','Task deadline exceeded',signal.reason),{name:'TimeoutError'}) : signal.reason;
+}
+
 export function during(signal, action) {
-  if (signal.aborted) return Promise.reject(signal.reason);
+  if (signal.aborted) return Promise.reject(abortReason(signal));
   return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason);
+    const abort = () => reject(abortReason(signal));
     signal.addEventListener('abort', abort, { once: true });
     Promise.resolve().then(() => {
       signal.throwIfAborted();
@@ -146,6 +205,7 @@ export function assertPreparedProfessionalSkills(pins, nodeId, skills) {
 /** Shared Standard/P0-A resource preparation; Host supplies discovery and actual permissions. */
 export async function prepareTaskV2(task, runtime, policy, context, mode = 'standard') {
   const {signal, descriptionResources, budget} = context;
+  validateSize(task, budget.maxTaskBytes, 'Task');
   const requiredSkills = task.task.requiredSkills ?? [];
   if (requiredSkills.length && typeof runtime.prepareAgentTask !== 'function') {
     throw failure('required-skill-missing', 'Required Skills need host preparation');
@@ -188,13 +248,9 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
     }
     const budget = sharedBudget ??= createBudget(policy, signal);
     budget.check();
-    const activityTimeoutMs = policy.activityTimeoutMs === undefined ? undefined :
-      positive(policy.activityTimeoutMs, undefined, 'activityTimeoutMs');
     function activity() {
-      const deadlineMs = activityTimeoutMs === undefined ? budget.deadlineMs :
-        Math.min(budget.deadlineMs, Date.now() + Math.min(2147483647, activityTimeoutMs));
-      const expires = AbortSignal.timeout(Math.max(1, Math.min(2147483647, deadlineMs - Date.now())));
-      return { deadlineMs, taskSignal: signal ? AbortSignal.any([signal, expires]) : expires };
+      const deadlineMs = activityDeadline(budget.deadlineMs, policy.activityTimeoutMs);
+      return { deadlineMs, taskSignal: taskDeadlineSignal(deadlineMs, signal) };
     }
     let { deadlineMs, taskSignal } = activity();
     const { state } = ctx;
@@ -210,7 +266,7 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
     };
     for (let attempt = 1; attempt <= spec.retries + 1; attempt++) {
       budget.check();
-      if (attempt > 1 && activityTimeoutMs !== undefined) ({ deadlineMs, taskSignal } = activity());
+      if (attempt > 1 && policy.activityTimeoutMs !== undefined) ({ deadlineMs, taskSignal } = activity());
       checkState();
       const task = snapshot({
         protocolVersion: 2,
@@ -221,25 +277,30 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
         input,
         missing,
         outputSchema: spec.output,
-        execution: { activationId, requestId: randomUUID(), deadlineMs,
+        execution: { activationId, requestId: randomUUID(), ...(deadlineMs === undefined ? {} : {deadlineMs}),
           attempt, reasons, ...(spec.overview ? { overviewStep: step } : {}) }
       });
-      validateSize(task, budget.maxTaskBytes, 'Task');
       const context = Object.freeze({ signal: taskSignal, deadlineMs, budget, projectRoot: policy.projectRoot,
         hostProfile: policy.hostProfile, authorizationContextRef: policy.authorizationContextRef,
         descriptionResources });
       const prepared = await prepareTaskV2(task, runtime, policy, context);
-      if (checkPreparedSkills) await during(taskSignal, () => checkPreparedSkills(task.node.id, prepared.skills));
+      if (checkPreparedSkills) {
+        checkTaskDeadline(deadlineMs);
+        await during(taskSignal, () => checkPreparedSkills(task.node.id, prepared.skills));
+      }
       const manifestHash = prepared.resourceManifest.manifestHash;
       if (frozenManifest !== undefined && manifestHash !== frozenManifest) {
         throw failure('invalid-preparation', 'Required resource identity changed within one activation');
       }
       frozenManifest = manifestHash;
+      checkTaskDeadline(deadlineMs);
       budget.dispatch();
       const envelope = validateResultEnvelope(await during(taskSignal, () => runtime.runAgentTask(prepared, context)));
       runtime.recordAgentResult?.(task, envelope);
       budget.check();
+      checkTaskDeadline(deadlineMs);
       async function authorizeRetry(reasons) {
+        checkTaskDeadline(deadlineMs);
         const effect = envelope.status === 'failed' ? envelope.failure.sideEffectStatus : envelope.sideEffectStatus;
         if (effect !== 'none' || typeof policy.authorizeRetry !== 'function' ||
             await during(taskSignal, () => policy.authorizeRetry({ task, envelope, reasons: [...reasons], signal: taskSignal })) !== true) {
@@ -265,17 +326,20 @@ export function createPreparedAgentRunner(ctx, options, artifact, checkPreparedS
         }
       }
       if (!reasons.length && checkStep) {
+        checkTaskDeadline(deadlineMs);
         const message = await during(taskSignal, () => checkStep({ id: spec.id, name: spec.name, attempt }, result, ctx));
         if (typeof message === 'string') reasons = [message];
         else if (message != null) throw failure('invalid-result', 'checkStep returned an invalid value');
       }
       if (!reasons.length && spec.verify !== null) {
+        checkTaskDeadline(deadlineMs);
         const candidate = { ...state, ...result };
         if (!await during(taskSignal, () => verifyStep(spec.id, spec.verify, spec.name, { ...ctx, state: candidate }))) {
           reasons = [`verify ${spec.verify} failed`];
         }
       }
       budget.check();
+      checkTaskDeadline(deadlineMs);
       taskSignal.throwIfAborted();
       checkState();
       if (!reasons.length) {

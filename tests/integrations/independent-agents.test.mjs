@@ -14,6 +14,12 @@ const binding = ({ artifactHash, runId, nodeId }) => ({ artifactHash, runId, nod
   sessionId: runId, workspaceRef: runId, permissionRef: 'fixture-permissions',
   runAgentTask: async () => ({ status: 'succeeded', result: {}, events: [] }) });
 
+test('independent agent rejects misspelled Host limits', () => {
+  const options={scope:'fixture',select:binding,authorize:()=>true};
+  assert.throws(()=>createIndependentAgentAdapter({...options,limits:{maxConcurent:1}}), /Unknown Independent Agent limit field/);
+  assert.equal(createIndependentAgentAdapter({...options,limits:{maxConcurrent:1}}).status().activeExecutions,0);
+});
+
 test('two real worker processes receive separate Runs and working directories through Host routing', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowkit-subjects-'));
   const children = [];
