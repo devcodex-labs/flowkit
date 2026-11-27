@@ -18,6 +18,9 @@ async function approvedWorkflow(store, { collectionId, skillId, candidateHash, s
   if (typeof executionRef !== 'string' || !executionRef.trim() || typeof authorizeExecution !== 'function') {
     throw new Error('Host execution authorization is required');
   }
+  if (typeof resolveApplicableSafetyPolicies !== 'function') {
+    throw new Error('Host denied Workflow Skill execution: an applicable safety policy resolver is required');
+  }
   const candidate = store.readVersion(collectionId, skillId, candidateHash);
   if (!candidate || candidate.manifest.collectionId !== collectionId || candidate.manifest.skillId !== skillId ||
     candidate.hash !== candidateHash) throw new Error('No approved Workflow Skill at the requested identity');
@@ -38,7 +41,7 @@ async function approvedWorkflow(store, { collectionId, skillId, candidateHash, s
   const approvedPolicies = JSON.stringify(policyKeys(safetyPolicies));
   const allowed = async () => {
     if (await authorizeExecution(authorization) !== true) return false;
-    const applicable = await resolveApplicableSafetyPolicies?.(authorization);
+    const applicable = await resolveApplicableSafetyPolicies(authorization);
     return Array.isArray(applicable) && applicable.every(binding =>
       typeof binding?.nodeId === 'string' && typeof binding.policyRef === 'string') &&
       JSON.stringify(policyKeys(applicable)) === approvedPolicies;

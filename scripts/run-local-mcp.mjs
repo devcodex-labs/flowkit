@@ -591,6 +591,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     };
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       hostExecutionContracts: dependencies.hostExecutionContracts,
+      capabilityGraph: dependencies.capabilityGraph,
+      resolveCapabilityGraphContext: dependencies.resolveCapabilityGraphContext,
+      initialCapabilityIds: dependencies.initialCapabilityIds,
+      initialDocuments: dependencies.initialDocuments,
+      readDocumentUrl: dependencies.readDocumentUrl,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
       professionalSkillCatalog,
       async resolveProfessionalSkill(pin, scope) {

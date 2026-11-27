@@ -18,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -28,6 +29,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: npm run release:check -- --tag "$RELEASE_TAG"
+      - name: Verify immutable Capability Graph documentation
+        run: node scripts/docs/check-capability-documents.mjs --verify-https
 
   checks:
     needs: preflight

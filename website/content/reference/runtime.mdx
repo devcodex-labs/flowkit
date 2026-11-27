@@ -49,7 +49,7 @@ Runtime是宿主提供的对象。isControlSignal始终必需，其余业务方�
 
 本地描述读取要求 Host 指定获授权的 `taskPolicy.projectRoot`。远程需要显式 `remoteSkillHosts`、`taskPolicy.authorizeRemote` 及落实 DNS 和目的地址授权的可信 `taskPolicy.fetch`。完整性使用 SHA-256 或 Host 核实的不可变引用。未授予访问或身份不一致时任务在派发前失败。
 
-`taskPolicy` 可指定成功准备和派发共享的 `deadlineMs`、`maxDispatches`、`maxResourceBytes`、`maxTotalResourceBytes` 和 `maxTaskBytes`。分别默认当前时刻后 10 分钟、1024 次、256 KiB、1 MiB 和 1 MiB。远程单次读取还受十秒上限。达到适用阈值后停止新的受限派发。
+Standard 的 `taskPolicy.deadlineMs` 是准备和派发共享的绝对期限，默认起算后 10 分钟。`activityTimeoutMs` 可进一步约束单次 Task V2 尝试和准备，默认省略。`maxDispatches` 默认 1024 次，`maxProviderRequests` 可限制 Host 经预算端口登记的 Provider 请求。SDK 默认不设置实用的 Provider 请求上限。`maxResourceBytes`、`maxTotalResourceBytes`、`maxTaskBytes` 分别默认 256 KiB、1 MiB 和 1 MiB。远程单次读取还受十秒上限。达到适用阈值后停止新的受限派发。Task V2 的 `authorizeRetry` 接收 Task、上次执行结果、校验原因及取消信号；Host 授权并确认没有副作用后，才能按节点重试规则执行。
 
 结果封套的状态为 succeeded、failed 或 cancelled。FlowKit 仅将已验证的 succeeded.result 合并业务 State。使用 `recordAgentResult` 观察实际 Host 提供的事件、Usage 和失败。明确无副作用且允许重试的失败可在剩余额度内执行新尝试。
 

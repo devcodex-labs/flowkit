@@ -54,11 +54,17 @@ test('Codex marketplace contains a pure FlowKit MCP plugin and a credential refe
 
 test('local Intent sends workflow scope guidance separately from raw materials and preserves acceptance facts', async () => {
   const input = { input: 'The workflow must ask for business approval. The tester will validate recovery.', context: { revision: '30' } };
-  const intent = { effective: { intents: [{ id: 'work', goal: 'Perform the change', children: [], constraints: [] }],
-    constraints: [{ id: 'approval', text: 'Ask for business approval', kind: 'requirement', scope: { intentId: 'work' } }],
+  const intent = { effective: { intents: [{ id: 'work', goal: 'Perform the change', children: [], constraints: [],
+    references: [{ id: 'receipt', kind: 'entity', ref: null, resolved: false }] }],
+    constraints: [
+      { id: 'approval', text: 'Ask for business approval', kind: 'requirement', scope: { type: 'intent', intentId: 'work' } },
+      { id: 'input', text: 'Preserve input', kind: 'prohibition', scope: { type: 'global' } },
+      { id: 'order', text: 'Read first', kind: 'requirement', scope: { type: 'phase', intentId: 'work' } },
+      { id: 'record', text: 'Record the receipt', kind: 'preference', scope: { type: 'target', intentId: 'work', referenceId: 'receipt' } }
+    ],
     relations: [], unresolved: [], coverage: 'complete' },
   turn: { changes: [], facts: { externalAcceptance: ['The tester will validate recovery'] } }, issues: [], inferences: [], evidence: [] };
-  let status = 'completed';
+  let status = 'completed', result = intent;
   const model = localModel({ provider: 'openai', model: 'fixture', apiKey: 'fixture',
     async fetcher(_url, options) {
       const request = JSON.parse(options.body);
@@ -68,9 +74,19 @@ test('local Intent sends workflow scope guidance separately from raw materials a
       assert.match(instructions.content, /Keep requirements explicitly assigned.*external acceptance tester in turn\.facts/);
       assert.match(instructions.content, /A Human approval that the workflow itself must request.*workflow constraint/);
       assert.deepEqual(material, { role: 'user', content: JSON.stringify(input) });
-      return Response.json({ status, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(intent) }] }] });
+      return Response.json({ status, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] }] });
     } });
   assert.deepEqual(await model.execution.request({ flowkitIntent: input }), intent);
+  for (const mutate of [
+    result => { result.effective.constraints[0].scope = { intentId: 'work' }; },
+    result => { result.effective.constraints[3].scope.referenceId = 'unknown'; },
+    result => { result.effective.intents[0].constraints.push(result.effective.constraints[0]); },
+    result => { result.effective.intents.push(result.effective.intents[0]); }
+  ]) {
+    result = structuredClone(intent);
+    mutate(result);
+    await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INVALID' });
+  }
   status = 'incomplete';
   await assert.rejects(model.execution.request({ flowkitIntent: input }), { code: 'MODEL_OUTPUT_INCOMPLETE' });
 });

@@ -24,8 +24,13 @@ export const positive = (value, fallback, name) => {
 };
 
 export function budgetPolicy(options = {}) {
-  const policy = Object.fromEntries(Object.entries({ durationMs: 300000, maxRequests: 24, maxToolCalls: 32,
-    maxIoCalls: 96, maxBytes: 16 * 1024 * 1024, maxResponseBytes: 262144 }).map(([key, fallback]) =>
+  const defaults = { durationMs: 300000, maxRequests: 24, maxToolCalls: 32,
+    maxIoCalls: 96, maxBytes: 16 * 1024 * 1024, maxResponseBytes: 262144 };
+  if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      Reflect.ownKeys(options).some(key => !Object.hasOwn(defaults, key))) {
+    throw new TypeError('Unknown Author budget field');
+  }
+  const policy = Object.fromEntries(Object.entries(defaults).map(([key, fallback]) =>
     [key, positive(options[key], fallback, key)]));
   if (policy.durationMs > 2147483647) throw new TypeError('Turn duration exceeds the supported finite timer range');
   return policy;
@@ -96,6 +101,7 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
     });
     if (replay) return structuredClone(replay.value);
     let dispatched = false;
+    let processingOutput = false;
     // Track the real operation promise, even if the caller stops awaiting after logical cancellation.
     const pending = Promise.resolve().then(async () => {
       operationSignal.throwIfAborted();
@@ -104,6 +110,7 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       dispatched = true;
       return operation(input, { ...supplied, signal: operationSignal, requestContext });
     }).then(async value => {
+      processingOutput = true;
       if (kind === 'tool' && (value instanceof Response || JSON.stringify(value) === undefined)) throw authorError('author-executor', 'Tool result must be JSON data');
       if (value instanceof Response) {
         const reader = value.body?.getReader();
@@ -160,7 +167,12 @@ export function createTurnPorts({ changeTurn, signal, requestContext, execution,
       changeTurn(turn => {
         const receipt = turn.budget.reservations[id];
         receipt.status = dispatched ? 'unknown' : 'not-sent';
-        receipt.sideEffectStatus = dispatched && sideEffect === 'write' ? error.sideEffectStatus ?? 'unknown' : 'none';
+        receipt.sideEffectStatus = 'none';
+        if (dispatched && sideEffect === 'write') {
+          // An output error cannot confirm what happened in the Host.
+          // A no-effect decision after dispatch requires explicit settlement.
+          receipt.sideEffectStatus = !processingOutput && error?.sideEffectStatus === 'known' ? 'known' : 'unknown';
+        }
         if (!dispatched) { turn.budget.used[field]--; turn.budget.used.bytes -= inputBytes + maximum; }
         if (!dispatched || sideEffect !== 'write') releaseReceiptReserve(turn, receipt);
         if (ledgerKey) turn.budget.toolOperations[ledgerKey].status = receipt.status;

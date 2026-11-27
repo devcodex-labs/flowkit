@@ -762,7 +762,7 @@ terminal('done',{name:'Done',status:'succeeded'})
     authorizeAgentTask:{...authorize,implementation:()=>true}};
   const deadline=Date.now()+60_000;
   const cfg={...f.options,auth:context({authorizeTask:()=>true}),policy:{...policy,capabilityStage:'P0-B',
-    taskPolicy:{projectRoot:f.dir,deadlineMs:deadline},bindingManifest:{validateResult:policy.bindingManifest.validateResult,
+    businessDeadlineMs:deadline,taskPolicy:{projectRoot:f.dir,deadlineMs:deadline},bindingManifest:{validateResult:policy.bindingManifest.validateResult,
       prepareAgentTask:prepare,authorizeAgentTask:authorize}}};
   const first=await start(file,callbacks,{},cfg);
   const firstReceipt=submission(first);

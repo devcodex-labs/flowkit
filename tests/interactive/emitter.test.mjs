@@ -132,3 +132,36 @@ test('public-facing compiler can emit memory/file without importing DSL source, 
  await assert.rejects(compileInteractive(file,{output:'memory',featureStage:'P0-A',surprise:true}),/Unknown Interactive/);
  await assert.rejects(compileInteractive(file,{output:'file',featureStage:'P0-A',outDir:1}),/outDir must/);
 });
+
+test('file compilation preserves distinct JS, TS and same-named sources sharing an output directory', async t => {
+ const dir=await mkdtemp(path.join(tmpdir(),'fk-program-output-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const elsewhere=await mkdtemp(path.join(tmpdir(),'fk-program-source-'));
+ t.after(()=>rm(elsewhere,{recursive:true,force:true}));
+ const source=[path.join(dir,'example.workflow.js'),path.join(dir,'example.workflow.ts'),path.join(elsewhere,'example.workflow.js')];
+ for (const [index,file] of source.entries()) {
+  await writeFile(file,importDSL+"\nexport default defineWorkflow({id:'example-"+index+"',version:'1.0.0',name:'Example',nodes:[terminal('done',{name:'Done',status:'succeeded'})]});");
+ }
+ const results=await Promise.all(source.map(file=>compileInteractive(file,{output:'file',featureStage:'P0-A',outDir:dir})));
+ assert.equal(new Set(results.map(result=>result.artifactPath)).size,3);
+ for (const result of results) {
+  const bytes=await readFile(result.artifactPath);
+  assert.equal(bytes.toString('utf8'),result.code);
+  await loadInteractiveProgram(bytes,result.programIdentity.artifactHash);
+ }
+ const local=await Promise.all(source.slice(0,2).map(file=>compileInteractive(file,{output:'file',featureStage:'P0-A'})));
+ assert.notEqual(local[0].artifactPath,local[1].artifactPath);
+});
+
+test('compiler rejects Program metadata outside the loader data boundary', async t => {
+ const dir=await mkdtemp(path.join(tmpdir(),'fk-program-data-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'schema.workflow.js');
+ await writeFile(file,"import {defineWorkflow,node,terminal} from '@devcodex-labs/flowkit/dsl';\n"+
+  "export default defineWorkflow({id:'schema-flow',version:'1.0.0',name:'Schema',nodes:["+
+  "node('work',{name:'Work',agent:'test',output:{type:'object',properties:{constructor:{type:'string'}}},next:'done'}),"+
+  "terminal('done',{name:'Done',status:'succeeded'})]});");
+ const result=await compileInteractive(file,{output:'file',featureStage:'P0-A',skillCheck:false});
+ assert.equal(result.artifactPath,undefined);
+ assert.ok(result.diagnostics.some(item=>item.pointer==='/programTable' && /Unsafe metadata key/.test(item.message)),JSON.stringify(result.diagnostics));
+});

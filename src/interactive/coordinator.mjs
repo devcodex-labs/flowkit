@@ -378,7 +378,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     const activeTasks=publishedInteractivePending(cp).flatMap(task=>task.preparedTask?[task.preparedTask]:[]);
     if (cp.phase==='dispatch-ready' && cp.prepared?.preparedTask) activeTasks.push(cp.prepared.preparedTask);
     const mustCloseExpiredParallel=cp.parallel && (cp.parallel.decision?.deadline
-      || !cp.parallel.decision && cp.taskContext?.deadlineScope!=='activity' && cp.taskContext?.deadlineMs<=Date.now());
+      || !cp.parallel.decision && runDeadlineExpired(cp));
     if (!FINISHED.has(cp.status) && cp.taskContext && activeTasks.length && !runDeadlineExpired(cp) && !mustCloseExpiredParallel) {
       for (const task of activeTasks) {
         const deadlineMs = task.task.execution.deadlineMs;
@@ -604,15 +604,20 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
     if (node.metadata.task) {
       const policy = {...policySnapshot.taskPolicy, fetch:execution.taskResourcePolicy?.fetch,
         authorizeRemote:execution.taskResourcePolicy?.authorizeRemote,isImmutableResource:execution.taskResourcePolicy?.isImmutableResource};
-      const activityTimeoutMs = policy.activityTimeoutMs;
-      const deadline = activityTimeoutMs === undefined ? undefined : Math.min(
-        Date.now() + Math.min(2147483647, activityTimeoutMs), policy.deadlineMs ?? Infinity, cp.businessDeadlineMs ?? Infinity);
-      const budget = createBudget(policy, signal, deadline === undefined ? cp.taskContext :
-        { ...cp.taskContext, deadlineMs: deadline, deadlineScope: 'activity' });
-      const timeout = AbortSignal.timeout(Math.max(1,Math.min(2147483647,budget.deadlineMs-Date.now())));
-      const taskSignal = signal ? AbortSignal.any([signal,timeout]) : timeout;
       const activationId = 'activation:' + fingerprint([cp.runId,cp.artifactHash,frame.activation]).slice(7);
       const saved = cp.taskContext?.active?.activationId === activationId ? cp.taskContext.active : null;
+      const activityTimeoutMs = policy.activityTimeoutMs;
+      const windowDeadline = activityTimeoutMs === undefined ? Infinity : Date.now() + Math.min(2147483647, activityTimeoutMs);
+      const priorExecution = saved?.prepared.task.execution;
+      const attemptDeadline = priorExecution?.attempt === frame.attempt ? priorExecution.deadlineMs : windowDeadline;
+      const deadline = Math.min(attemptDeadline,
+        policy.deadlineMs ?? Infinity, cp.businessDeadlineMs ?? Infinity);
+      const persisted = { ...cp.taskContext };
+      if (Number.isFinite(deadline)) persisted.deadlineMs = deadline;
+      else delete persisted.deadlineMs;
+      const budget = createBudget(policy, signal, persisted);
+      const timeout = AbortSignal.timeout(Math.max(1,Math.min(2147483647,budget.deadlineMs-Date.now())));
+      const taskSignal = signal ? AbortSignal.any([signal,timeout]) : timeout;
       const {input,missing} = saved ?? inputForAgent(cp.state,node.metadata.inputs);
       const descriptionResources = saved?.prepared.descriptionResources ?? await during(taskSignal, () =>
         createDescriptionResources(node.metadata.task.descriptionRefs ?? [],policy,
@@ -642,7 +647,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
           node.metadata.task.description.join('\n') : node.metadata.task.description ?? '',input,missing,
         resultSchema:node.metadata.output,reasons:frame.reasons,preparedTask:prepared,
         taskContext:{...cp.taskContext,...budget.snapshot(),
-          ...(deadline===undefined?{}:{deadlineScope:'activity'}),active:{activationId,input,missing,prepared}}});
+          ...(activityTimeoutMs===undefined?{}:{deadlineScope:'activity'}),active:{activationId,input,missing,prepared}}});
     }
     const pin=program.interactiveProgram.identity.implementedStage!=='P0-A';
     const instruction = cp.skillSnapshot?.instruction ?? await execution.skillResolver(Object.freeze(copy({
@@ -757,7 +762,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
       return {kind:'validation-rejected',reasons:['Agent result must be object']};
     }
     const candidateDeadline = cp.candidate.activityDeadlineMs;
-    const validationDeadline = Math.min(candidateDeadline ?? cp.taskContext?.deadlineMs ?? Infinity,
+    const validationDeadline = Math.min(candidateDeadline ?? Infinity,
       cp.businessDeadlineMs ?? Infinity);
     if (validationDeadline <= Date.now()) return {kind:'deterministic-failure',causeCode:'FK_R004'};
     let reasons;

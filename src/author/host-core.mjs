@@ -13,7 +13,7 @@ import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { authorError, isIntentModelOutputError } from './host-budget.mjs';
 import { authorIdentity } from './host-target.mjs';
 import { evalWhen } from '../when/evaluate.mjs';
-import { createBudget, prepareTaskV2 } from '../runtime/tasks.mjs';
+import { createBudget, during, prepareTaskV2 } from '../runtime/tasks.mjs';
 import { authorDocumentWork } from './document-work.mjs';
 
 function clarificationQuestions(draft, intent, continuation, answered) {
@@ -110,6 +110,12 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     const method = target[key];
     return typeof method === 'function' ? (...args) => ports.read({ graphMethod: String(key), args }, () => method.apply(target, args)) : method;
   } });
+  let graphContext;
+  function readGraphContext() {
+    if (!graph || !options.resolveCapabilityGraphContext) return;
+    graphContext ??= ports.read({ graphContext: true }, () => options.resolveCapabilityGraphContext({ requestContext, signal }));
+    return graphContext;
+  }
   let intentBaseline = draft.intentBaseline;
   const author = createWorkflowAuthor({ intentRuntime: { async parse(...args) {
     const result = await session.intentRuntime.parse(...args);
@@ -150,6 +156,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     return manifest;
   }
   const continuation = turn.clarifyingDraft || !!turn.reviewRevision;
+  const policy = session.runtime.taskPolicy ?? {};
+  const deadlineMs = Math.min(policy.deadlineMs ?? Infinity, turn.budget.deadlineMs);
+  const maxDispatches = policy.maxDispatches ?? turn.budget.limits.maxRequests;
   const supportsNodeOptions = ['standard', 'interactive-p0-b', 'interactive-p1', 'interactive-p2'].includes(draft.choices.executionMode);
   const answered = new Set(turn.answeredQuestionIds);
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
@@ -161,19 +170,24 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     return pending;
   }, stage);
   function documents(context, request) {
-    const budget = createBudget({ deadlineMs: turn.budget.deadlineMs, maxTaskBytes: 192000,
-      maxDispatches: turn.budget.limits.maxRequests, hostProfile: options.hostProfile }, signal);
+    const timeout = AbortSignal.timeout(Math.max(1, Math.min(2147483647, deadlineMs - Date.now())));
+    const taskSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const budget = createBudget({ ...policy, deadlineMs, maxTaskBytes: Math.min(192000,
+      policy.maxTaskBytes ?? Infinity, turn.budget.limits.maxBytes), maxDispatches, hostProfile: options.hostProfile }, taskSignal);
+    const { workflowId: id, version, artifactHash, programAbiVersion, semanticsVersion, compilerVersion } = options.coreIdentity;
+    const workflow = { id, version, artifactHash, programAbiVersion, semanticsVersion, compilerVersion };
     const work = authorDocumentWork({ context, request, ...documentSteps,
       async runModel(kind, description, input) {
         const requestId = randomUUID();
-        const task = { protocolVersion: 2, workflow: { id: 'flowkit-author-core', artifactHash: options.coreIdentity.artifactHash },
+        const task = { protocolVersion: 2, workflow,
           run: { runId: turn.attemptId }, node: { id: 'document-' + kind, name: 'Author document ' + kind },
           task: { description }, input, missing: [], outputSchema: { type: 'object' },
-          execution: { requestId, activationId: requestId, attempt: 1, reasons: [], deadlineMs: turn.budget.deadlineMs } };
-        const taskContext = { signal, budget, hostProfile: options.hostProfile, deadlineMs: turn.budget.deadlineMs, descriptionResources: [] };
+          execution: { requestId, activationId: requestId, attempt: 1, reasons: [], deadlineMs: budget.deadlineMs } };
+        const taskContext = { signal: taskSignal, budget, hostProfile: options.hostProfile, deadlineMs: budget.deadlineMs, descriptionResources: [] };
         budget.dispatch();
         const prepared = await prepareTaskV2(task, session.runtime, taskContext, taskContext);
-        const response = await observed(() => session.runtime.runAgentTask(prepared, taskContext), 'document-' + kind);
+        const response = await during(taskSignal,
+          () => observed(() => session.runtime.runAgentTask(prepared, taskContext), 'document-' + kind));
         if (response?.status !== 'succeeded') throw authorError(response?.failure?.code ?? 'FKA_DOCUMENT_MODEL',
           `Document ${kind} failed: ${response?.failure?.message ?? 'the Host did not return a model result'}`);
         return { value: response.result, execution: { requestId, usage: response.usage ?? null } };
@@ -310,7 +324,9 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       for (const pin of pins) documents.push(await author.readDocument(pin));
       const guide = await ports.read({ bundledAuthorGuide: true }, () => readFile(new URL('./flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8'));
       if (artifactDigest(guide) !== options.coreIdentity.guideHash) throw authorError('author-resource', 'Bundled Author guide differs from the built core identity');
-      const catalog = graph && await graph.getCapabilities({ ids: options.initialCapabilityIds ?? ['flowkit::compile-workflow'] });
+      const ids = options.initialCapabilityIds ?? ['flowkit::compile-workflow'];
+      const match = graph && ids.length ? await readGraphContext() : undefined;
+      const catalog = graph && ids.length ? await graph.getCapabilities({ ids, ...(match === undefined ? {} : { context: match }) }) : null;
       ctx.state.catalogSnapshot = { documents, catalog: catalog ?? null,
         generalDocumentation: { text: guide, contentHash: artifactDigest(guide), source: 'bundled-author-guide' },
         hostProfile: options.hostProfile, choices: draft.choices,
@@ -408,7 +424,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           proposal = compiledPlan.proposal;
         }
         ctx.state.currentPlan = await author.plan(draft, planningIntent, proposal,
-          { previous: draft.plan, graphContext: requestContext, sourceHash: compiledPlan?.sourceHash });
+          { previous: draft.plan, graphContext: proposal.capabilityRequirements?.length ? await readGraphContext() : undefined,
+            sourceHash: compiledPlan?.sourceHash });
         if (compiledPlan) {
           ctx.state.planSource = compiledPlan.source;
           ctx.state.planHasSource = true;
@@ -430,7 +447,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     async bindResources(ctx) {
       const plan = ctx.state.currentPlan;
       if (plan.capabilityRequirements.length && !graph) throw clarify('Capability Graph binding is missing', [question('capability-graph', 'Connect the Host capability catalog', ['configure-host', 'revise'])]);
-      const capabilities = await checkPlanCapabilities(graph, plan.capabilityRequirements, requestContext);
+      const capabilities = await checkPlanCapabilities(graph, plan.capabilityRequirements,
+        plan.capabilityRequirements.length ? await readGraphContext() : undefined);
       const documents = [];
       if (plan.resourceRequirements.some(item => !['document', 'professional-skill'].includes(item.kind) && item.required !== false)) {
         throw clarify('Unknown required resource kind', [question('resource-kind', 'Select a supported document or approved Professional Skill', ['revise', 'cancel'])]);
@@ -534,8 +552,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     }
   };
   const runtime = { ...session.runtime, evalWhen, isControlSignal: session.runtime.isControlSignal ?? (() => false),
-    taskPolicy: { ...session.runtime.taskPolicy, deadlineMs: turn.budget.deadlineMs,
-      maxDispatches: turn.budget.limits.maxRequests, maxTaskBytes: turn.budget.limits.maxBytes },
+    taskPolicy: { ...policy, deadlineMs, maxDispatches,
+      maxTaskBytes: Math.min(policy.maxTaskBytes ?? Infinity, turn.budget.limits.maxBytes) },
     async runAgentTask(prepared, context) {
       const id = prepared.task.node.id;
       if (id.endsWith('-repair')) {

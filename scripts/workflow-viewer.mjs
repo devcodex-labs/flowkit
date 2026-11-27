@@ -23,6 +23,7 @@ const edgeStyles = new Map([
   ['verification-success', ['success', '校验通过']],
   ['verification-failure', ['error', '校验失败']],
   ['action-error', ['error', '技术失败']],
+  ['action-failure', ['error', '技术异常（派生）']],
   ['human-approve', ['success', '批准']],
   ['human-reject', ['loop', '要求修订']],
   ['human-decline', ['error', '拒绝']],
@@ -50,10 +51,10 @@ function layoutFor(graph, definition) {
     // GraphSnapshot redacts predicate literals. Curated descriptions also depend on the exact predicates.
     definition && graphContentHash(definition.nodes.filter(node => node.type === 'condition')
       .map(({ id, branches }) => [id, branches]).sort()) === reference.conditionDigest) return reference.layout;
-  return defaultLayout(graph);
+  return defaultLayout(graph, { includeActionFailure: true });
 }
 
-export function defaultLayout(graph) {
+export function defaultLayout(graph, { includeActionFailure = false } = {}) {
   const placements = new Map();
   const nodes = [];
   function place(node, helper) {
@@ -71,7 +72,9 @@ export function defaultLayout(graph) {
       placements.set(node.id, { entry: place(node) });
     }
   }
-  const edges = graph.referenceEdges.map((edge, index) => {
+  const visibleEdges = includeActionFailure ? [...graph.referenceEdges,
+    ...graph.executionEdges.filter(edge => edge.origin === 'derived' && edge.role === 'action-failure')] : graph.referenceEdges;
+  const edges = visibleEdges.map((edge, index) => {
     const [kind, label] = edgeStyles.get(edge.role) ?? ['normal', ''];
     const from = placements.get(edge.from);
     const to = placements.get(edge.to);

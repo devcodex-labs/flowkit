@@ -18,7 +18,7 @@ export interface ApprovedWorkflowHostAuthority {
   hostProfile: { id: string; digest: string };
   hostExecutionContracts?: readonly HostExecutionContract[];
   authorizeExecution(scope: ApprovedWorkflowScope): boolean | Promise<boolean>;
-  resolveApplicableSafetyPolicies?(scope: ApprovedWorkflowScope):
+  resolveApplicableSafetyPolicies(scope: ApprovedWorkflowScope):
     ApprovedWorkflowScope['safetyPolicies'] | Promise<ApprovedWorkflowScope['safetyPolicies']>;
   resolveRunProfessionalSkill?(pin: { nodeId: string; id: string; version: string; digest: string; source: string },
     scope: ApprovedWorkflowScope & { signal?: AbortSignal }): { authorized: boolean; source: string; candidate: AuthorProfessionalSkill } | null |

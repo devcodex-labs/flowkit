@@ -26,6 +26,7 @@ function waitForCleanup(signal, cancel) {
 }
 
 async function readResponse(response, maximum, signal) {
+  if (!response.body) return undefined;
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
@@ -37,6 +38,7 @@ async function readResponse(response, maximum, signal) {
       if (size > maximum) fail('size-limit', 'Provider response exceeds the configured budget');
       chunks.push(value);
     }
+    if (!response.ok) return undefined;
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
   } finally {
     await waitForCleanup(signal, () => reader.cancel()).catch(() => {});
@@ -48,9 +50,14 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
   supportsTools = true, requiresTools = () => false, ledger = new Map(), limits = {}, retryDelaysMs = [100, 250] }) {
   if (typeof scope !== 'string' || !scope || typeof model !== 'string' || !model || typeof request !== 'function' ||
     typeof requiresTools !== 'function' || typeof supportsTools !== 'boolean') throw new TypeError('API adapter needs an explicit Host scope, model and request port');
-  const budget = { maxRequests: 4, maxToolCalls: 8, maxInputBytes: 262144, maxOutputBytes: 262144,
+  const defaults = { maxRequests: 4, maxToolCalls: 8, maxInputBytes: 262144, maxOutputBytes: 262144,
     maxToolResultBytes: 65536, maxArgumentBytes: 65536, maxOutputTokens: 1024,
-    maxLedgerEntries: 128, timeoutMs: 30000, ...limits };
+    maxLedgerEntries: 128, timeoutMs: 30000 };
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits) ||
+      Reflect.ownKeys(limits).some(key => key !== 'maxTotalTokens' && !Object.hasOwn(defaults, key))) {
+    throw new TypeError('Unknown API budget field');
+  }
+  const budget = { ...defaults, ...limits };
   if (!Object.values(budget).every(value => Number.isSafeInteger(value) && value > 0) ||
     !Array.isArray(retryDelaysMs) || retryDelaysMs.some(value => !Number.isSafeInteger(value) || value < 0 || value > 2147483647)) {
     throw new TypeError('API limits and retry delays must be finite positive budgets');
@@ -103,6 +110,11 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
       try {
         check();
         if (!supportsTools && requiresTools(prepared)) fail('capability-unavailable', 'This task needs tools that the Provider cannot call');
+        const skillCount = task.task?.requiredSkills?.length ?? 0;
+        if (skillCount && (prepared.skills?.length !== skillCount || prepared.skills.some(skill =>
+            typeof skill?.files?.['SKILL.md'] !== 'string' || !skill.files['SKILL.md'].trim()))) {
+          fail('required-skill-missing', 'The reference API adapter requires the prepared Professional Skill contents');
+        }
         let body = { model, input: [{ role: 'user', content: 'Return a JSON object matching the supplied output schema. ' +
           'Use only the tools provided by this Host. Task and prepared resources follow.\n' +
           sized({ task, descriptionResources: prepared.descriptionResources, skills: prepared.skills }, budget.maxInputBytes, 'Prepared task') }],
@@ -126,7 +138,7 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
           }
           const result = await readResponse(response, budget.maxOutputBytes, signal);
           if (!response.ok) fail('provider-error', `Provider returned HTTP ${response.status}`, sideEffects);
-          const tokens = result.usage ?? {};
+          const tokens = result?.usage ?? {};
           usageResponses++;
           for (const [name, source, key] of [
             ['inputTokens', tokens, 'input_tokens'],
@@ -143,12 +155,14 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
           }
           check();
           if (remainingTokens() < 0) fail('token-limit', 'API task token budget exceeded', sideEffects);
-          if (result.status !== 'completed' || !Array.isArray(result.output)) fail('invalid-result', 'Provider did not complete the task', sideEffects);
+          if (result?.status !== 'completed' || !Array.isArray(result.output)) fail('invalid-result', 'Provider did not complete the task', sideEffects);
           const calls = result.output.filter(item => item.type === 'function_call');
           if (calls.length === 0) {
             const text = result.output.filter(item => item.type === 'message').flatMap(item => item.content ?? [])
               .filter(item => item.type === 'output_text').map(item => item.text).join('');
-            const value = JSON.parse(text);
+            let value;
+            try { value = JSON.parse(text); }
+            catch { fail('invalid-result', 'Agent result is not valid JSON', sideEffects); }
             if (!value || Array.isArray(value) || typeof value !== 'object') fail('invalid-result', 'Agent result must be a JSON object', sideEffects);
             return { status: 'succeeded', result: value, sideEffectStatus: sideEffects, usage: finalUsage(), events };
           }

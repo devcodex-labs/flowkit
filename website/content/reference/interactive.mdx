@@ -16,7 +16,7 @@
 
 | options字段 | 必需/默认 | 行为 |
 | --- | --- | --- |
-| output | 必需：memory或file | memory只返回；file另写`<stem>.interactive.mjs`并返回artifactPath |
+| output | 必需：memory或file | memory只返回。file 写出包含原源文件名和扩展名的 Interactive Program，并返回 artifactPath。指定 outDir 时，文件名还包含源文件路径摘要。 |
 | featureStage | 必需：P0-A、P0-B、P1 或 P2 | P1 支持 `all_succeeded`，P2 增加 `any` |
 | targetVersion | 可省略；若给必须interactive-state-machine-v1 | 指定语义目标，不是软件包版本 |
 | outDir | 源目录；相对cwd | file输出目录；不要套用Standard输出目录的所有限制 |
@@ -155,7 +155,7 @@ readHistoricalAck接收namespace/runId/requestId/nodeId/attempt/receiptHash，�
 
 ### createSqliteInteractivePersistence {#createSqliteInteractivePersistence}
 
-`createSqliteInteractivePersistence(file,{namespace})` 返回 `{store, programRegistry, adminController, operationController, close}`。Store 的方法均为 Promise，见 CheckpointStoreV1。注册表负责按产物摘要注册和读取。
+`createSqliteInteractivePersistence(file,{namespace})` 返回 `{store, programRegistry, adminController, operationController, artifactController, close}`。Store 的方法均为 Promise，见 CheckpointStoreV1。注册表负责按产物摘要注册和读取。`artifactController` 登记版本并固定审核绑定。
 
 ### 行为操作账本 {#operation-controller}
 
@@ -213,7 +213,16 @@ maxStagesPerCall默认128，signal可选并需宿主协作。JSON状态和策略
 
 ### complete {#complete}
 
-`await complete(submission,runtime,options)`是Host特权调用。成功submission仅有kind:'agent'、runId、requestId、outcome:'succeeded'及result对象；失败用outcome:'failed'及error对象，其code/message必需，retryable/origin可选。origin仅为runtime/executor/validator/store/policy之一。
+`await complete(submission,runtime,options)` 是 Host 特权调用。每种回执都需要当前 `runId`、`requestId` 和 `kind`。使用 `outcome:'succeeded'` 时按节点提供下列字段。
+
+| `kind` | 成功回执字段 |
+| --- | --- |
+| `agent` | `result` 为符合 Agent schema 的对象 |
+| `action` | `operationKey` 与当前 Pending 及已结算账本一致，`result` 包含 `set` 和可选的 `remove` |
+| `verification` | `result` 为 `{passed:boolean}`。`false` 同样是有效回执，按业务失败分支推进 |
+| `human` | 当前 `reviewDigest`、节点需要时的 `bundleHash`，以及 `result` 中的 `InteractiveHumanDecision` |
+
+Action、Verification 和 Human 使用支持对应节点的 P0-B、P1 或 P2 版本化协议。Agent、Action 和 Verification 的执行失败用 `outcome:'failed'`、`error.code` 和 `error.message` 表达。Action 同时需要 `operationKey`。可附带 `retryable`、`sideEffectStatus` 和 `origin`。`origin` 可为 `runtime`、`executor`、`validator`、`store` 或 `policy`。
 
 Host先校验真实执行器来源并关联当前请求，再调用本接口；它不接受Trusted Host的attestation包，也不自动等价于Ed25519来源认证。结果的acknowledgement含requestId、acceptedRevision、repeated；同字节重试与不同内容冲突分别处理。已接纳回执的同字节重试只返回原接纳确认和当前检查点。如果执行仍有内部步骤待推进，或待处理任务已超出运行期限，返回可恢复的 `paused`，由具备恢复权限的宿主调用 `resume`。
 

@@ -6,6 +6,34 @@ import { supportsInteractiveNodeKind } from './feature-gate.mjs';
 import { isInteractiveStage, hasStepFrame } from '../../interactive/protocol.mjs';
 import {verifyWorkflowContract} from '../../shared/workflow-contract.mjs';
 
+/** The emitter and loader accept the same plain Program data. */
+export function copyProgramData(value, depth = 0, seen = new Set()) {
+  if (depth > 64) throw new TypeError('Excessive Program metadata depth');
+  if (value === null || ['string','number','boolean'].includes(typeof value)) {
+    if (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value,-0))) throw new TypeError('Invalid number');
+    return value;
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) throw new TypeError('Invalid Program metadata');
+  const plain = Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null;
+  if (!plain) throw new TypeError('Untrusted Program metadata prototype');
+  seen.add(value);
+  const result = Array.isArray(value) ? [] : Object.create(null);
+  const props = Reflect.ownKeys(value);
+  for (const key of props) {
+    if (typeof key !== 'string') throw new TypeError('Program metadata must have string keys');
+    const descriptor = Object.getOwnPropertyDescriptor(value,key);
+    if (!descriptor || !Object.hasOwn(descriptor,'value')) throw new TypeError('Program metadata has accessor');
+    if (Array.isArray(value) && key === 'length') continue;
+    if (Array.isArray(value) && !/^(0|[1-9]\d*)$/.test(key)) throw new TypeError('Invalid Program metadata array key');
+    if (!Array.isArray(value) && ['__proto__', 'constructor', 'prototype'].includes(key)) throw new TypeError('Unsafe metadata key');
+    const own = copyProgramData(descriptor.value, depth+1,seen);
+    Object.defineProperty(result,key,{value:own,enumerable:true,writable:false,configurable:false});
+  }
+  if (Array.isArray(value) && Object.keys(value).length !== value.length) throw new TypeError('Sparse Program metadata array');
+  seen.delete(value);
+  return Object.freeze(result);
+}
+
 const externalPhases = Object.freeze(['enter', 'prepare', 'dispatch-ready', 'awaiting', 'validate']);
 export const INTERACTIVE_PHASES = Object.freeze({
   condition: Object.freeze(['enter', 'route']),

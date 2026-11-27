@@ -24,7 +24,7 @@ export function monthlyTimesheetModel({interactive=false}={}) {
   const reviewRequests = new Set();
   const intent = { effective: { intents: [{ id: 'timesheet', goal: '月度工时', children: [], constraints: [] }],
     constraints: [{ id: 'verify-copy', text: interactive?'输入与任一复核分支均通过才结束。':'输入或副本校验失败时结束。',
-      kind: 'requirement', scope: { intentId: null } }],
+      kind: 'requirement', scope: { type: 'global' } }],
     relations: [], coverage: 'complete', unresolved: [] }, turn: { changes: [], facts: {} }, issues: [], inferences: [], evidence: [] };
   const nodes=interactive?structured:definition;
   const proposalInput = {

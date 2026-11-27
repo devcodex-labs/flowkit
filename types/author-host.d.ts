@@ -102,8 +102,12 @@ export interface AuthorHostOptions {
     verifyImport?(binding: object): boolean | Promise<boolean>;
     reviewPolicy?: 'separate-pass' | 'independent-subject';
   };
-  capabilityGraph?: object | ((context: { requestContext: AuthorRequestContext; signal: AbortSignal }) => object | Promise<object>); initialDocuments?: object[];
+  capabilityGraph?: object | ((context: { requestContext: AuthorRequestContext; signal: AbortSignal }) => object | Promise<object>);
+  resolveCapabilityGraphContext?(context: { requestContext: AuthorRequestContext; signal: AbortSignal }):
+    { facts?: Record<string, string | number | boolean>; notes?: string } |
+    Promise<{ facts?: Record<string, string | number | boolean>; notes?: string } | undefined> | undefined;
   initialCapabilityIds?: string[];
+  initialDocuments?: object[];
   resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string; issuer?: string }>;
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
   professionalSkillCatalog?: {

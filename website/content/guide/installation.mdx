@@ -53,11 +53,11 @@ node --input-type=module -e "import p from '@devcodex-labs/flowkit/package.json'
 ## 公开导入入口
 
 ```js
-import { run, compile, compileSource, check, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
+import { run, runArtifact, compile, compileSource, compileArtifact, check, evalWhen, isControlSignal } from '@devcodex-labs/flowkit';
 import { defineWorkflow, node, action, verification, parallel, condition, loop, human, terminal } from '@devcodex-labs/flowkit/dsl';
 ```
 
-根入口提供 Standard SDK，`/dsl` 提供定义构造器，`/capability-graph` 提供可选 Provider 与宿主绑定适配器（使用时另行安装 `@devcodex/capability-graph`）。`/interactive` 提供独立的 P0-A Host/Store 协议，按[接入指南](/guide/interactive)选择接口层。`/host` 提供 AuthorHost 和执行适配，`/mcp` 提供 MCP 服务及 stdio、HTTP 接入函数，见[宿主接入](/guide/host-integration)。`/package.json` 只提供包元数据。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 命令提供 `compile` 和 `check`。执行使用 [SDK 或直接 Host](/guide/direct-host)，Interactive 使用自己的 Host 协议。
+根入口提供八个 Standard SDK 导出，`/dsl` 提供定义构造器，`/capability-graph` 提供可选 Provider 与宿主绑定适配器（使用时另行安装 `@devcodex/capability-graph`）。`/interactive` 提供 P0-A、P0-B、P1 和 P2 的编译与 Host/Store 协议，按[接入指南](/guide/interactive)选择模式和接口层。`/host` 提供 AuthorHost 和执行适配，`/mcp` 提供 MCP 服务及 stdio、HTTP 接入函数，见[宿主接入](/guide/host-integration)。`/package.json` 只提供包元数据。不要从包的内部 `src` 或 `dist` 子路径导入。安装后的 `flowkit` 命令提供 `compile` 和 `check`。执行使用 [SDK 或直接 Host](/guide/direct-host)，Interactive 使用自己的 Host 协议。
 
 ## 准备文件目录
 

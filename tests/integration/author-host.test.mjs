@@ -25,6 +25,44 @@ async function candidate(f) {
   return f.host.advanceTurn({ draftId: draft.id, expectedStateVersion: draft.stateVersion, turnId: 'turn', input: 'Inspect' }, context);
 }
 
+test('Author graph preselection, Plan and binding share authorized match facts', async t => {
+  const id = 'demo::inspect';
+  const match = { facts: { runtime: 'node' } };
+  const seen = [];
+  let reads = 0;
+  const item = { capability: { id }, applicability: { status: 'applicable' } };
+  const meta = { completeness: 'complete' };
+  const f = await setup(t, { useNodeOptionsForNewDrafts: true, initialCapabilityIds: [id],
+    proposal: { ...executableProposal, capabilityRequirements: [id] },
+    resolveCapabilityGraphContext({ requestContext }) {
+      assert.deepEqual(requestContext, context);
+      reads++;
+      return match;
+    },
+    capabilityGraph: {
+      async getCapabilities(query) {
+        assert.deepEqual(query, { ids: [id], context: match });
+        seen.push('catalog');
+        return { items: [item], meta };
+      },
+      async resolve(query) {
+        assert.deepEqual(query, { ids: [id], context: match, relations: ['requires'] });
+        seen.push('resolve');
+        return { nodes: [item], unresolved: [], meta };
+      }
+    }
+  });
+  const request = f.options.execution.request;
+  f.options.execution.request = input => {
+    if (input.stage === 'intent') assert.equal(Object.hasOwn(input.request, 'context'), false);
+    return request(input);
+  };
+  const result = await candidate(f);
+  assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
+  assert.deepEqual(seen, ['catalog', 'resolve', 'resolve']);
+  assert.equal(reads, 1);
+});
+
 test('Author pins trusted callbacks, exports exact node notes and closes omitted nested output objects', async t => {
   const implementationDigest = artifactDigest('isolated inspect implementation');
   const hostExecutionContracts = [{ id:'inspect', version:'fixture-1', kind:'action', effect:'read-only',
@@ -249,7 +287,8 @@ test('document work is admitted early, persists verified sections and fences an 
     if (kind === 'document-fragment') return { nodes: executableProposal.nodes.map(({ id, options }) => ({ id, options })) };
     assert.equal(kind, 'document-review');
     const passed = !rejectChapter || input.source.id !== 'part-2';
-    return { sectionId: input.source.id, candidateHash: input.candidateHash, passed, nodeIds: ['work'],
+    return { sectionId: input.source.id, candidateHash: input.candidateHash, graphDigest: input.graphDigest, passed, nodeIds: ['work'],
+      coverage: { nodes: input.witness.nodes.map((_, index) => index), edges: input.witness.edges.map((_, index) => index) },
       findings: passed ? [] : [{ message: 'Missing independently reviewed section rule', nodeIds: ['work'] }] };
   } });
   await f.register();

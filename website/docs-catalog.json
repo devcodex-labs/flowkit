@@ -661,7 +661,7 @@
       "path": "website/content/troubleshooting/compiler.mdx",
       "route": "/troubleshooting/compiler",
       "title": "编译诊断",
-      "scope": "52码逐条现象/触发/非法例/修复/复验，C053/C059 warning",
+      "scope": "53码逐条现象/触发/非法例/修复/复验，C053/C059 warning",
       "topic": "errors",
       "status": "implemented",
       "anchor": "flowkit-doc-compiler-errors"

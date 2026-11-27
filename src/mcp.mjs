@@ -60,7 +60,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   };
   const draftView = draft => workflowUi ? workflowUi.present(draft, requestContext) : Object.fromEntries(['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash',
     'goal', 'target', 'choices', 'questions', 'plan', 'candidate', 'previousHash', 'diff', 'diagnostics', 'reviewReceipt', 'approvalReceipt',
-    'reviewRejection', 'documentProgress']
+    'reviewRejection', 'documentProgress', 'reconciliationRequired']
     .filter(key => Object.hasOwn(draft, key)).map(key => [key, draft[key]]));
   async function exactDraft(collectionId, draftId, signal) {
     const draft = await author().readDraft({ draftId }, requestContext, signal);
@@ -68,35 +68,54 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     return draft;
   }
 
-  function toolError(error) {
+  function toolError(error, recovery) {
     const code = typeof error?.code === 'string' ? error.code : 'FKA_HOST_OPERATION_FAILED';
+    const details = { code };
+    if (typeof error?.retryable === 'boolean') details.retryable = error.retryable;
+    if (['none', 'known', 'unknown'].includes(error?.sideEffectStatus)) details.sideEffectStatus = error.sideEffectStatus;
+    if (recovery) details.recovery = recovery;
     let text;
     try {
-      text = JSON.stringify({ error: { code, message: error?.message ?? String(error),
+      text = JSON.stringify({ error: { ...details, message: error?.message ?? String(error),
         ...(error?.questions ? { questions: error.questions } : {}),
         ...(error?.options ? { options: error.options, recommended: error.recommended } : {}) } });
     } catch { /* The bounded fallback also covers non-JSON details from the Host. */ }
     if (text === undefined || Buffer.byteLength(text) > maxResponseBytes) {
-      text = JSON.stringify({ error: { code, message: 'Tool response exceeds the Host response byte budget' } });
+      text = JSON.stringify({ error: details });
       if (Buffer.byteLength(text) > maxResponseBytes) text = JSON.stringify({ error: { code } });
       if (Buffer.byteLength(text) > maxResponseBytes) text = minimumErrorText;
     }
     return { ...response(text), isError: true };
   }
 
+  const draftResponses = new Set(['flowkit_start_workflow', 'flowkit_prepare_workflow', 'flowkit_get_workflow_draft', 'flowkit_recover_workflow']);
+  const accessDenied = new Error('FlowKit access denied for this collection');
   function tool(name, description, schema, invoke, readOnlyHint = false) {
     const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
     server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
       async (args, ctx) => {
+        const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
+        const allowed = () => access(name, input.collectionId, ctx).then(() => true, () => false);
+        if (!await allowed()) return toolError(accessDenied);
+        let outcome;
         try {
-          const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
-          await access(name, input.collectionId, ctx);
-          const result = await invoke(input, ctx);
-          await access(name, input.collectionId, ctx);
+          outcome = { result: await invoke(input, ctx) };
+        } catch (error) {
+          outcome = { error };
+        }
+        // A failed invocation can also have executed before access was revoked.
+        if (!await allowed()) return toolError(accessDenied);
+        if (Object.hasOwn(outcome, 'error')) return toolError(outcome.error);
+        try {
+          const { result } = outcome;
           const text = JSON.stringify(result);
           if (Buffer.byteLength(text) > maxResponseBytes) {
-            throw Object.assign(new Error('Tool response exceeds the Host response byte budget; read the committed draft through the Host'),
-              { code: responseLimitCode });
+            const isDraft = draftResponses.has(name) && typeof result?.id === 'string';
+            const message = isDraft ?
+              'Tool response exceeds the Host response byte budget; read the committed draft through the Host' :
+              'Tool response exceeds the Host response byte budget';
+            return toolError(Object.assign(new Error(message), { code: responseLimitCode, retryable: false }),
+              isDraft ? { draftId: result.id } : undefined);
           }
           return response(text);
         } catch (error) {

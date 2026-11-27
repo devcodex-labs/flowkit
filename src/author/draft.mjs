@@ -65,14 +65,22 @@ export function readIntentForPlan(result, { baselineId, confirmedConstraintIds =
 export async function analyzeAuthorDraft(draft, intentRuntime, { input = draft.goal, baseline, baselineId,
   context, confirmedConstraintIds, signal } = {}) {
   if ((baseline === undefined) !== (baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
-  const result = await intentRuntime.parse({ input, context, baseline, output: { evidence: true, suggestions: false } }, { signal });
+  const result = await intentRuntime.parse({ input, ...(context == null ? {} : { context }),
+    baseline, output: { evidence: true, suggestions: false } }, { signal });
   return readIntentForPlan(result, { baselineId, confirmedConstraintIds });
 }
 
 /** Read-only dependency resolution. Graph relations stay capability information. */
 export async function checkPlanCapabilities(graph, ids, context) {
   if (ids.length === 0) return { supported: true, unresolved: [], nodes: [] };
-  const { meta, unresolved, nodes } = await graph.resolve({ ids: [...ids], context,relations:['requires'] });
+  let result;
+  try {
+    result = await graph.resolve({ ids: [...ids], ...(context === undefined ? {} : { context }), relations: ['requires'] });
+  } catch (error) {
+    if (error?.code !== 'CG_CAPABILITY_NOT_FOUND' && error?.code !== 'CG_PROVIDER_NOT_FOUND') throw error;
+    return { supported: false, unresolved: [...ids], nodes: [] };
+  }
+  const { meta, unresolved, nodes } = result;
   return { supported: meta.completeness === 'complete' && unresolved.length === 0 && Array.isArray(nodes) &&
       ids.every(id=>nodes.some(item=>item.capability?.id===id)) && nodes.every(item=>item.applicability?.status==='applicable'),
     unresolved, nodes };

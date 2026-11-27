@@ -63,16 +63,29 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
   evidence.browser=browser.version();
   try {
     const roleSource = path.join(temporary, 'role.workflow.js');
-    await writeFile(roleSource, `import { defineWorkflow, node, terminal } from '@devcodex-labs/flowkit/dsl';
+    await writeFile(roleSource, `import { defineWorkflow, action, node, verification, terminal } from '@devcodex-labs/flowkit/dsl';
       export default defineWorkflow({ id:'role-review', name:'Role review', version:'1.0.0', nodes:[
+        action('prepare',{ name:'Prepare record', action:'prepare', next:'check' }),
+        verification('check',{ name:'Review the submitted record', verifier:'check', onSuccess:'review', onFailure:'rejected' }),
         node('review',{ name:'Review record', description:'Review the approved record.', inputs:[], output:{type:'object'}, next:'done' }),
-        terminal('done',{ name:'Done', status:'succeeded' })
+        terminal('done',{ name:'Done', status:'succeeded' }),
+        terminal('rejected',{ name:'Rejected', status:'failed' })
       ] });`);
     const { candidate: roleCandidate } = await prepareStandardSkill({ ...candidateOptions, file: roleSource, name:'role-review',
       skillId:'role-review', executionMode:'standard', compilerOptions:{ projectRoot:temporary } });
-    const roleDiagram = readWorkflowPageData(publicDelivery(roleCandidate,key)['workflow.html']);
+    const roleFiles = publicDelivery(roleCandidate,key);
+    assert.equal(readPortableExport(roleFiles,exportTrust([key.publicKey])).candidate.hash,roleCandidate.hash);
+    const roleDiagram = readWorkflowPageData(roleFiles['workflow.html']);
+    const failed = roleDiagram.graph.executionEdges.find(edge => edge.role==='action-failure');
+    assert.equal(failed?.from,'prepare');
+    assert.equal(failed.to,'rejected');
+    const failureLine = roleDiagram.layout.edges.find(edge => edge.edgeId===failed.edgeId);
+    assert.equal(failureLine?.kind,'error');
+    assert.equal(failureLine.dashed,true);
     const agent = roleDiagram.graph.nodes.find(node => node.type === 'agent');
     const rolePage = await browser.newPage({ offline: true });
+    const searchErrors = [];
+    rolePage.on('pageerror', error => searchErrors.push(error.message));
     try {
       await rolePage.setContent(workflowPage({ graph:roleDiagram.graph, viewLayout:roleDiagram.layout, executionManifest: {
         nodeRoles: [{ nodeId: agent.id, id: 'reviewer', label: '业务复核员' }],
@@ -83,6 +96,21 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
       const panel = await rolePage.locator('#inspectorBody').innerText();
       assert.match(panel, /业务复核员/);
       assert.match(panel, /record-check · 1\.0\.0 · 已固定/);
+      assert.equal(await rolePage.getByRole('button',{name:'Prepare record → Rejected',exact:true}).count(),1);
+      const search = rolePage.getByRole('combobox',{name:'搜索节点名称或 ID'});
+      const options = rolePage.locator('#nodeSearchOptions').getByRole('option');
+      await search.fill('');
+      await search.press('Enter');
+      await search.fill('not-a-node');
+      assert.equal(await options.count(),0);
+      await search.fill('Review record');
+      await search.press('Enter');
+      assert.equal(await rolePage.locator('#inspectorTitle').innerText(),'Review record');
+      await search.fill('Review');
+      assert.equal(await options.count(),2);
+      await options.filter({hasText:'Review the submitted record'}).click();
+      assert.equal(await rolePage.locator('#inspectorTitle').innerText(),'Review the submitted record');
+      assert.deepEqual(searchErrors,[]);
     } finally { await rolePage.close(); }
     for(const reducedMotion of ['no-preference','reduce'])for(const width of [390,800,1024,1440]){
       const page=await browser.newPage({offline:true,reducedMotion,viewport:{width,height:950}});

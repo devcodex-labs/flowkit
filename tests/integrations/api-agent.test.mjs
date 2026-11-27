@@ -12,6 +12,40 @@ const answer = (output, id = 'response-a') => ({ id, status: 'completed', output
   usage: { input_tokens: 10, output_tokens: 5 } });
 const terminal = () => answer([{ type: 'message', content: [{ type: 'output_text', text: '{"ok":true}' }] }]);
 
+test('API distinguishes HTTP failure from invalid model JSON and rejects misspelled limits', async () => {
+  const options = { scope: 'classified', model: 'controlled-fixture', retryDelaysMs: [] };
+  assert.throws(() => createApiAgentAdapter({ ...options, request: async () => Response.json(terminal()),
+    limits: { maxRequets: 1 } }), /Unknown API budget field/);
+  for (const response of [new Response('provider failure', { status: 400 }), new Response(null, { status: 400 }),
+    Response.json({ error: 'test' }, { status: 400 })]) {
+    const result = await createApiAgentAdapter({ ...options, request: async () => response }).runAgentTask(prepared);
+    assert.equal(result.failure.code, 'provider-error');
+    assert.equal(result.usage.providerRequests, 1);
+  }
+  const result = await createApiAgentAdapter({ ...options, request: async () =>
+    Response.json(answer([{ type: 'message', content: [{ type: 'output_text', text: '{invalid' }] }]))
+  }).runAgentTask(prepared);
+  assert.equal(result.failure.code, 'invalid-result');
+  assert.equal(result.failure.sideEffectStatus, 'none');
+});
+
+test('reference API sends required Professional Skill contents and rejects identity-only preparation', async () => {
+  const candidate = structuredClone(prepared);
+  candidate.task.task = { ...candidate.task.task, requiredSkills: [{ id: 'review', version: '1.0.0' }] };
+  candidate.skills = [{ logicalId: 'review', resolvedVersion: '1.0.0', digest: 'sha256:' + 'a'.repeat(64) }];
+  let sent;
+  const adapter = createApiAgentAdapter({ scope: 'skill-wire', model: 'controlled-fixture', request: async body => {
+    sent = JSON.parse(body.input[0].content.split('\n').at(-1));
+    return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{}' }] }] });
+  } });
+  const invalid = await adapter.runAgentTask(candidate);
+  assert.equal(invalid.failure.code, 'required-skill-missing');
+  assert.equal(sent, undefined);
+  candidate.skills[0].files = { 'SKILL.md': 'Use this authorized fixture reference.' };
+  assert.equal((await adapter.runAgentTask(candidate)).status, 'succeeded');
+  assert.deepEqual(sent.skills, candidate.skills);
+});
+
 test('ordinary API uses a real HTTP tool loop with authorized resource reads and bounded usage', async t => {
   let requests = 0;
   let toolReads = 0;

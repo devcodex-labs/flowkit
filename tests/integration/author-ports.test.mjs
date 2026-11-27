@@ -17,6 +17,25 @@ async function turn(f, id = 'one') {
   return f.host.advanceTurn({ draftId: draft.id, expectedStateVersion: draft.stateVersion, turnId: 'turn', input: 'Inspect' }, context);
 }
 
+test('Author keeps explicitly tighter Host task limits and rejects misspelled turn budgets', async t => {
+  assert.throws(() => budgetPolicy({ maxRequets: 1 }), /Unknown Author budget field/);
+  const f = await setup(t);
+  const createSession = f.options.execution.createSession, seen = [];
+  const deadlineMs = Date.now() + 60_000;
+  f.options.execution.createSession = async ports => {
+    const session = await createSession(ports);
+    const { runtime } = session;
+    return { ...session, runtime: { ...runtime, taskPolicy: { ...runtime.taskPolicy, deadlineMs, maxTaskBytes: 100_000, maxDispatches: 1 },
+      async runAgentTask(prepared, execution) {
+        seen.push({ deadlineMs: prepared.task.execution.deadlineMs, maxTaskBytes: execution.budget.maxTaskBytes });
+        return runtime.runAgentTask(prepared, execution);
+      }
+    } };
+  };
+  assert.notEqual((await turn(f)).status, 'candidate-ready');
+  assert.deepEqual(seen, [{ deadlineMs, maxTaskBytes: 100_000 }]);
+});
+
 test('I4 S45/S93/S94/S97: actual API adapter 429 retries charge each real guarded dispatch once inside the durable shared budget', async t => {
   const f = await setup(t, { budgetPolicy: { maxRequests: 5 } }); let requests = 0; const observed = new Set();
   f.options.execution.request = async body => {
@@ -73,6 +92,42 @@ test('I4 S93/S99: exact reservation boundary dispatches once; one byte less and 
     if (expected) { await ports.request(input); await assert.rejects(ports.request(input), /budget/); }
     else await assert.rejects(ports.request(input));
     assert.equal(calls, expected); assert.ok(turn.budget.used.requests <= 1);
+  }
+});
+
+test('failed processing of a dispatched write result stays unknown across SQLite reopen', async t => {
+  for (const [kind, makeOutput, diagnostic] of [
+    ['oversized', () => ({ output: 'x'.repeat(4096) }), 'FKA_SIZE_LIMIT'],
+    ['missing', () => undefined, 'FKA_HOST_BINDING_MISSING']
+  ]) {
+    const f = await setup(t, { budgetPolicy: { maxResponseBytes: 4096 } });
+    let writes = 0;
+    f.options.execution.tool = async () => { writes++; return makeOutput(); };
+    f.options.execution.createSession = async ports => ({
+      intentRuntime: { parse: async () => {
+        await ports.tool({ value: 1 }, { sideEffect: 'write', toolName: 'update-record', operationKey: kind });
+        assert.fail('unusable output must stop the turn');
+      } },
+      runtime: { validateResult: () => [], runAgentTask: () => assert.fail('no Agent dispatch expected') }
+    });
+    const result = await turn(f);
+    assert.equal(result.status, 'reconciliation-required', JSON.stringify(result.diagnostics));
+    assert.equal(result.diagnostics[0].code, diagnostic);
+    assert.equal(writes, 1);
+    await f.host.close({ mode: 'drain' });
+    const reopened = await createWorkflowAuthorHost(f.options);
+    try {
+      const record = reopened.createMcpOptions().store.authorTransaction(state => state.readTurn(result.id, 'turn'));
+      assert.equal(record.reconciliationRequired, true);
+      assert.equal(record.failure.sideEffectStatus, 'unknown');
+      assert.equal(Object.values(record.budget.toolOperations)[0].status, 'unknown');
+      const sameDraft = await reopened.readDraft({ draftId: result.id }, context);
+      assert.equal(sameDraft.status, 'reconciliation-required');
+      await reopened.advanceTurn({ draftId: result.id, expectedStateVersion: sameDraft.stateVersion, turnId: 'turn', input: 'Inspect' }, context);
+      assert.equal(writes, 1);
+    } finally {
+      await reopened.close({ mode: 'drain' });
+    }
   }
 });
 

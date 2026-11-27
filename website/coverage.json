@@ -396,7 +396,7 @@
     "file": "troubleshooting/compiler.mdx",
     "group": "排错",
     "status": "drafted",
-    "scope": "52码逐条现象/触发/非法例/修复/复验，C053/C059 warning",
+    "scope": "53码逐条现象/触发/非法例/修复/复验，C053/C059 warning",
     "validation": "RT04/07，V-DIAG"
   },
   {

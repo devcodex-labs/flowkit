@@ -154,8 +154,9 @@ test('warnings permit writing without fetching remote Skills or running source/c
 test('mermaid false leaves existing diagrams alone and returns empty diagram text', async t => {
   const directory = await workspace(t);
   const filename = path.join(directory, 'source.workflow.js');
-  await api.compileSource(source(), { filename });
-  const diagram = path.join(directory, 'source.mmd');
+  const generated = await api.compileSource(source(), { filename });
+  const diagram = filename + '.mmd';
+  assert.equal(await readFile(diagram, 'utf8'), generated.mermaid);
   await writeFile(diagram, 'user diagram');
   const metadata = await stat(diagram, { bigint: true });
   const result = await api.compileSource(source('Changed'), { filename, mermaid: false });
@@ -195,8 +196,10 @@ test('check uses current options and source every time, and does not compare dia
   const directory = await workspace(t);
   const file = path.join(directory, 'source.workflow.js');
   await writeFile(file, source());
-  await api.compile(file);
-  await writeFile(path.join(directory, 'source.mmd'), 'changed diagram');
+  const generated = await api.compile(file);
+  const mermaidFile = file + '.mmd';
+  assert.equal(await readFile(mermaidFile, 'utf8'), generated.mermaid);
+  await writeFile(mermaidFile, 'changed diagram');
   assert.deepEqual(await api.check(file), []);
   assert.deepEqual((await api.check(file, { trace: true })).map(item => item.code), ['FK_R001']);
   await writeFile(file, source('Changed'));

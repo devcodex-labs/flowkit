@@ -33,6 +33,14 @@ defineWorkflow({ id: 'x', version: '1.0.0', name: 'x', nodes: [parallel('p', { n
 defineWorkflow({ id: 'x', version: '1.0.0', name: 'x', nodes: [parallel('p', { name: 'p', branches: ['a', 'typo'], join: { strategy: 'any', next: 'end' } }), action('a', { name: 'a', action: 'a' }), terminal('end', { name: '结束', status: 'succeeded' })] });
 // @ts-expect-error parallel成员不能next
 defineWorkflow({ id: 'x', version: '1.0.0', name: 'x', nodes: [parallel('p', { name: 'p', branches: ['a', 'b'], join: { strategy: 'any', next: 'end' } }), action('a', { name: 'a', action: 'a', next: 'end' }), node('b', { name: 'b', agent: 'b', output: { type: 'object' } }), terminal('end', { name: '结束', status: 'succeeded' })] });
+defineWorkflow({ id: 'subflow', version: '1.0.0', name: 'Interactive subflow', nodes: [
+  parallel('fan', { name: 'Fan', branchMode: 'subflow', branches: ['left', 'right'], join: { strategy: 'all_succeeded', next: 'done' } }),
+  action('left', { name: 'Left', action: 'left', next: 'left-done' }),
+  action('right', { name: 'Right', action: 'right', next: 'right-done' }),
+  terminal('left-done', { name: 'Left done', status: 'succeeded' }),
+  terminal('right-done', { name: 'Right done', status: 'succeeded' }),
+  terminal('done', { name: 'Done', status: 'succeeded' }),
+] });
 // @ts-expect-error parallel verification成员不能带后继
 defineWorkflow({ id: 'x', version: '1.0.0', name: 'x', nodes: [parallel('p', { name: 'p', branches: ['a', 'b'], join: { strategy: 'any', next: 'end' } }), verification('a', { name: 'a', verifier: 'v', onSuccess: 'end' }), action('b', { name: 'b', action: 'b' }), terminal('end', { name: '结束', status: 'succeeded' })] });
 // @ts-expect-error terminal不是合法parallel成员类型

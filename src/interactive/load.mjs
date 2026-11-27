@@ -1,7 +1,7 @@
 import {parse} from 'acorn';
 import {loadBoundedModule} from '../runtime/compilation-cache.mjs';
 import {sha256Bytes,assertSha256} from './identity.mjs';
-import {validateInteractiveIR,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
+import {copyProgramData,validateInteractiveIR,stepFrameRule} from '../compiler/interactive/validate-ir.mjs';
 import {isInteractiveStage,hasStepFrame} from './protocol.mjs';
 
 /** A verified program is trusted compiler output, NOT an untrusted JavaScript sandbox. */
@@ -25,32 +25,6 @@ function ensureNoImports(ast) {
     }
   }
 }
-function ownJSON(value, depth = 0, seen = new Set()) {
-  if (depth > 64) throw new TypeError('Excessive Program metadata depth');
-  if (value === null || ['string','number','boolean'].includes(typeof value)) {
-    if (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value,-0))) throw new TypeError('Invalid number');
-    return value;
-  }
-  if (!value || typeof value !== 'object' || seen.has(value)) throw new TypeError('Invalid Program metadata');
-  const plain = Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null;
-  if (!plain) throw new TypeError('Untrusted Program metadata prototype');
-  seen.add(value);
-  const result = Array.isArray(value) ? [] : Object.create(null);
-  const props = Reflect.ownKeys(value);
-  for (const key of props) {
-    if (typeof key !== 'string') throw new TypeError('Program metadata must have string keys');
-    const descriptor = Object.getOwnPropertyDescriptor(value,key);
-    if (!descriptor || !Object.hasOwn(descriptor,'value')) throw new TypeError('Program metadata has accessor');
-    if (Array.isArray(value) && key === 'length') continue;
-    if (Array.isArray(value) && !/^(0|[1-9]\d*)$/.test(key)) throw new TypeError('Invalid Program metadata array key');
-    if (!Array.isArray(value) && (key === 'constructor' || key === 'prototype')) throw new TypeError('Unsafe metadata key');
-    const own = ownJSON(descriptor.value, depth+1,seen);
-    Object.defineProperty(result,key,{value:own,enumerable:true,writable:false,configurable:false});
-  }
-  if (Array.isArray(value) && Object.keys(value).length !== value.length) throw new TypeError('Sparse Program metadata array');
-  seen.delete(value);
-  return Object.freeze(result);
-}
 
 /** Loads exactly the verified byte snapshot, regardless of file-name swaps. */
 export async function loadInteractiveProgram(bytes, expectedArtifactHash) {
@@ -73,8 +47,8 @@ export async function loadInteractiveProgram(bytes, expectedArtifactHash) {
   if (Object.keys(module).sort().join(',') !== 'advance,interactiveProgram,programTable') {
     throw new TypeError('Unexpected Interactive Program exports');
   }
-  const manifest = ownJSON(module.interactiveProgram);
-  const table = ownJSON(module.programTable);
+  const manifest = copyProgramData(module.interactiveProgram);
+  const table = copyProgramData(module.programTable);
   if (manifest.artifactFormat !== 'FlowkitInteractiveProgramV1'
     || manifest.identity.programAbiVersion !== 1
     || manifest.identity.semanticsVersion !== 'interactive-state-machine-v1'

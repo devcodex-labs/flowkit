@@ -40,6 +40,6 @@ Standard 的并行分支共享 state，`any` 汇合后其余分支仍可继续�
 
 ## capability-graph 兼容性
 
-可选 Provider 与宿主动作适配使用独立的 `@devcodex/capability-graph` v2.1.1 SDK 契约。核心六个 SDK 与八类 DSL 节点不变；Graph 的 Provider schemaVersion、声明版本、结果 revision 不等于 FlowKit 版本。Graph 可能与 Node 20 兼容，但 FlowKit 仍要求 Node >=22.13.0；消费者按两者要求取交集。
+可选 Provider 与宿主动作适配使用独立的 `@devcodex/capability-graph` v2.1.1 SDK 契约。FlowKit 根入口有八个 SDK 导出。Graph 的 Provider schemaVersion、声明版本、结果 revision 分别独立于 FlowKit 版本。消费者需满足两者的 Node 要求，FlowKit 要求 Node >=22.13.0。
 
 文档站已获批准公开展示；FlowKit 源码仓库当前公开可见但采用专有许可，GitHub Packages 安装包仍私有分发。站点公开不代表源码开源或授予包下载权限；GitHub Pages 实际可用性和发布授权需在部署时单独核查。

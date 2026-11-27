@@ -91,11 +91,15 @@ settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提�
 
 `@devcodex-labs/flowkit/host` 的 `createApiAgentAdapter` 接收 PreparedAgentTask，调用 Host 提供的 Responses 传输，再把输出交回统一 AgentExecutionResult。Host 为工具提供 schema、参数验证、授权、执行与副作用分类。写工具还提供稳定的业务 operation key，以回执识别重放和参数冲突。
 
-工具循环默认最多 4 次 HTTP 请求、8 个 Tool Call、30 秒总时限。请求输入与 Provider 输出分别最多 256 KiB，参数和单个工具结果最多 64 KiB。单次输出上限 1024 tokens，累计观测 Token 上限 16000。429 和暂时性 5xx 最多按两次延迟策略重试，计入同一请求上限和 deadline。`ApiHostOptions.limits` 可由 Host 配置。金额预算仍由实际 Provider 和 Host 计费策略负责。
+工具循环默认最多 4 次 HTTP 请求、8 个 Tool Call、30 秒，且遵守 Prepared Task 的较早 deadline。请求输入与 Provider 输出分别最多 256 KiB，参数和单个工具结果最多 64 KiB。每次请求默认提交 `max_output_tokens: 1024`。Host 可用 `ApiHostOptions.limits.maxTotalTokens` 限制累计可观测用量，SDK 默认省略该限制。429 和暂时性 5xx 最多按两次延迟策略重试，计入同一请求上限和 deadline。当前本机 MCP 另有明确的模型请求限制。金额预算由实际 Provider 和 Host 计费策略负责。
+
+逻辑派发记录 Task 的一次执行。`dispatchProvider` 记录 Host 的请求预留，各次 HTTP 重试分别占用预留。实际发送与 Provider 响应由传输层记录，预留后取消时可能没有发送。Adapter 只汇总返回的 usage，区分 `known`、`partial` 和 `unknown`，缺失用量不能证明零消耗。原生 Host 可使用自身执行入口及计数策略。独立会话参考运行器默认有 4 个活跃槽和 64 个已保留会话，取消后未结束的执行继续占用容量。
 
 `supportsTools: false` 允许适用的预装配 JSON 任务。Host 用 `requiresTools` 标出必须动态工具执行的任务。未知写结果需要 Host 对账后处理，adapter 返回不自动重试的分类失败。`ApiHostTool` 的工具表与 `ledger` 由 Host 按项目和 Run 范围持有。
 
 ## MCP 宿主绑定
+
+Author 可选接入 Host 已授权的 Capability Graph。`capabilityGraph` 可按当前认证上下文选择 Graph 实例。`resolveCapabilityGraphContext` 单独返回适用性所需的 `facts` 和可选 `notes`，供目录预选、计划解析和资源绑定共用。Host 可提供 `initialCapabilityIds` 及任务所需的 `initialDocuments`，远端材料由 `readDocumentUrl` 对精确 URL 授权读取并校验固定版本。没有外部依赖的工作流可独立使用 Author。
 
 `flowkit_collection` 和协商的 Skills 发现按 `pageSize` 分页；使用 `nextCursor` 获取下一页。默认最多枚举 10000 条 metadata，可用 `maxMetadataEntries` 调整，每页还受 `maxResourceBytes` 限制。内置 Store 从 metadata 查询取得目录，只为选中页读取批准版本正文；自定义 Store 应提供 `readCollectionMetadata` 以避免全量正文装配。缩小集合范围可降低上下文与存储读取压力。
 
@@ -110,6 +114,8 @@ settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提�
 工具覆盖起草、编译候选、查看差异、批准发布、丢弃候选、集合操作和运行。运行回调使用当前授权以及已批准 Artifact。Resources 使用包含 namespace、集合、Skill 和版本摘要的 URI。正文按需读取并受单次字节预算限制。
 
 支持当前 MCP Skills 扩展的客户端可以分页查询 Skill metadata，并校验资源内容。普通客户端使用 Tools/Resources。工作流和专业 Skill 共用原来的两层集合及批准身份。
+
+正式批准集合的执行入口要求 Host 提供适用安全策略的解析器。确实无适用策略时由 Host 明确返回空数组。参考 API 适配器需要经准备的必需专业 Skill 正文。仅有身份信息时应先加载正文，或使用 Host 已验证的原生 Skill 挂载入口。
 
 完整 Host 参数由 `FlowkitMcpOptions` 描述，`FlowkitMcpServer` 暴露连接和关闭生命周期。与模型运行、凭据和业务动作相关的实现由 Host 提供。
 

@@ -628,7 +628,8 @@ export declare function createInteractiveHostContext(options:{
     startKey?:string;source?:string;artifactHash?:string;runId?:string;requestId?:string;revision?:number;
     graphDigest?:string;collectionId?:string;candidateHash?:string;approvalRef?:string;entryRevision?:number;redoWrites?:boolean;
     reasonCode?:string;operationKey?:string;inputHash?:string;businessKey?:string;effect?:'applied'|'no-effect';
-    evidenceHash?:string;compensationKey?:string;compensationPlan?:Readonly<{capabilityId:string;inputHash:string}>}>):boolean|Promise<boolean>;
+    evidenceHash?:string;compensationKey?:string;artifactId?:string;versionId?:string;
+    compensationPlan?:Readonly<{capabilityId:string;inputHash:string}>}>):boolean|Promise<boolean>;
   authorizeTask(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;revision:number;nodeId:string;
     task:PublicPendingV1['task']}>):boolean|Promise<boolean>;
   authorizeHuman?(request:Readonly<{namespace:string;subjectId:string;runId:string;requestId:string;reviewDigest:string;

@@ -33,7 +33,11 @@ async function writeMappedArtifacts(entries, { outDir, source }) {
     for (;;) {
       try { await mkdir(lock); break; }
       catch (error) {
-        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw error;
+        if (error.code !== 'EEXIST') throw error;
+        if (Date.now() >= deadline) {
+          throw Object.assign(new Error('Compilation output lock is still held: ' + lock +
+            '. Confirm that no compiler owns it before removing an abandoned lock.', { cause: error }), { code: error.code });
+        }
         await delay(20);
       }
     }

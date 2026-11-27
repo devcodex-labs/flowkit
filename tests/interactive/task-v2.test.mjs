@@ -10,7 +10,7 @@ import {compileInteractive,createInteractiveCoordinator,createSqliteCheckpointSt
   createSqliteInteractivePersistence,createInteractiveHostContext,createTrustedInteractiveHost,
   createAgentReceiptStatement,encodeAgentReceiptStatement,start,resume,complete} from '../../src/interactive/index.mjs';
 import {prepareStandardSkill,publishStandardSkill} from '../../src/author/standard-artifact.mjs';
-import {artifactDigest} from '../../src/shared/artifact-identity.mjs';
+import {artifactDigest,professionalSkillFileHashes} from '../../src/shared/artifact-identity.mjs';
 import {createIndependentAgentAdapter,createApiAgentAdapter} from '../../src/host.mjs';
 import {openLocalSkillStore} from '../../src/author/local-skill-store.mjs';
 import {prepareProfessionalSkill,publishProfessionalSkill} from '../../src/author/professional-skills.mjs';
@@ -51,6 +51,46 @@ async function fixture(t,{maxDispatches=3,maxProviderRequests,deadlineMs=Date.no
     allow(value){allowed=value;},digest(value){digest=value;},preparations:()=>preparations};
 }
 const receipt=(frame,result)=>({runId:frame.runId,requestId:frame.pending.requestId,nodeId:'worker',attempt:frame.pending.attempt,result});
+
+test('durable Human wait and the following legacy Agent outlive an earlier Task V2 window', async t => {
+  const dir=await mkdtemp(path.join(tmpdir(),'flowkit-human-activity-'));
+  const file=path.join(dir,'mixed.workflow.js'), database=path.join(dir,'run.sqlite');
+  await writeFile(file,`import {defineWorkflow,node,human,terminal} from '@devcodex-labs/flowkit/dsl';
+export default defineWorkflow({id:'mixed-activity',name:'Mixed activity',version:'1.0.0',nodes:[
+node('first',{name:'Prepare',description:'Prepare the review',output:{type:'object'},next:'review'}),
+human('review',{name:'Review',onApprove:'legacy',onReject:'first',maxRevisions:1}),
+node('legacy',{name:'Legacy',agent:'writer',output:{type:'object'},next:'done'}),
+terminal('done',{name:'Done',status:'succeeded'})]});`);
+  let persistence=createSqliteInteractivePersistence(database,{namespace:'mixed-activity'});
+  t.after(async()=>{persistence.close();await rm(dir,{recursive:true,force:true});});
+  const auth=createInteractiveHostContext({namespace:'mixed-activity',subjectId:'fixture',authorize:()=>true,
+    authorizeTask:()=>true,authorizeHuman:({reviewDigest})=>({proofId:'fixture-review',evidenceHash:reviewDigest})});
+  const bindingManifest={skillResolver:{id:'skill',version:'1',mode:'trusted-read'},
+    validateResult:{id:'schema',version:'1',mode:'pure-local'},authorizeAgentTask:{id:'authorize',version:'1',mode:'trusted-read'}};
+  const runtime={skillResolver:{...bindingManifest.skillResolver,implementation:()=> 'Use the fixture instructions'},
+    validateResult:{...bindingManifest.validateResult,implementation:()=>[]},
+    authorizeAgentTask:{...bindingManifest.authorizeAgentTask,implementation:()=>true}};
+  const policy={id:'mixed',version:'1',disclosePolicyId:'fixture',capabilityStage:'P0-B',
+    canonicalizationVersion:'jcs-rfc8785-v1',bindingManifest,taskPolicy:{projectRoot:dir}};
+  const options=()=>({...persistence,auth,policy,startKey:'mixed-start'});
+  const compiled=await compileInteractive(file,{featureStage:'P0-B',output:'memory',projectRoot:dir,skillCheck:false});
+  assert.deepEqual(compiled.diagnostics,[]);
+  const ref=await persistence.programRegistry.putImmutable(Buffer.from(compiled.code),compiled.programIdentity);
+  const first=await start(ref,runtime,{},options());
+  const submit=(frame,result,extra={})=>complete({kind:frame.pending[0].kind,runId:frame.runId,
+    requestId:frame.pending[0].requestId,outcome:'succeeded',result,...extra},runtime,options());
+  const review=await submit(first,{});
+  assert.equal(review.pending[0].kind,'human');
+  persistence.close();
+  persistence=createSqliteInteractivePersistence(database,{namespace:'mixed-activity'});
+  const late=Date.now()+600001;
+  const now=t.mock.method(Date,'now',()=>late);
+  try {
+    const legacy=await submit(review,{approved:true},{reviewDigest:review.pending[0].task.reviewDigest});
+    assert.equal(legacy.pending[0].nodeId,'legacy');
+    assert.equal((await submit(legacy,{})).status,'succeeded');
+  } finally { now.mock.restore(); }
+});
 
 test('restored Task V2 attempts and accepted candidates keep their own activity window', async t => {
   const businessDeadlineMs = Date.now() + 30_000;
@@ -292,7 +332,13 @@ test('original absolute deadline remains expired after reopening the database',a
 });
 
 test('API continuation reservations persist across restart and reject calls beyond the original Run budget',async t=>{
-  const f=await fixture(t,{maxDispatches:1,maxProviderRequests:2});const waiting=await f.api().start(f.opening);
+  const f=await fixture(t,{maxDispatches:1,maxProviderRequests:2});
+  const files={'SKILL.md':'Inspect the declared inputs.'};
+  const digest=artifactDigest(JSON.stringify(professionalSkillFileHashes(files)));
+  f.runtime.prepareAgentTask=(task,context)=>({protocolVersion:2,task,descriptionResources:context.descriptionResources,
+    skills:[{logicalId:'inspect',resolvedVersion:'1.0.0',digest,files}]});
+  f.runtime.authorizeAgentTask=prepared=>prepared.skills[0].digest===digest;
+  const waiting=await f.api().start(f.opening);
   let requests=0;
   const adapter=createApiAgentAdapter({scope:'tasks',model:'local-protocol-fixture',authorizeTool:()=>true,
     tools:[{name:'inspect',description:'Read pinned resource',sideEffect:'read',parameters:{type:'object'},validate:()=>[],execute:async()=>({ok:true})}],

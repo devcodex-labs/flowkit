@@ -94,7 +94,10 @@ Identify the concrete responsibility, trigger, choice, result or handoff that th
 A note or an unbound callback name is not execution evidence. Documentation-only details
 do not each need a node. Fail a wrong or absent obligation, including a claim of permission or settled policy unsupported by the source.
 Check the submitted intent constraints when deciding what the workflow must do. Distinguish pending policy from permitted execution.
+Use the complete witness when checking links across sections. Report obligations from this section only, and do not call a graph path absent just because another section defines it.
+List the positions you actually inspected as zero-based ordinals of witness.nodes and witness.edges. The union across all source sections must cover the compiled graph.
 Return JSON {"sectionId":"exact input id","candidateHash":"exact input candidateHash","passed":true or false,
+"graphDigest":"exact input graphDigest","coverage":{"nodes":[0],"edges":[0]},
 "nodeIds":["relevant declared node IDs"],"findings":[{"message":"specific violation","nodeIds":["relevant declared IDs"]}]}.
 Use [] when none; each finding should be short and actionable. No tools.`;
 
@@ -259,22 +262,35 @@ export function authorDocumentWork({ context, request, runModel, readStep, saveS
       if (jsonBytes(witness) > 100000) throw blocked('FKA_DOCUMENT_REVIEW_LIMIT', 'Compiled workflow exceeds the bounded document review evidence size');
       const nodeIds = new Set(definition.nodes.map(node => node.id));
       const knownIds = value => textArray(value, 100, 64) && value.every(id => nodeIds.has(id));
+      const knownOrdinals = (value, size) => Array.isArray(value) && value.length <= size &&
+        new Set(value).size === value.length && value.every(index => Number.isSafeInteger(index) && index >= 0 && index < size);
       const receipts = await inBatches(sections, section => stage('review', section.id, reviewInstructions, {
-        source: section, candidateHash, requestIdentity, request, witness,
+        source: section, candidateHash, graphDigest: graph.graphDigest, requestIdentity, request, witness,
         extracted: summary?.evidence?.find(item => item.id === section.id || item.sourceSections?.includes(section.id)) ?? null
       }, value => value?.sectionId === section.id && value.candidateHash === candidateHash && typeof value.passed === 'boolean' &&
+        value.graphDigest === graph.graphDigest && knownOrdinals(value.coverage?.nodes, witness.nodes.length) &&
+        knownOrdinals(value.coverage?.edges, witness.edges.length) &&
         knownIds(value.nodeIds) && Array.isArray(value.findings) && value.findings.length <= 12 &&
         value.passed === (value.findings.length === 0) && value.findings.every(item =>
           typeof item?.message === 'string' && item.message.trim() && item.message.length <= 800 && knownIds(item.nodeIds))));
       // Show one finding from each affected section before proposing more fixes
       // from any one section. All detailed results stay in their durable receipts.
-      const findings = [];
+      const coveredNodes = new Set(receipts.flatMap(({ value }) => value.coverage.nodes));
+      const coveredEdges = new Set(receipts.flatMap(({ value }) => value.coverage.edges));
+      const missingNodes = witness.nodes.filter((_, index) => !coveredNodes.has(index)).map(node => node.id);
+      const missingEdges = witness.edges.filter((_, index) => !coveredEdges.has(index));
+      const findings = missingNodes.length || missingEdges.length ? [{
+        message: `Document reviews did not inspect ${missingNodes.length} compiled nodes and ${missingEdges.length} compiled edges.`,
+        rule: 'document:graph-coverage',
+        nodeIds: [...new Set([...missingNodes, ...missingEdges.flatMap(({ from, to }) => [from, to])])].slice(0, 12)
+      }] : [];
       for (let index = 0; index < 12; index++) {
         for (const { id, value } of receipts) {
           if (value.findings[index]) findings.push({ ...value.findings[index], rule: 'document:' + id });
         }
       }
       return { sourceIdentity, requestIdentity, candidateHash, graphDigest: graph.graphDigest,
+        coverage: { inspectedNodes: coveredNodes.size, inspectedEdges: coveredEdges.size },
         sections: receipts.map(({ id, key, execution, value }) => ({ id, key, execution, passed: value.passed, nodeIds: value.nodeIds })),
         findings };
     }

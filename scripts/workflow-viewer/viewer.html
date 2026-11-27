@@ -2562,7 +2562,8 @@ function showSearchResults() {
 }
 function runSearch(index=nodeSearchActive) {
   if(!searchInput.value.trim())return;
-  const match=(nodeSearchMenu.hidden?searchNodes():nodeSearchHits)[Math.max(0,index)];
+  const hits=nodeSearchMenu.hidden?searchNodes():nodeSearchHits;
+  const match=hits[Math.max(0,index)];
   if(!match){showSearchResults();return;}
   hideSearchResults();
   if(PROJECT){visitProjectTarget({kind:'node',id:match.id});return;}

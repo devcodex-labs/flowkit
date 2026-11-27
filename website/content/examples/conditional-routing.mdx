@@ -52,7 +52,7 @@ node host.mjs urgent ts
 
 ## 对照预期结果
 
-默认输入urgent:false，state.route为normal；urgent参数得到fast。两者status均为succeeded，terminal为done。TS运行同样得到fast。两个源码同名基础部分会生成同名产物，所以命令按每次compile/check成对执行。
+默认输入 `urgent:false` 得到 `state.route: normal`，传 `urgent` 得到 `fast`。两者 `status` 均为 `succeeded`，`terminal` 为 `done`。TS 运行同样得到 `fast`。两个源码可在同一目录并存，分别生成 `sample.workflow.js.compiled.mjs`、`sample.workflow.js.mmd` 和 `sample.workflow.ts.compiled.mjs`、`sample.workflow.ts.mmd`。
 
 ## 失败与恢复
 

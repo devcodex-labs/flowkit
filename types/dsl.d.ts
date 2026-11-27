@@ -109,7 +109,8 @@ type References<T> = T extends { type: 'parallel'; branches: readonly string[]; 
   : T extends { type: 'human' } ? ValueAt<T, 'onApprove'> | ValueAt<T, 'onReject'> | ValueAt<T, 'onDecline'>
   : T extends { type: 'verification' } ? ValueAt<T, 'onSuccess'> | ValueAt<T, 'onFailure'>
   : ValueAt<T, 'next'> | ValueAt<T, 'onError'>;
-type Members<N extends readonly DslNode[]> = Extract<N[number], { type: 'parallel' }>['branches'][number];
+type Members<N extends readonly DslNode[]> =
+  Exclude<Extract<N[number], { type: 'parallel' }>, { readonly branchMode: 'subflow' }>['branches'][number];
 type ContextError<T extends DslNode, N extends readonly DslNode[]> =
   T['id'] extends Members<N> ? (
     T extends AgentNode | ActionNode ? ('next' extends keyof T ? T['id'] : 'onError' extends keyof T ? T['id'] : never)

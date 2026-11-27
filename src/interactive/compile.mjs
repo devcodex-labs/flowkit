@@ -1,6 +1,4 @@
 import {readFile} from 'node:fs/promises';
-import {mkdir,open,rename,unlink} from 'node:fs/promises';
-import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {analyzeSource} from '../compiler/analyze.mjs';
 import {normalizeOptions,resolveProjectRoot} from '../compiler/source.mjs';
@@ -9,6 +7,8 @@ import {emitInteractive} from '../compiler/interactive/emit.mjs';
 import {checkMermaidIds, renderMermaid} from '../compiler/mermaid.mjs';
 import {isInteractiveStage} from './protocol.mjs';
 import {sealGraphSnapshot} from '../compiler/graph-snapshot.mjs';
+import {replaceArtifacts} from '../compiler/output.mjs';
+import {sha256Bytes} from './identity.mjs';
 
 /** Internal M2 compile API; the exported SDK subpath is introduced in M4. */
 export async function compileInteractive(file, options) {
@@ -62,19 +62,11 @@ export async function compileInteractiveDraft(file, options) {
     graphSnapshot:sealGraphSnapshot(lowered.graphStructure,emitted.programIdentity.artifactHash),
     programIdentity:emitted.programIdentity,snapshot:analysis.snapshot,definition:analysis.literal.definition,graph:analysis.graph};
   if (snapshotOptions.output === 'file') {
-    const stem = path.basename(filename).replace(/\.workflow\.(js|ts)$/,'');
+    const sourceName = path.basename(filename);
+    const sourceKey = sha256Bytes(Buffer.from(filename)).slice(7, 27);
+    const stem = snapshotOptions.outDir === undefined ? sourceName : sourceName + '.' + sourceKey;
     const artifactPath = path.join(outDir,stem + '.interactive.mjs');
-    await mkdir(outDir,{recursive:true});
-    const temporary = path.join(outDir,'.' + stem + '.' + randomUUID() + '.tmp');
-    const handle = await open(temporary,'wx');
-    try {
-      await handle.writeFile(emitted.code,'utf8'); await handle.sync(); await handle.close();
-      await rename(temporary,artifactPath);
-    } catch(e) {
-      await handle.close().catch(()=>{});
-      await unlink(temporary).catch(()=>{});
-      throw e;
-    }
+    await replaceArtifacts([[artifactPath, emitted.code]]);
     result.artifactPath = artifactPath;
   }
   return result;

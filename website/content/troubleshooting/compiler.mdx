@@ -6,7 +6,7 @@
 
 适用 FlowKit 1.0.0。定位诊断时保留源码、选项和错误码，再用 [SDK 的 check](/reference/sdk#check)复验。每条错误下面保留可执行反例和修复入口。
 
-这里列出v1.0.0全部52个编译诊断。C053和C059为warning，其余为error；编号不连续，不应把空缺编号当作功能。先看code，再结合file/line/column/nodeId定位。
+这里列出 v1.0.0 的 53 个编译诊断。C053 和 C059 为 warning，其余为 error。先看 code，再结合 file、line、column、nodeId 定位。
 
 ## 如何复现与复验
 
@@ -1368,11 +1368,11 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[loop
 
 ## Agent、Skill与数据
 
-### FK_C050 · agent / skill 都缺 {#FK_C050}
+### FK_C050 · 缺少 Agent 指令来源 {#FK_C050}
 
-级别：**error**。触发：agent / skill 都缺。
+级别为 **error**。节点缺少 `agent`、`skill` 和非空 `description` 时触发。
 
-修复：至少填写agent或显式skill；两者都有时skill优先。
+填写 `agent`、显式 `skill` 或非空 `description`。同时给出 `agent` 和 `skill` 时，路径以 `skill` 为准。
 
 错误源码（保存为case.workflow.js）：
 

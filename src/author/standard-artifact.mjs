@@ -75,8 +75,9 @@ export async function prepareStandardSkill({ file, collectionId, skillId, name, 
   }
   const entry = skillDocument(name, description,
     '# Run this workflow\n\nAsk the Host to verify the approved artifact identity and provide the runtime bindings referenced by the workflow. ' +
-    (executionMode === 'standard' ? 'Use the Host’s FlowKit `runArtifact` entry point with `workflow.js` and its approved SHA-256. ' :
-      'Use the Host’s Interactive start/resume entry points with `workflow.js`, its approved Program identity and the original Run. ') +
+    'For a Workflow Skill installed from an approved collection, use the Host’s approved collection entry point with the exact collection, Skill and candidate identities. ' +
+    (executionMode === 'standard' ? 'For a standalone artifact outside a collection, the Host can use FlowKit `runArtifact` with `workflow.js`, its approved SHA-256 and separately authorized bindings. ' :
+      'For an Interactive run, use the Host’s approved start/resume binding and preserve the exact Program identity and original Run. ') +
     'Use `workflow.mmd` to view the static workflow.\n\n' +
     '[FlowKit documentation](https://devcodex-labs.github.io/flowkit/).' +
     (documentEvidence.length?'\n\nReviewed documentation:\n'+documentEvidence.map(item=>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,6 +69,81 @@ test('real MCP stdio client reaches the same Author and scoped approved Skill re
   const prepared = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } });
   assert.equal(prepared.isError, undefined, JSON.stringify(prepared));
   assert.equal(JSON.parse(prepared.content[0].text).status, 'candidate-ready');
+});
+
+test('stdio reports a write awaiting reconciliation and does not duplicate it after reopening', async t => {
+  const { dir, close } = await directory(t), database = path.join(dir, 'host.sqlite');
+  const connect = async () => {
+    const transport = new StdioClientTransport({ command: process.execPath,
+      args: [fileURLToPath(new URL('./mcp-fixture.mjs', import.meta.url)), database, 'write-without-result'], stderr: 'pipe' });
+    transport.stderr.resume();
+    const client = new Client({ name: 'flowkit-reconciliation-test', version: '1.0.0' });
+    close.push(() => client.close());
+    await client.connect(transport);
+    return client;
+  };
+  const client = await connect();
+  const draft = await assertClient(client);
+  const request = { name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } };
+  const response = await client.callTool(request);
+  assert.equal(response.isError, undefined);
+  const pending = JSON.parse(response.content[0].text);
+  assert.equal(pending.status, 'reconciliation-required');
+  assert.equal(pending.reconciliationRequired, true);
+  assert.equal(await readFile(database + '.writes', 'utf8'), 'written\n');
+  await client.close();
+  const reopened = await connect();
+  const replay = await reopened.callTool(request);
+  assert.equal(replay.isError, undefined);
+  const persisted = JSON.parse(replay.content[0].text);
+  assert.equal(persisted.id, draft.id);
+  assert.equal(persisted.status, 'reconciliation-required');
+  assert.equal(await readFile(database + '.writes', 'utf8'), 'written\n');
+});
+
+test('HTTP tool errors expose only authorized effect classifications and bounded draft recovery', async t => {
+  const { dir, close } = await directory(t);
+  const fixture = await fixtureOptions(path.join(dir, 'http-errors.sqlite'));
+  close.push(fixture.close);
+  let allowed = true, revokeOnFailure = false;
+  fixture.options.authorize = async () => allowed;
+  fixture.options.resolveAuthoringInput = async () => {
+    if (revokeOnFailure) allowed = false;
+    throw Object.assign(new Error('Host could not establish the result'), {
+      code: 'FIXTURE_EFFECT_UNKNOWN', retryable: false, sideEffectStatus: 'unknown'
+    });
+  };
+  const handler = createFlowkitHttpHandler(() => fixture.options);
+  const http = createServer(handler);
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
+  close.push(() => new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve())));
+  const client = new Client({ name: 'flowkit-http-error-test', version: '1.0.0' });
+  close.push(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:' + http.address().port + '/mcp')));
+  const callError = async request => {
+    const result = await client.callTool(request);
+    assert.equal(result.isError, true);
+    return JSON.parse(result.content[0].text).error;
+  };
+  const prepare = { name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'test-ref' } };
+  assert.deepEqual(await callError(prepare), {
+    code: 'FIXTURE_EFFECT_UNKNOWN', message: 'Host could not establish the result', retryable: false, sideEffectStatus: 'unknown'
+  });
+  revokeOnFailure = true;
+  assert.deepEqual(await callError(prepare), { code: 'FKA_HOST_OPERATION_FAILED', message: 'FlowKit access denied for this collection' });
+  allowed = true;
+  const start = { name: 'flowkit_start_workflow', arguments: {
+    collectionId: 'test-collection', requestId: 'response-limited-draft', operation: 'create', goal: 'Review a scoped draft'
+  } };
+  fixture.options.limits.maxResponseBytes = 220;
+  const limited = await callError(start);
+  assert.equal(limited.code, 'FKA_RESPONSE_LIMIT');
+  assert.equal(limited.retryable, false);
+  assert.equal((await fixture.authorHost.readDraft(limited.recovery, fixture.requestContext)).id, limited.recovery.draftId);
+  assert.deepEqual((await callError(start)).recovery, limited.recovery);
+  fixture.options.limits.maxResponseBytes = Buffer.byteLength(JSON.stringify({ error: { code: 'FKA_RESPONSE_LIMIT' } }));
+  assert.deepEqual(await callError(start), { code: 'FKA_RESPONSE_LIMIT' });
 });
 
 test('real HTTP MCP authenticates requests and returns R-03 S03 clarification before preparing or publishing', async t => {

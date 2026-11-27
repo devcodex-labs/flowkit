@@ -89,9 +89,10 @@ async function replay(fixture, materialsReady = true) {
     for (let index = 0; index < (fixture.turns ?? []).length; index++) {
       const pending = await host.getPublicAgentTask({runId: fixture.runId});
       const recorded = fixture.turns[index];
-      const taskDigest = sha256Bytes(canonicalBytes(pending));
-      if (recorded.requestId !== pending.requestId || recorded.taskDigest !== taskDigest) {
-        throw new Error('fixture does not bind to live Pending at ' + index);
+      // Check the historical task content before binding the receipt to this Program's Pending.
+      if (recorded.nodeId !== pending.nodeId || recorded.attempt !== pending.attempt ||
+          recorded.taskDigest !== sha256Bytes(canonicalBytes({...pending, requestId: recorded.requestId}))) {
+        throw new Error('fixture content differs from live Pending at ' + index);
       }
       const receipt = {
         runId: fixture.runId, requestId: pending.requestId, nodeId: pending.nodeId,

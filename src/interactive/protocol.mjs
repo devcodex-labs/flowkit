@@ -9,14 +9,12 @@ export const workflowExecutionModes=Object.freeze(['standard',...Object.keys(aut
 export const interactiveStageForMode=mode=>Object.hasOwn(authorModes,mode)?authorModes[mode]:undefined;
 export const interactiveModeForStage=stage=>'interactive-'+stage.toLowerCase();
 
-/** Sequential and all-succeeded runs cannot progress past their shared task budget. */
+/** A durable wait is bounded by the Run deadline, not a previous Agent's budget. */
 export function runDeadlineExpired(cp, now=Date.now()) {
   if (cp.businessDeadlineMs!==undefined && cp.businessDeadlineMs<=now) return true;
-  if (cp.taskContext?.deadlineScope==='activity') {
-    const prepared=cp.pending?.preparedTask ?? cp.prepared?.preparedTask;
-    return !cp.parallel && (cp.candidate?.activityDeadlineMs ?? prepared?.task.execution.deadlineMs)<=now;
-  }
-  return ['P0-B','P1'].includes(cp.program.implementedStage) && cp.taskContext?.deadlineMs<=now;
+  if (cp.taskContext?.deadlineScope!=='activity') return false;
+  const prepared=cp.pending?.preparedTask ?? cp.prepared?.preparedTask;
+  return !cp.parallel && (cp.candidate?.activityDeadlineMs ?? prepared?.task.execution.deadlineMs)<=now;
 }
 
 export function publishedInteractivePending(checkpoint) {
