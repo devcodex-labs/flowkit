@@ -55,6 +55,17 @@ const importedFiles = fixtureDirectory && Object.fromEntries(await Promise.all(d
 const sourceKey = referenceMode ? importedFiles ? JSON.parse(importedFiles['workflow.html']
   .match(/<script type="application\/json" id="flowkit-export-provenance">([^<]+)<\/script>/)[1]) : newExportKey() : null;
 if (readOnly && (!live || interactive)) throw new Error('Use --live --p0b for the Interactive read-only Action scenario');
+const ticketContracts = [
+  { id: 'read-ticket', kind: 'action', version: '1', implementationDigest: artifactDigest('p0b-ticket-read-fixture-v1'),
+    effect: 'read-only', reads: [], writes: ['ticket', 'ticketOutcome'],
+    rules: [
+      'A normal read settles with no-effect and a successful Action receipt. It writes ticketOutcome as found or not-found.',
+      'When found, the receipt also writes ticket. When not-found, it writes only ticketOutcome.',
+      "After the successful read, use a Condition on ticketOutcome. Only ticketOutcome === 'found' reaches the check-ticket Verification. A not-found ticket goes to a failed Terminal without calling check-ticket.",
+    ] },
+  { id: 'check-ticket', kind: 'verification', version: '1', implementationDigest: artifactDigest('p0b-ticket-check-fixture-v1'),
+    rules: ['Verify a found ticket. True goes to a succeeded Terminal; false goes to a failed Terminal.'] },
+];
 const professionalGoal = [
   '起草 Standard 工作流，根据一条 FlowKit 候选交付记录判断能否导出。',
   '根输入必须有字符串 evidence，根输出必须有字符串 decision。只用一个 Agent 步骤评估并产出 decision，之后直接到成功终点。',
@@ -64,7 +75,7 @@ const professionalGoal = [
 ].join('\n');
 const goal = professional ? professionalGoal : v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
   contractCase ? contractCase.goal : readOnly ?
-  '起草 Interactive P0-B 工单校验工作流。Host 提供既有的只读 Action read-ticket，将读取结果写入工作流状态 state.ticket；后继是独立的布尔 Verification check-ticket，返回 true 到成功终点，false 到失败终点。read-ticket 普通业务失败也走失败终点。只编排这两个回调，不增加外部写入。' : interactive ?
+  '起草 Interactive P0-B 工单校验工作流，严格按 Host 提供的 read-ticket 与 check-ticket 契约编排。正常读取回执返回 ticketOutcome。工单找到后调用 check-ticket，校验通过则成功，否则失败。工单不存在时直接失败并跳过校验。只编排这两个回调，无外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
   '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。公开 contract.input 声明必填的 employeeId（string）、month（string）和 hours（number）。Host 的 check-input 只读校验这三个字段，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点。调用方从 Standard runArtifact 的 state.copyRef 读取结果，省略 contract.output。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
 const base = path.resolve('.tmp');
@@ -77,7 +88,8 @@ const service = await startLocalMcp({
   ...(v45Spec || layoutValidation || professional ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: longTurnMs } : {}),
   ...(openai ? { authorProvider: 'openai' } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
-}, { credential: token, ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
+}, { credential: token, ...(readOnly ? { hostExecutionContracts: ticketContracts } : {}),
+  ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
 
 async function verifyApprovedSkillRun(exported, saved) {
   const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
@@ -246,27 +258,37 @@ async function runExport(directory) {
     const reference=await persistence.programRegistry.putImmutable(bytes,{...program.interactiveProgram.identity,artifactHash});
     if (readOnly) {
       const outcomes = {};
-      for (const passed of [true, false]) {
-        const startKey = passed ? 'check-passed' : 'check-rejected';
+      const cases = [
+        { startKey: 'check-passed', ticketOutcome: 'found', passed: true, status: 'succeeded' },
+        { startKey: 'check-rejected', ticketOutcome: 'found', passed: false, status: 'failed' },
+        { startKey: 'ticket-not-found', ticketOutcome: 'not-found', status: 'failed' },
+      ];
+      for (const { startKey, ticketOutcome, passed, status } of cases) {
         const runOptions = { ...options, startKey };
         let frame = await start(reference, {}, {}, runOptions);
+        assert.equal(frame.pending.length, 1);
         const [read] = frame.pending;
         assert.equal(read.task.action, 'read-ticket');
         const { operationKey } = read.task;
         const inputHash = artifactDigest(canonicalBytes(read.task));
         const claim = { runId: frame.runId, requestId: read.requestId, operationKey, inputHash };
         assert.equal((await persistence.operationController.claim(claim, auth)).readOnly, true);
-        const result = { set: { ticket: { id: 'test-ticket' } } };
+        const found = ticketOutcome === 'found';
+        const result = { set: { ticketOutcome, ...(found ? { ticket: { id: 'test-ticket' } } : {}) } };
         await persistence.operationController.settle({ runId: frame.runId, operationKey, inputHash,
           effect: 'no-effect', evidenceHash: artifactDigest(startKey), result }, auth);
         frame = await complete({ runId: frame.runId, requestId: read.requestId, operationKey,
           kind: 'action', outcome: 'succeeded', result }, {}, runOptions);
-        const [verification] = frame.pending;
-        assert.equal(verification.task.verifier, 'check-ticket');
-        frame = await complete({ runId: frame.runId, requestId: verification.requestId, kind: 'verification',
-          outcome: 'succeeded', result: { passed } }, {}, runOptions);
-        assert.equal(frame.status, passed ? 'succeeded' : 'failed');
-        outcomes[startKey] = frame.status;
+        if (found) {
+          assert.equal(frame.pending.length, 1);
+          const [verification] = frame.pending;
+          assert.equal(verification.task.verifier, 'check-ticket');
+          frame = await complete({ runId: frame.runId, requestId: verification.requestId, kind: 'verification',
+            outcome: 'succeeded', result: { passed } }, {}, runOptions);
+        }
+        assert.equal(frame.status, status);
+        assert.equal(frame.pending.length, 0);
+        outcomes[startKey] = { status: frame.status, verificationCalls: found ? 1 : 0, runId: frame.runId };
       }
       console.log(JSON.stringify({ path: 'interactive-sdk', stage, effect: 'no-effect', cases: outcomes }));
       return;
@@ -434,7 +456,7 @@ try {
       assert.equal(readPortableExport(files, exportTrust([service.exportPublicKey])).candidate.hash, identity.candidateHash);
       console.log(JSON.stringify({ path: 'live-author-review-signature', candidateHash: identity.candidateHash,
         reviewExecutionId: receipt.observation.executionId, reviewSubjectId: receipt.observation.subjectId,
-        signedFilesVerified: deliveryNames.length }));
+        signedFilesVerified: deliveryNames.length, ...(readOnly ? { exportPublicKey: service.exportPublicKey } : {}) }));
     }
     if (v45Spec) {
       assert.equal(offline.graph.nodes.length, 140);
