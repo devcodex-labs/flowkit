@@ -73,6 +73,12 @@ test('local model queue cancellation does not release an outstanding physical sl
     assert.equal(active.size, 0);
     await assert.rejects(run(() => assert.fail('Must not dispatch an already cancelled request'),
       AbortSignal.abort(reason)), error => error === reason);
+    const beforeDispatch = new AbortController();
+    const reserved = run(() => assert.fail('Cancelled before transport dispatch'), beforeDispatch.signal);
+    assert.equal(active.size, 1);
+    beforeDispatch.abort(reason);
+    await assert.rejects(reserved, error => error === reason);
+    assert.equal(active.size, 0);
   } finally {
     clearTimeout(timer);
     release('first');

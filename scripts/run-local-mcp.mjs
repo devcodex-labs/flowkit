@@ -97,7 +97,10 @@ export async function runModelInSlot(operation, signal, activeCalls, limit) {
     await during(signal, () => available);
   }
   signal.throwIfAborted();
-  const request = Promise.resolve().then(operation);
+  const request = Promise.resolve().then(() => {
+    signal.throwIfAborted();
+    return operation();
+  });
   const settled = request.then(() => undefined, () => undefined);
   activeCalls.add(settled);
   try { return await request; }
