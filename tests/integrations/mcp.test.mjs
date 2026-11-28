@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { SkillsClient } from '@modelcontextprotocol/client/ext/skills';
-import { createFlowkitHttpHandler } from '../../src/mcp.mjs';
+import { createFlowkitHttpHandler, createFlowkitMcpServer } from '../../src/mcp.mjs';
 import { fixtureOptions } from './mcp-fixture.mjs';
 
 async function directory(t) {
@@ -56,6 +56,21 @@ async function assertClient(client, extended = false) {
   }
   return draft;
 }
+
+test('MCP limit configuration rejects misspelled fields and null without silently choosing defaults', async () => {
+  const options = { namespace: 'test-project', collectionIds: ['test-collection'], authorize: () => true };
+  for (const limits of [null, [], 'invalid', { pageSze: 1 }, { maxMetadataEntry: 1 }]) {
+    assert.throws(() => createFlowkitMcpServer({ ...options, limits }), /MCP limit field/);
+  }
+  for (const limits of [{ pageSize: null }, { maxResourceBytes: null }, { maxResponseBytes: null },
+    { maxMetadataEntries: null }, { pageSize: 0 }, { maxMetadataEntries: 1.5 }]) {
+    assert.throws(() => createFlowkitMcpServer({ ...options, limits }), /positive integers/);
+  }
+  assert.throws(() => createFlowkitMcpServer({ ...options, limits: { maxResponseBytes: 1 } }), /fit an error code/);
+  const server = createFlowkitMcpServer({ ...options, limits: { pageSize: 1, maxResourceBytes: 1024,
+    maxResponseBytes: 1024, maxMetadataEntries: undefined } });
+  await server.close();
+});
 
 test('real MCP stdio client reaches the same Author and scoped approved Skill resources', async t => {
   const { dir, close } = await directory(t);

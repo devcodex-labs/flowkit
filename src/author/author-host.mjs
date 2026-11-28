@@ -71,6 +71,11 @@ export async function createWorkflowAuthorHost(supplied) {
   const requiredCapacity = ['maxPhysicalExecutions', 'maxDrafts', 'maxDraftBytes', 'maxRetainedDraftBytes', 'maxReceiptBytes', 'maxTurnsPerDraft'];
   if (requiredCapacity.some(key => options.capacity?.[key] === undefined)) throw Object.assign(authorError('author-executor', 'Host must configure finite execution, draft and receipt capacities'), {
     missingBindings: requiredCapacity.filter(key => options.capacity?.[key] === undefined) });
+  if (typeof options.capacity !== 'object' || Array.isArray(options.capacity) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(options.capacity)) ||
+      Reflect.ownKeys(options.capacity).some(key => ![...requiredCapacity, 'maxPendingCandidates'].includes(key))) {
+    throw new TypeError('Unknown or invalid Author capacity field');
+  }
   const capacity = { maxPhysicalExecutions: positive(options.capacity?.maxPhysicalExecutions, 4, 'physical executions'),
     maxPendingCandidates: positive(options.capacity?.maxPendingCandidates, 16, 'pending candidates'),
     maxDrafts: positive(options.capacity?.maxDrafts, 256, 'drafts'),

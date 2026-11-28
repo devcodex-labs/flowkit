@@ -19,10 +19,14 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
-  const pageSize = limits.pageSize ?? 50;
-  const maxBytes = limits.maxResourceBytes ?? 262144;
-  const maxResponseBytes = limits.maxResponseBytes ?? 262144;
-  const maxMetadataEntries = limits.maxMetadataEntries ?? 10000;
+  const defaults = { pageSize: 50, maxResourceBytes: 262144, maxResponseBytes: 262144, maxMetadataEntries: 10000 };
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(limits)) ||
+      Reflect.ownKeys(limits).some(key => !Object.hasOwn(defaults, key))) {
+    throw new TypeError('Unknown or invalid MCP limit field');
+  }
+  const { pageSize = defaults.pageSize, maxResourceBytes: maxBytes = defaults.maxResourceBytes,
+    maxResponseBytes = defaults.maxResponseBytes, maxMetadataEntries = defaults.maxMetadataEntries } = limits;
   if (![pageSize, maxBytes, maxResponseBytes,maxMetadataEntries].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new TypeError('MCP limits must be positive integers');
   }

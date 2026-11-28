@@ -67,6 +67,7 @@ export interface AuthorHostOptions {
   budgetPolicy?: Partial<AuthorBudgetPolicy>;
   /** Explicit finite overrides of the material-based policy. Undefined inherits; null and unknown fields are rejected. */
   documentBudgetPolicy?: Partial<AuthorBudgetPolicy>;
+  /** Finite required capacities; unknown fields and null are rejected. maxPendingCandidates defaults to 16. */
   capacity: { maxPhysicalExecutions: number; maxPendingCandidates?: number; maxDrafts: number; maxDraftBytes: number;
     maxRetainedDraftBytes: number; maxReceiptBytes: number; maxTurnsPerDraft: number };
   retention?: { policyRef: string; idempotencyRetentionMs: number };

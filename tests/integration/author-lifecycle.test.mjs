@@ -38,6 +38,14 @@ test('I4 S130: missing finite Host capacities, invalid zero values and unsupport
     { ...f.options.capacity, maxDrafts: null }, { ...f.options.capacity, maxPhysicalExecutions: null }]) {
     await assert.rejects(createWorkflowAuthorHost({ ...missing, capacity }), /positive/);
   }
+  for (const capacity of [
+    { ...f.options.capacity, maxPendingCanddiates: 1 },
+    Object.assign([], f.options.capacity),
+    Object.assign(new Map(), f.options.capacity)
+  ]) {
+    await assert.rejects(createWorkflowAuthorHost({ ...missing, capacity }), /capacity field/);
+    await assert.rejects(readFile(missing.storageFile), { code: 'ENOENT' });
+  }
   await assert.rejects(createWorkflowAuthorHost({ ...f.options, budgetPolicy: { durationMs: Number.MAX_SAFE_INTEGER } }), /timer range/);
   await assert.rejects(createWorkflowAuthorHost({ ...f.options, budgetPolicy: { maxRequests: null } }), /positive/);
   for (const documentBudgetPolicy of [null, [], 'invalid', { maxRequest: 7 }, { durationMs: null }]) {

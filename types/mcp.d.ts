@@ -50,6 +50,7 @@ export interface FlowkitMcpOptions {
     add(input: { collectionId: string; requestId: string; sourceRef: string; candidateHash?: string; destination?: 'flowkit' | 'codex' },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
   };
+  /** Omitted fields use defaults; unknown fields, null and nonpositive limits are rejected. */
   limits?: { pageSize?: number; maxResourceBytes?: number; maxResponseBytes?: number;maxMetadataEntries?:number };
 }
 export interface FlowkitMcpServer {
