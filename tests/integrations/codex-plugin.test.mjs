@@ -832,46 +832,84 @@ test('disconnecting a Design client preserves work and orderly Host stop records
   assert.equal(calls, 1);
 });
 
-test('an optional layout timeout does not prevent delivery or repeat the design model', async t => {
-  let service, client;
-  let modelCalls = 0;
-  let layoutSignal;
-  let finishLayout;
-  t.after(async () => {
-    finishLayout?.();
-    await client?.close();
-    await service?.close();
+// The optional layout cutoff is the subject of this fixture, not the mandatory
+// Design deadline (covered separately above). Trigger its TimeoutError after
+// physical dispatch, instead of racing publication I/O against a 2-second turn.
+for (const grouped of [false, true]) {
+  test(grouped ? 'all Design view scopes share one optional layout deadline' :
+    'an optional layout timeout does not prevent delivery or repeat the design model', async t => {
+    let service, client;
+    let modelCalls = 0, layoutCalls = 0, layoutDeadlines = 0;
+    let layoutSignal, finishLayout;
+    const parentDuration = 46_000;
+    const optionalDeadline = new AbortController();
+    const nativeTimeout = AbortSignal.timeout;
+    // Only intercept the fixture's optional half-turn deadline after Design planning.
+    // The parent deadline and unrelated transport timers remain real.
+    const timeout = t.mock.method(AbortSignal, 'timeout', duration => {
+      if (modelCalls && duration >= parentDuration / 4 && duration <= parentDuration / 2) {
+        layoutDeadlines++;
+        return optionalDeadline.signal;
+      }
+      return nativeTimeout(duration);
+    });
+    t.after(async () => {
+      finishLayout?.();
+      await client?.close();
+      await service?.close();
+    });
+    const root = await ownedDirectory(t);
+    const model = monthlyTimesheetModel();
+    model.planLayout = ({ signal }) => {
+      layoutCalls++;
+      layoutSignal = signal;
+      const pending = new Promise((_, reject) => { finishLayout = () => reject(new Error('Layout stopped')); });
+      setImmediate(() => optionalDeadline.abort(new DOMException('Optional layout deadline', 'TimeoutError')));
+      return pending;
+    };
+    model.planDesign = async ({ materials: [material] }) => {
+      modelCalls++;
+      const nodes = grouped ? ['one', 'two', 'three', 'four'].map((id, index) => ({
+        id, name: 'Step ' + id, description: 'Read source at step ' + id, sources: [material.id],
+        subflow: index < 2 ? { key: 'first', name: 'First phase' } : { key: 'second', name: 'Second phase' }
+      })) : [{ id: 'start', name: 'Start', description: 'Read request', sources: [material.id] }];
+      const edges = grouped ? nodes.slice(0, -1).map((node, index) => ({
+        from: node.id, to: nodes[index + 1].id, description: 'Continue to next step', sources: [material.id]
+      })) : [];
+      return { status: 'completed', requestId: 'design-result', provider: 'fixture', model: 'fixture', proposal: {
+        schemaVersion: 1, nodes, edges, unresolved: [],
+        coverage: [{ source: material.id, status: 'represented', reason: 'Source-backed steps' }]
+      } };
+    };
+    const token = 'test-design-layout-timeout';
+    service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'),
+      exportDir: path.join(root, 'exports'), designTurnDurationMs: parentDuration }, { credential: token, modelBinding: model });
+    client = new Client({ name: 'flowkit-design-timeout-test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+    const arguments_ = { requestId: 'design-layout-timeout', title: 'Request', materials: [{ id: 'guide', title: 'Guide', content: 'Read' }] };
+    const request = () => client.callTool({ name: 'flowkit_create_design_diagram', arguments: arguments_ });
+    const response = await finishedDesign(request);
+    timeout.mock.restore();
+    assert.ok(!response.isError, JSON.stringify(response));
+    const result = JSON.parse(response.content[0].text);
+    assert.equal(result.status, 'ready');
+    assert.equal(result.layoutSource, 'fallback');
+    assert.equal(layoutSignal?.aborted, true);
+    assert.equal(layoutSignal.reason, optionalDeadline.signal.reason);
+    assert.equal(layoutSignal.reason.name, 'TimeoutError');
+    assert.equal(layoutDeadlines, 1, 'Do not renew optional layout time for another scope');
+    assert.equal(layoutCalls, 1, 'Do not dispatch more layout work after the shared deadline');
+    assert.equal(modelCalls, 1);
+    assert.deepEqual(await readdir(result.directory), ['design.html']);
+    if (grouped) {
+      const page = readWorkflowPageData(await readFile(path.join(result.directory, 'design.html'), 'utf8'));
+      assert.equal(page.graph.nodes.length, 4);
+      assert.equal(page.project.positions.length, 3);
+      assert.ok(page.project.positions.every(scope => scope.layoutSource === 'fallback'));
+    }
+    assert.equal(JSON.parse((await request()).content[0].text).designHash, result.designHash);
   });
-  const root = await ownedDirectory(t);
-  const model = monthlyTimesheetModel();
-  model.planLayout = ({ signal }) => {
-    layoutSignal = signal;
-    return new Promise((_, reject) => { finishLayout = () => reject(new Error('Layout stopped')); });
-  };
-  model.planDesign = async ({ materials: [material] }) => {
-    modelCalls++;
-    return { status: 'completed', requestId: 'design-result', provider: 'fixture', model: 'fixture', proposal: {
-      schemaVersion: 1, nodes: [{ id: 'start', name: 'Start', description: 'Read request', sources: [material.id] }],
-      edges: [], unresolved: [], coverage: [{ source: material.id, status: 'represented', reason: 'First step' }]
-    } };
-  };
-  const token = 'test-design-layout-timeout';
-  service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'),
-    exportDir: path.join(root, 'exports'), designTurnDurationMs: 2000 }, { credential: token, modelBinding: model });
-  client = new Client({ name: 'flowkit-design-timeout-test', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
-  const arguments_ = { requestId: 'design-layout-timeout', title: 'Request', materials: [{ id: 'guide', title: 'Guide', content: 'Read' }] };
-  const request = () => client.callTool({ name: 'flowkit_create_design_diagram', arguments: arguments_ });
-  const response = await finishedDesign(request);
-  assert.ok(!response.isError, JSON.stringify(response));
-  const result = JSON.parse(response.content[0].text);
-  assert.equal(result.status, 'ready');
-  assert.equal(result.layoutSource, 'fallback');
-  assert.equal(layoutSignal?.aborted, true);
-  assert.equal(modelCalls, 1);
-  assert.deepEqual(await readdir(result.directory), ['design.html']);
-  assert.equal(JSON.parse((await request()).content[0].text).designHash, result.designHash);
-});
+}
 
 test('project design uses known source IDs, commits one offline HTML and replays an exact request', async t => {
   let service, client;

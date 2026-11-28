@@ -492,11 +492,17 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               const merged = mergeDesignSections(title, materials, sections);
               const { graph, design, mermaid, viewManifest } = merged;
               const canvas = planDesignCanvas(graph, design);
-              function arrange(graph, ceiling) {
-                const layoutMs = Math.max(0, Math.min(ceiling, Math.floor((expiresAt - performance.now()) / 2)));
-                if (layoutMs && model.planLayout) {
-                  return arrangeDesign(graph, AbortSignal.any([workSignal, AbortSignal.timeout(layoutMs)]));
+              // Optional layout shares one budget across all view scopes. Recomputing
+              // half the remaining time per scope can consume almost all delivery time.
+              let layoutSignal;
+              function arrange(graph) {
+                if (!model.planLayout || workSignal.aborted) return;
+                if (!layoutSignal) {
+                  const layoutMs = Math.max(0, Math.min(60_000, Math.floor((expiresAt - performance.now()) / 2)));
+                  if (!layoutMs) return;
+                  layoutSignal = AbortSignal.any([workSignal, AbortSignal.timeout(layoutMs)]);
                 }
+                return arrangeDesign(graph, layoutSignal);
               }
               let project, viewLayout, layoutSource = 'fallback';
               if (canvas) {
@@ -504,11 +510,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
                 const positions = [];
                 let arranged = 0, modelScopes = 0;
                 for (const { id, graph: rawScope } of layoutGraphs) {
-                  layoutAbort.signal.throwIfAborted();
+                  workSignal.throwIfAborted();
                   const scope = projectDesignLayoutGraph(rawScope);
                   const needsModel = scope.nodes.length > 1 || scope.referenceEdges.length > 0;
                   if (needsModel) modelScopes++;
-                  const arrangement = needsModel ? await arrange(scope, 60_000) : undefined;
+                  const arrangement = needsModel ? await arrange(scope) : undefined;
                   if (arrangement?.layout) arranged++;
                   const layout = arrangement?.layout ?? defaultLayout(scope);
                   const packed = packDesignScope(id, scope, layout, Boolean(arrangement?.layout));
@@ -519,10 +525,10 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
                 project = { ...structure, positions };
                 layoutSource = arranged && arranged === modelScopes ? 'model' : arranged ? 'mixed' : 'fallback';
               } else {
-                viewLayout = (await arrange(graph, 60_000))?.layout;
+                viewLayout = (await arrange(graph))?.layout;
                 if (viewLayout) layoutSource = 'model';
               }
-              layoutAbort.signal.throwIfAborted();
+              workSignal.throwIfAborted();
               const excerpts=await designExportExcerpts(design,materials,requestContext,workSignal);
               const files = { 'design.html': workflowPage({ graph, mermaid, viewManifest, viewLayout, project,
                 design:excerpts.length?{...design,excerpts}:design }) };
