@@ -246,7 +246,8 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
         const effect = effectWithFailure(sideEffects, error?.sideEffectStatus);
         // The combined signal preserves the first cancellation source. A later
         // parent abort must not relabel an already expired API task.
-        if (context.signal?.aborted && signal.aborted && signal.reason === context.signal.reason) {
+        const adapterExpired = timer.aborted && signal.reason === timer.reason;
+        if (!adapterExpired && context.signal?.aborted && signal.aborted && signal.reason === context.signal.reason) {
           return { status: 'cancelled', reason: 'Host cancelled the API task',
             sideEffectStatus: effect, usage: finalUsage(), events };
         }

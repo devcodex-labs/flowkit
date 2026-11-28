@@ -193,7 +193,7 @@ test('API task deadline retains its classification when the parent cancels after
   const deadline = new DOMException('API task deadline exceeded', 'TimeoutError');
   const adapter = createApiAgentAdapter({ scope: 'team', model: 'controlled-fixture', limits: { timeoutMs: 12345 },
     request: async (_body, { signal }) => {
-      signal.addEventListener('abort', () => parent.abort(new Error('Later Host cancellation')), { once: true });
+      signal.addEventListener('abort', () => parent.abort(signal.reason), { once: true });
       entered.resolve(signal);
       await release.promise;
       return Response.json(terminal());
@@ -205,6 +205,8 @@ test('API task deadline retains its classification when the parent cancels after
     const result = await pending;
     assert.equal(effective.reason, deadline);
     assert.equal(parent.signal.aborted, true);
+    // A caller may propagate the exact same reason object to its own controller.
+    assert.equal(parent.signal.reason, deadline);
     assert.equal(result.status, 'failed');
     assert.equal(result.failure.code, 'deadline-exceeded');
     assert.equal(result.failure.sideEffectStatus, 'none');
