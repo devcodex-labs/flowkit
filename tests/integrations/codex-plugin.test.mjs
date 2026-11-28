@@ -311,6 +311,67 @@ test('direct local model response-body timeouts are attributed to the model, inc
   }
 });
 
+test('Graph phase deadline and parent cancellation do not release a real model slot early', { timeout: 10000 }, async t => {
+  const { createLocalCapabilityGraph } = await import('../../scripts/local-capability-graph.mjs');
+  const graph = await createLocalCapabilityGraph(1000);
+  const nativeTimer = globalThis.setTimeout;
+  let expire;
+  // The actual Graph 2.1.1 SDK creates its own 60-second matching timer.
+  // Capture that callback and expire it after dispatch rather than sleep a minute.
+  t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+    if (ms > 59000 && ms <= 60000) expire = () => callback(...args);
+    return nativeTimer(callback, ms, ...args);
+  });
+  try {
+    for (const first of ['graph', 'parent']) {
+      expire = undefined;
+      const active = new Set(), parent = new AbortController(), waiting = new AbortController();
+      const entered = Promise.withResolvers(), release = Promise.withResolvers();
+      let physical, queued, dispatched = 0;
+      const run = (operation, signal) => runModelInSlot(operation, signal, active, 1);
+      const matched = graph.match('Draft a workflow', { signal: parent.signal, request: (_body, { signal }) => {
+        physical = run(async () => {
+          entered.resolve(signal);
+          await release.promise;
+          return { decision: 'none', ids: [] };
+        }, signal);
+        return physical;
+      } });
+      const result = assert.rejects(matched, { code: first === 'graph' ? 'CG_MODEL_TIMEOUT' : 'CG_MODEL_CANCELLED' });
+      try {
+        const signal = await entered.promise;
+        assert.equal(active.size, 1);
+        assert.equal(typeof expire, 'function', 'Actual Graph SDK deadline must be observed');
+        if (first === 'graph') {
+          expire();
+          parent.abort(new Error('Later parent cancellation'));
+        } else {
+          parent.abort(new Error('Parent cancelled first'));
+          expire();
+        }
+        await result;
+        assert.equal(signal.aborted, true);
+        assert.equal(signal.reason.code, first === 'graph' ? 'CG_MODEL_TIMEOUT' : 'CG_MODEL_CANCELLED');
+        assert.equal(active.size, 1, 'Graph logical exit is not physical completion');
+        queued = run(() => { dispatched++; return 'layout'; }, waiting.signal);
+        const stopped = assert.rejects(queued, { name: 'AbortError' });
+        waiting.abort();
+        await stopped;
+        assert.equal(dispatched, 0);
+        assert.equal(active.size, 1);
+        release.resolve();
+        await physical;
+        assert.equal(await run(() => { dispatched++; return 'layout'; }, new AbortController().signal), 'layout');
+        assert.equal(dispatched, 1);
+        assert.equal(active.size, 0);
+      } finally {
+        waiting.abort(); parent.abort(); release.resolve();
+        await Promise.allSettled([matched, result, physical, queued]);
+      }
+    }
+  } finally { await graph.registry.close(); }
+});
+
 test('local Graph search is opt-in per draft and an explicit search fails closed', async t => {
   let service, client;
   t.after(async () => { await client?.close(); await service?.close(); });

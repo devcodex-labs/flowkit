@@ -64,7 +64,7 @@ const next = await complete(submission, runtime, options);
 
 取消先持久撤销 executionToken，再发信号；实际未结束仍占物理槽。迟到结果只结算旧回执，不提交候选。新输入可有界保留，不自动接管。Standard 内部 Run 不从中途恢复：读已提交结果，或经 Host 对账后显式重试。
 
-settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提升已持久完成且 Hash 匹配的结果；confirm-no-effect 要证明物理结束及无副作用；abandon 仍保留未知写及去重记录。跨草稿复用未知 operationKey 也阻断。仅服务所有者 close；closed=false 附 outstanding，处理后再次收尾，不关闭外部客户端。组合宿主可以传入 `waitFor` Promise，在冻结入口和实际消费者全部结算后才 resolve；Author 立即按 mode 取消或排空，但不提前关闭存储。未结算或拒绝的 barrier 均阻断关闭（`hostDrains`、`failedHostDrains`），重复 close 不能绕过已有 barrier。HTTP 断开仅结束客户端等待，不关闭共享服务；实际回调仍需结算。
+settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提升已持久完成且 Hash 匹配的结果；confirm-no-effect 要证明物理结束及无副作用；abandon 仍保留未知写及去重记录。跨草稿复用未知 operationKey 也阻断。仅服务所有者 close；closed=false 附 outstanding，处理后再次收尾，不关闭外部客户端。组合宿主可以传入 `waitFor` Promise，在冻结入口和实际消费者全部结算后才 resolve；Author 立即按 mode 取消或排空，但不提前关闭存储。未结算或拒绝的 barrier 均阻断关闭（`hostDrains`、`failedHostDrains`），重复 close 不能绕过已有 barrier。HTTP 断开仅结束客户端等待，不关闭共享服务；实际回调仍需结算。API Agent 任务期限与父级取消竞争时，以组合信号的首次取消来源分类；后到的父级取消不改写已经发生的适配器期限失败。逻辑终止不证明物理请求或外部写入已结算。
 
 ### 发现与清理
 

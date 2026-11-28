@@ -182,3 +182,56 @@ test('a non-cooperating Provider times out and a cancelled task returns a classi
   assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.sideEffectStatus, 'none');
 });
+
+test('API task deadline retains its classification when the parent cancels after the deadline', { timeout: 5000 }, async t => {
+  const nativeTimeout = AbortSignal.timeout;
+  const timer = new AbortController();
+  // Trigger the adapter's existing deadline only after actual provider dispatch.
+  // No scheduler race or provider latency is needed to order the two causes.
+  t.mock.method(AbortSignal, 'timeout', ms => ms === 12345 ? timer.signal : nativeTimeout(ms));
+  const parent = new AbortController(), entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const deadline = new DOMException('API task deadline exceeded', 'TimeoutError');
+  const adapter = createApiAgentAdapter({ scope: 'team', model: 'controlled-fixture', limits: { timeoutMs: 12345 },
+    request: async (_body, { signal }) => {
+      signal.addEventListener('abort', () => parent.abort(new Error('Later Host cancellation')), { once: true });
+      entered.resolve(signal);
+      await release.promise;
+      return Response.json(terminal());
+    } });
+  const pending = adapter.runAgentTask(prepared, { signal: parent.signal });
+  try {
+    const effective = await entered.promise;
+    timer.abort(deadline);
+    const result = await pending;
+    assert.equal(effective.reason, deadline);
+    assert.equal(parent.signal.aborted, true);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure.code, 'deadline-exceeded');
+    assert.equal(result.failure.sideEffectStatus, 'none');
+    assert.equal(result.usage.providerRequests, 1);
+  } finally { parent.abort(); release.resolve(); await pending; }
+});
+
+test('API parent cancellation is preserved when the adapter deadline follows it', { timeout: 5000 }, async t => {
+  const nativeTimeout = AbortSignal.timeout;
+  const timer = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', ms => ms === 12345 ? timer.signal : nativeTimeout(ms));
+  const parent = new AbortController(), entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const reason = new Error('Host cancelled first');
+  const adapter = createApiAgentAdapter({ scope: 'team', model: 'controlled-fixture', limits: { timeoutMs: 12345 },
+    request: async (_body, { signal }) => {
+      entered.resolve(signal);
+      await release.promise;
+      return Response.json(terminal());
+    } });
+  const pending = adapter.runAgentTask(prepared, { signal: parent.signal });
+  try {
+    const effective = await entered.promise;
+    parent.abort(reason);
+    timer.abort(new DOMException('Later deadline', 'TimeoutError'));
+    const result = await pending;
+    assert.equal(effective.reason, reason);
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.sideEffectStatus, 'none');
+  } finally { parent.abort(); release.resolve(); await pending; }
+});

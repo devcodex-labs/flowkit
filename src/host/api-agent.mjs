@@ -244,8 +244,12 @@ export function createApiAgentAdapter({ scope, model, request, tools = [], autho
         }
       } catch (error) {
         const effect = effectWithFailure(sideEffects, error?.sideEffectStatus);
-        if (context.signal?.aborted) return { status: 'cancelled', reason: 'Host cancelled the API task',
-          sideEffectStatus: effect, usage: finalUsage(), events };
+        // The combined signal preserves the first cancellation source. A later
+        // parent abort must not relabel an already expired API task.
+        if (context.signal?.aborted && signal.aborted && signal.reason === context.signal.reason) {
+          return { status: 'cancelled', reason: 'Host cancelled the API task',
+            sideEffectStatus: effect, usage: finalUsage(), events };
+        }
         return { status: 'failed', failure: { code: signal.aborted ? 'deadline-exceeded' : typeof error?.code === 'string' ? error.code : 'api-task-failed',
           message: String(error?.message ?? error), retryable: false, sideEffectStatus: effect }, usage: finalUsage(), events };
       }
