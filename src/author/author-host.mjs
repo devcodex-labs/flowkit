@@ -169,9 +169,15 @@ export async function createWorkflowAuthorHost(supplied) {
       return result ?? view(draft, state);
     });
   }
-  async function authorize(action, collectionId, context, signal, details = {}) {
-    signal?.throwIfAborted();
+  function assertOpen(action) {
     if (closed || closing && !['read', 'cancel', 'settle', 'advance-commit'].includes(action) && !action.startsWith('execute-') && !action.startsWith('discovery')) throw authorError('author-closed', 'Author service is closing');
+  }
+  function assertAdmission(action, signal) {
+    signal?.throwIfAborted();
+    assertOpen(action);
+  }
+  async function authorize(action, collectionId, context, signal, details = {}) {
+    assertAdmission(action, signal);
     if (!context || context.namespace !== options.namespace || !context.principalId || !context.sessionId ||
       !context.workspaceId || !context.authorizationSnapshotRef || !Array.isArray(context.authorizedCollections) || !context.authorizedCollections.includes(collectionId) ||
       !options.collectionIds.includes(collectionId)) throw authorError('author-unauthorized', 'Current Host request does not authorize this namespace/collection');
@@ -180,7 +186,7 @@ export async function createWorkflowAuthorHost(supplied) {
     if (await options.authorization.authorize({ ...binding, ...details, action, collectionId, requestContext: clone(context), signal }) !== true) {
       throw authorError('author-unauthorized', 'Host denied the current action');
     }
-    signal?.throwIfAborted();
+    assertAdmission(action, signal);
   }
   function receiptBinding(draft) {
     return { namespace: options.namespace, storeId: meta.store_id, draftId: draft.id, collectionId: draft.collectionId,
@@ -252,6 +258,8 @@ export async function createWorkflowAuthorHost(supplied) {
         { verifyImport: binding => options.authorization.verifyImport?.({ ...binding, requestContext: currentRequestContext, signal }) });
         fingerprint = hash({ ...input, currentRequestContext, sourceHash: source.candidate.hash, issuer: source.issuer });
       }
+      // Authorization/import can suspend while close freezes admission.
+      assertAdmission('start', signal);
       return store.authorTransaction(state => {
         const drafts = state.activeDrafts(capacity.maxDrafts + 1);
         const replay = state.findStartRequest(input.requestId);
@@ -324,6 +332,7 @@ export async function createWorkflowAuthorHost(supplied) {
       const initial = read(input.draftId);
       const beforeAdmission = signal && admissionSignal ? AbortSignal.any([signal, admissionSignal]) : admissionSignal ?? signal;
       await authorize('advance', initial.collectionId, currentRequestContext, beforeAdmission, { draftId: initial.id });
+      assertAdmission('advance', beforeAdmission);
       requiredId(input.turnId, 'turnId');
       if ((input.baseline === undefined) !== (input.baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
       if (!['authoring', 'review-only', 'retry'].includes(input.kind ?? 'authoring')) throw new TypeError('Unknown Author turn kind');
@@ -630,6 +639,7 @@ export async function createWorkflowAuthorHost(supplied) {
         approvalRef: input.approvalRef, requestContext: clone(currentRequestContext), signal });
       if (observation?.approved !== true || !observation.subjectId || !observation.approvalId) throw authorError('author-approval', 'Host did not observe explicit user approval');
       await authorize('approve', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef });
+      assertAdmission('approve', signal);
       return mutate(draft.id, input.expectedStateVersion, current => {
         if (current.contentHash !== draft.contentHash) throw authorError('author-conflict', 'Content changed during approval');
         current.approvalReceipt = { ...receiptBinding(current), reviewRef: input.reviewRef, approvalRef: input.approvalRef, observation };
@@ -657,6 +667,7 @@ export async function createWorkflowAuthorHost(supplied) {
         approvalRef: input.approvalRef, requestContext: clone(currentRequestContext), signal });
       if (observation?.approved !== true || !observation.subjectId || !observation.approvalId) throw authorError('author-approval', 'Current exact review and user approval are required');
       await authorize('publish', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef, publicationId: input.publicationId });
+      assertAdmission('publish', signal);
       try { mutate(draft.id, input.expectedStateVersion, (current, state) => {
         const binding = receiptBinding(current);
         if (current.contentHash !== draft.contentHash || current.reviewReceipt?.reviewRef !== draft.reviewReceipt.reviewRef) throw authorError('author-conflict', 'Content changed during publication approval verification');
@@ -781,6 +792,7 @@ export async function createWorkflowAuthorHost(supplied) {
     },
     async discard(input, currentRequestContext, signal) {
       const draft = read(input.draftId); await authorize('discard', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
+      assertAdmission('discard', signal);
       if (input.generationId) {
         if (draft.stateVersion !== input.expectedStateVersion) throw authorError('author-conflict', 'Draft stateVersion changed');
         const key = JSON.stringify([draft.id, 'cleanup', input.generationId]);
@@ -803,6 +815,7 @@ export async function createWorkflowAuthorHost(supplied) {
           options.retention.idempotencyRetentionMs < 1) throw authorError('author-executor', 'Body cleanup requires an explicit Host retention policy');
         await authorize('cleanup', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, retentionPolicyRef: input.retentionPolicyRef });
       }
+      assertAdmission('discard', signal);
       return mutate(draft.id, input.expectedStateVersion, (current, state) => {
         if (current.bodyPurged) return NO_CHANGE;
         const turns = state.turns(current.id, capacity.maxTurnsPerDraft + 1);
@@ -847,6 +860,7 @@ export async function createWorkflowAuthorHost(supplied) {
           const { verifiedCollectionPlan } = await import('./collections.mjs');
           const verified = verifiedCollectionPlan(plan);
           await authorize('collection-plan', plan.destination.id, context ?? requestContext, signal, { plan: verified.plan, planHash: verified.planHash, approvalRef });
+          assertAdmission('collection-plan', signal);
           collectionChange = { planHash: verified.planHash, approvalRef };
           try { return store.applyCollectionPlan(plan, approvalRef); } finally { collectionChange = null; }
         } };

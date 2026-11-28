@@ -217,6 +217,29 @@ test('Author close cancels immediately but keeps the store open until Host consu
   assert.deepEqual(results, [{ closed: true, outstanding: 0 }, { closed: true, outstanding: 0 }]);
 });
 
+test('close fences new drafts whose Host authorization was already pending', async t => {
+  for (const keepStoreOpen of [true, false]) {
+    const f = await setup(t);
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), barrier = Promise.withResolvers();
+    f.releases.push(release.resolve, barrier.resolve);
+    const authorize = f.options.authorization.authorize;
+    f.options.authorization.authorize = async request => {
+      if (request.action === 'start') { entered.resolve(); await release.promise; }
+      return authorize(request);
+    };
+    const start = f.start({ requestId: 'closing-start' });
+    const rejected = assert.rejects(start, { code: 'FKA_CLOSED' });
+    await entered.promise;
+    const closing = await f.host.close({ mode: 'cancel', timeoutMs: 15, ...(keepStoreOpen ? { waitFor: barrier.promise } : {}) });
+    assert.equal(closing.closed, !keepStoreOpen);
+    release.resolve();
+    await rejected;
+    assert.equal(database(f.file, db => db.prepare('SELECT count(*) AS count FROM fk_author_drafts').get().count), 0);
+    barrier.resolve();
+    assert.equal((await f.host.close()).closed, true);
+  }
+});
+
 test('a deadline crossed during commit authorization fences promotion and stays expired after a clock rollback and reopen', async t => {
   const f = await setup(t);
   const realNow = Date.now.bind(Date);
