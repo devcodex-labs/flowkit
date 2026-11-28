@@ -63,9 +63,11 @@ export interface AuthorHostOptions {
   defaults?: AuthorChoices;
   /** Compile the initial Standard Plan from its validated node options. */
   useNodeOptionsForNewDrafts?: boolean;
+  /** Ordinary policy and shared baseline for material-based turns; omitted maxRequests defaults to 24/168 respectively. */
   budgetPolicy?: Partial<AuthorBudgetPolicy>;
-  /** Optional finite budget for material-based turns that dispatch multiple document tasks. */
+  /** Explicit finite overrides of the material-based policy. Undefined inherits; null and unknown fields are rejected. */
   documentBudgetPolicy?: Partial<AuthorBudgetPolicy>;
+  /** Finite required capacities. maxDrafts limits nonterminal drafts, not retained history; physical outstanding turns are counted independently. maxPendingCandidates defaults to 16. Unknown fields and null are rejected. */
   capacity: { maxPhysicalExecutions: number; maxPendingCandidates?: number; maxDrafts: number; maxDraftBytes: number;
     maxRetainedDraftBytes: number; maxReceiptBytes: number; maxTurnsPerDraft: number };
   retention?: { policyRef: string; idempotencyRetentionMs: number };
@@ -176,6 +178,9 @@ export interface WorkflowAuthorHost {
   discard(input: { draftId: string; expectedStateVersion: number; candidateHash: string | null; purgeBody?: boolean; retentionPolicyRef?: string; generationId?: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   cancelTurn(input: { draftId: string; expectedStateVersion: number; turnId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   createMcpOptions(context?: AuthorRequestContext, bindings?: Pick<FlowkitMcpOptions, 'resolveAuthoringInput' | 'resolveCollectionPlan' | 'runWorkflow' | 'limits'>): FlowkitMcpOptions;
-  close(options?: { mode?: 'drain' | 'cancel'; timeoutMs?: number }): Promise<{ closed: boolean; outstanding: number }>;
+  /** Cancel/drain within an observation budget. waitFor resolves only after Host-owned store consumers settle; a rejected barrier blocks closure. */
+  close(options?: { mode?: 'drain' | 'cancel'; timeoutMs?: number; waitFor?: PromiseLike<void> }): Promise<{
+    closed: boolean; outstanding: number; hostDrains?: number; failedHostDrains?: number;
+  }>;
 }
 export function createWorkflowAuthorHost(options: AuthorHostOptions): Promise<WorkflowAuthorHost>;

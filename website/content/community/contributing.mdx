@@ -41,6 +41,8 @@ npm run docs:preview -- --host 127.0.0.1 --port 4173
 
 ## 提交问题与PR
 
+仓库根目录的[贡献规范](https://github.com/devcodex-labs/flowkit/blob/main/CONTRIBUTING.md)是授权开发、分支、独立审查和合并门禁的权威入口。[AGENTS.md](https://github.com/devcodex-labs/flowkit/blob/main/AGENTS.md)仅记录长期架构与核心契约，不承担工程分工。经授权的开发者在 develop 分批提交、执行可用测试并完成多轮自审，维护同一已批准范围的累计 Draft PR；全部研发批次完成后才交独立审查方最终复核准确提交、实际测试及授权。全部必要门禁满足才可合并，不能以 CI 通过代替完整验收。合并不等于发布。
+
 问题报告参考[排错模板](/troubleshooting/index)。PR描述用户触发条件、修复后的行为、涉及的公开边界和实际验证命令；若有未验证环境明确列出。界面/文档布局变化附桌面和窄屏截图，示例变化同时给成功、失败与恢复结果。
 
 不要把模型密钥、用户数据或内部流程记录放进公开文件。对暂不支持的新能力先讨论契约和范围，再改实现。兼容范围见[兼容与支持范围](/community/compatibility)，发布操作由维护者按[发布维护](/maintainers/releasing)执行。

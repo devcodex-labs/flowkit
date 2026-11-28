@@ -6,6 +6,10 @@ import { verifiedCollectionPlan } from './collections.mjs';
 import { authorIdentity } from './host-target.mjs';
 import { checkProfessionalSkill } from './professional-skills.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
+import { terminalDraftStatuses } from './draft.mjs';
+
+const activeDraftWhere = "status NOT IN (" + terminalDraftStatuses.map(() => '?').join(',') +
+  ") AND coalesce(json_extract(payload,'$.bodyPurged'),0)=0";
 
 const FORMAL_SCHEMA = `
   CREATE TABLE IF NOT EXISTS fk_author_collections (collection_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, payload TEXT NOT NULL) STRICT;
@@ -147,7 +151,15 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
               meta: () => ({ ...db.prepare('SELECT * FROM fk_author_meta WHERE singleton=1').get() }),
               readDraft: id => { const row = db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(id); return row ? JSON.parse(row.payload) : null; },
               drafts: (limit = 10001) => db.prepare('SELECT payload FROM fk_author_drafts ORDER BY draft_id LIMIT ?').all(limit).map(row => JSON.parse(row.payload)),
-              activeDrafts: limit => db.prepare("SELECT payload FROM fk_author_drafts WHERE status!='expired' ORDER BY draft_id LIMIT ?").all(limit).map(row => JSON.parse(row.payload)),
+              activeDraftCount: () => db.prepare('SELECT count(*) AS total FROM fk_author_drafts WHERE ' + activeDraftWhere)
+                .get(...terminalDraftStatuses).total,
+              pendingCandidateCount: () => db.prepare("SELECT count(*) AS total FROM fk_author_drafts WHERE " + activeDraftWhere +
+                " AND json_type(payload,'$.candidate')='object' AND coalesce(json_type(payload,'$.savedReceipt'),'null')='null'")
+                .get(...terminalDraftStatuses).total,
+              // Scan durable outstanding turns, including terminal drafts and other connections.
+              // Never truncate physical ownership by the active draft quota or a listing limit.
+              physicalUsage: draftId => db.prepare(`SELECT count(*) AS total,coalesce(sum(draft_id=?),0) AS own
+                FROM fk_author_turns WHERE json_extract(payload,'$.physicalOutstanding')=1`).get(draftId),
               findStartRequest: requestId => { const row = db.prepare("SELECT payload FROM fk_author_drafts WHERE json_extract(payload,'$.startRequestId')=? LIMIT 1").get(requestId); return row ? JSON.parse(row.payload) : null; },
               findToolOperation: key => {
                 const row = db.prepare(`SELECT turns.draft_id,turns.turn_id,operations.value AS operation
@@ -236,6 +248,9 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           if (authorizeCollectionChange({ plan, planHash, approvalRef, previous }) !== true) {
             throw new Error('Host denied the collection plan');
           }
+          if (db.prepare('SELECT 1 FROM fk_author_active WHERE collection_id=? AND name=?').get(id, name)) {
+            throw new Error('The collection entry name is reserved; an active Skill already uses it');
+          }
           if (plan.operation === 'rename') rename.run(name, payload, id);
           else register.run(id, name, payload);
           return plan.destination;
@@ -254,6 +269,7 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           }
           const currentHash = current.get(collectionId, skillId)?.candidate_hash ?? null;
           if (hash !== currentHash) {
+            if (registered.get(collectionId)?.name === name) throw new Error('The collection entry name is reserved');
             if (currentHash !== previousHash) throw new Error('Active workflow changed after review');
             const previous = currentHash && readCandidate(read.get(collectionId, skillId, currentHash));
             if (previous && previous.manifest.kind !== candidate.manifest.kind) throw new Error('Cannot replace a Skill with a different kind');

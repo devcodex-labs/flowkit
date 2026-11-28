@@ -10,7 +10,9 @@ import { createWorkflowAuthorHost } from '../dist/host.mjs';
 import { checkProfessionalSkill, planProfessionalSkills, resolveTrustedProfessionalPin } from '../src/author/professional-skills.mjs';
 import { collectDesignSections, mergeDesignSections, packDesignScope, planDesignCanvas, projectDesignLayoutGraph } from './workflow-viewer/project-design.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
+import { during } from '../src/runtime/tasks.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
+import { validateSkillName } from '../src/author/skill-document.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
 import { checkCandidate, rebindImportedCandidate } from '../src/author/standard-artifact.mjs';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
@@ -89,7 +91,72 @@ function acquireServiceLease(dataDir) {
   };
 }
 
+/** Cancel a waiting request without releasing a slot held by a real transport. */
+export async function runModelInSlot(operation, signal, activeCalls, limit) {
+  while (activeCalls.size >= limit) {
+    const available = Promise.race(activeCalls);
+    await during(signal, () => available);
+  }
+  signal.throwIfAborted();
+  const request = Promise.resolve().then(() => {
+    signal.throwIfAborted();
+    return operation();
+  });
+  const settled = request.then(() => undefined, () => undefined);
+  activeCalls.add(settled);
+  try { return await request; }
+  finally { activeCalls.delete(settled); }
+}
+
+const localStringFields = ['namespace', 'workspaceId', 'dataDir', 'exportDir', 'mcpTokenEnv',
+  'defaultCollection', 'authorProvider', 'authorModelEnv', 'codexSkillsWorkspace'];
+const localTimeoutFields = ['authorTaskTimeoutMs', 'authorTurnDurationMs', 'designTurnDurationMs', 'resourceReadTimeoutMs'];
+
+function checkedConfigObject(value, keys, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError(label + ' must be an object');
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    if (!keys.includes(key)) throw new TypeError('Unknown ' + label + ' field: ' + String(key));
+  }
+}
+const nonblank = value => typeof value === 'string' && !!value.trim() && !value.includes('\0');
+
+/** Validate the documented local service input, not the independent Host dependency ports. */
+function validateLocalConfig(config) {
+  checkedConfigObject(config, [...localStringFields, ...localTimeoutFields, 'listen', 'capabilityGraph', 'trustedExportKeys'], 'local config');
+  for (const key of localStringFields) {
+    if (config[key] !== undefined && !nonblank(config[key])) throw new TypeError('Invalid local config field: ' + key);
+  }
+  for (const key of localTimeoutFields) {
+    const value = config[key];
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2147483647)) {
+      throw new TypeError('Local service timeouts must be positive integer milliseconds within the timer range: ' + key);
+    }
+  }
+  if (config.listen !== undefined) {
+    checkedConfigObject(config.listen, ['host', 'port', 'mcpPath'], 'listen');
+    for (const key of ['host', 'mcpPath']) {
+      if (config.listen[key] !== undefined && !nonblank(config.listen[key])) throw new TypeError('Invalid listen field: ' + key);
+    }
+    if (config.listen.port !== undefined && (!Number.isInteger(config.listen.port) ||
+        config.listen.port < 0 || config.listen.port > 65535)) throw new TypeError('Invalid listen field: port');
+  }
+  if (config.authorProvider !== undefined && !['codex', 'openai'].includes(config.authorProvider)) {
+    throw new TypeError('Choose the codex or openai Author provider');
+  }
+  if (config.capabilityGraph !== undefined && typeof config.capabilityGraph !== 'boolean') {
+    throw new TypeError('capabilityGraph must be a boolean');
+  }
+  if (config.codexSkillsWorkspace !== undefined && !path.isAbsolute(config.codexSkillsWorkspace)) {
+    throw new TypeError('codexSkillsWorkspace must be an absolute directory');
+  }
+  if (config.defaultCollection !== undefined) validateSkillName(config.defaultCollection);
+}
+
 export async function startLocalMcp(config, dependencies = {}) {
+  validateLocalConfig(config);
   const listen = config.listen ?? {};
   const host = listen.host ?? '127.0.0.1';
   const port = listen.port ?? 8765;
@@ -100,15 +167,15 @@ export async function startLocalMcp(config, dependencies = {}) {
   const exportDir = path.resolve(config.exportDir ?? 'flowkit-exports');
   const credential = dependencies.credential ?? process.env[config.mcpTokenEnv ?? 'FLOWKIT_MCP_TOKEN'];
   const collectionName = config.defaultCollection ?? 'flowkit-workflows';
-  const timeouts = [config.authorTaskTimeoutMs, config.authorTurnDurationMs, config.designTurnDurationMs, config.resourceReadTimeoutMs];
-  if (timeouts.some(value => value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2147483647))) {
-    throw new TypeError('Local service timeouts must be positive integer milliseconds within the timer range');
-  }
   if (host !== '127.0.0.1' || !Number.isInteger(port) || port < 0 || port > 65535 ||
       !/^\/[a-z][a-z0-9-]*$/.test(mcpPath) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
       typeof credential !== 'string' || credential.length < 24) throw new Error('Configure a loopback address and a FlowKit MCP token of at least 24 characters');
-  await mkdir(dataDir, { recursive: true });
+  if (config.capabilityGraph && dependencies.capabilityGraph) throw new TypeError('Choose local or externally supplied Capability Graph');
+  if (config.capabilityGraph && (dependencies.discoverCapabilities || dependencies.matchCapability)) {
+    throw new TypeError('Configure discovery and matching with the same Capability Graph binding');
+  }
   const trustedExports = exportTrust(config.trustedExportKeys);
+  await mkdir(dataDir, { recursive: true });
   const releaseLease = acquireServiceLease(dataDir);
   try {
     return await bindLocalMcp({ config, dependencies, host, port, mcpPath, namespace, workspaceId, dataDir,
@@ -191,12 +258,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
   const designOwner = context => authorIdentity([context.principalId, context.workspaceId, collectionId]);
   const closeStorage = async () => {
     if (storageClosed) return;
+    data.close();
+    await localGraph?.registry.close();
+    if (modelWorkspace) await rmdir(modelWorkspace);
+    releaseLease();
     storageClosed = true;
-    try {
-      data.close();
-      await localGraph?.registry.close();
-      if (modelWorkspace) await rmdir(modelWorkspace);
-    } finally { releaseLease(); }
   };
   try {
     const exportKey = get('export-key-v1') ?? insert('export-key-v1', newExportKey());
@@ -217,22 +283,9 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
     const model = dependencies.modelBinding ?? localModel({ provider, timeoutMs: config.authorTaskTimeoutMs,
       model: process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'], apiKey: process.env.OPENAI_API_KEY, workspace: modelWorkspace });
-    if (config.capabilityGraph !== undefined && typeof config.capabilityGraph !== 'boolean') throw new TypeError('capabilityGraph must be a boolean');
-    if (config.capabilityGraph && dependencies.capabilityGraph) throw new TypeError('Choose local or externally supplied Capability Graph');
-    if (config.capabilityGraph && (dependencies.discoverCapabilities || dependencies.matchCapability)) {
-      throw new TypeError('Configure discovery and matching with the same Capability Graph binding');
-    }
     if (config.capabilityGraph) localGraph = await createLocalCapabilityGraph(resourceReadTimeoutMs);
     const modelLayoutCalls = new Set();
-    async function runLocalModel(operation, signal) {
-      while (modelLayoutCalls.size >= capacity.maxPhysicalExecutions) await Promise.race(modelLayoutCalls);
-      signal.throwIfAborted();
-      const request = Promise.resolve().then(operation);
-      const settled = request.then(() => undefined, () => undefined);
-      modelLayoutCalls.add(settled);
-      try { return await request; }
-      finally { modelLayoutCalls.delete(settled); }
-    }
+    const runLocalModel = (operation, signal) => runModelInSlot(operation, signal, modelLayoutCalls, capacity.maxPhysicalExecutions);
     const planLayout = input => runLocalModel(() => model.planLayout(input), input.signal);
     const selectedLayoutKey = hash => 'preview-layout-selection:' + viewerHash + ':' + hash;
     const baseLayoutRevision = hash => artifactDigest(JSON.stringify(['layout-initial', viewerHash, hash]));
@@ -482,11 +535,17 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               const merged = mergeDesignSections(title, materials, sections);
               const { graph, design, mermaid, viewManifest } = merged;
               const canvas = planDesignCanvas(graph, design);
-              function arrange(graph, ceiling) {
-                const layoutMs = Math.max(0, Math.min(ceiling, Math.floor((expiresAt - performance.now()) / 2)));
-                if (layoutMs && model.planLayout) {
-                  return arrangeDesign(graph, AbortSignal.any([workSignal, AbortSignal.timeout(layoutMs)]));
+              // Optional layout shares one budget across all view scopes. Recomputing
+              // half the remaining time per scope can consume almost all delivery time.
+              let layoutSignal;
+              function arrange(graph) {
+                if (!model.planLayout || workSignal.aborted) return;
+                if (!layoutSignal) {
+                  const layoutMs = Math.max(0, Math.min(60_000, Math.floor((expiresAt - performance.now()) / 2)));
+                  if (!layoutMs) return;
+                  layoutSignal = AbortSignal.any([workSignal, AbortSignal.timeout(layoutMs)]);
                 }
+                return arrangeDesign(graph, layoutSignal);
               }
               let project, viewLayout, layoutSource = 'fallback';
               if (canvas) {
@@ -494,11 +553,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
                 const positions = [];
                 let arranged = 0, modelScopes = 0;
                 for (const { id, graph: rawScope } of layoutGraphs) {
-                  layoutAbort.signal.throwIfAborted();
+                  workSignal.throwIfAborted();
                   const scope = projectDesignLayoutGraph(rawScope);
                   const needsModel = scope.nodes.length > 1 || scope.referenceEdges.length > 0;
                   if (needsModel) modelScopes++;
-                  const arrangement = needsModel ? await arrange(scope, 60_000) : undefined;
+                  const arrangement = needsModel ? await arrange(scope) : undefined;
                   if (arrangement?.layout) arranged++;
                   const layout = arrangement?.layout ?? defaultLayout(scope);
                   const packed = packDesignScope(id, scope, layout, Boolean(arrangement?.layout));
@@ -509,10 +568,10 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
                 project = { ...structure, positions };
                 layoutSource = arranged && arranged === modelScopes ? 'model' : arranged ? 'mixed' : 'fallback';
               } else {
-                viewLayout = (await arrange(graph, 60_000))?.layout;
+                viewLayout = (await arrange(graph))?.layout;
                 if (viewLayout) layoutSource = 'model';
               }
-              layoutAbort.signal.throwIfAborted();
+              workSignal.throwIfAborted();
               const excerpts=await designExportExcerpts(design,materials,requestContext,workSignal);
               const files = { 'design.html': workflowPage({ graph, mermaid, viewManifest, viewLayout, project,
                 design:excerpts.length?{...design,excerpts}:design }) };
@@ -739,6 +798,8 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
         return { id: exact.logicalId, version: exact.resolvedVersion, digest: exact.digest, source: exact.source, approved: true,
           ...(requested.source.startsWith('codex-skill:') ? { reviewMaterial: { text, contentHash: artifactDigest(text) } } : {}) };
       },
+      // The existing local authorTurnDurationMs is an explicit all-Author-turn override.
+      // Without it, normal and material-based turns keep their independent defaults.
       budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
         // The internal compile port returns a candidate with Program, Mermaid and GraphSnapshot.
         maxResponseBytes: 1024 * 1024 },
@@ -1381,25 +1442,61 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       }
       return json(res, 404, { error: 'FlowKit endpoint not found' });
     }
-    server = createServer((req,res) => web(req,res).catch(error => {
-      if (!res.headersSent) json(res, 400, { error: error.message });
-      else res.end();
-    }));
+    const httpRequests = new Set();
+    let closing = false, hostDrain, storageCleanup;
+    server = createServer((req,res) => {
+      if (closing) return json(res, 503, { error: 'FlowKit service is closing' });
+      const pending = Promise.resolve().then(() => {
+        if (closing) {
+          if (!res.destroyed) json(res, 503, { error: 'FlowKit service is closing' });
+          return;
+        }
+        return web(req,res);
+      }).catch(error => {
+        if (res.destroyed || res.writableEnded) return;
+        if (!res.headersSent) json(res, 400, { error: error.message });
+        else res.end();
+      });
+      httpRequests.add(pending);
+      const settled = () => httpRequests.delete(pending);
+      void pending.then(settled, settled);
+    });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
     origin = 'http://' + host + ':' + server.address().port;
 
     return {
       url: origin + mcpPath, collectionId, operatorUrl: origin + '/operator/' + bootstrap, exportPublicKey: exportKey.publicKey,
-      async close() {
-        layoutAbort.abort();
-        if (server.listening) {
+      async close({ timeoutMs = 5000 } = {}) {
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new TypeError('Invalid close observation timeout');
+        const deadline = performance.now() + timeoutMs;
+        if (!hostDrain) {
+          closing = true;
+          // Stop admission before closing connections. Socket closure is not physical completion.
+          const listener = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
           server.closeAllConnections();
-          await new Promise(resolve => server.close(resolve));
+          layoutAbort.abort();
+          hostDrain = (async () => {
+            await listener;
+            // No further HTTP admission; wait for the consumers before the work they may have started.
+            await Promise.allSettled([...httpRequests]);
+            await Promise.allSettled([...Array.from(designRequests.values(), job => job.pending)]);
+            await Promise.allSettled([...layoutRequests.values()]);
+            await Promise.allSettled([...modelLayoutCalls]);
+          })();
         }
-        await Promise.allSettled([...Array.from(designRequests.values(), job => job.pending), ...layoutRequests.values(), ...modelLayoutCalls]);
-        const outcome = await authorHost.close({ mode: 'cancel' });
-        if (outcome.closed) await closeStorage();
-        return outcome;
+        // Author cancellation starts now, not after a potentially non-cooperative Design/HTTP job.
+        const outcome = await authorHost.close({ mode: 'cancel', waitFor: hostDrain,
+          timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) });
+        if (!outcome.closed) return { ...outcome, local: { http: httpRequests.size,
+          design: designRequests.size, layout: layoutRequests.size, model: modelLayoutCalls.size } };
+        // Cleanup is single-flight. A failed cleanup must not advertise a safely closed service.
+        storageCleanup ??= closeStorage();
+        let timer;
+        try {
+          const finished = await Promise.race([storageCleanup.then(() => true),
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), Math.max(1, deadline - performance.now())); })]);
+          return finished ? outcome : { closed: false, outstanding: 1, storageCleanup: true };
+        } finally { clearTimeout(timer); }
       }
     };
   } catch (error) {
@@ -1418,7 +1515,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.stdout.write(JSON.stringify({ url: service.url, collectionId: service.collectionId, operatorUrl: service.operatorUrl,
       exportPublicKey: service.exportPublicKey }) + '\n');
     const stop = async () => {
-      try { if (!(await service.close()).closed) process.exitCode = 1; }
+      try {
+        const outcome = await service.close();
+        if (!outcome.closed) {
+          process.stderr.write('FlowKit shutdown is draining: ' + JSON.stringify(outcome) + '\\n');
+          process.exitCode = 1;
+        }
+      }
       catch (error) { process.stderr.write(error.message + '\n'); process.exitCode = 1; }
     };
     process.once('SIGINT', stop);

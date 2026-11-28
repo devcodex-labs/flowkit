@@ -15,14 +15,18 @@ const minimumErrorText = JSON.stringify({ error: { code: responseLimitCode } });
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
   resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, nativeSkillDiscovery = false, limits = {} },
-  transportSignal = undefined) {
+  transportSignal = undefined, trackOperation = operation => operation) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
-  const pageSize = limits.pageSize ?? 50;
-  const maxBytes = limits.maxResourceBytes ?? 262144;
-  const maxResponseBytes = limits.maxResponseBytes ?? 262144;
-  const maxMetadataEntries = limits.maxMetadataEntries ?? 10000;
+  const defaults = { pageSize: 50, maxResourceBytes: 262144, maxResponseBytes: 262144, maxMetadataEntries: 10000 };
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(limits)) ||
+      Reflect.ownKeys(limits).some(key => !Object.hasOwn(defaults, key))) {
+    throw new TypeError('Unknown or invalid MCP limit field');
+  }
+  const { pageSize = defaults.pageSize, maxResourceBytes: maxBytes = defaults.maxResourceBytes,
+    maxResponseBytes = defaults.maxResponseBytes, maxMetadataEntries = defaults.maxMetadataEntries } = limits;
   if (![pageSize, maxBytes, maxResponseBytes,maxMetadataEntries].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new TypeError('MCP limits must be positive integers');
   }
@@ -113,7 +117,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   function tool(name, description, schema, invoke, readOnlyHint = false, readAfterAuthorization) {
     const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
     server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
-      async (args, request) => {
+      trackOperation(async (args, request) => {
         const requestSignal = request.mcpReq.signal;
         const ctx = { ...request, signal: transportSignal ? AbortSignal.any([requestSignal, transportSignal]) : requestSignal };
         const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
@@ -143,7 +147,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         } catch (error) {
           return responseError(name,input,result,error);
         }
-      });
+      }));
   }
 
   if (!nativeSkillDiscovery) tool('flowkit_collection', 'Read one bounded page of approved collection metadata.', { collectionId: id,cursor:z.string().optional() },
@@ -164,7 +168,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     targetRef: z.union([z.object({ collectionId: id, skillId: id, baseArtifactHash: hash, baseVersion: id }).strict(),
       z.object({ sourceRef: id, mode: z.enum(['new-collection', 'migration']) }).strict()]).optional(),
     executionMode: z.enum(workflowExecutionModes).optional(),
-    includeSource: z.boolean().optional()
+    ...(workflowUi ? {} : { includeSource: z.boolean().optional() })
   }, async ({ collectionId, goal, requestId, operation, targetRef, executionMode, includeSource }, ctx) => draftView(await author().start({ collectionId,
     goal, requestId, operation, ...(operation === 'import' ? { importSource: targetRef } : { targetRef }), choices: { collectionName: catalog(collectionId).collection.name,
       ...(executionMode ? { executionMode } : {}), ...(workflowUi ? { includeSource: false } :
@@ -271,7 +275,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         ...(workflowUi.relayout ? { layoutRevision: hash.optional() } : {}) },
       (input, ctx) => workflowUi.export(input, requestContext, ctx.signal));
     tool('flowkit_add_workflow', 'Add a verified candidate or inspect the supported destinations for an external workflow.',
-      { collectionId: id, requestId: id, sourceRef: id, candidateHash: hash.optional(), approvalRef: id.optional(),
+      { collectionId: id, requestId: id, sourceRef: id, candidateHash: hash.optional(),
         destination: z.enum(['flowkit','codex']).optional() }, (input, ctx) => workflowUi.add(input, requestContext, ctx.signal));
     return server;
   }
@@ -342,7 +346,10 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       return resources;
     }
   };
-  if (!nativeSkillDiscovery) new SkillsExtension({ source, baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' } }).attach(server);
+  if (!nativeSkillDiscovery) new SkillsExtension({
+    source: Object.fromEntries(Object.entries(source).map(([name, operation]) => [name, trackOperation(operation)])),
+    baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' }
+  }).attach(server);
   return server;
 }
 
@@ -362,14 +369,34 @@ export function createFlowkitHttpHandler(resolveHost) {
     const onClose = () => { if (!response.writableFinished) disconnect.abort(); };
     response.once('close', onClose);
     if (response.destroyed) onClose();
-    const server = createFlowkitMcpServer(options, disconnect.signal);
+    // A disconnected transport may finish before a non-cooperative callback.
+    // The Host's HTTP handler remains outstanding until those callbacks settle.
+    const operations = new Set();
+    let accepting = true;
+    const trackOperation = operation => (...args) => {
+      if (!accepting) throw new Error('MCP connection is closed');
+      const pending = Promise.resolve().then(() => {
+        disconnect.signal.throwIfAborted();
+        return operation(...args);
+      });
+      operations.add(pending);
+      const settled = () => operations.delete(pending);
+      void pending.then(settled, settled);
+      return pending;
+    };
+    const server = createFlowkitMcpServer(options, disconnect.signal, trackOperation);
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try {
       await server.connect(transport);
       await transport.handleRequest(request, response);
     } finally {
-      response.off('close', onClose);
-      await server.close();
+      accepting = false;
+      if (!response.writableFinished) disconnect.abort();
+      try { await server.close(); }
+      finally {
+        await Promise.allSettled([...operations]);
+        response.off('close', onClose);
+      }
     }
   };
 }

@@ -34,10 +34,45 @@ async function until(predicate, timeout = 5000) {
 test('I4 S130: missing finite Host capacities, invalid zero values and unsupported timer ranges fail before opening a store', async t => {
   const f = await setup(t); const missing = { ...f.options, storageFile: path.join(f.dir, 'missing.sqlite') }; delete missing.capacity;
   await assert.rejects(createWorkflowAuthorHost(missing), /finite.*capacities/);
-  for (const capacity of [{ ...f.options.capacity, maxPhysicalExecutions: 0 }, { ...f.options.capacity, maxReceiptBytes: 0 }]) {
+  for (const capacity of [{ ...f.options.capacity, maxPhysicalExecutions: 0 }, { ...f.options.capacity, maxReceiptBytes: 0 },
+    { ...f.options.capacity, maxDrafts: null }, { ...f.options.capacity, maxPhysicalExecutions: null }]) {
     await assert.rejects(createWorkflowAuthorHost({ ...missing, capacity }), /positive/);
   }
+  for (const capacity of [
+    { ...f.options.capacity, maxPendingCanddiates: 1 },
+    Object.assign([], f.options.capacity),
+    Object.assign(new Map(), f.options.capacity)
+  ]) {
+    await assert.rejects(createWorkflowAuthorHost({ ...missing, capacity }), /capacity field/);
+    await assert.rejects(readFile(missing.storageFile), { code: 'ENOENT' });
+  }
   await assert.rejects(createWorkflowAuthorHost({ ...f.options, budgetPolicy: { durationMs: Number.MAX_SAFE_INTEGER } }), /timer range/);
+  await assert.rejects(createWorkflowAuthorHost({ ...f.options, budgetPolicy: { maxRequests: null } }), /positive/);
+  for (const documentBudgetPolicy of [null, [], 'invalid', { maxRequest: 7 }, { durationMs: null }]) {
+    const storageFile = path.join(f.dir, 'invalid-document.sqlite');
+    await assert.rejects(createWorkflowAuthorHost({ ...f.options, storageFile, documentBudgetPolicy }), /budget field|positive/);
+    await assert.rejects(readFile(storageFile), { code: 'ENOENT' });
+  }
+});
+
+test('material-based Author budgets inherit validated SDK fields and persist only explicit overrides', async t => {
+  for (const [index, ordinary, document, expected] of [
+    [0, undefined, undefined, [300000, 24, 300000, 168]],
+    [1, { durationMs: 60000, maxRequests: 9 }, { durationMs: undefined, maxRequests: undefined }, [60000, 9, 60000, 9]],
+    [2, { durationMs: 60000, maxRequests: 9 }, { durationMs: 120000, maxRequests: 40 }, [60000, 9, 120000, 40]]
+  ]) {
+    const f = await setup(t, { budgetPolicy: ordinary, documentBudgetPolicy: document });
+    await f.register();
+    f.options.execution.request = async () => { throw new Error('Controlled stop after admission'); };
+    const first = await f.start({ requestId: 'ordinary-' + index });
+    await advance(f, first, { turnId: 'ordinary' });
+    const second = await f.start({ requestId: 'document-' + index });
+    const materials = [{ id: 'contract', title: 'Contract', content: 'Source requirement.\n'.repeat(1400) }];
+    await advance(f, second, { turnId: 'document', contextSnapshot: { materials } });
+    const normal = turnRecord(f.file, 'ordinary').budget;
+    const long = turnRecord(f.file, 'document').budget;
+    assert.deepEqual([normal.limits.durationMs, normal.limits.maxRequests, long.limits.durationMs, long.limits.maxRequests], expected);
+  }
 });
 
 test('I4 S31/S67/S111: two SQLite connections admit one execution and same-turn in-flight reads never dispatch twice', async t => {
@@ -171,6 +206,48 @@ test('I4 S93/S105: an ignored physical request outlives the logical deadline and
   release(); await until(async () => (await f.host.close({ mode: 'drain', timeoutMs: 20 })).closed);
 });
 
+test('Author close cancels immediately but keeps the store open until Host consumers settle', async t => {
+  const f = await setup(t);
+  const gate = Promise.withResolvers();
+  f.releases.push(gate.resolve);
+  const draft = await f.start();
+  const first = await f.host.close({ mode: 'cancel', timeoutMs: 15, waitFor: gate.promise });
+  assert.equal(first.closed, false);
+  assert.equal(first.outstanding, 1);
+  assert.equal(first.hostDrains, 1);
+  assert.equal((await f.host.readDraft({ draftId: draft.id }, context)).id, draft.id);
+  await assert.rejects(advance(f, draft), { code: 'FKA_CLOSED' });
+  const repeated = await f.host.close({ mode: 'cancel', timeoutMs: 15 });
+  assert.equal(repeated.closed, false);
+  assert.equal(repeated.hostDrains, 1);
+  gate.resolve();
+  const results = await Promise.all([f.host.close(), f.host.close()]);
+  assert.deepEqual(results, [{ closed: true, outstanding: 0 }, { closed: true, outstanding: 0 }]);
+});
+
+test('close fences new drafts whose Host authorization was already pending', async t => {
+  for (const keepStoreOpen of [true, false]) {
+    const f = await setup(t);
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), barrier = Promise.withResolvers();
+    f.releases.push(release.resolve, barrier.resolve);
+    const authorize = f.options.authorization.authorize;
+    f.options.authorization.authorize = async request => {
+      if (request.action === 'start') { entered.resolve(); await release.promise; }
+      return authorize(request);
+    };
+    const start = f.start({ requestId: 'closing-start' });
+    const rejected = assert.rejects(start, { code: 'FKA_CLOSED' });
+    await entered.promise;
+    const closing = await f.host.close({ mode: 'cancel', timeoutMs: 15, ...(keepStoreOpen ? { waitFor: barrier.promise } : {}) });
+    assert.equal(closing.closed, !keepStoreOpen);
+    release.resolve();
+    await rejected;
+    assert.equal(database(f.file, db => db.prepare('SELECT count(*) AS count FROM fk_author_drafts').get().count), 0);
+    barrier.resolve();
+    assert.equal((await f.host.close()).closed, true);
+  }
+});
+
 test('a deadline crossed during commit authorization fences promotion and stays expired after a clock rollback and reopen', async t => {
   const f = await setup(t);
   const realNow = Date.now.bind(Date);
@@ -293,13 +370,85 @@ test('I4 S49/S125/S126/S127/S129: default discard retains bodies; explicit unref
   const first = await f.start(), ready = await advance(f, first);
   const second = await f.start({ requestId: 'second', target: { name: 'second', description: 'Second', version: '1.0.0' } });
   await assert.rejects(advance(f, second), /Pending candidate capacity/);
+  await assert.rejects(f.start({ requestId: 'third' }), /Active draft capacity/);
   const discarded = await f.host.discard({ draftId: first.id, expectedStateVersion: ready.stateVersion, candidateHash: ready.candidate.hash }, context);
-  assert.ok(discarded.candidate); await assert.rejects(f.start({ requestId: 'third' }), /Retained draft capacity/);
+  assert.ok(discarded.candidate);
+  const third = await f.start({ requestId: 'third' });
+  assert.equal(third.status, 'draft');
+  assert.equal((await latest(f, first)).candidate.hash, ready.candidate.hash);
+  await assert.rejects(f.start({ requestId: 'fourth' }), /Active draft capacity/);
   const expired = await f.host.discard({ draftId: first.id, expectedStateVersion: discarded.stateVersion, candidateHash: ready.candidate.hash,
     purgeBody: true, retentionPolicyRef: 'owned-retention' }, context);
   assert.equal(expired.status, 'expired'); assert.equal(expired.candidate, undefined);
   await assert.rejects(f.start(), /expired/);
   await assert.rejects(advance(f, first), /expired/);
-  assert.equal((await f.start({ requestId: 'third' })).status, 'draft');
+  assert.equal((await f.start({ requestId: 'third' })).id, third.id);
+  await assert.rejects(f.start({ requestId: 'fourth' }), /Active draft capacity/);
   const next = await advance(f, second); assert.equal(next.status, 'candidate-ready');
+});
+
+test('saved draft history and publication replay do not exhaust the active draft quota', async t => {
+  const f = await setup(t, { capacity: { maxDrafts: 2, maxPendingCandidates: 1 } });
+  await f.register();
+  const saved = [];
+  for (let index = 0; index < 3; index++) {
+    const input = { requestId: 'historical-' + index, target: { name: 'historical-' + index, description: 'Inspect', version: '1.0.0' } };
+    const draft = await f.start(input);
+    const ready = await advance(f, draft, { turnId: 'historical-turn-' + index });
+    assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+    const binding = { draftId: draft.id, expectedStateVersion: ready.stateVersion, candidateHash: ready.candidate.hash,
+      previousHash: ready.previousHash, reviewRef: ready.reviewReceipt.reviewRef, approvalRef: 'approved-' + index };
+    f.approvals.set(binding.approvalRef, binding.candidateHash);
+    const approved = await f.host.recordApproval(binding, context);
+    const publication = { ...binding, expectedStateVersion: approved.stateVersion, publicationId: 'save-' + index };
+    const receipt = await f.host.publish(publication, context);
+    assert.equal(receipt.status, 'saved');
+    saved.push({ input, draft, receipt, publication });
+  }
+  const first = await f.start({ requestId: 'active-first' });
+  const second = await f.start({ requestId: 'active-second' });
+  await assert.rejects(f.start({ requestId: 'active-third' }), /Active draft capacity/);
+  const reopened = await fixture(f.file, { capacity: { maxDrafts: 2, maxPendingCandidates: 1 } });
+  f.hosts.push(reopened.host);
+  for (const item of saved) {
+    const replay = await reopened.start(item.input);
+    assert.equal(replay.id, item.draft.id);
+    assert.equal(replay.status, 'saved');
+    const receipt = await reopened.host.publish(item.publication, context);
+    assert.equal(receipt.candidateHash, item.receipt.candidateHash);
+    assert.equal(receipt.publicationId, item.receipt.publicationId);
+  }
+  assert.equal(reopened.calls.length, 0);
+  assert.equal(database(f.file, db => db.prepare('SELECT count(*) AS count FROM fk_author_versions').get().count), 3);
+  await f.host.discard({ draftId: first.id, expectedStateVersion: first.stateVersion, candidateHash: null }, context);
+  assert.equal((await reopened.start({ requestId: 'active-third' })).status, 'draft');
+  assert.equal((await latest(f, second)).status, 'draft');
+});
+
+test('an abandoned draft frees active admission but its real outstanding turn still blocks physical dispatch', async t => {
+  const f = await setup(t, { capacity: { maxDrafts: 1, maxPhysicalExecutions: 1 } });
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.releases.push(release.resolve);
+  const raw = f.options.execution.request;
+  f.options.execution.request = async input => { entered.resolve(); await release.promise; return raw(input); };
+  const draft = await f.start({ requestId: 'abandon-me' });
+  const running = advance(f, draft);
+  try {
+    await entered.promise;
+    await f.host.cancelTurn({ draftId: draft.id, expectedStateVersion: (await latest(f, draft)).stateVersion, turnId: 'turn' }, context);
+    await running;
+    await f.host.settleTurn({ draftId: draft.id, expectedStateVersion: (await latest(f, draft)).stateVersion,
+      turnId: 'turn', decision: 'abandon', evidenceRef: 'owned-test-abandonment' }, context);
+    assert.equal((await latest(f, draft)).status, 'abandoned');
+    assert.equal((await latest(f, draft)).physicalOutstanding.length, 1);
+    const next = await f.start({ requestId: 'new-after-abandon' });
+    const queued = await advance(f, next, { turnId: 'next' });
+    assert.equal(queued.outcome, 'blocked-by-inflight');
+    assert.equal(database(f.file, db => db.prepare("SELECT count(*) AS count FROM fk_author_turns WHERE draft_id=?").get(next.id).count), 0);
+    release.resolve();
+    await until(async () => !(await latest(f, draft)).physicalOutstanding.length);
+    const ready = await advance(f, next, { turnId: 'next' });
+    assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+    assert.equal((await latest(f, draft)).status, 'abandoned');
+  } finally { release.resolve(); await running; }
 });

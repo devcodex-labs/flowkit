@@ -18,15 +18,16 @@ export const isIntentModelOutputError = error =>
   (error.sideEffectStatus === undefined || error.sideEffectStatus === 'none');
 export const jsonBytes = value => Buffer.byteLength(JSON.stringify(value) ?? 'null');
 export const positive = (value, fallback, name) => {
-  value ??= fallback;
+  if (value === undefined) value = fallback;
   if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`Finite positive ${name} is required`);
   return value;
 };
 
-export function budgetPolicy(options = {}) {
+export function budgetPolicy(options = {}, inherited = {}) {
   const defaults = { durationMs: 300000, maxRequests: 24, maxToolCalls: 32,
-    maxIoCalls: 96, maxBytes: 16 * 1024 * 1024, maxResponseBytes: 262144 };
+    maxIoCalls: 96, maxBytes: 16 * 1024 * 1024, maxResponseBytes: 262144, ...inherited };
   if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(options)) ||
       Reflect.ownKeys(options).some(key => !Object.hasOwn(defaults, key))) {
     throw new TypeError('Unknown Author budget field');
   }

@@ -23,8 +23,9 @@ Author 审查候选时，宿主的 `authorization.resolveApplicableSafetyPolicie
 | execution.createSession | 用 ports 装配实际 Intent Runtime 和 Task V2 Runtime；createApiAgentAdapter.request 接 ports.request，工具执行接 ports.tool。执行端能在 MCP 等待期间独立响应，不能等待同一原生调用者 |
 | authorization | 逐动作授权；observeReview 关联实际 requestId，verifyApproval 核验准确用户批准；模型自称批准无效 |
 | capabilityGraph / readDocumentUrl / resolveProfessionalSkill | 当前权限下发现和读取；专业 Skill 固定 id/version/digest/approved；Graph 不执行 Agent |
-| budgetPolicy | 缺省 300000ms、24 模型请求、32 工具、96 I/O、16MiB 总字节、256KiB 单响应；Host 可配置有限正值，429/5xx 重试也计数 |
-| capacity | 必填有限正值：maxPhysicalExecutions、maxDrafts、maxDraftBytes、maxRetainedDraftBytes、maxReceiptBytes、maxTurnsPerDraft；maxPendingCandidates 默认 16 |
+| budgetPolicy | 缺省 300000ms、24 模型请求、32 工具、96 I/O、16MiB 总字节、256KiB 单响应；Host 可配置有限正值，429/5xx 重试也计数。也是长材料策略的共享基线 |
+| documentBudgetPolicy | 长材料回合继承已解析的 budgetPolicy；若普通 maxRequests 未显式提供，长材料默认 168 次。此对象仅覆盖明确给出的字段，undefined 继承，null、错误类型及未知字段拒绝 |
+| capacity | 必填有限正值：maxPhysicalExecutions、maxDrafts、maxDraftBytes、maxRetainedDraftBytes、maxReceiptBytes、maxTurnsPerDraft；maxPendingCandidates 默认 16。maxDrafts 仅限制非终态活跃草稿，已保存/放弃/丢弃/过期历史不占新草稿名额；未物理结算轮次单独计数，终态不等于释放物理槽。历史字节、回执和版本仍受保留边界约束，不自动删除。未知字段、null 和错误类型拒绝 |
 | retention / discovery | 默认不自动删数据；发现需自有 root、readMapping、compareAndSetMapping。缺 CAS 可保存，但 discovery 保持 pending |
 
 每个业务调用独立传 `AuthorRequestContext={namespace,principalId,sessionId,workspaceId,authorizedCollections,authorizationSnapshotRef}`，由当前 Host 认证生成，不从模型参数补造或缓存上次 HTTP 身份。完整类型见[Host 类型](/reference/types#author-types)。
@@ -63,7 +64,7 @@ const next = await complete(submission, runtime, options);
 
 取消先持久撤销 executionToken，再发信号；实际未结束仍占物理槽。迟到结果只结算旧回执，不提交候选。新输入可有界保留，不自动接管。Standard 内部 Run 不从中途恢复：读已提交结果，或经 Host 对账后显式重试。
 
-settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提升已持久完成且 Hash 匹配的结果；confirm-no-effect 要证明物理结束及无副作用；abandon 仍保留未知写及去重记录。跨草稿复用未知 operationKey 也阻断。仅服务所有者 close；closed=false 附 outstanding，处理后再次收尾，不关闭外部客户端。HTTP 断开仅结束请求等待，不关闭共享服务。
+settleTurn 核验准确 draft/turn/attempt/evidenceRef。confirm-result 只提升已持久完成且 Hash 匹配的结果；confirm-no-effect 要证明物理结束及无副作用；abandon 仍保留未知写及去重记录。跨草稿复用未知 operationKey 也阻断。仅服务所有者 close；closed=false 附 outstanding，处理后再次收尾，不关闭外部客户端。组合宿主可以传入 `waitFor` Promise，在冻结入口和实际消费者全部结算后才 resolve；Author 立即按 mode 取消或排空，但不提前关闭存储。未结算或拒绝的 barrier 均阻断关闭（`hostDrains`、`failedHostDrains`），重复 close 不能绕过已有 barrier。HTTP 断开仅结束客户端等待，不关闭共享服务；实际回调仍需结算。API Agent 任务期限与父级取消竞争时，以组合信号的首次取消来源分类；后到的父级取消不改写已经发生的适配器期限失败。逻辑终止不证明物理请求或外部写入已结算。
 
 ### 发现与清理
 

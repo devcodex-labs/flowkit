@@ -12,7 +12,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
 import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
 import { createLocalCodexSkills } from '../../scripts/local-codex-skills.mjs';
-import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
+import { runModelInSlot, startLocalMcp } from '../../scripts/run-local-mcp.mjs';
 import { localModel } from '../../scripts/local-mcp-model.mjs';
 import { defaultLayout, readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
 import { generateLayout } from '../../scripts/workflow-viewer/auto-layout.mjs';
@@ -36,6 +36,126 @@ async function ownedDirectory(t) {
   });
   return root;
 }
+
+test('local service rejects unknown and invalid configuration before creating data', async t => {
+  const root = await ownedDirectory(t);
+  const dataDir = path.join(root, 'never-created');
+  const credential = 'test-config-validation-credential';
+  const modelBinding = monthlyTimesheetModel();
+  const base = { dataDir, exportDir: path.join(root, 'exports'), listen: { port: 0 } };
+  for (const [invalid, expected] of [
+    [{ authorTurnDuratonMs: 50 }, /Unknown local config field: authorTurnDuratonMs/],
+    [{ listen: { porrt: 0 } }, /Unknown listen field: porrt/],
+    [{ listen: null }, /listen must be an object/],
+    [{ listen: { port: null } }, /Invalid listen field: port/],
+    [{ namespace: null }, /namespace/],
+    [{ authorTaskTimeoutMs: null }, /authorTaskTimeoutMs/],
+    [{ authorTurnDurationMs: 2147483648 }, /authorTurnDurationMs/],
+    [{ designTurnDurationMs: 1.5 }, /designTurnDurationMs/],
+    [{ resourceReadTimeoutMs: 0 }, /resourceReadTimeoutMs/],
+    [{ capabilityGraph: 'false' }, /capabilityGraph/],
+    [{ authorProvider: 'invalid' }, /provider/],
+    [{ trustedExportKeys: null }, /trustedExportKeys/],
+    [{ codexSkillsWorkspace: 'relative' }, /absolute directory/],
+    [{ defaultCollection: 'Invalid' }, /portable Skill name/],
+    [{ workspaceId: '' }, /workspaceId/]
+  ]) {
+    await assert.rejects(startLocalMcp({ ...base, ...invalid }, { credential, modelBinding }), expected);
+    await assert.rejects(lstat(dataDir), { code: 'ENOENT' });
+  }
+  for (const invalid of [null, [], 'invalid']) {
+    await assert.rejects(startLocalMcp(invalid, { credential, modelBinding }), /local config must be an object/);
+  }
+  const service = await startLocalMcp({ ...base, capabilityGraph: false }, { credential, modelBinding });
+  assert.equal((await service.close()).closed, true);
+});
+
+test('local Author default and all-turn override budgets are persisted by the actual MCP entry', async t => {
+  const root = await ownedDirectory(t);
+  const credential = 'test-effective-local-budget-credential';
+  for (const [index, durationMs, expected] of [[0, undefined, [240000, 900000]], [1, 120000, [120000, 120000]]]) {
+    const dataDir = path.join(root, 'state-' + index);
+    const modelBinding = monthlyTimesheetModel();
+    modelBinding.execution.request = async () => { throw new Error('Controlled stop after admission'); };
+    const service = await startLocalMcp({ listen: { port: 0 }, dataDir, exportDir: path.join(root, 'exports-' + index),
+      ...(durationMs === undefined ? {} : { authorTurnDurationMs: durationMs }) }, { credential, modelBinding });
+    const client = new Client({ name: 'local-budget-test', version: '1.0.0' });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(service.url), {
+        requestInit: { headers: { authorization: 'Bearer ' + credential } }
+      }));
+      for (const [turnId, sources] of [['ordinary', undefined], ['material', ['first', 'second'].map(id =>
+        ({ kind: 'text', id, title: id, content: 'x'.repeat(11500) }))]]) {
+        const started = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+          requestId: turnId, goal: 'Inspect', operation: 'create', executionMode: 'standard'
+        } });
+        assert.ok(!started.isError, JSON.stringify(started));
+        const draft = JSON.parse(started.content[0].text);
+        const admitted = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: { turn: {
+          draftId: draft.id, turnId, expectedStateVersion: draft.stateVersion, input: 'Inspect'
+        }, ...(sources ? { sources } : {}) } });
+        assert.ok(!admitted.isError, JSON.stringify(admitted));
+      }
+      const db = new DatabaseSync(path.join(dataDir, 'author.sqlite'));
+      try {
+        const limits = id => JSON.parse(db.prepare('SELECT payload FROM fk_author_turns WHERE turn_id=?').get(id).payload).budget.limits;
+        const ordinary = limits('ordinary'), material = limits('material');
+        assert.deepEqual([ordinary.durationMs, material.durationMs], expected);
+        assert.deepEqual([ordinary.maxRequests, material.maxRequests], [8, 168]);
+        assert.equal(material.maxBytes, 48 * 1024 * 1024);
+      } finally { db.close(); }
+    } finally { await client.close(); await service.close(); }
+  }
+});
+
+test('local model queue cancellation does not release an outstanding physical slot', { timeout: 10000 }, async () => {
+  const active = new Set();
+  const runningController = new AbortController();
+  const waitingController = new AbortController();
+  const reason = new Error('cancel queued request');
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const run = (operation, signal) => runModelInSlot(operation, signal, active, 1);
+  let waiting, observed, next, timer;
+  let queuedDispatches = 0, nextDispatches = 0;
+  const running = run(() => { entered(); return gate; }, runningController.signal);
+  try {
+    await started;
+    assert.equal(active.size, 1);
+    waiting = run(() => { queuedDispatches++; return 'unexpected'; }, waitingController.signal);
+    observed = assert.rejects(waiting, error => error === reason);
+    await new Promise(setImmediate);
+    waitingController.abort(reason);
+    const cancelled = await Promise.race([observed.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 2000); })]);
+    assert.equal(cancelled, true, 'Queued cancellation must settle before the active transport releases its slot');
+    runningController.abort(new Error('non-cooperative transport remains outstanding'));
+    assert.equal(active.size, 1);
+    next = run(() => { nextDispatches++; return 'next'; }, new AbortController().signal);
+    await new Promise(setImmediate);
+    assert.equal(queuedDispatches, 0);
+    assert.equal(nextDispatches, 0);
+    release('first');
+    assert.equal(await running, 'first');
+    await observed;
+    assert.equal(await next, 'next');
+    assert.equal(nextDispatches, 1);
+    assert.equal(active.size, 0);
+    await assert.rejects(run(() => assert.fail('Must not dispatch an already cancelled request'),
+      AbortSignal.abort(reason)), error => error === reason);
+    const beforeDispatch = new AbortController();
+    const reserved = run(() => assert.fail('Cancelled before transport dispatch'), beforeDispatch.signal);
+    assert.equal(active.size, 1);
+    beforeDispatch.abort(reason);
+    await assert.rejects(reserved, error => error === reason);
+    assert.equal(active.size, 0);
+  } finally {
+    clearTimeout(timer);
+    release('first');
+    await Promise.allSettled([running, waiting, observed, next]);
+  }
+});
 
 test('Codex marketplace contains a pure FlowKit MCP plugin and a credential reference', async t => {
   const root = await ownedDirectory(t);
@@ -189,6 +309,67 @@ test('direct local model response-body timeouts are attributed to the model, inc
     clearTimeout(keepAlive);
     await graph.registry.close();
   }
+});
+
+test('Graph phase deadline and parent cancellation do not release a real model slot early', { timeout: 10000 }, async t => {
+  const { createLocalCapabilityGraph } = await import('../../scripts/local-capability-graph.mjs');
+  const graph = await createLocalCapabilityGraph(1000);
+  const nativeTimer = globalThis.setTimeout;
+  let expire;
+  // The actual Graph 2.1.1 SDK creates its own 60-second matching timer.
+  // Capture that callback and expire it after dispatch rather than sleep a minute.
+  t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+    if (ms > 59000 && ms <= 60000) expire = () => callback(...args);
+    return nativeTimer(callback, ms, ...args);
+  });
+  try {
+    for (const first of ['graph', 'parent']) {
+      expire = undefined;
+      const active = new Set(), parent = new AbortController(), waiting = new AbortController();
+      const entered = Promise.withResolvers(), release = Promise.withResolvers();
+      let physical, queued, dispatched = 0;
+      const run = (operation, signal) => runModelInSlot(operation, signal, active, 1);
+      const matched = graph.match('Draft a workflow', { signal: parent.signal, request: (_body, { signal }) => {
+        physical = run(async () => {
+          entered.resolve(signal);
+          await release.promise;
+          return { decision: 'none', ids: [] };
+        }, signal);
+        return physical;
+      } });
+      const result = assert.rejects(matched, { code: first === 'graph' ? 'CG_MODEL_TIMEOUT' : 'CG_MODEL_CANCELLED' });
+      try {
+        const signal = await entered.promise;
+        assert.equal(active.size, 1);
+        assert.equal(typeof expire, 'function', 'Actual Graph SDK deadline must be observed');
+        if (first === 'graph') {
+          expire();
+          parent.abort(new Error('Later parent cancellation'));
+        } else {
+          parent.abort(new Error('Parent cancelled first'));
+          expire();
+        }
+        await result;
+        assert.equal(signal.aborted, true);
+        assert.equal(signal.reason.code, first === 'graph' ? 'CG_MODEL_TIMEOUT' : 'CG_MODEL_CANCELLED');
+        assert.equal(active.size, 1, 'Graph logical exit is not physical completion');
+        queued = run(() => { dispatched++; return 'layout'; }, waiting.signal);
+        const stopped = assert.rejects(queued, { name: 'AbortError' });
+        waiting.abort();
+        await stopped;
+        assert.equal(dispatched, 0);
+        assert.equal(active.size, 1);
+        release.resolve();
+        await physical;
+        assert.equal(await run(() => { dispatched++; return 'layout'; }, new AbortController().signal), 'layout');
+        assert.equal(dispatched, 1);
+        assert.equal(active.size, 0);
+      } finally {
+        waiting.abort(); parent.abort(); release.resolve();
+        await Promise.allSettled([matched, result, physical, queued]);
+      }
+    }
+  } finally { await graph.registry.close(); }
 });
 
 test('local Graph search is opt-in per draft and an explicit search fails closed', async t => {
@@ -374,13 +555,15 @@ test('native discovery distinguishes an exact directory mapping from observation
   const generation = path.join(source, 'test-generation');
   const directory = path.join(generation, 'team-workflows');
   const child = path.join(directory, 'skills', 'check');
+  const entryDirectory = path.join(directory, 'skills', 'team-workflows');
   await mkdir(child, { recursive: true });
-  await writeFile(path.join(directory, 'SKILL.md'), 'Owned collection');
+  await mkdir(entryDirectory, { recursive: true });
+  await writeFile(path.join(entryDirectory, 'SKILL.md'), 'Owned collection');
   await writeFile(path.join(child, 'SKILL.md'), 'Owned child');
   const collection = { id: 'team', name: 'team-workflows', directory: 'team-workflows' };
   const mapping = { generationId: 'generation', discoveryRoot: generation, snapshotHash: 'snapshot',
     manifestHash: 'manifest', operationId: 'publish' };
-  const files = ['team-workflows/SKILL.md', 'team-workflows/skills/check/SKILL.md'];
+  const files = ['team-workflows/skills/team-workflows/SKILL.md', 'team-workflows/skills/check/SKILL.md'];
   const receipts = new Map();
   const skills = [];
   const create = () => createLocalCodexSkills({ workspace, root: source, collection,
@@ -391,7 +574,7 @@ test('native discovery distinguishes an exact directory mapping from observation
   const restored = await create();
   assert.deepEqual(await restored.discovery.readMapping(), mapping);
   const entry = (name, file) => ({ name, path: file, description: name, scope: 'repo', enabled: true });
-  skills.push(entry('team-workflows', path.join(directory, 'SKILL.md')));
+  skills.push(entry('team-workflows', path.join(entryDirectory, 'SKILL.md')));
   assert.equal(await restored.discovery.observeMapping({ mapping, files }), false);
   skills.push(entry('check', path.join(child, 'SKILL.md')));
   assert.equal(await restored.discovery.observeMapping({ mapping, files }), true);
@@ -783,46 +966,161 @@ test('disconnecting a Design client preserves work and orderly Host stop records
   assert.equal(calls, 1);
 });
 
-test('an optional layout timeout does not prevent delivery or repeat the design model', async t => {
-  let service, client;
-  let modelCalls = 0;
-  let layoutSignal;
-  let finishLayout;
-  t.after(async () => {
-    finishLayout?.();
-    await client?.close();
-    await service?.close();
-  });
+test('local shutdown reports non-cooperative Design and Author work without releasing the service lease', { timeout: 25000 }, async t => {
   const root = await ownedDirectory(t);
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') };
+  const credential = 'test-noncooperative-shutdown-key';
   const model = monthlyTimesheetModel();
-  model.planLayout = ({ signal }) => {
-    layoutSignal = signal;
-    return new Promise((_, reject) => { finishLayout = () => reject(new Error('Layout stopped')); });
+  const designEntered = Promise.withResolvers(), authorEntered = Promise.withResolvers();
+  const designRelease = Promise.withResolvers(), authorRelease = Promise.withResolvers();
+  let service, client, authorClient, pending, recovered;
+  const raw = model.execution.request;
+  model.execution.request = async (input, options) => {
+    if (input.flowkitIntent) {
+      authorEntered.resolve(options.signal);
+      await authorRelease.promise;
+    }
+    return raw(input, options);
   };
-  model.planDesign = async ({ materials: [material] }) => {
-    modelCalls++;
-    return { status: 'completed', requestId: 'design-result', provider: 'fixture', model: 'fixture', proposal: {
-      schemaVersion: 1, nodes: [{ id: 'start', name: 'Start', description: 'Read request', sources: [material.id] }],
-      edges: [], unresolved: [], coverage: [{ source: material.id, status: 'represented', reason: 'First step' }]
-    } };
+  model.planDesign = async ({ signal }) => {
+    designEntered.resolve(signal);
+    await designRelease.promise;
+    signal.throwIfAborted();
   };
-  const token = 'test-design-layout-timeout';
-  service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'),
-    exportDir: path.join(root, 'exports'), designTurnDurationMs: 2000 }, { credential: token, modelBinding: model });
-  client = new Client({ name: 'flowkit-design-timeout-test', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
-  const arguments_ = { requestId: 'design-layout-timeout', title: 'Request', materials: [{ id: 'guide', title: 'Guide', content: 'Read' }] };
-  const request = () => client.callTool({ name: 'flowkit_create_design_diagram', arguments: arguments_ });
-  const response = await finishedDesign(request);
-  assert.ok(!response.isError, JSON.stringify(response));
-  const result = JSON.parse(response.content[0].text);
-  assert.equal(result.status, 'ready');
-  assert.equal(result.layoutSource, 'fallback');
-  assert.equal(layoutSignal?.aborted, true);
-  assert.equal(modelCalls, 1);
-  assert.deepEqual(await readdir(result.directory), ['design.html']);
-  assert.equal(JSON.parse((await request()).content[0].text).designHash, result.designHash);
+  const connect = async active => {
+    const connection = new Client({ name: 'shutdown-test', version: '1.0.0' });
+    await connection.connect(new StreamableHTTPClientTransport(new URL(active.url), {
+      requestInit: { headers: { authorization: 'Bearer ' + credential } }
+    }));
+    return connection;
+  };
+  const input = { requestId: 'blocked-design', title: 'Design', materials: [{ id: 'one', title: 'One', content: 'Read' }] };
+  try {
+    service = await startLocalMcp(config, { credential, modelBinding: model });
+    client = await connect(service);
+    authorClient = await connect(service);
+    const opened = await authorClient.callTool({ name: 'flowkit_start_workflow', arguments: {
+      requestId: 'blocked-author', operation: 'create', goal: 'Inspect', executionMode: 'standard'
+    } });
+    const draft = JSON.parse(opened.content[0].text);
+    pending = authorClient.callTool({ name: 'flowkit_prepare_workflow', arguments: { turn: {
+      draftId: draft.id, turnId: 'blocked-turn', expectedStateVersion: draft.stateVersion, input: 'Inspect'
+    } } }).catch(error => error);
+    const started = await client.callTool({ name: 'flowkit_create_design_diagram', arguments: input });
+    assert.equal(JSON.parse(started.content[0].text).status, 'running');
+    const [designSignal, authorSignal] = await Promise.all([designEntered.promise, authorEntered.promise]);
+    const stopped = await service.close({ timeoutMs: 40 });
+    assert.equal(stopped.closed, false);
+    assert.ok(stopped.outstanding >= 2, JSON.stringify(stopped));
+    assert.equal(stopped.local.design, 1);
+    assert.equal(designSignal.aborted, true);
+    assert.equal(authorSignal.aborted, true);
+    await assert.rejects(fetch(service.url));
+    await assert.rejects(startLocalMcp(config, { credential, modelBinding: model }), /数据目录已被其他本机 MCP 服务占用/);
+    designRelease.resolve();
+    const stillAuthor = await service.close({ timeoutMs: 100 });
+    assert.equal(stillAuthor.closed, false);
+    await assert.rejects(startLocalMcp(config, { credential, modelBinding: model }), /数据目录已被其他本机 MCP 服务占用/);
+    authorRelease.resolve();
+    assert.deepEqual(await service.close(), { closed: true, outstanding: 0 });
+    recovered = await startLocalMcp(config, { credential, modelBinding: model });
+    const next = await connect(recovered);
+    try {
+      const result = await next.callTool({ name: 'flowkit_create_design_diagram', arguments: input });
+      const record = JSON.parse(result.content[0].text);
+      assert.equal(record.status, 'interrupted');
+      assert.equal(record.error.code, 'FKA_DESIGN_INTERRUPTED');
+      assert.ok(record.resumeToken);
+      const read = await next.callTool({ name: 'flowkit_get_workflow_draft', arguments: { draftId: draft.id } });
+      const observed = JSON.parse(read.content[0].text);
+      assert.equal(observed.candidate, undefined);
+    } finally { await next.close(); }
+  } finally {
+    designRelease.resolve(); authorRelease.resolve();
+    await Promise.allSettled([client?.close(), authorClient?.close(), pending]);
+    if (service) await service.close();
+    if (recovered) await recovered.close();
+  }
 });
+
+// The optional layout cutoff is the subject of this fixture, not the mandatory
+// Design deadline (covered separately above). Trigger its TimeoutError after
+// physical dispatch, instead of racing publication I/O against a 2-second turn.
+for (const grouped of [false, true]) {
+  test(grouped ? 'all Design view scopes share one optional layout deadline' :
+    'an optional layout timeout does not prevent delivery or repeat the design model', async t => {
+    let service, client;
+    let modelCalls = 0, layoutCalls = 0, layoutDeadlines = 0;
+    let layoutSignal, finishLayout;
+    const parentDuration = 46_000;
+    const optionalDeadline = new AbortController();
+    const nativeTimeout = AbortSignal.timeout;
+    // Only intercept the fixture's optional half-turn deadline after Design planning.
+    // The parent deadline and unrelated transport timers remain real.
+    const timeout = t.mock.method(AbortSignal, 'timeout', duration => {
+      if (modelCalls && duration >= parentDuration / 4 && duration <= parentDuration / 2) {
+        layoutDeadlines++;
+        return optionalDeadline.signal;
+      }
+      return nativeTimeout(duration);
+    });
+    t.after(async () => {
+      finishLayout?.();
+      await client?.close();
+      await service?.close();
+    });
+    const root = await ownedDirectory(t);
+    const model = monthlyTimesheetModel();
+    model.planLayout = ({ signal }) => {
+      layoutCalls++;
+      layoutSignal = signal;
+      const pending = new Promise((_, reject) => { finishLayout = () => reject(new Error('Layout stopped')); });
+      setImmediate(() => optionalDeadline.abort(new DOMException('Optional layout deadline', 'TimeoutError')));
+      return pending;
+    };
+    model.planDesign = async ({ materials: [material] }) => {
+      modelCalls++;
+      const nodes = grouped ? ['one', 'two', 'three', 'four'].map((id, index) => ({
+        id, name: 'Step ' + id, description: 'Read source at step ' + id, sources: [material.id],
+        subflow: index < 2 ? { key: 'first', name: 'First phase' } : { key: 'second', name: 'Second phase' }
+      })) : [{ id: 'start', name: 'Start', description: 'Read request', sources: [material.id] }];
+      const edges = grouped ? nodes.slice(0, -1).map((node, index) => ({
+        from: node.id, to: nodes[index + 1].id, description: 'Continue to next step', sources: [material.id]
+      })) : [];
+      return { status: 'completed', requestId: 'design-result', provider: 'fixture', model: 'fixture', proposal: {
+        schemaVersion: 1, nodes, edges, unresolved: [],
+        coverage: [{ source: material.id, status: 'represented', reason: 'Source-backed steps' }]
+      } };
+    };
+    const token = 'test-design-layout-timeout';
+    service = await startLocalMcp({ listen: { port: 0 }, dataDir: path.join(root, 'state'),
+      exportDir: path.join(root, 'exports'), designTurnDurationMs: parentDuration }, { credential: token, modelBinding: model });
+    client = new Client({ name: 'flowkit-design-timeout-test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(service.url), { requestInit: { headers: { authorization: 'Bearer ' + token } } }));
+    const arguments_ = { requestId: 'design-layout-timeout', title: 'Request', materials: [{ id: 'guide', title: 'Guide', content: 'Read' }] };
+    const request = () => client.callTool({ name: 'flowkit_create_design_diagram', arguments: arguments_ });
+    const response = await finishedDesign(request);
+    timeout.mock.restore();
+    assert.ok(!response.isError, JSON.stringify(response));
+    const result = JSON.parse(response.content[0].text);
+    assert.equal(result.status, 'ready');
+    assert.equal(result.layoutSource, 'fallback');
+    assert.equal(layoutSignal?.aborted, true);
+    assert.equal(layoutSignal.reason, optionalDeadline.signal.reason);
+    assert.equal(layoutSignal.reason.name, 'TimeoutError');
+    assert.equal(layoutDeadlines, 1, 'Do not renew optional layout time for another scope');
+    assert.equal(layoutCalls, 1, 'Do not dispatch more layout work after the shared deadline');
+    assert.equal(modelCalls, 1);
+    assert.deepEqual(await readdir(result.directory), ['design.html']);
+    if (grouped) {
+      const page = readWorkflowPageData(await readFile(path.join(result.directory, 'design.html'), 'utf8'));
+      assert.equal(page.graph.nodes.length, 4);
+      assert.equal(page.project.positions.length, 3);
+      assert.ok(page.project.positions.every(scope => scope.layoutSource === 'fallback'));
+    }
+    assert.equal(JSON.parse((await request()).content[0].text).designHash, result.designHash);
+  });
+}
 
 test('project design uses known source IDs, commits one offline HTML and replays an exact request', async t => {
   let service, client;
@@ -1263,13 +1561,28 @@ test('local MCP pins a validated model layout, confirms the candidate and replay
   const unauthorized = await fetch(service.url, { method: 'POST', headers: { authorization: 'Bearer wrong' } });
   assert.equal(unauthorized.status, 401);
   assert.equal(unauthorized.headers.get('connection'), 'close');
-  assert.ok((await client.listTools()).tools.some(item => item.name === 'flowkit_add_workflow'));
+  const availableTools = (await client.listTools()).tools;
+  assert.equal(Object.hasOwn(availableTools.find(item => item.name === 'flowkit_start_workflow').inputSchema.properties, 'includeSource'), false);
+  assert.equal(Object.hasOwn(availableTools.find(item => item.name === 'flowkit_add_workflow').inputSchema.properties, 'approvalRef'), false);
+  async function assertUnsupported(name, args, field) {
+    let result;
+    try { result = await client.callTool({ name, arguments: args }); }
+    catch (error) {
+      assert.match(String(error.message), new RegExp(field));
+      return;
+    }
+    assert.equal(result.isError, true, JSON.stringify(result));
+    assert.match(JSON.stringify(result.content), new RegExp(field));
+  }
   assert.equal(client.getServerCapabilities().resources, undefined);
   const collection = await tool('flowkit_collection', {});
   assert.equal(collection.collection.name, 'flowkit-workflows');
   assert.equal(Object.hasOwn(collection.collection, 'rootSkill'), false);
-  const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'monthly-start',
-    goal: '校验月度工时输入，写入副本并二次校验，失败结束。', includeSource: true });
+  const startRequest = { operation: 'create', requestId: 'monthly-start',
+    goal: '校验月度工时输入，写入副本并二次校验，失败结束。' };
+  await assertUnsupported('flowkit_start_workflow', { ...startRequest, includeSource: true }, 'includeSource');
+  await assertUnsupported('flowkit_start_workflow', { ...startRequest, includeSource: false }, 'includeSource');
+  const draft = await tool('flowkit_start_workflow', startRequest);
   const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'monthly-prepare',
     expectedStateVersion: draft.stateVersion, input: '首次准备月度工时', target: { name: 'monthly-timesheet' } } });
   assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
@@ -1314,7 +1627,8 @@ test('local MCP pins a validated model layout, confirms the candidate and replay
     assert.deepEqual(calls, failedAt === 'check-input' ? ['check-input'] : ['check-input', 'write-copy', 'check-copy']);
   }
   const addRequest = { requestId: 'add-monthly', sourceRef: draft.id, candidateHash: args.candidateHash };
-  assert.equal((await tool('flowkit_add_workflow', { ...addRequest, approvalRef: 'caller-supplied-approval' })).status, 'rejected');
+  await assertUnsupported('flowkit_add_workflow', { ...addRequest, approvalRef: 'caller-supplied-approval' }, 'approvalRef');
+  assert.equal((await tool('flowkit_collection', {})).skills.length, 0);
   const readyToAdd = await tool('flowkit_add_workflow', addRequest);
   assert.equal(readyToAdd.status, 'rejected');
   assert.equal((await tool('flowkit_collection', {})).skills.length, 0);

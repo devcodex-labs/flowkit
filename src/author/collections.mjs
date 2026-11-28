@@ -6,11 +6,11 @@ const DEFAULT_NAME = 'flowkit-workflows';
 const DEFAULT_DESCRIPTION = 'Find, use, and author workflows and their Professional Skills for this collection.';
 const ROOT_GUIDE = [
   '# Workflow collection',
-  'Select an existing Workflow Skill or Professional Skill under `skills/`. Both types live at that same level.',
-  'To create or update a Workflow Skill, use `flowkit-workflow-author`. Clarify the intent with Intent Runtime, ' +
-    'discover relevant capabilities and documentation with Capability Graph, compile, review the semantics and ' +
-    'obtain user approval before publishing.',
-  'For existing workflows, follow the selected Skill’s entry instructions. See the [FlowKit documentation](https://devcodex-labs.github.io/flowkit/).'
+  'The collection entry, Workflow Skills and Professional Skills are independent siblings under the collection skills directory. Select only the Skill needed for the current task using the Host’s authorized discovery.',
+  'For workflow creation or update, use the connected FlowKit MCP tools: flowkit_start_workflow, then flowkit_prepare_workflow using the available turn or Host inputRef contract. Use the exact target reference for an update. Clarify unresolved business choices; use Capability Graph only when relevant and available.',
+  'Follow the actual review and user approval path exposed by the Host before export or publication. If preparation returns running, read the original draft using the available recovery or draft-read entry; do not start a duplicate. Missing tools, bindings or permissions are blockers, not permission to simulate success.',
+  'For an existing approved workflow, follow its entry instructions and use the authorized exact-version execution or recovery binding. A Professional Skill can be selected independently for an ordinary task in the Host’s actual permissions. No internal Author Skill or private SDK installation is required for the MCP path.',
+  'See the [FlowKit documentation](https://devcodex-labs.github.io/flowkit/).'
 ].join('\n\n');
 
 function collection(id, name, description) {
@@ -86,6 +86,15 @@ export function planCollectionRename({ id, name }, discovered, host) {
       workflowReferences: changes.workflowReferences }) });
 }
 
+/** The collection entry is a Skill in its own right, alongside the two business Skill kinds. */
+export function collectionRootSkillPath(current) {
+  validateSkillName(current.name);
+  if (current.directory !== current.name || typeof current.id !== 'string' || !current.id.trim()) {
+    throw new TypeError('Collection identity differs');
+  }
+  return `${current.directory}/skills/${current.name}/SKILL.md`;
+}
+
 /** A collection-qualified identity and a two-layer path apply to both second-layer Skill kinds. */
 export function collectionSkill(current, { id, name }) {
   validateSkillName(current.name);
@@ -93,5 +102,6 @@ export function collectionSkill(current, { id, name }) {
   if (current.directory !== current.name || typeof id !== 'string' || !id || /\s/.test(id)) {
     throw new TypeError('Skill identity needs a consistent collection directory and logical Skill ID');
   }
+  if (name === current.name) throw new TypeError('The collection entry name is reserved');
   return Object.freeze({ collectionId: current.id, skillId: id, directory: `${current.directory}/skills/${name}` });
 }

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { SkillsClient } from '@modelcontextprotocol/client/ext/skills';
-import { createFlowkitHttpHandler } from '../../src/mcp.mjs';
+import { createFlowkitHttpHandler, createFlowkitMcpServer } from '../../src/mcp.mjs';
 import { fixtureOptions } from './mcp-fixture.mjs';
 
 async function directory(t) {
@@ -57,6 +57,21 @@ async function assertClient(client, extended = false) {
   return draft;
 }
 
+test('MCP limit configuration rejects misspelled fields and null without silently choosing defaults', async () => {
+  const options = { namespace: 'test-project', collectionIds: ['test-collection'], authorize: () => true };
+  for (const limits of [null, [], 'invalid', { pageSze: 1 }, { maxMetadataEntry: 1 }]) {
+    assert.throws(() => createFlowkitMcpServer({ ...options, limits }), /MCP limit field/);
+  }
+  for (const limits of [{ pageSize: null }, { maxResourceBytes: null }, { maxResponseBytes: null },
+    { maxMetadataEntries: null }, { pageSize: 0 }, { maxMetadataEntries: 1.5 }]) {
+    assert.throws(() => createFlowkitMcpServer({ ...options, limits }), /positive integers/);
+  }
+  assert.throws(() => createFlowkitMcpServer({ ...options, limits: { maxResponseBytes: 1 } }), /fit an error code/);
+  const server = createFlowkitMcpServer({ ...options, limits: { pageSize: 1, maxResourceBytes: 1024,
+    maxResponseBytes: 1024, maxMetadataEntries: undefined } });
+  await server.close();
+});
+
 test('real MCP stdio client reaches the same Author and scoped approved Skill resources', async t => {
   const { dir, close } = await directory(t);
   const transport = new StdioClientTransport({ command: process.execPath,
@@ -69,6 +84,14 @@ test('real MCP stdio client reaches the same Author and scoped approved Skill re
   const prepared = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } });
   assert.equal(prepared.isError, undefined, JSON.stringify(prepared));
   assert.equal(JSON.parse(prepared.content[0].text).status, 'candidate-ready');
+  const startTool = (await client.listTools()).tools.find(item => item.name === 'flowkit_start_workflow');
+  assert.ok(Object.hasOwn(startTool.inputSchema.properties, 'includeSource'));
+  const withSource = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+    collectionId: 'test-collection', requestId: 'fixture-start-with-source', operation: 'create',
+    goal: 'Create a review workflow retaining the source', includeSource: true
+  } });
+  assert.equal(withSource.isError, undefined, JSON.stringify(withSource));
+  assert.equal(JSON.parse(withSource.content[0].text).choices.includeSource, true);
 });
 
 test('stdio reports a write awaiting reconciliation and does not duplicate it after reopening', async t => {

@@ -1,45 +1,28 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rename, rm, writeFile,readFile,readdir,lstat,realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { collectionSkill } from './collections.mjs';
-import { checkProfessionalSkill } from './professional-skills.mjs';
-import { validateSkillName } from './skill-document.mjs';
-import { checkCandidate } from './standard-artifact.mjs';
 import {artifactDigest} from '../shared/artifact-identity.mjs';
-import { materializeCollectionGeneration } from './generation.mjs';
+import { collectionGenerationFiles, materializeCollectionGeneration } from './generation.mjs';
 
 /** Materialize one approved store snapshot. The Host chooses which completed generation to advertise. */
 export async function stageCollectionForDiscovery(store, collectionId, hostOwnedRoot, planned) {
   const snapshot = planned?.snapshot ?? store.readCollection(collectionId);
   if (!snapshot) throw new Error('The Host has no approved collection with this ID');
-  if (planned?.plan) return materializeCollectionGeneration(snapshot, hostOwnedRoot, planned.plan, planned.signal);
   const { collection, skills } = snapshot;
-  validateSkillName(collection.name);
-  if (collection.id !== collectionId || collection.name !== collection.directory) throw new Error('Collection identity differs');
+  if (collection.id !== collectionId) throw new Error('Collection identity differs');
+  if (planned?.plan) return materializeCollectionGeneration(snapshot, hostOwnedRoot, planned.plan, planned.signal);
+  const bodies = collectionGenerationFiles(snapshot);
   const root = path.resolve(hostOwnedRoot);
   await mkdir(root, { recursive: true });
   const staging = await mkdtemp(path.join(root, '.flowkit-stage-'));
   const complete = path.join(root, `flowkit-collection-${randomUUID()}`);
   try {
     const files={};
-    const entries = path.join(staging, collection.directory, 'skills');
-    await mkdir(entries, { recursive: true });
-    await writeFile(path.join(staging, collection.directory, 'SKILL.md'), collection.rootSkill, { flag: 'wx' });
-    files[collection.directory+'/SKILL.md']=artifactDigest(collection.rootSkill);
-    for (const candidate of skills) {
-      if (candidate.manifest.kind === 'professional') checkProfessionalSkill(candidate);
-      else checkCandidate(candidate);
-      const { skillId, collectionId: owner, name } = candidate.manifest;
-      if (owner !== collectionId) throw new Error('Workflow belongs to a different collection');
-      const workflow = collectionSkill(collection, { id: skillId, name });
-      const directory = path.join(staging, workflow.directory);
-      await mkdir(directory);
-      for (const [file, body] of Object.entries(candidate.files)) {
-        const target = path.join(directory, file);
-        await mkdir(path.dirname(target), { recursive: true });
-        await writeFile(target, body, { flag: 'wx' });
-        files[path.relative(staging,target).split(path.sep).join('/')]=artifactDigest(body);
-      }
+    for (const [file, body] of Object.entries(bodies)) {
+      const target = path.join(staging, file);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, body, { flag: 'wx' });
+      files[file]=artifactDigest(body);
     }
     const receipt={collectionId,files};const manifestHash=artifactDigest(JSON.stringify(receipt));
     await writeFile(path.join(staging,'.flowkit-generation.json'),JSON.stringify({...receipt,manifestHash}),{flag:'wx'});

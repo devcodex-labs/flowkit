@@ -30,7 +30,9 @@ codex login status
 }
 ```
 
-本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制内置模型适配器的单次请求（默认 90000 毫秒），用 `authorTurnDurationMs` 控制持久化 Author 整轮（普通默认 240000，长文档默认 900000）。整轮剩余时间可缩短单次请求；外接模型绑定需要遵守宿主传入的取消信号，并管理自己的传输预算。项目设计回合和资源读取分别通过 `designTurnDurationMs` 与 `resourceReadTimeoutMs` 配置。这些值使用正整数毫秒。工作流运行期的业务截止由业务方在执行时声明。
+本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制内置模型的请求传输期限（默认 90000 毫秒），并作为 API Agent 适配器的整个模型任务期限（包含其内部重试）；它也适用于 Intent、Skill、Graph 匹配、Design 和 Layout 的内置模型请求。整轮剩余时间可缩短这些期限；Graph SDK 另有独立匹配阶段期限（当前 2.1.1 默认 60000 毫秒），包括目录处理与模型匹配，不会被本机模型的 90000 毫秒默认值覆盖。外接模型绑定需要遵守宿主传入的取消信号，并管理自己的传输预算。省略 `authorTurnDurationMs` 时，普通 Author 回合默认 240000 毫秒，长材料回合默认 900000 毫秒；显式设置时，它是所有 Author 回合的统一覆盖值，而非仅普通回合。独立策略可由通用 Author SDK 的 `budgetPolicy` / `documentBudgetPolicy` 配置。项目设计回合和资源读取分别通过 `designTurnDurationMs` 与 `resourceReadTimeoutMs` 配置。这些值使用正整数毫秒。工作流运行期的业务截止由业务方在执行时声明。
+
+本机 Author 的执行轮次、发现发布操作、Design 尝试和布局工作分别有准入限制（当前每类为 2）；Design、Layout 与独立 Graph 匹配的模型请求还共享 2 个实际调用槽。Author 自身使用持久轮次的 guarded ports，长材料分段可按 4 个任务一批处理。上述数字不是全服务统一的 Provider 并发上限，也不是业务 Run 的并发配置。逻辑到期、取消或停止等待不会提前释放仍在执行的物理调用槽。Graph 阶段到期与父级取消以首先发生的信号区分。
 
 Codex 的 `tool_timeout_sec` 只控制客户端等待。请求取消或 HTTP 断开时，FlowKit 向接单前的宿主授权和独立能力查询传递取消信号。Author 轮次入库后由宿主继续执行，用原草稿 ID 调用 `flowkit_get_workflow_draft` 可查看原轮次或结果。若返回对账要求，先走恢复入口。宿主可以用 Author SDK 显式取消轮次。模型时限、token 额度和请求字节限制分别生效，调整一个值仍需满足其余限制。
 
@@ -57,9 +59,12 @@ bearer_token_env_var = "FLOWKIT_MCP_TOKEN"
 | `authorProvider`、`authorModelEnv` | `codex`、`FLOWKIT_AUTHOR_MODEL`。Codex 采用 CLI 登录态，`openai` 采用配置的 Responses 模型和 `OPENAI_API_KEY` |
 | `codexSkillsWorkspace` | 可选。授权 Codex 仓库的绝对目录。启用后用 Codex 的原生目录发现，批准的集合发布到该工作区的 `.agents/skills`，并保留集合入口及两类同级 Skill |
 | `capabilityGraph` | 默认关闭。`true` 注册 FlowKit Provider。用 `flowkit_match_capability` 查找起草、批准后交付、执行或恢复入口 |
-| `authorTaskTimeoutMs`、`authorTurnDurationMs` | 模型请求默认 `90000`。Author 普通回合默认 `240000`，长文档默认 `900000` |
+| `authorTaskTimeoutMs` | 内置模型请求与 API Agent 任务上限，默认 `90000`；外接 modelBinding 不自动消费此字段 |
+| `authorTurnDurationMs` | 省略时普通回合 `240000`、长材料回合 `900000`；显式值统一覆盖两类回合，独立请求数/字节策略不变 |
 | `designTurnDurationMs`、`resourceReadTimeoutMs` | 项目设计回合默认 `240000`。Run 产物读取、设计材料和证据再核验以及预览 Skill 复核的读取窗口默认 `90000` |
 | `trustedExportKeys` | 接收方接受的签名公钥。撤销源授权时，从该列表移除并重启接收服务 |
+
+本机服务 JSON 只接受上表字段及列出的 `listen` 子字段；未知或拼错的键、null、错误类型、超出范围的时限在创建服务数据目录前被拒绝。省略字段才使用默认值。该配置不等同于 SDK 的编译选项，也不接收 Host 的程序化依赖端口。
 
 默认 Author 使用正式 Intent Runtime SDK，模型传输仍由本机 Host 控制。使用 OpenAI Responses 时，将服务配置中的 `authorProvider` 改为 `openai`，在服务环境中提供 `OPENAI_API_KEY` 和 `FLOWKIT_AUTHOR_MODEL`。操作仍使用同一个 MCP 入口。已有编译工作流由 SDK 或 Host 提供运行模型和授权。宿主角色、数据、业务回调、Task V2 资源预算及授权目录随 Host 配置传入。
 
@@ -175,7 +180,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 用户先核对候选目标、控制流和文件差异。Standard workflow 使用同一次编译的 `workflow.js` 与 `workflow.mmd`，与 `SKILL.md` 同目录。需要保留 DSL 时显式启用 `source/workflow.dsl.js`。Workflow Skill 与 Professional Skill 都出现在主集合的 `skills/` 目录下。集合逻辑 ID 在重命名时保持，旧版本继续保持原 Artifact 身份。
 独立复审未通过时，草稿的 `reviewRejection` 与 `reviewCandidate` 的 `rejection` 提供同一候选的具体发现。Host 用新 turnId 和动作附带的 `candidateHash` 发起 `review-only` 重审原候选，或发起 `authoring` 按发现修订。改稿沿用原草稿的用户请求、补答及明确授权的基线。评审查看声明节点、Mermaid 渲染标记及 Parallel 控制语义，用户批准仍需单独记录。
 
-宿主验证候选摘要与审批，发布完整版本并将获准的目录映射到发现位置。执行已有 Workflow Skill 时，宿主核对下载或本地文件与已批准 Artifact、固定资源版本和当前权限，再经 [runArtifact](/reference/sdk#runArtifact) 执行。Standard 运行无需安装 Author。
+宿主验证候选摘要与审批，发布完整版本并将获准的目录映射到发现位置。新集合采用平级目录：`<collection>/skills/<collection>/SKILL.md` 是独立集合主入口，`<collection>/skills/<name>/SKILL.md` 是独立 Workflow 或 Professional Skill，主入口名称保留。两种业务 Skill 不嵌套在主 Skill 内。主入口使用已连接的 FlowKit MCP 功能，不要求预装内部 Author Skill；Capability Graph 仍按需使用。文件生成和宿主实际发现是不同状态，原生适配器必须观察到对应条目才能报告发现成功。已有历史 generation 不被自动改写；不能按新布局安全重放的旧计划保留并等待对账。执行已有 Workflow Skill 时，宿主核对下载或本地文件与已批准 Artifact、固定资源版本和当前权限，再经 [runArtifact](/reference/sdk#runArtifact) 执行。Standard 运行无需安装 Author。
 
 ## 从业务目的到可执行交付
 
@@ -191,7 +196,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 
 最终文件发布前检查本轮截止。已经实际发布的结果通过原身份补齐回执。客户端停止等待时，共享 Design 可继续运行。业务方在运行已生成的工作流时声明独立的业务截止，由 FlowKit Runtime 执行。
 
-打开大型图时，同一画布展示项目总览和已有的跨块关系。点击块可原位展开，点击跨块连线可看每条原始关系的起止节点、条件和材料依据。用工具栏搜索名称或标识可直接定位文件里的节点。总览或子流程可分层排版，模型的单次布局预算应用到每层任务。MCP 回执通过 `layoutSource` 标明采用模型、采用部分模型或使用本地回退。原始节点、关系和待确认项保存在同一个离线文件中。静态图采用工作流详情组件显示取证说明和字段空态。需要推进实际任务时，用经授权的设计引用起草并复审可执行候选。节点详情内的来源分组标识是设计引用可用的 `groupId`。
+打开大型图时，同一画布展示项目总览和已有的跨块关系。点击块可原位展开，点击跨块连线可看每条原始关系的起止节点、条件和材料依据。用工具栏搜索名称或标识可直接定位文件里的节点。总览或子流程可分层排版。同一 Design 尝试中的可选布局共享期限（至多 60000 毫秒，且不超过建立期限时父级剩余预算的一半），后续分层任务不会重新获得完整预算；到期后使用本地回退。MCP 回执通过 `layoutSource` 标明采用模型、采用部分模型或使用本地回退。原始节点、关系和待确认项保存在同一个离线文件中。静态图采用工作流详情组件显示取证说明和字段空态。需要推进实际任务时，用经授权的设计引用起草并复审可执行候选。节点详情内的来源分组标识是设计引用可用的 `groupId`。
 
 本机 MCP 的设计与 Author 可以共用材料选择。普通材料用 `{kind:"text", id, title, content}`。宿主能重新授权读取的版本用 `{kind:"material", id, sha256}`，其中摘要是原始文字的 SHA-256。创建设计后，将结果里的 `designRef` 与 `designHash` 分别作为 `{kind:"design", ref, sha256}` 的两项引用，连同额外需求或方案在 `flowkit_prepare_workflow` 的 `sources` 传入。同一草稿沿用第一次选择的版本。每次起草以及通过本机链接下载设计时，服务会重新核对所需来源。读取权限被撤销、材料内容变更或设计交付版本不一致时，请先处理来源。选择其他材料版本可新建草稿。
 

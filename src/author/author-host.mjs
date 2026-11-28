@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { during } from '../runtime/tasks.mjs';
 import { openLocalSkillStore } from './local-skill-store.mjs';
-import { startAuthorDraft } from './draft.mjs';
+import { startAuthorDraft, isTerminalDraft } from './draft.mjs';
 import { checkCandidate, reviewStandardCandidate, prepareImportedStandardSkill } from './standard-artifact.mjs';
 import { authorInput, authorTarget, authorIdentity as hash, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from './host-target.mjs';
 import { executeAuthorCore, rejectedReview } from './host-core.mjs';
@@ -29,7 +29,8 @@ const requiredId = (value, label) => {
 // Multiple connections in this process share observed physical ownership, never a TTL takeover.
 const physicalExecutions = new Map();
 const NO_CHANGE = Symbol('no-change');
-const isTerminalDraft = draft => ['discarded', 'abandoned', 'saved', 'expired'].includes(draft.status);
+const countsPendingCandidate = draft => !!draft && !isTerminalDraft(draft) && !draft.bodyPurged &&
+  !!draft.candidate && !draft.savedReceipt;
 const turnDeadlineExpired = turn => turn.deadlineExpired === true || turn.failure?.code === 'FKA_DEADLINE' ||
   Date.now() >= turn.budget.deadlineMs;
 
@@ -63,11 +64,19 @@ export async function createWorkflowAuthorHost(supplied) {
     throw authorError('author-executor', 'FKA_HOST_BINDING_MISSING: independently responsive execution and guarded request ports are required');
   }
   const policy = budgetPolicy(options.budgetPolicy);
-  const documentPolicy = budgetPolicy({ ...policy, maxRequests: options.budgetPolicy?.maxRequests ?? 168,
-    ...options.documentBudgetPolicy });
+  // Explicit ordinary settings are the shared SDK baseline, except that an
+  // unspecified request count defaults to 168 for material-based turns.
+  // Validate the document override before resolving its undefined fields.
+  const documentPolicy = budgetPolicy(options.documentBudgetPolicy, {
+    ...policy, maxRequests: options.budgetPolicy?.maxRequests ?? 168 });
   const requiredCapacity = ['maxPhysicalExecutions', 'maxDrafts', 'maxDraftBytes', 'maxRetainedDraftBytes', 'maxReceiptBytes', 'maxTurnsPerDraft'];
   if (requiredCapacity.some(key => options.capacity?.[key] === undefined)) throw Object.assign(authorError('author-executor', 'Host must configure finite execution, draft and receipt capacities'), {
     missingBindings: requiredCapacity.filter(key => options.capacity?.[key] === undefined) });
+  if (typeof options.capacity !== 'object' || Array.isArray(options.capacity) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(options.capacity)) ||
+      Reflect.ownKeys(options.capacity).some(key => ![...requiredCapacity, 'maxPendingCandidates'].includes(key))) {
+    throw new TypeError('Unknown or invalid Author capacity field');
+  }
   const capacity = { maxPhysicalExecutions: positive(options.capacity?.maxPhysicalExecutions, 4, 'physical executions'),
     maxPendingCandidates: positive(options.capacity?.maxPendingCandidates, 16, 'pending candidates'),
     maxDrafts: positive(options.capacity?.maxDrafts, 256, 'drafts'),
@@ -94,6 +103,7 @@ export async function createWorkflowAuthorHost(supplied) {
   const ownerId = randomUUID();
   const flights = new Map();
   const publications = new Map();
+  const closeBarriers = new Map();
   const terminalReceiptReserve = 2048;
   function checkRetention(usage) {
     if (usage.draftBytes + usage.activeExecutionDrafts * terminalReceiptReserve > capacity.maxRetainedDraftBytes ||
@@ -101,9 +111,18 @@ export async function createWorkflowAuthorHost(supplied) {
       throw authorError('author-capacity', 'Retained draft/receipt byte capacity reached; explicit Host retention decision required');
     }
   }
-  function physicalSlotUnavailable(state, draft, activeDrafts = state.activeDrafts(capacity.maxDrafts + 1)) {
-    const physical = activeDrafts.flatMap(item => state.turns(item.id)).filter(turn => turn.physicalOutstanding);
-    return Boolean(draft.activeExecution || physical.some(turn => turn.draftId === draft.id) || physical.length >= capacity.maxPhysicalExecutions);
+  function physicalSlotUnavailable(state, draft) {
+    const physical = state.physicalUsage(draft.id);
+    return Boolean(draft.activeExecution || physical.own || physical.total >= capacity.maxPhysicalExecutions);
+  }
+  function checkCandidateAdmission(state, draft) {
+    // Enforce the quota when a draft first acquires a pending candidate, not on
+    // updates or settlement of an already admitted candidate. This also covers
+    // concurrent completions and imports without evicting any existing receipt.
+    if (countsPendingCandidate(draft) && !countsPendingCandidate(state.readDraft(draft.id)) &&
+        state.pendingCandidateCount() >= capacity.maxPendingCandidates) {
+      throw authorError('author-capacity', 'Pending candidate capacity reached');
+    }
   }
   function view(draft, state) {
     const result = select(draft, ['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash', 'goal', 'operation',
@@ -151,6 +170,7 @@ export async function createWorkflowAuthorHost(supplied) {
     if (jsonBytes(draft) + (draft.activeExecution ? terminalReceiptReserve : 0) > capacity.maxDraftBytes) {
       throw authorError('author-capacity', 'Draft byte capacity exceeded');
     }
+    checkCandidateAdmission(state, draft);
     state.writeDraft(draft, previous);
     checkRetention(state.usage());
   }
@@ -165,9 +185,15 @@ export async function createWorkflowAuthorHost(supplied) {
       return result ?? view(draft, state);
     });
   }
-  async function authorize(action, collectionId, context, signal, details = {}) {
-    signal?.throwIfAborted();
+  function assertOpen(action) {
     if (closed || closing && !['read', 'cancel', 'settle', 'advance-commit'].includes(action) && !action.startsWith('execute-') && !action.startsWith('discovery')) throw authorError('author-closed', 'Author service is closing');
+  }
+  function assertAdmission(action, signal) {
+    signal?.throwIfAborted();
+    assertOpen(action);
+  }
+  async function authorize(action, collectionId, context, signal, details = {}) {
+    assertAdmission(action, signal);
     if (!context || context.namespace !== options.namespace || !context.principalId || !context.sessionId ||
       !context.workspaceId || !context.authorizationSnapshotRef || !Array.isArray(context.authorizedCollections) || !context.authorizedCollections.includes(collectionId) ||
       !options.collectionIds.includes(collectionId)) throw authorError('author-unauthorized', 'Current Host request does not authorize this namespace/collection');
@@ -176,7 +202,7 @@ export async function createWorkflowAuthorHost(supplied) {
     if (await options.authorization.authorize({ ...binding, ...details, action, collectionId, requestContext: clone(context), signal }) !== true) {
       throw authorError('author-unauthorized', 'Host denied the current action');
     }
-    signal?.throwIfAborted();
+    assertAdmission(action, signal);
   }
   function receiptBinding(draft) {
     return { namespace: options.namespace, storeId: meta.store_id, draftId: draft.id, collectionId: draft.collectionId,
@@ -226,6 +252,7 @@ export async function createWorkflowAuthorHost(supplied) {
   async function discover(draftId, publicationId, context, signal) {
     const key = JSON.stringify([draftId, publicationId]);
     if (publications.has(key)) return publications.get(key).promise;
+    if (closing || closed) return;
     if (publications.size >= capacity.maxPhysicalExecutions) return;
     const controller = new AbortController(), combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const promise = discoverPublication({ store, options, draftId, publicationId, context, signal: combined, read, mutate, authorize });
@@ -247,15 +274,16 @@ export async function createWorkflowAuthorHost(supplied) {
         { verifyImport: binding => options.authorization.verifyImport?.({ ...binding, requestContext: currentRequestContext, signal }) });
         fingerprint = hash({ ...input, currentRequestContext, sourceHash: source.candidate.hash, issuer: source.issuer });
       }
+      // Authorization/import can suspend while close freezes admission.
+      assertAdmission('start', signal);
       return store.authorTransaction(state => {
-        const drafts = state.activeDrafts(capacity.maxDrafts + 1);
         const replay = state.findStartRequest(input.requestId);
         if (replay) {
           if (replay.bodyPurged) throw authorError('author-expired', 'Start requestId is expired; it cannot create a new operation');
           if (replay.startFingerprint !== fingerprint) throw authorError('author-conflict', 'Start requestId has different material');
           return view(replay, state);
         }
-        if (drafts.filter(draft => !draft.bodyPurged).length >= capacity.maxDrafts) throw authorError('author-capacity', 'Retained draft capacity reached; Host retention decision required');
+        if (state.activeDraftCount() >= capacity.maxDrafts) throw authorError('author-capacity', 'Active draft capacity reached; finish or discard an active draft');
         const collection = store.readCollectionMetadata(input.collectionId, { limit: 1 })?.collection;
         const initial = startAuthorDraft(input.goal, { ...options.defaults, ...(collection ? { collectionName: collection.name } : {}), ...input.choices });
         const { previous, operation } = authorTarget(input, store);
@@ -292,6 +320,7 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         draft.contentHash = hash(content(draft));
         if (jsonBytes(draft) > capacity.maxDraftBytes) throw authorError('author-capacity', 'Draft byte capacity exceeded');
+        checkCandidateAdmission(state, draft);
         state.writeDraft(draft, null);
         checkRetention(state.usage());
         return view(draft, state);
@@ -319,6 +348,7 @@ export async function createWorkflowAuthorHost(supplied) {
       const initial = read(input.draftId);
       const beforeAdmission = signal && admissionSignal ? AbortSignal.any([signal, admissionSignal]) : admissionSignal ?? signal;
       await authorize('advance', initial.collectionId, currentRequestContext, beforeAdmission, { draftId: initial.id });
+      assertAdmission('advance', beforeAdmission);
       requiredId(input.turnId, 'turnId');
       if ((input.baseline === undefined) !== (input.baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
       if (!['authoring', 'review-only', 'retry'].includes(input.kind ?? 'authoring')) throw new TypeError('Unknown Author turn kind');
@@ -339,6 +369,7 @@ export async function createWorkflowAuthorHost(supplied) {
       let turn, replay, retryExpired;
       store.authorTransaction(state => {
         beforeAdmission?.throwIfAborted();
+        if (closing || closed) throw authorError('author-closed', 'Author service is closing');
         const draft = state.readDraft(input.draftId);
         turn = state.readTurn(draft.id, input.turnId);
         if (turn) {
@@ -382,8 +413,7 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         const ownTurns = state.turns(draft.id, capacity.maxTurnsPerDraft + 1);
         if (ownTurns.length >= capacity.maxTurnsPerDraft) throw authorError('author-capacity', 'Retained turn receipt capacity reached');
-        const all = state.activeDrafts(capacity.maxDrafts + 1);
-        if (physicalSlotUnavailable(state, draft, all) ||
+        if (physicalSlotUnavailable(state, draft) ||
           ownTurns.some(item => item.reconciliationRequired && !item.settlement)) {
           draft.pendingInputs ??= {};
           if (Object.keys(draft.pendingInputs).length >= 4 && !Object.hasOwn(draft.pendingInputs, input.turnId)) throw authorError('author-capacity', 'Pending input capacity reached');
@@ -396,7 +426,7 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         if (draft.pendingInputs && Object.hasOwn(draft.pendingInputs, input.turnId) && draft.pendingInputs[input.turnId].fingerprint !== fingerprint) throw authorError('author-conflict', 'Pending input changed');
         if (draft.pendingInputs) { delete draft.pendingInputs[input.turnId]; draft.pendingTurnIds = Object.keys(draft.pendingInputs); }
-        if (all.filter(item => item.candidate && !item.savedReceipt && item.status !== 'discarded').length >= capacity.maxPendingCandidates && !draft.candidate) {
+        if (state.pendingCandidateCount() >= capacity.maxPendingCandidates && !countsPendingCandidate(draft)) {
           throw authorError('author-capacity', 'Pending candidate capacity reached');
         }
         if (typeof input.input !== 'string' || !input.input.trim()) throw new TypeError('Current input is required');
@@ -624,6 +654,7 @@ export async function createWorkflowAuthorHost(supplied) {
         approvalRef: input.approvalRef, requestContext: clone(currentRequestContext), signal });
       if (observation?.approved !== true || !observation.subjectId || !observation.approvalId) throw authorError('author-approval', 'Host did not observe explicit user approval');
       await authorize('approve', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef });
+      assertAdmission('approve', signal);
       return mutate(draft.id, input.expectedStateVersion, current => {
         if (current.contentHash !== draft.contentHash) throw authorError('author-conflict', 'Content changed during approval');
         current.approvalReceipt = { ...receiptBinding(current), reviewRef: input.reviewRef, approvalRef: input.approvalRef, observation };
@@ -651,6 +682,7 @@ export async function createWorkflowAuthorHost(supplied) {
         approvalRef: input.approvalRef, requestContext: clone(currentRequestContext), signal });
       if (observation?.approved !== true || !observation.subjectId || !observation.approvalId) throw authorError('author-approval', 'Current exact review and user approval are required');
       await authorize('publish', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, approvalRef: input.approvalRef, publicationId: input.publicationId });
+      assertAdmission('publish', signal);
       try { mutate(draft.id, input.expectedStateVersion, (current, state) => {
         const binding = receiptBinding(current);
         if (current.contentHash !== draft.contentHash || current.reviewReceipt?.reviewRef !== draft.reviewReceipt.reviewRef) throw authorError('author-conflict', 'Content changed during publication approval verification');
@@ -775,6 +807,7 @@ export async function createWorkflowAuthorHost(supplied) {
     },
     async discard(input, currentRequestContext, signal) {
       const draft = read(input.draftId); await authorize('discard', draft.collectionId, currentRequestContext, signal, { draftId: draft.id });
+      assertAdmission('discard', signal);
       if (input.generationId) {
         if (draft.stateVersion !== input.expectedStateVersion) throw authorError('author-conflict', 'Draft stateVersion changed');
         const key = JSON.stringify([draft.id, 'cleanup', input.generationId]);
@@ -797,6 +830,7 @@ export async function createWorkflowAuthorHost(supplied) {
           options.retention.idempotencyRetentionMs < 1) throw authorError('author-executor', 'Body cleanup requires an explicit Host retention policy');
         await authorize('cleanup', draft.collectionId, currentRequestContext, signal, { draftId: draft.id, retentionPolicyRef: input.retentionPolicyRef });
       }
+      assertAdmission('discard', signal);
       return mutate(draft.id, input.expectedStateVersion, (current, state) => {
         if (current.bodyPurged) return NO_CHANGE;
         const turns = state.turns(current.id, capacity.maxTurnsPerDraft + 1);
@@ -841,13 +875,24 @@ export async function createWorkflowAuthorHost(supplied) {
           const { verifiedCollectionPlan } = await import('./collections.mjs');
           const verified = verifiedCollectionPlan(plan);
           await authorize('collection-plan', plan.destination.id, context ?? requestContext, signal, { plan: verified.plan, planHash: verified.planHash, approvalRef });
+          assertAdmission('collection-plan', signal);
           collectionChange = { planHash: verified.planHash, approvalRef };
           try { return store.applyCollectionPlan(plan, approvalRef); } finally { collectionChange = null; }
         } };
     },
-    async close({ mode = 'drain', timeoutMs = 5000 } = {}) {
+    async close({ mode = 'drain', timeoutMs = 5000, waitFor } = {}) {
       if (closed) return { closed: true, outstanding: 0 };
       if (!['drain', 'cancel'].includes(mode)) throw new TypeError('Choose drain or cancel');
+      const deadline = performance.now() + positive(timeoutMs, 5000, 'close timeout');
+      if (waitFor !== undefined) {
+        if (typeof waitFor?.then !== 'function') throw new TypeError('Host close waitFor must be a promise');
+        if (!closeBarriers.has(waitFor)) {
+          const barrier = { status: 'pending' };
+          closeBarriers.set(waitFor, barrier);
+          Promise.resolve(waitFor).then(() => { barrier.status = 'fulfilled'; },
+            cause => { barrier.status = 'failed'; barrier.cause = cause; });
+        }
+      }
       closing = true;
       if (mode === 'cancel') for (const flight of flights.values()) {
         mutate(flight.draftId, undefined, (draft, state) => {
@@ -859,11 +904,20 @@ export async function createWorkflowAuthorHost(supplied) {
         flight.controller.abort(authorError('author-cancelled', 'Author Host closing'));
       }
       if (mode === 'cancel') for (const job of publications.values()) job.controller.abort(authorError('author-cancelled', 'Author discovery closing'));
-      const deadline = Date.now() + positive(timeoutMs, 5000, 'close timeout');
-      while ((flights.size || publications.size) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
-      if (flights.size || publications.size) return { closed: false, outstanding: flights.size + publications.size,
-        executions: [...flights.values()].map(({ draftId, turnId, attemptId, cleanupError }) => ({ draftId, turnId, attemptId, cleanupError })),
-        publications: [...publications.values()].map(({ draftId, publicationId }) => ({ draftId, publicationId })) };
+      const barriers = () => [...closeBarriers.values()].filter(item => item.status !== 'fulfilled');
+      const outstanding = () => flights.size + publications.size + barriers().length;
+      while (!closed && outstanding() && performance.now() < deadline) {
+        if (barriers().some(item => item.status === 'failed')) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(10, Math.max(1, deadline - performance.now()))));
+      }
+      if (closed) return { closed: true, outstanding: 0 };
+      if (outstanding()) {
+        const pending = barriers();
+        return { closed: false, outstanding: outstanding(),
+          executions: [...flights.values()].map(({ draftId, turnId, attemptId, cleanupError }) => ({ draftId, turnId, attemptId, cleanupError })),
+          publications: [...publications.values()].map(({ draftId, publicationId }) => ({ draftId, publicationId })),
+          ...(pending.length ? { hostDrains: pending.length, failedHostDrains: pending.filter(item => item.status === 'failed').length } : {}) };
+      }
       store.close(); closed = true;
       return { closed: true, outstanding: 0 };
     }
