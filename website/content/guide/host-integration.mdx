@@ -23,7 +23,8 @@ Author 审查候选时，宿主的 `authorization.resolveApplicableSafetyPolicie
 | execution.createSession | 用 ports 装配实际 Intent Runtime 和 Task V2 Runtime；createApiAgentAdapter.request 接 ports.request，工具执行接 ports.tool。执行端能在 MCP 等待期间独立响应，不能等待同一原生调用者 |
 | authorization | 逐动作授权；observeReview 关联实际 requestId，verifyApproval 核验准确用户批准；模型自称批准无效 |
 | capabilityGraph / readDocumentUrl / resolveProfessionalSkill | 当前权限下发现和读取；专业 Skill 固定 id/version/digest/approved；Graph 不执行 Agent |
-| budgetPolicy | 缺省 300000ms、24 模型请求、32 工具、96 I/O、16MiB 总字节、256KiB 单响应；Host 可配置有限正值，429/5xx 重试也计数 |
+| budgetPolicy | 缺省 300000ms、24 模型请求、32 工具、96 I/O、16MiB 总字节、256KiB 单响应；Host 可配置有限正值，429/5xx 重试也计数。也是长材料策略的共享基线 |
+| documentBudgetPolicy | 长材料回合继承已解析的 budgetPolicy；若普通 maxRequests 未显式提供，长材料默认 168 次。此对象仅覆盖明确给出的字段，undefined 继承，null、错误类型及未知字段拒绝 |
 | capacity | 必填有限正值：maxPhysicalExecutions、maxDrafts、maxDraftBytes、maxRetainedDraftBytes、maxReceiptBytes、maxTurnsPerDraft；maxPendingCandidates 默认 16 |
 | retention / discovery | 默认不自动删数据；发现需自有 root、readMapping、compareAndSetMapping。缺 CAS 可保存，但 discovery 保持 pending |
 

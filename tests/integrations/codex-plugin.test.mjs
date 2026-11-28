@@ -37,6 +37,77 @@ async function ownedDirectory(t) {
   return root;
 }
 
+test('local service rejects unknown and invalid configuration before creating data', async t => {
+  const root = await ownedDirectory(t);
+  const dataDir = path.join(root, 'never-created');
+  const credential = 'test-config-validation-credential';
+  const modelBinding = monthlyTimesheetModel();
+  const base = { dataDir, exportDir: path.join(root, 'exports'), listen: { port: 0 } };
+  for (const [invalid, expected] of [
+    [{ authorTurnDuratonMs: 50 }, /Unknown local config field: authorTurnDuratonMs/],
+    [{ listen: { porrt: 0 } }, /Unknown listen field: porrt/],
+    [{ listen: null }, /listen must be an object/],
+    [{ listen: { port: null } }, /Invalid listen field: port/],
+    [{ namespace: null }, /namespace/],
+    [{ authorTaskTimeoutMs: null }, /authorTaskTimeoutMs/],
+    [{ authorTurnDurationMs: 2147483648 }, /authorTurnDurationMs/],
+    [{ designTurnDurationMs: 1.5 }, /designTurnDurationMs/],
+    [{ resourceReadTimeoutMs: 0 }, /resourceReadTimeoutMs/],
+    [{ capabilityGraph: 'false' }, /capabilityGraph/],
+    [{ authorProvider: 'invalid' }, /provider/],
+    [{ trustedExportKeys: null }, /trustedExportKeys/],
+    [{ codexSkillsWorkspace: 'relative' }, /absolute directory/],
+    [{ defaultCollection: 'Invalid' }, /portable Skill name/],
+    [{ workspaceId: '' }, /workspaceId/]
+  ]) {
+    await assert.rejects(startLocalMcp({ ...base, ...invalid }, { credential, modelBinding }), expected);
+    await assert.rejects(lstat(dataDir), { code: 'ENOENT' });
+  }
+  for (const invalid of [null, [], 'invalid']) {
+    await assert.rejects(startLocalMcp(invalid, { credential, modelBinding }), /local config must be an object/);
+  }
+  const service = await startLocalMcp({ ...base, capabilityGraph: false }, { credential, modelBinding });
+  assert.equal((await service.close()).closed, true);
+});
+
+test('local Author default and all-turn override budgets are persisted by the actual MCP entry', async t => {
+  const root = await ownedDirectory(t);
+  const credential = 'test-effective-local-budget-credential';
+  for (const [index, durationMs, expected] of [[0, undefined, [240000, 900000]], [1, 120000, [120000, 120000]]]) {
+    const dataDir = path.join(root, 'state-' + index);
+    const modelBinding = monthlyTimesheetModel();
+    modelBinding.execution.request = async () => { throw new Error('Controlled stop after admission'); };
+    const service = await startLocalMcp({ listen: { port: 0 }, dataDir, exportDir: path.join(root, 'exports-' + index),
+      ...(durationMs === undefined ? {} : { authorTurnDurationMs: durationMs }) }, { credential, modelBinding });
+    const client = new Client({ name: 'local-budget-test', version: '1.0.0' });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(service.url), {
+        requestInit: { headers: { authorization: 'Bearer ' + credential } }
+      }));
+      for (const [turnId, sources] of [['ordinary', undefined], ['material', ['first', 'second'].map(id =>
+        ({ kind: 'text', id, title: id, content: 'x'.repeat(11500) }))]]) {
+        const started = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+          requestId: turnId, goal: 'Inspect', operation: 'create', executionMode: 'standard'
+        } });
+        assert.ok(!started.isError, JSON.stringify(started));
+        const draft = JSON.parse(started.content[0].text);
+        const admitted = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: { turn: {
+          draftId: draft.id, turnId, expectedStateVersion: draft.stateVersion, input: 'Inspect'
+        }, ...(sources ? { sources } : {}) } });
+        assert.ok(!admitted.isError, JSON.stringify(admitted));
+      }
+      const db = new DatabaseSync(path.join(dataDir, 'author.sqlite'));
+      try {
+        const limits = id => JSON.parse(db.prepare('SELECT payload FROM fk_author_turns WHERE turn_id=?').get(id).payload).budget.limits;
+        const ordinary = limits('ordinary'), material = limits('material');
+        assert.deepEqual([ordinary.durationMs, material.durationMs], expected);
+        assert.deepEqual([ordinary.maxRequests, material.maxRequests], [8, 168]);
+        assert.equal(material.maxBytes, 48 * 1024 * 1024);
+      } finally { db.close(); }
+    } finally { await client.close(); await service.close(); }
+  }
+});
+
 test('local model queue cancellation does not release an outstanding physical slot', { timeout: 10000 }, async () => {
   const active = new Set();
   const runningController = new AbortController();

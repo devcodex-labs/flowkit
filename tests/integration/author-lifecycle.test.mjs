@@ -34,10 +34,37 @@ async function until(predicate, timeout = 5000) {
 test('I4 S130: missing finite Host capacities, invalid zero values and unsupported timer ranges fail before opening a store', async t => {
   const f = await setup(t); const missing = { ...f.options, storageFile: path.join(f.dir, 'missing.sqlite') }; delete missing.capacity;
   await assert.rejects(createWorkflowAuthorHost(missing), /finite.*capacities/);
-  for (const capacity of [{ ...f.options.capacity, maxPhysicalExecutions: 0 }, { ...f.options.capacity, maxReceiptBytes: 0 }]) {
+  for (const capacity of [{ ...f.options.capacity, maxPhysicalExecutions: 0 }, { ...f.options.capacity, maxReceiptBytes: 0 },
+    { ...f.options.capacity, maxDrafts: null }, { ...f.options.capacity, maxPhysicalExecutions: null }]) {
     await assert.rejects(createWorkflowAuthorHost({ ...missing, capacity }), /positive/);
   }
   await assert.rejects(createWorkflowAuthorHost({ ...f.options, budgetPolicy: { durationMs: Number.MAX_SAFE_INTEGER } }), /timer range/);
+  await assert.rejects(createWorkflowAuthorHost({ ...f.options, budgetPolicy: { maxRequests: null } }), /positive/);
+  for (const documentBudgetPolicy of [null, [], 'invalid', { maxRequest: 7 }, { durationMs: null }]) {
+    const storageFile = path.join(f.dir, 'invalid-document.sqlite');
+    await assert.rejects(createWorkflowAuthorHost({ ...f.options, storageFile, documentBudgetPolicy }), /budget field|positive/);
+    await assert.rejects(readFile(storageFile), { code: 'ENOENT' });
+  }
+});
+
+test('material-based Author budgets inherit validated SDK fields and persist only explicit overrides', async t => {
+  for (const [index, ordinary, document, expected] of [
+    [0, undefined, undefined, [300000, 24, 300000, 168]],
+    [1, { durationMs: 60000, maxRequests: 9 }, { durationMs: undefined, maxRequests: undefined }, [60000, 9, 60000, 9]],
+    [2, { durationMs: 60000, maxRequests: 9 }, { durationMs: 120000, maxRequests: 40 }, [60000, 9, 120000, 40]]
+  ]) {
+    const f = await setup(t, { budgetPolicy: ordinary, documentBudgetPolicy: document });
+    await f.register();
+    f.options.execution.request = async () => { throw new Error('Controlled stop after admission'); };
+    const first = await f.start({ requestId: 'ordinary-' + index });
+    await advance(f, first, { turnId: 'ordinary' });
+    const second = await f.start({ requestId: 'document-' + index });
+    const materials = [{ id: 'contract', title: 'Contract', content: 'Source requirement.\n'.repeat(1400) }];
+    await advance(f, second, { turnId: 'document', contextSnapshot: { materials } });
+    const normal = turnRecord(f.file, 'ordinary').budget;
+    const long = turnRecord(f.file, 'document').budget;
+    assert.deepEqual([normal.limits.durationMs, normal.limits.maxRequests, long.limits.durationMs, long.limits.maxRequests], expected);
+  }
 });
 
 test('I4 S31/S67/S111: two SQLite connections admit one execution and same-turn in-flight reads never dispatch twice', async t => {

@@ -30,7 +30,7 @@ codex login status
 }
 ```
 
-本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制内置模型适配器的单次请求（默认 90000 毫秒），用 `authorTurnDurationMs` 控制持久化 Author 整轮（普通默认 240000，长文档默认 900000）。整轮剩余时间可缩短单次请求；外接模型绑定需要遵守宿主传入的取消信号，并管理自己的传输预算。项目设计回合和资源读取分别通过 `designTurnDurationMs` 与 `resourceReadTimeoutMs` 配置。这些值使用正整数毫秒。工作流运行期的业务截止由业务方在执行时声明。
+本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制内置模型的请求传输期限（默认 90000 毫秒），并作为 API Agent 适配器的整个模型任务期限（包含其内部重试）；它也适用于 Intent、Skill、Graph 匹配、Design 和 Layout 的内置模型请求。整轮剩余时间可缩短这些期限；Graph SDK 另有独立匹配阶段期限。外接模型绑定需要遵守宿主传入的取消信号，并管理自己的传输预算。省略 `authorTurnDurationMs` 时，普通 Author 回合默认 240000 毫秒，长材料回合默认 900000 毫秒；显式设置时，它是所有 Author 回合的统一覆盖值，而非仅普通回合。独立策略可由通用 Author SDK 的 `budgetPolicy` / `documentBudgetPolicy` 配置。项目设计回合和资源读取分别通过 `designTurnDurationMs` 与 `resourceReadTimeoutMs` 配置。这些值使用正整数毫秒。工作流运行期的业务截止由业务方在执行时声明。
 
 Codex 的 `tool_timeout_sec` 只控制客户端等待。请求取消或 HTTP 断开时，FlowKit 向接单前的宿主授权和独立能力查询传递取消信号。Author 轮次入库后由宿主继续执行，用原草稿 ID 调用 `flowkit_get_workflow_draft` 可查看原轮次或结果。若返回对账要求，先走恢复入口。宿主可以用 Author SDK 显式取消轮次。模型时限、token 额度和请求字节限制分别生效，调整一个值仍需满足其余限制。
 
@@ -57,9 +57,12 @@ bearer_token_env_var = "FLOWKIT_MCP_TOKEN"
 | `authorProvider`、`authorModelEnv` | `codex`、`FLOWKIT_AUTHOR_MODEL`。Codex 采用 CLI 登录态，`openai` 采用配置的 Responses 模型和 `OPENAI_API_KEY` |
 | `codexSkillsWorkspace` | 可选。授权 Codex 仓库的绝对目录。启用后用 Codex 的原生目录发现，批准的集合发布到该工作区的 `.agents/skills`，并保留集合入口及两类同级 Skill |
 | `capabilityGraph` | 默认关闭。`true` 注册 FlowKit Provider。用 `flowkit_match_capability` 查找起草、批准后交付、执行或恢复入口 |
-| `authorTaskTimeoutMs`、`authorTurnDurationMs` | 模型请求默认 `90000`。Author 普通回合默认 `240000`，长文档默认 `900000` |
+| `authorTaskTimeoutMs` | 内置模型请求与 API Agent 任务上限，默认 `90000`；外接 modelBinding 不自动消费此字段 |
+| `authorTurnDurationMs` | 省略时普通回合 `240000`、长材料回合 `900000`；显式值统一覆盖两类回合，独立请求数/字节策略不变 |
 | `designTurnDurationMs`、`resourceReadTimeoutMs` | 项目设计回合默认 `240000`。Run 产物读取、设计材料和证据再核验以及预览 Skill 复核的读取窗口默认 `90000` |
 | `trustedExportKeys` | 接收方接受的签名公钥。撤销源授权时，从该列表移除并重启接收服务 |
+
+本机服务 JSON 只接受上表字段及列出的 `listen` 子字段；未知或拼错的键、null、错误类型、超出范围的时限在创建服务数据目录前被拒绝。省略字段才使用默认值。该配置不等同于 SDK 的编译选项，也不接收 Host 的程序化依赖端口。
 
 默认 Author 使用正式 Intent Runtime SDK，模型传输仍由本机 Host 控制。使用 OpenAI Responses 时，将服务配置中的 `authorProvider` 改为 `openai`，在服务环境中提供 `OPENAI_API_KEY` 和 `FLOWKIT_AUTHOR_MODEL`。操作仍使用同一个 MCP 入口。已有编译工作流由 SDK 或 Host 提供运行模型和授权。宿主角色、数据、业务回调、Task V2 资源预算及授权目录随 Host 配置传入。
 

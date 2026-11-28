@@ -63,8 +63,11 @@ export async function createWorkflowAuthorHost(supplied) {
     throw authorError('author-executor', 'FKA_HOST_BINDING_MISSING: independently responsive execution and guarded request ports are required');
   }
   const policy = budgetPolicy(options.budgetPolicy);
-  const documentPolicy = budgetPolicy({ ...policy, maxRequests: options.budgetPolicy?.maxRequests ?? 168,
-    ...options.documentBudgetPolicy });
+  // Explicit ordinary settings are the shared SDK baseline, except that an
+  // unspecified request count defaults to 168 for material-based turns.
+  // Validate the document override before resolving its undefined fields.
+  const documentPolicy = budgetPolicy(options.documentBudgetPolicy, {
+    ...policy, maxRequests: options.budgetPolicy?.maxRequests ?? 168 });
   const requiredCapacity = ['maxPhysicalExecutions', 'maxDrafts', 'maxDraftBytes', 'maxRetainedDraftBytes', 'maxReceiptBytes', 'maxTurnsPerDraft'];
   if (requiredCapacity.some(key => options.capacity?.[key] === undefined)) throw Object.assign(authorError('author-executor', 'Host must configure finite execution, draft and receipt capacities'), {
     missingBindings: requiredCapacity.filter(key => options.capacity?.[key] === undefined) });

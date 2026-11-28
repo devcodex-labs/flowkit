@@ -63,8 +63,9 @@ export interface AuthorHostOptions {
   defaults?: AuthorChoices;
   /** Compile the initial Standard Plan from its validated node options. */
   useNodeOptionsForNewDrafts?: boolean;
+  /** Ordinary policy and shared baseline for material-based turns; omitted maxRequests defaults to 24/168 respectively. */
   budgetPolicy?: Partial<AuthorBudgetPolicy>;
-  /** Optional finite budget for material-based turns that dispatch multiple document tasks. */
+  /** Explicit finite overrides of the material-based policy. Undefined inherits; null and unknown fields are rejected. */
   documentBudgetPolicy?: Partial<AuthorBudgetPolicy>;
   capacity: { maxPhysicalExecutions: number; maxPendingCandidates?: number; maxDrafts: number; maxDraftBytes: number;
     maxRetainedDraftBytes: number; maxReceiptBytes: number; maxTurnsPerDraft: number };
