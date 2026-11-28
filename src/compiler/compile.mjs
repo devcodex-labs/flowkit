@@ -29,8 +29,8 @@ function header(analysis, paths, bodyHash) {
     : 'runHuman accepts boolean or approved/comment; comment defaults to null.');
   if (has('verification') || nodes.some(node => node.verify != null)) interaction.push('runVerification is strictly boolean (FK_R002).');
   if (interaction.length) conventions.push(interaction.join(' '));
-  if (has('action')) conventions.push(analysis.graph.executionEdges.some(edge => edge.role === 'action-failure') ?
-    'runAction resolve means success. An action with a compiled failure edge sets ctx.error and takes that edge for every non-control error, skipping the next verification. Other actions reject; control signals are rethrown.' :
+  if (has('action')) conventions.push(nodes.some(node => node.type === 'action' && node.onError) ?
+    'runAction resolve means success. Explicit onError sets ctx.error and takes that edge for non-control errors. Other actions reject; control signals are rethrown.' :
     'runAction resolve means success; other errors reject; control signals are rethrown.');
   if (has('parallel')) {
     const parallel = nodes.filter(node => node.type === 'parallel');

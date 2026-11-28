@@ -2,7 +2,7 @@ import { materializePlan } from '../../src/author/workflow-plan.mjs';
 
 const definition = [
   { id: 'input', kind: 'verification', name: 'Check input', options: { verifier: 'check-input', onSuccess: 'copy', onFailure: 'failed' } },
-  { id: 'copy', kind: 'action', name: 'Create copy', options: { action: 'write-copy', next: 'verify' } },
+  { id: 'copy', kind: 'action', name: 'Create copy', options: { action: 'write-copy', next: 'verify', onError: 'failed' } },
   { id: 'verify', kind: 'verification', name: 'Verify copy', options: { verifier: 'check-copy', onSuccess: 'done', onFailure: 'failed' } },
   { id: 'done', kind: 'terminal', name: 'Deliver', options: { status: 'succeeded' } },
   { id: 'failed', kind: 'terminal', name: 'Report failure', options: { status: 'failed' } }

@@ -17,19 +17,20 @@ export function emitWorkflow(analysis, plan) {
   const nodes = literal.definition.nodes;
   const indices = new Map(nodes.map((node, index) => [node.id, index]));
   const name = id => localName(indices.get(id), id);
-  const catches = new Set(graph.executionEdges.filter(edge => edge.role === 'action-failure').map(edge => edge.from));
-  const gates = new Set([...catches].map(id => graph.byId.get(id).next));
-  const helper = emitHelpers(nodes, context.trace, catches.size > 0);
+  const helper = emitHelpers(nodes, context.trace, nodes.some(node => node.type === 'action' && node.onError));
   const output = ['export async function workflow(ctx) {'];
   const line = (level, text = '') => output.push(text ? `${'  '.repeat(level)}${text}` : '');
   for (const text of helper.code.split('\n')) if (helper.code) line(1, text);
-  for (const id of gates) line(1, `let ${name(id)}ActionOk = true;`);
   const humanRepairs = new Map();
   for (const region of graph.regions.values()) if (region.kind === 'human') {
     const repairs = [];
     const review=graph.byId.get(region.id);
     if (review.onDecline) {
       if (region.entryTargets.size > 1) line(1, `let ${name(region.id)}BeforeApproval = false;`);
+      continue;
+    }
+    if (plan.contexts.has(review.id)) {
+      if (region.entryTargets.size > 1) line(1, `let ${name(review.id)}RepairStart;`);
       continue;
     }
     let current = review.onReject;
@@ -41,6 +42,10 @@ export function emitWorkflow(analysis, plan) {
     const owner = graph.owners.get(target);
     const region = graph.regions.get(owner);
     if (region?.kind !== 'human') return;
+    if (!graph.byId.get(owner).onDecline && plan.contexts.has(owner)) {
+      if (region.entryTargets.size > 1) line(level, `${name(owner)}RepairStart = ${quote(target)};`);
+      return;
+    }
     const repairs = humanRepairs.get(owner);
     if (!repairs) {
       if (region.entryTargets.size > 1 && target === graph.byId.get(owner).onReject) {
@@ -62,7 +67,7 @@ export function emitWorkflow(analysis, plan) {
         if (skill.remote) detail += `; remote; integrity: ${skill.integrity ?? 'not provided'}`;
       }
       detail += `; inputs: ${(node.inputs ?? []).join(', ') || 'none'}; results: ${Object.keys(node.output.properties ?? {}).join(', ') || 'object'}; attempts: ${(node.retries ?? 2) + 1}`;
-    } else if (node.type === 'action') detail += `: ${node.action}${catches.has(node.id) ? `; error -> ${graph.byId.get(node.next).onFailure}` : ''}`;
+    } else if (node.type === 'action') detail += `: ${node.action}${node.onError ? `; error -> ${node.onError}` : ''}`;
     else if (node.type === 'verification') detail += `: ${node.verifier}`;
     line(level, `// [${node.id}] ${commentText(node.name)} · ${commentText(detail)}`);
   }
@@ -84,15 +89,16 @@ export function emitWorkflow(analysis, plan) {
   }
   function action(node, level) {
     const call = `runAction(${quote(node.action)}, ${quote(node.name)}, ctx)`;
-    if (!catches.has(node.id)) { tracedCall(node, call, level); return; }
-    const flag = `${name(node.next)}ActionOk`;
-    line(level, `${flag} = true;`);
+    if (!node.onError) { tracedCall(node, call, level); return; }
+    const flag = `${name(node.id)}ActionOk`;
+    line(level, `let ${flag} = true;`);
     line(level, 'try {'); tracedCall(node, call, level + 1);
     line(level, '} catch (error) {');
     line(level + 1, 'if (isControlSignal(error)) throw error;');
     line(level + 1, 'writeOwn(ctx, "error", error);');
     line(level + 1, `${flag} = false;`);
     line(level, '}');
+    return flag;
   }
   function leaf(node, level, parallelMember = false) {
     nodeComment(node, level);
@@ -130,6 +136,21 @@ export function emitWorkflow(analysis, plan) {
       if (node.maxRevisions === undefined) return;
       line(inner, `if (${revisions} >= ${node.maxRevisions}) throw Object.assign(new Error("FK_R004 Human revision limit reached"), { code: "FK_R004" });`);
       line(inner, `${revisions}++;`);
+    }
+    const repair = plan.contexts.get(node.id);
+    if (repair) {
+      const runRepair = `${name(node.id)}Repair`;
+      const start = `${name(node.id)}RepairStart`;
+      const initial = graph.regions.get(node.id).entryTargets.size > 1;
+      line(level, `const ${runRepair} = async (${initial ? `entry = ${quote(node.onReject)}` : ''}) => {`);
+      emitContext(repair, level + 1, () => {}, initial ? 'entry' : undefined);
+      line(level, '};');
+      if (initial) line(level, `if (${start} !== undefined) await ${runRepair}(${start});`);
+      line(level, `while (!(${call})) {`);
+      checkRejection(level + 1);
+      line(level + 1, `await ${runRepair}();`);
+      line(level, '}');
+      return;
     }
     if (graph.regions.get(node.id).entryTargets.size === 1) {
       line(level, `while (!(${call})) {`);
@@ -205,7 +226,8 @@ export function emitWorkflow(analysis, plan) {
     else if (node.type === 'human') condition=humanDecision(node,level);
     else {
       nodeComment(node, level);
-      if (node.type === 'verification') condition = `${gates.has(node.id) ? `${name(node.id)}ActionOk && ` : ''}(await verifyStep(${quote(node.id)}, ${quote(node.verifier)}, ${quote(node.name)}))`;
+      if (node.type === 'action') condition = action(node, level);
+      else if (node.type === 'verification') condition = `(await verifyStep(${quote(node.id)}, ${quote(node.verifier)}, ${quote(node.name)}))`;
     }
     if (node.type === 'condition' && node.branches.length === 1) { branches(0, level); return; }
     const count = branchTargets(node).length;
@@ -227,7 +249,7 @@ export function emitWorkflow(analysis, plan) {
       else ordinary(graph.byId.get(step.id), level);
     }
   }
-  function emitContext(current, level, onEnter = activate) {
+  function emitContext(current, level, onEnter = activate, entry) {
     if (current.mode === 'structured') { sequence(current.body, level, onEnter); return; }
     const flag = id => `${name(id)}Reach`;
     for (const id of current.ids) line(level, `let ${flag(id)} = false;`);
@@ -236,7 +258,13 @@ export function emitWorkflow(analysis, plan) {
       const resolved = current.resolve(target);
       if (resolved !== EXIT) line(inner, `${flag(resolved)} = true;`);
     }
-    hop(current.entry, level);
+    if (entry && current.entries.length > 1) {
+      for (const target of current.entries) {
+        line(level, `if (${entry} === ${quote(target)}) {`);
+        hop(target, level + 1);
+        line(level, '}');
+      }
+    } else hop(current.entry, level);
     for (const id of current.order) {
       const node = graph.byId.get(id);
       line(level, `if (${flag(id)}) {`);

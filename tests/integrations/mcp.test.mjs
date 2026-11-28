@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -159,6 +159,90 @@ test('HTTP tool errors expose only authorized effect classifications and bounded
     assert.deepEqual(failure.recovery,{executionRef});
   }
   assert.equal(writes,2);
+});
+
+test('HTTP cancellation prevents unadmitted Author work and leaves admitted work available by draft ID', { timeout: 5000 }, async t => {
+  const { dir, close } = await directory(t);
+  const fixture = await fixtureOptions(path.join(dir, 'client-wait.sqlite'));
+  close.push(fixture.close);
+  const barrier = Promise.withResolvers();
+  fixture.controls.barrier = barrier.promise;
+  const dispatched = Promise.withResolvers();
+  const invoke = fixture.options.authorHost.advanceTurn;
+  let active;
+  fixture.options.authorHost = { ...fixture.options.authorHost, advanceTurn(...args) {
+    active = invoke(...args);
+    dispatched.resolve();
+    return active;
+  } };
+  const materialEntered = Promise.withResolvers(), releaseMaterial = Promise.withResolvers();
+  let holdMaterial = true;
+  fixture.options.workflowUi = { defaultCollectionId: 'test-collection', present: draft => draft,
+    async authoringMaterials({ input }, _context, signal) {
+      if (holdMaterial) {
+        materialEntered.resolve(signal);
+        await releaseMaterial.promise;
+      }
+      return input;
+    }
+  };
+  const http = createServer(createFlowkitHttpHandler(() => fixture.options));
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
+  close.push(() => new Promise(resolve => http.close(resolve)));
+  const url = new URL('http://127.0.0.1:' + http.address().port + '/mcp');
+  async function connect() {
+    const client = new Client({ name: 'flowkit-http-wait-test', version: '1.0.0' });
+    close.push(() => client.close());
+    await client.connect(new StreamableHTTPClientTransport(url));
+    return client;
+  }
+  const client = await connect();
+  const opened = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+    requestId: 'wait-draft', operation: 'create', goal: 'Inspect', executionMode: 'standard'
+  } });
+  const { id } = JSON.parse(opened.content[0].text);
+  const request = { name: 'flowkit_prepare_workflow', arguments: { inputRef: 'fixture-input-' + id } };
+  const controller = new AbortController();
+  try {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 'before-admission', method: 'tools/call', params: request });
+    const outbound = httpRequest(url, { method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' } });
+    outbound.on('error', () => {});
+    t.after(() => outbound.destroy());
+    outbound.end(body);
+    const transportSignal = await materialEntered.promise;
+    const disconnected = once(transportSignal, 'abort', { signal: t.signal });
+    outbound.destroy();
+    await disconnected;
+    holdMaterial = false;
+    releaseMaterial.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(active, undefined);
+    assert.deepEqual(fixture.calls, []);
+
+    const second = await connect();
+    const pending = assert.rejects(second.callTool(request, { signal: controller.signal }));
+    await dispatched.promise;
+    let running;
+    do {
+      t.signal.throwIfAborted();
+      running = await fixture.authorHost.readDraft({ draftId: id }, fixture.requestContext);
+      if (running.status !== 'running') await new Promise(resolve => setTimeout(resolve, 5));
+    } while (running.status !== 'running');
+    controller.abort();
+    await pending;
+    const reconnected = await connect();
+    const read = () => reconnected.callTool({ name: 'flowkit_get_workflow_draft', arguments: { draftId: id } });
+    assert.equal(JSON.parse((await read()).content[0].text).status, 'running');
+    barrier.resolve();
+    const ready = await active;
+    const observed = JSON.parse((await read()).content[0].text);
+    assert.equal(observed.status, 'candidate-ready', JSON.stringify(observed));
+    assert.equal(observed.candidate.hash, ready.candidate.hash);
+    assert.equal(fixture.calls.filter(call => call.intent).length, 1);
+    assert.equal(fixture.calls.filter(call => call.prepared?.task.node.id === 'proposal').length, 1);
+  } finally { releaseMaterial.resolve(); barrier.resolve(); }
 });
 
 test('real HTTP MCP authenticates requests and returns R-03 S03 clarification before preparing or publishing', async t => {

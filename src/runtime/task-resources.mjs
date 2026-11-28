@@ -12,8 +12,27 @@ function contained(root, target) {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-export async function readRegularResource(target, limit, signal) {
+export async function readRegularResource(target, limit, signal, root) {
   signal?.throwIfAborted();
+  const parents = [];
+  if (root) {
+    if (target === root || !contained(root, target)) throw skillError('FK_R011', 'Resource escapes its authorized root');
+    for (let parent = path.dirname(target); ; parent = path.dirname(parent)) {
+      const stat = await lstat(parent, { bigint: true });
+      if (!stat.isDirectory() || await realpath(parent) !== parent) throw skillError('FK_R011', 'Resource parent is not an authorized directory');
+      parents.push([parent, stat]);
+      if (parent === root) break;
+    }
+  }
+  async function checkParents() {
+    for (const [parent, prior] of parents) {
+      const now = await lstat(parent, { bigint: true });
+      if (!now.isDirectory() || now.dev !== prior.dev || now.ino !== prior.ino ||
+          now.birthtimeNs !== prior.birthtimeNs || await realpath(parent) !== parent) {
+        throw skillError('FK_R011', 'Resource parent changed during reading');
+      }
+    }
+  }
   const expected = await lstat(target, { bigint: true });
   if (!expected.isFile()) throw skillError('FK_R011', 'Resource is not a regular file');
   const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
@@ -25,6 +44,11 @@ export async function readRegularResource(target, limit, signal) {
     if (!stat.isFile() || !sameDevice || stat.ino !== expected.ino) {
       throw skillError('FK_R011', 'Resource changed before it could be read');
     }
+    if (root && process.platform === 'linux') {
+      const opened = await realpath('/proc/self/fd/' + file.fd);
+      if (opened !== target) throw skillError('FK_R011', 'Opened resource differs from the authorized path');
+    }
+    await checkParents();
     if (stat.size > limit) throw skillError('FK_R014', `Resource exceeds ${limit} bytes`);
     const chunks = [];
     let received = 0;
@@ -38,6 +62,15 @@ export async function readRegularResource(target, limit, signal) {
       chunks.push(chunk.subarray(0, bytesRead));
     }
     signal?.throwIfAborted();
+    if (root) {
+      const after = await file.stat({ bigint: true });
+      const current = await lstat(target, { bigint: true });
+      if (current.ino !== expected.ino || current.dev !== expected.dev || !current.isFile() ||
+          after.size !== stat.size || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs) {
+        throw skillError('FK_R011', 'Resource changed during reading');
+      }
+      await checkParents();
+    }
     return Buffer.concat(chunks, received);
   } finally {
     await file.close();

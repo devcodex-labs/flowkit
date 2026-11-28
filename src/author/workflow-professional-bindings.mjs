@@ -2,7 +2,7 @@ import { checkProfessionalSkill, prepareProfessionalSkill } from './professional
 import { isWorkflowId } from '../shared/contracts.mjs';
 
 /** Search always precedes drafting. Only Host-supplied material can become a Plan pin. */
-export async function bindProfessionalNeeds(proposal, { catalog, collection, requestContext, signal, read, draftSkill, drafts, selectionFor, verifyApplicability }) {
+export async function bindProfessionalNeeds(proposal, { catalog, collection, requestContext, signal, read, draftSkill, drafts, selectionFor, selectCandidates, verifyApplicability }) {
   const requirements = [...(proposal.resourceRequirements ?? [])];
   const question = (node, need, reason, candidates = []) => ({
     id: `skill-${node.id}-${need.id}`, kind: 'resource-gap', blocking: true, relatedIntentIds: [],
@@ -31,7 +31,7 @@ export async function bindProfessionalNeeds(proposal, { catalog, collection, req
     for (const { id, description } of needs) {
       const selection = selectionFor(node.id, id);
       const result = catalog && await read({ findProfessionalSkill: id }, () =>
-        catalog.search({ id, description, collection, requestContext, signal, verifyApplicability }));
+        catalog.search({ id, description, selection, collection, requestContext, signal, selectCandidates, verifyApplicability }));
       if (result?.denied === true || result?.complete !== true || !Array.isArray(result.matches) || result.matches.length > 32) {
         issues.push(question(node, { id }, result?.denied ? 'Skill discovery was denied' : 'Skill discovery was incomplete or unavailable'));
         continue;

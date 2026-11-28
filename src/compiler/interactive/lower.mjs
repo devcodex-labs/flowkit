@@ -58,12 +58,10 @@ export function lowerInteractive(analysis, options = {}) {
           .filter(key => node[key] !== undefined).map(key => [key, node[key]]))} : {}),
       };
     } else if (node.type==='action') {
-      const failure=analysis.graph.executionEdges.find(edge=>edge.from===node.id && edge.role==='action-failure');
       metadata={name:node.name,action:node.action,writes:node.writes??[],next:node.next??parallelNext,
         ...(node.reads!==undefined?{reads:node.reads}:{}),
         ...(node.effect!==undefined?{effect:node.effect}:{}),
-        ...(node.onError!==undefined?{onError:node.onError}:{}),
-        ...(failure?{onFailure:failure.to}:{})};
+        ...(node.onError!==undefined?{onError:node.onError}:{})};
     } else if (node.type==='verification') {
       const region=analysis.graph.regions.get(analysis.graph.owners.get(node.id));
       const loop=region?.kind==='loop' && region.body===node.id ? analysis.graph.byId.get(region.id) : null;

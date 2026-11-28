@@ -130,11 +130,16 @@ test('does not exempt normal approval or loop exit cycles through a legitimate r
   ]) assert.ok((await issues(nodes)).includes('FK_C080'));
 });
 
-test('preserves action implicit failure edges to an ordinary verification', async () => {
-  const result=await analyze([action('a','v'),"verification('v',{name:'V',verifier:'check',onSuccess:'done',onFailure:'failed'})",end(),end('failed')]);
-  assert.deepEqual(result.diagnostics,[]);
-  assert.ok(result.graph.executionEdges.some(e=>e.from==='a'&&e.to==='failed'&&e.role==='action-failure'));
-  assert.ok(!result.graph.dominators.get('failed').has('v'));
+test('a verification failure is reachable from an Action only through the check or an explicit onError', async () => {
+  const tail = ["verification('v',{name:'V',verifier:'check',onSuccess:'done',onFailure:'failed'})",end(),end('failed')];
+  const omitted = await analyze([action('a','v'),...tail]);
+  const explicit = await analyze(["action('a',{name:'A',action:'save',next:'v',onError:'failed'})",...tail]);
+  assert.deepEqual(omitted.diagnostics, []);
+  assert.deepEqual(explicit.diagnostics, []);
+  assert.deepEqual(omitted.graph.executionEdges.filter(edge => edge.from === 'a').map(edge => edge.to), ['v']);
+  assert.ok(omitted.graph.dominators.get('failed').has('v'));
+  assert.ok(explicit.graph.executionEdges.some(edge => edge.from === 'a' && edge.to === 'failed' && edge.role === 'action-error'));
+  assert.ok(!explicit.graph.dominators.get('failed').has('v'));
 });
 
 test('checks when grammar independently while retaining original source locations', async () => {

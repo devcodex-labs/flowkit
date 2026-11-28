@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { validateSkillName } from './skill-document.mjs';
 import { workflowExecutionModes } from '../interactive/protocol.mjs';
+import { authorIdentity } from './host-target.mjs';
 
 const constraintKinds = Object.freeze({ requirement: 'must', prohibition: 'must_not',
   precondition: 'precondition', preference: 'should' });
@@ -32,24 +33,31 @@ export function startAuthorDraft(goal, { project, collectionName = 'flowkit-work
 }
 
 /** Consume the actual Intent Runtime result; preserve issues and non-applied changes for planning. */
-export function readIntentForPlan(result, { baselineId, confirmedConstraintIds = [] } = {}) {
+export function readIntentForPlan(result, { baselineId, confirmedConstraintIds = [], priorConstraints = [] } = {}) {
   const { effective, turn, issues, inferences, evidence = [], fieldResults } = structuredClone(result);
   const nodes = intentNodes(effective.intents);
   const sources = new Map(evidence.map(entry => [entry.target, entry.sourceRefs]));
   const confirmed = new Set(confirmedConstraintIds);
+  const changed = new Set();
+  const fromInput = new Set();
+  const prior = new Map(priorConstraints.filter(item => item.confidence === 'confirmed').map(item => [item.id, item]));
+  const identity = ({ statement, kind, intentScope, expression }) => authorIdentity([statement, kind, intentScope, expression ?? null]);
   for (const change of turn.changes) {
-    if (change.effect === 'applied' && change.operation === 'confirm' && change.target.kind === 'constraint' &&
-      change.sourceRefs.some(ref => ref.root === 'input')) {
-      confirmed.add(change.target.id);
+    if (change.effect === 'applied' && change.target?.kind === 'constraint') {
+      if (change.operation === 'confirm' && change.sourceRefs?.some(ref => ref.root === 'input')) fromInput.add(change.target.id);
+      if (['modify', 'remove', 'replace'].includes(change.operation)) changed.add(change.target.id);
     }
   }
   function constraint(item, pointer) {
     const intentId = item.scope.intentId;
-    return { id: item.id, statement: item.text, kind: constraintKinds[item.kind],
+    const projected = { id: item.id, statement: item.text, kind: constraintKinds[item.kind],
       scope: intentId ? 'node' : 'global', sourceIntentIds: intentId ? [intentId] : [],
-      confidence: confirmed.has(item.id) ? 'confirmed' : 'inferred',
       sourceRefs: sources.get(pointer) ?? sources.get(`${pointer}/text`) ?? [], intentScope: item.scope,
       ...(item.expression === undefined ? {} : { expression: item.expression }) };
+    const previous = prior.get(item.id);
+    const unchanged = previous && identity(previous) === identity(projected);
+    return { ...projected, confidence: fromInput.has(item.id) || unchanged || confirmed.has(item.id) &&
+      !changed.has(item.id) && !previous ? 'confirmed' : 'inferred' };
   }
   return { intentRef: { ...(baselineId === undefined ? {} : { baselineId }),
       effectiveIntentHash: artifactDigest(JSON.stringify(effective)),
@@ -67,7 +75,7 @@ export async function analyzeAuthorDraft(draft, intentRuntime, { input = draft.g
   if ((baseline === undefined) !== (baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
   const result = await intentRuntime.parse({ input, ...(context == null ? {} : { context }),
     baseline, output: { evidence: true, suggestions: false } }, { signal });
-  return readIntentForPlan(result, { baselineId, confirmedConstraintIds });
+  return readIntentForPlan(result, { baselineId, confirmedConstraintIds, priorConstraints: draft.intent?.constraints });
 }
 
 /** Read-only dependency resolution. Graph relations stay capability information. */

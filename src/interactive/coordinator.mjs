@@ -695,7 +695,7 @@ export function buildCoordinator({store, runtime, policy = {}, maxStagesPerCall 
         const operationKey=cp.receivedSubmission?.payload?.operationKey;
         const contextError={code:executionFailure.code??'FK_I_STEP_FAILED',message:executionFailure.message,
           ...(operationKey?{operationKey,sideEffectStatus:executionFailure.sideEffectStatus}:{})};
-        if (kind==='action' && (metadata.onError!==undefined || metadata.onFailure!==undefined)) {
+        if (kind==='action' && metadata.onError!==undefined) {
           // The versioned Host has verified settlement against this exact receipt.
           const receipt=cp.receivedSubmission?.payload?.error;
           if (receipt?.origin!=='executor' || !['known','none'].includes(receipt.sideEffectStatus)

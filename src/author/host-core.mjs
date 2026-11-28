@@ -105,10 +105,17 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   if (!session?.intentRuntime?.parse || !session.runtime?.runAgentTask || !session.runtime?.validateResult) {
     throw authorError('author-executor', 'Session requires Intent Runtime, TaskV2 execution and result validation');
   }
-  const boundGraph = typeof options.capabilityGraph === 'function' ? await options.capabilityGraph({ requestContext, signal }) : options.capabilityGraph;
-  const graph = boundGraph && new Proxy(boundGraph, { get(target, key) {
-    const method = target[key];
-    return typeof method === 'function' ? (...args) => ports.read({ graphMethod: String(key), args }, () => method.apply(target, args)) : method;
+  let graphBinding;
+  function boundGraph() {
+    graphBinding ??= typeof options.capabilityGraph === 'function' ? options.capabilityGraph({ requestContext, signal }) : options.capabilityGraph;
+    return graphBinding;
+  }
+  const graph = options.capabilityGraph && new Proxy({}, { get(_target, key) {
+    return (...args) => ports.read({ graphMethod: String(key), args }, async () => {
+      const target = await boundGraph();
+      if (typeof target?.[key] !== 'function') throw authorError('FKA_GRAPH_UNAVAILABLE', 'Capability Graph binding is unavailable');
+      return target[key](...args);
+    });
   } });
   let graphContext;
   function readGraphContext() {
@@ -137,8 +144,8 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     state.candidate = candidate;
     state.candidateDiff = diff;
     // reviewStandardCandidate has checked this graph against the exact candidate.
-    diff.compilerEvidence.actionRoutes = JSON.parse(graphSnapshotJson).executionEdges
-      .filter(({ role }) => role === 'action-failure' || role === 'action-error')
+    diff.compilerEvidence.actionRoutes = JSON.parse(graphSnapshotJson).referenceEdges
+      .filter(({ role }) => role === 'action-error')
       .map(({ from, to, role }) => ({ from, to, role }));
     diff.compilerEvidence.nodeDescriptions = candidate.manifest.nodeDescriptions ?? [];
     if (candidate.manifest.nodeExecutionContracts) {
@@ -163,7 +170,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
   const answered = new Set(turn.answeredQuestionIds);
   const question = (id, text, values = ['clarify', 'revise']) => ({ id, question: text,
     options: values.map(value => ({ value, label: String(value) })), recommended: values[0], customAllowed: true });
-  const clarify = (message, questions) => Object.assign(authorError('author-resource', message), { outcome: 'needs-clarification', questions });
+  const clarify = (message, questions, code = 'author-resource') => Object.assign(authorError(code, message), { outcome: 'needs-clarification', questions });
   async function readProfessionalSkill(pin) {
     const skill = await ports.read({ professionalSkill: pin }, () => options.resolveProfessionalSkill?.(pin, { requestContext, signal }));
     if (!skill || skill.approved !== true || skill.id !== pin.id || skill.version !== pin.version || skill.digest !== pin.digest ||
@@ -257,11 +264,33 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         throw clarify('Interactive Action effect was not declared; rebuild before review',
           [question('action-effect', 'Rebuild with explicit external Action effects', ['rebuild', 'cancel'])]);
       }
+      const historicalDocuments = [];
       for (const item of draft.candidate.manifest.documents ?? []) {
-        await author.readDocument({ ...item, ...(item.source.type === 'url' ? { url: item.source.url } : {}) });
+        try {
+          if (options.readHistoricalDocument) {
+            const supplied = await ports.read({ historicalDocument: item }, async () => {
+              const result = await options.readHistoricalDocument(item, { requestContext, signal, candidateHash: draft.candidate.hash });
+              if (!(result?.bytes instanceof Uint8Array) || result.bytes.length > 262144 ||
+                  authorIdentity(result.evidence) !== authorIdentity(item) || artifactDigest(result.bytes) !== item.contentHash) {
+                throw new Error('Historical document does not match its authorized identity');
+              }
+              return { text: new TextDecoder('utf-8', { fatal: true }).decode(result.bytes), evidence: item };
+            });
+            historicalDocuments.push(supplied);
+          } else {
+            const document = await author.readDocument({ ...item, ...(item.source.type === 'url' ? { url: item.source.url } : {}) });
+            if (authorIdentity(document.evidence) !== authorIdentity(item)) throw new Error('Historical document provenance changed');
+            historicalDocuments.push(document);
+          }
+        } catch (error) {
+          signal.throwIfAborted();
+          throw clarify('The exact approved document is unavailable for review',
+            [question('historical-document', 'Restore access to the exact approved document', ['review-access', 'cancel'])]);
+        }
       }
+      const resources = historicalDocuments.length ? { ...draft.resources, documents: historicalDocuments } : draft.resources;
       const nativePins = draft.candidate.manifest.professionalSkills.filter(pin => pin.source?.startsWith('codex-skill:'));
-      if (!nativePins.length) ctx.state.resourceSnapshot = draft.resources;
+      if (!nativePins.length) ctx.state.resourceSnapshot = resources;
       else {
         const retained = draft.resources?.professionalSkills ?? [];
         const verified = [];
@@ -272,14 +301,23 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
             [question('missing-professional-skill', `Restore access to the exact Professional Skill for ${pin.id}`, ['review-access', 'cancel'])]);
           verified.push(current);
         }
-        ctx.state.resourceSnapshot = { ...draft.resources, professionalSkills: [
+        ctx.state.resourceSnapshot = { ...resources, professionalSkills: [
           ...retained.filter(item => !item.source?.startsWith('codex-skill:')), ...verified] };
       }
     },
     async parseIntent(ctx) {
       const authorization = { ...turn.reviewAuthorization, ...turn.request };
+      const reconfirmBaseline = turn.request.reconfirmIntentBaseline === true;
+      if (reconfirmBaseline) {
+        delete authorization.baseline;
+        delete authorization.baselineId;
+      }
+      if ((reconfirmBaseline || Object.hasOwn(turn.request, 'baseline')) && !Object.hasOwn(turn.request, 'confirmedConstraintIds')) {
+        delete authorization.confirmedConstraintIds;
+      }
       ctx.state.authorizedRequest = structuredClone(authorization);
-      if (!Object.hasOwn(authorization, 'useCapabilityGraph') && typeof draft.authorizedRequest?.useCapabilityGraph === 'boolean') {
+      if (typeof turn.useCapabilityGraph === 'boolean') ctx.state.authorizedRequest.useCapabilityGraph = turn.useCapabilityGraph;
+      else if (!Object.hasOwn(authorization, 'useCapabilityGraph') && typeof draft.authorizedRequest?.useCapabilityGraph === 'boolean') {
         ctx.state.authorizedRequest.useCapabilityGraph = draft.authorizedRequest.useCapabilityGraph;
       }
       ctx.state.authorizedRequest.target = { operation: draft.operation, ...draft.target, previousHash: draft.previousHash };
@@ -311,18 +349,18 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       }
       context = await prepareDocuments(context, input);
       if (documentWork) ctx.state.authorizedRequest.contextSnapshot = context;
-      const reconfirmBaseline = turn.request.reconfirmIntentBaseline === true;
       let baseline = Object.hasOwn(authorization, 'baseline') ? authorization.baseline : draft.intentBaseline;
       if (reconfirmBaseline || (continuation && !session.intentRuntime.usesOfficialIntent && !Object.hasOwn(authorization, 'baseline'))) {
         baseline = undefined;
       }
       if (reconfirmBaseline) {
-        context = { suppliedContext: context, priorIntentInterpretation: draft.intentBaseline, initialRequest: draft.goal };
+        context = { suppliedContext: context, priorIntentInterpretation: draft.intentBaselineReview?.baseline ?? draft.intentBaseline,
+          initialRequest: draft.goal };
       }
       const mayRepairIntentOutput = draft.operation === 'create' && (!draft.candidate || !!turn.reviewRevision) && !baseline;
       const request = { input,
         context: draftContext ? { currentDraft: draftContext, suppliedContext: context ?? null } : context,
-        baseline, baselineId: authorization.baselineId ?? (baseline ? authorIdentity(baseline) : undefined),
+        baseline, baselineId: baseline === undefined ? undefined : authorization.baselineId ?? authorIdentity(baseline),
         confirmedConstraintIds: authorization.confirmedConstraintIds, signal };
       for (let attempt = 0; attempt <= 1; attempt++) {
         try {
@@ -339,11 +377,17 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
             'The model did not identify a concrete business decision. Continue on this draft with the answers already saved.'),
           { outcome: 'needs-revision' });
         } catch (error) {
-          if (baseline === draft.intentBaseline && baseline && session.intentRuntime.usesOfficialIntent &&
+          if (baseline !== undefined && session.intentRuntime.usesOfficialIntent &&
               error.code === 'INPUT_INVALID' && error.stage === 'input' && error.details?.path === '/baseline') {
+            if (Object.hasOwn(turn.request, 'baseline')) {
+              throw Object.assign(authorError('FKA_INTENT_BASELINE_INVALID',
+                'Submit a valid Intent baseline and ID together, or omit both to use the draft baseline.'), {
+                outcome: 'needs-revision', cause: error
+              });
+            }
             throw Object.assign(authorError('FKA_INTENT_BASELINE_REVIEW_REQUIRED',
               'This draft has an older Intent baseline. Start a new authoring turn with reconfirmIntentBaseline after reviewing the original request.'), {
-              outcome: 'needs-revision', cause: error
+              outcome: 'needs-revision', pendingIntentBaseline: baseline, cause: error
             });
           }
           if (!mayRepairIntentOutput || !isIntentModelOutputError(error)) throw error;
@@ -374,14 +418,18 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       if (turn.reviewRevision) ctx.state.baselineEvidence.reviewRejection = turn.reviewRevision;
     },
     async readCatalog(ctx) {
+      const requested = ctx.state.authorizedRequest.useCapabilityGraph;
+      const ids = options.initialCapabilityIds ?? [];
       const pins = options.initialDocuments ?? [];
+      if (requested === false && (ids.length || pins.length)) {
+        throw clarify('Required capabilities or documentation conflict with the Graph opt-out',
+          [question('capability-graph', 'Authorize the required Graph material or revise the workflow', ['authorize', 'revise'])]);
+      }
       const documents = [];
       for (const pin of pins) documents.push(await author.readDocument(pin));
       const guide = await ports.read({ bundledAuthorGuide: true }, () => readFile(new URL('./flowkit-workflow-author/SKILL.md', import.meta.url), 'utf8'));
       if (artifactDigest(guide) !== options.coreIdentity.guideHash) throw authorError('author-resource', 'Bundled Author guide differs from the built core identity');
-      const ids = options.initialCapabilityIds ?? [];
-      const requested = ctx.state.authorizedRequest.useCapabilityGraph;
-      const discover = graph && options.discoverCapabilities && requested !== false;
+      const discover = graph && options.discoverCapabilities && requested === true;
       const match = graph && (ids.length || discover) ? await readGraphContext() : undefined;
       const discovery = discover ? await options.discoverCapabilities({
         input: ctx.state.authorizedRequest.draftInputs?.join('\n\n') ?? ctx.state.authorizedRequest.input, requested,
@@ -392,9 +440,29 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
         throw clarify('Capability Graph discovery is unavailable for this Host',
           [question('capability-graph', 'Connect an authorized Graph catalog or revise the discovery requirement', ['configure-host', 'revise'])]);
       }
-      if (discovery?.documents) documents.push(...discovery.documents);
+      let discoveredCapabilityIds = [];
+      if (discovery) {
+        const { selection } = discovery;
+        const selectedIds = Array.isArray(selection?.ids) ? selection.ids : [];
+        const applicability = Array.isArray(selection?.applicability) ? selection.applicability : [];
+        const compatible = selection?.status === 'matched' && selection.completeness === 'complete' &&
+          !selection.unresolved?.length && selectedIds.length > 0 && applicability.every(item => item.status === 'applicable') &&
+          selectedIds.every(id => typeof id === 'string' && id && applicability.some(item => item.id === id));
+        if (!compatible && (selection?.required !== false || selection?.status === 'denied')) {
+          const status = selection?.status ?? 'unavailable';
+          const instructions = status === 'ambiguous' ? 'Choose a matching capability' :
+            status === 'needs_context' ? 'Supply the Graph context needed to verify this capability' :
+              'Resolve the required capability in the authorized Graph or revise the request';
+          throw clarify('Required Capability Graph discovery did not qualify: ' + status,
+            [question('capability-graph', instructions, ['provide-details', 'revise'])], 'FKA_GRAPH_DISCOVERY_REQUIRED');
+        }
+        if (compatible) {
+          discoveredCapabilityIds = [...new Set(selectedIds)];
+          if (discovery.documents) documents.push(...discovery.documents);
+        }
+      }
       const catalog = graph && ids.length ? await graph.getCapabilities({ ids, ...(match === undefined ? {} : { context: match }) }) : null;
-      ctx.state.catalogSnapshot = { documents, catalog: catalog ?? null,
+      ctx.state.catalogSnapshot = { documents, catalog: catalog ?? null, discoveredCapabilityIds,
         ...(discovery ? { discovery: discovery.selection } : {}),
         generalDocumentation: { text: guide, contentHash: artifactDigest(guide), source: 'bundled-author-guide' },
         hostProfile: options.hostProfile, choices: draft.choices,
@@ -403,6 +471,16 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
       if (turn.request.confirmedPlanHash) {
         if (draft.plan?.planHash !== turn.request.confirmedPlanHash || draft.plan.intentRef.effectiveIntentHash !== ctx.state.effectiveIntent.intentRef.effectiveIntentHash) {
           throw authorError('author-conflict', 'Confirmed Plan or effective intent changed');
+        }
+        const known = draft.plan.resourceRequirements ?? [];
+        if (discoveredCapabilityIds.some(id => !draft.plan.capabilityRequirements?.includes(id)) ||
+          documents.some(({ evidence }) => !known.some(pin => pin.kind === 'document' &&
+          pin.capabilityId === evidence.capabilityId && pin.documentId === evidence.documentId &&
+          pin.revision === evidence.revision && pin.contentHash === evidence.contentHash &&
+          (evidence.source.type !== 'url' || pin.url === evidence.source.url)))) {
+          throw Object.assign(authorError('FKA_PLAN_REVIEW_REQUIRED', 'New authorized Graph evidence changes the confirmed Plan. Review the updated Plan.'), {
+            outcome: 'needs-revision'
+          });
         }
         const proposal = structuredClone(draft.plan);
         proposal.assumptions = proposal.assumptions.map(item => ({ ...item, requiresConfirmation: false }));
@@ -434,6 +512,11 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
           draft.plan.intentRef.changeSetHash === planningIntent.intentRef.changeSetHash) planningIntent.intentRef = draft.plan.intentRef;
         const confirmedSource = ctx.state.confirmedPlan && draft.plan.sourceHash;
         if (!ctx.state.confirmedPlan) {
+          const graphIds = ctx.state.catalogSnapshot.discoveredCapabilityIds;
+          const capabilityRequirements = proposal.capabilityRequirements ?? [];
+          if (graphIds.length && Array.isArray(capabilityRequirements)) {
+            proposal.capabilityRequirements = [...new Set([...capabilityRequirements, ...graphIds])];
+          }
           const documents = ctx.state.catalogSnapshot.documents.map(({ evidence }) => {
             const { capabilityId, documentId, revision, contentHash, source } = evidence;
             return { kind: 'document', capabilityId, documentId, revision, contentHash,
@@ -465,6 +548,10 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
               const option = draft.questions.find(item => item.id === `skill-${nodeId}-${needId}`)?.options?.find(({ value, label }) =>
                 value.startsWith('[') && (value === turn.request.input.trim() || label === turn.request.input.trim()));
               return option?.value ?? draft.plan?.resourceRequirements?.find(pin => pin.nodeId === nodeId && pin.needId === needId)?.selection;
+            },
+            async selectCandidates(need, entries) {
+              const result = await ports.request({ flowkitProfessionalSkillSelection: { need, entries } });
+              return Array.isArray(result?.keys) && result.keys.every(key => typeof key === 'string') ? result.keys : null;
             },
             async verifyApplicability(need, candidate) {
               const text = candidate.files['SKILL.md'];
@@ -500,6 +587,11 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
             }
           }
           proposal = compiledPlan.proposal;
+        }
+        if (ctx.state.authorizedRequest.useCapabilityGraph === false &&
+            (proposal.capabilityRequirements?.length || proposal.resourceRequirements?.some(pin => pin.kind === 'document'))) {
+          throw clarify('The Plan requires Graph material that is currently opted out',
+            [question('capability-graph', 'Authorize the required Graph material or revise the workflow', ['authorize', 'revise'])]);
         }
         ctx.state.currentPlan = await author.plan(draft, planningIntent, proposal,
           { previous: draft.plan, graphContext: proposal.capabilityRequirements?.length ? await readGraphContext() : undefined,
@@ -696,7 +788,7 @@ export async function executeAuthorCore({ draft, turn, options, ports, signal, r
     // The generated workflow routes action failures through its needs-info
     // terminal. Preserve the explicit technical recovery state in the Host.
     if (documentFailure) throw documentFailure;
-    if (result.error?.outcome === 'needs-revision') throw result.error;
+    if (['needs-clarification', 'needs-revision'].includes(result.error?.outcome)) throw result.error;
     ports.check(result.error);
     if (documentWork) {
       result.state.documentSource = documentWork.manifest;

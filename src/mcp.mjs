@@ -14,7 +14,8 @@ const minimumErrorText = JSON.stringify({ error: { code: responseLimitCode } });
 
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
-  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, nativeSkillDiscovery = false, limits = {} }) {
+  resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, nativeSkillDiscovery = false, limits = {} },
+  transportSignal = undefined) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
@@ -184,12 +185,15 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
     { collectionId: id, ...(workflowUi ? { inputRef: id.optional(), turn: turn.optional() } : { inputRef: id }), ...sourceOptions },
     async ({ collectionId, inputRef, turn, sources }, ctx) => {
+      const signal = transportSignal ? AbortSignal.any([ctx.mcpReq.signal, transportSignal]) : ctx.mcpReq.signal;
+      signal.throwIfAborted();
       if (Boolean(inputRef) === Boolean(turn)) throw new Error('Provide exactly one inputRef or turn');
       if (inputRef && typeof resolveAuthoringInput !== 'function') throw new Error('Host AuthoringInput resolver is unavailable');
-      let input = turn ?? await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal: ctx.signal });
-      const draft = await exactDraft(collectionId, input.draftId, ctx.signal);
-      if (workflowUi?.authoringMaterials) input = await workflowUi.authoringMaterials({ input, sources, draft }, requestContext, ctx.signal);
-      // An HTTP disconnect stops waiting. Only explicit SDK cancellation fences this shared turn.
+      let input = turn ?? await resolveAuthoringInput({ namespace, collectionId, inputRef, requestContext, signal });
+      const draft = await exactDraft(collectionId, input.draftId, signal);
+      if (workflowUi?.authoringMaterials) input = await workflowUi.authoringMaterials({ input, sources, draft }, requestContext, signal);
+      signal.throwIfAborted();
+      // Once admitted, the shared turn outlives the client wait.
       if (workflowUi && queueAuthoringTurn && hasLongAuthorMaterials(input.contextSnapshot)) {
         return draftView(await queueAuthoringTurn(input, requestContext));
       }
@@ -353,11 +357,18 @@ export function createFlowkitHttpHandler(resolveHost) {
   return async (request, response) => {
     const options = await resolveHost(request);
     if (!options) { response.writeHead(401); response.end(); return; }
-    const server = createFlowkitMcpServer(options);
+    const disconnect = new AbortController();
+    const onClose = () => { if (!response.writableFinished) disconnect.abort(); };
+    response.once('close', onClose);
+    if (response.destroyed) onClose();
+    const server = createFlowkitMcpServer(options, disconnect.signal);
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try {
       await server.connect(transport);
       await transport.handleRequest(request, response);
-    } finally { await server.close(); }
+    } finally {
+      response.off('close', onClose);
+      await server.close();
+    }
   };
 }

@@ -84,7 +84,7 @@ export function missingRootOutputSources(definition, graph) {
             const index = Number(edge.path.split('/')[2]);
             if (node.branches[index].when.trim() === 'false' || firstUnconditional !== -1 && index > firstUnconditional) continue;
           }
-          if (!writes || edge.role === 'action-failure' || edge.path === '/onError') pending.push(edge.to);
+          if (!writes || edge.path === '/onError') pending.push(edge.to);
         }
       }
       return [...found];

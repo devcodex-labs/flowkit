@@ -109,9 +109,9 @@ function project(graph, base) {
   for (const edge of graph.executionEdges.filter(e => e.origin === 'derived')) {
     edges.push({ id: 'e' + edges.length, edgeId: edge.edgeId, source: byNodeId.get(edge.from)[0],
       target: byNodeId.get(edge.to)[0], role: edge.role, origin: edge.origin,
-      kind: ['action-failure', 'loop-exhausted'].includes(edge.role) ? 'error' :
+      kind: edge.role === 'loop-exhausted' ? 'error' :
         ['loop-repair', 'repair-return'].includes(edge.role) ? 'loop' : 'normal',
-      label: edge.role === 'action-failure' ? '技术异常（派生）' : '', dashed: edge.role === 'action-failure' });
+      label: '', dashed: false });
   }
   for (const e of edges) {
     if (['loop-continue', 'human-reject'].includes(e.role)) e.kind = 'loop';

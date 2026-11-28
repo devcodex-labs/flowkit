@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, readFile, readdir, realpath, rename, symlink, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath, rename, symlink, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { artifactDigest, professionalSkillFileHashes } from '../src/shared/artifact-identity.mjs';
 import { validateSkillName } from '../src/author/skill-document.mjs';
+import { readRegularResource } from '../src/runtime/task-resources.mjs';
 
 const inside = (root, file) => {
   const relative = path.relative(root, file);
@@ -14,7 +15,7 @@ const optionalStat = file => lstat(file).catch(error => {
   if (error.code !== 'ENOENT') throw error;
 });
 const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-const maxAlternativeBodies = 4;
+const nativeSource = file => 'codex-skill:' + artifactDigest(file).slice(7);
 
 /** Ask a separate Codex App Server for its native catalog, without waiting on the calling agent. */
 function codexSkills(workspace, signal) {
@@ -58,26 +59,27 @@ function codexSkills(workspace, signal) {
   });
 }
 
-async function nativeCandidate(entry, file, collection) {
+async function nativeCandidate(entry, file, collection, signal) {
   const directory = path.dirname(file);
   const files = {};
   let total = 0;
   async function add(relative) {
     const candidate = path.join(directory, relative);
-    const stat = await lstat(candidate);
-    if (!stat.isFile() || stat.isSymbolicLink() || !inside(directory, await realpath(candidate)) ||
-        stat.size > 262144 || Object.keys(files).length >= 64 || (total += stat.size) > 1048576) {
+    const limit = Math.min(262144, 1048576 - total);
+    if (Object.keys(files).length >= 64 || limit < 1) {
       throw new Error('Codex Skill files are not within the portable text resource budget');
     }
-    const bytes = await readFile(candidate);
-    if (bytes.length !== stat.size) throw new Error('Codex Skill changed during reading');
+    const bytes = await readRegularResource(candidate, limit, signal, directory);
+    total += bytes.length;
     files[relative] = text.decode(bytes);
   }
   async function walk(relative) {
     const root = path.join(directory, relative);
     const stat = await optionalStat(root);
     if (!stat) return;
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Codex Skill resources contain an unowned link');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || await realpath(root) !== root) {
+      throw new Error('Codex Skill resources contain an unowned link');
+    }
     for (const member of await readdir(root, { withFileTypes: true })) {
       if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(member.name) || member.isSymbolicLink()) {
         throw new Error('Codex Skill resources contain an unsupported name or link');
@@ -115,6 +117,7 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
   const active = path.join(skills, name);
   const backup = path.join(path.dirname(skills), name + '.previous');
   const receiptKey = target => 'codex-skill-generation:' + artifactDigest(target);
+  const sourceKey = source => 'codex-skill-source:' + source;
   let mappingWork = Promise.resolve();
   function withMapping(operation) {
     const next = mappingWork.then(operation);
@@ -138,32 +141,73 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
     return previous;
   }
 
-  async function list(signal) {
-    const page = await readCatalog(cwd, signal);
-    if (page.errors?.length || !Array.isArray(page.skills)) throw new Error('Codex reported an incomplete Skill catalog');
-    const entries = [];
-    for (const entry of page.skills) {
-      if (entry.scope !== 'repo' || !path.isAbsolute(entry.path) || !entry.description) continue;
-      const file = await realpath(entry.path);
-      if (!inside(cwd, file) && !inside(root, file)) continue;
-      const managed = inside(root, file);
-      const source = managed ? 'collection:' + collection.id : 'codex-skill:' + artifactDigest(file).slice(7);
-      entries.push({ entry, file, source, managed });
+  function allowedEntry(entry) {
+    return entry.scope === 'repo' && typeof entry.path === 'string' && path.isAbsolute(entry.path) &&
+      path.basename(entry.path).toLowerCase() === 'skill.md' && typeof entry.name === 'string' &&
+      (inside(cwd, entry.path) || inside(root, entry.path));
+  }
+
+  async function managedSkill(entry, file, mapping) {
+    if (!mapping || path.dirname(path.dirname(file)) !== path.join(mapping.target, 'skills')) return null;
+    const stored = readManaged?.(mapping.receipt, path.basename(path.dirname(file)));
+    if (!stored || stored.manifest.kind !== 'professional' || entry.name !== stored.manifest.name) return null;
+    return stored;
+  }
+
+  async function resolveExact(pin, { signal } = {}) {
+    if (!pin.source?.startsWith('codex-skill:')) return { status: 'unavailable' };
+    try {
+      const page = await readCatalog(cwd, signal);
+      const remembered = get?.(sourceKey(pin.source));
+      for (const entry of page.skills ?? []) {
+        if (!allowedEntry(entry) || entry.name !== pin.id) continue;
+        const catalogPath = path.resolve(entry.path);
+        const sameCatalogPath = nativeSource(catalogPath) === pin.source || catalogPath === remembered?.catalogPath;
+        let file;
+        try { file = await realpath(entry.path); }
+        catch (error) {
+          if (sameCatalogPath && (error.code !== 'ENOENT' || entry.enabled === false)) {
+            return { status: 'denied' };
+          }
+          continue;
+        }
+        if (nativeSource(file) !== pin.source && !sameCatalogPath) continue;
+        if (entry.enabled === false || !inside(cwd, file) || inside(root, file) || nativeSource(file) !== pin.source) {
+          return { status: 'denied' };
+        }
+        const candidate = await nativeCandidate(entry, file, collection, signal);
+        if (candidate.manifest.version !== pin.version || candidate.manifest.digest !== pin.digest) return { status: 'denied' };
+        put?.(sourceKey(pin.source), { catalogPath, file });
+        return { status: 'resolved', value: { candidate, source: pin.source, authorized: true } };
+      }
+      // Losing catalog authorization is distinct from the installed material disappearing.
+      const knownFile = remembered && (await optionalStat(remembered.catalogPath) || await optionalStat(remembered.file));
+      return { status: knownFile || page.errors?.length || !Array.isArray(page.skills) ? 'denied' : 'unavailable' };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return { status: 'denied' };
     }
-    return entries;
   }
 
   return {
     discovery: {
       root,
-      readMapping: ({ signal }) => withMapping(async () => {
+      readMapping: () => withMapping(async () => {
         const mapping = await mapped();
-        if (!mapping) return null;
+        return mapping?.receipt ?? null;
+      }),
+      observeMapping: ({ mapping, files, signal }) => withMapping(async () => {
+        const physical = await mapped();
+        if (!physical || JSON.stringify(physical.receipt) !== JSON.stringify(mapping)) return false;
         const page = await readCatalog(cwd, signal);
-        if (!page.skills?.some(skill => path.resolve(skill.path) === path.join(mapping.target, 'SKILL.md'))) {
-          throw new Error('Codex has not observed the active collection mapping');
+        if (page.errors?.length || !Array.isArray(page.skills)) return false;
+        const observed = new Set();
+        for (const entry of page.skills) {
+          if (!allowedEntry(entry) || entry.enabled === false) continue;
+          const file = await realpath(entry.path).catch(() => null);
+          if (file && inside(physical.target, file)) observed.add(file);
         }
-        return mapping.receipt;
+        return files.every(file => observed.has(path.join(mapping.discoveryRoot, file)));
       }),
       compareAndSetMapping: ({ expected, next, signal }) => withMapping(async () => {
         signal?.throwIfAborted();
@@ -194,52 +238,59 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
         return true;
       })
     },
-    async search({ id, description, verifyApplicability, signal }) {
+    async search({ id, description, selection, selectCandidates, verifyApplicability, signal }) {
       try {
-        const entries = await list(signal);
-        const normalize = value => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
-        const purpose = normalize(description);
-        const preferred = [], alternatives = [];
-        for (const item of entries) {
-          const { entry } = item;
-          const group = entry.name === id || normalize(entry.description) === purpose ? preferred : alternatives;
-          group.push(item);
-        }
+        const page = await readCatalog(cwd, signal);
+        if (page.errors?.length || !Array.isArray(page.skills)) return { complete: false };
+        const mapping = await withMapping(mapped);
+        const entries = new Map();
         let occupied = false;
-        for (const group of [preferred, alternatives]) {
-          if (group === alternatives && group.length > maxAlternativeBodies) return { complete: false };
-          const matches = [];
-          for (const { entry, file, source, managed } of group) {
-            signal?.throwIfAborted();
-            const stored = managed ? readManaged?.(entry.name) : undefined;
-            if (managed && stored?.manifest.kind !== 'professional') continue;
-            if (stored && stored.manifest.files['SKILL.md'] !== artifactDigest(await readFile(file))) return { complete: false };
-            const candidate = stored ?? await nativeCandidate(entry, file, collection);
-            occupied ||= entry.name === id;
-            const applicable = await verifyApplicability({ id, description }, candidate);
-            if (typeof applicable !== 'boolean') return { complete: false };
-            if (applicable) matches.push({ candidate, source, approved: true });
-          }
-          if (matches.length) return { complete: true, occupied, matches };
+        for (const entry of page.skills.filter(allowedEntry)) {
+          occupied ||= entry.name === id;
+          if (entry.enabled === false) continue;
+          if (typeof entry.description !== 'string' || !entry.description.trim()) return { complete: false };
+          const file = await realpath(entry.path);
+          if (!inside(cwd, file) && !inside(root, file)) continue;
+          if (mapping && file === path.join(mapping.target, 'SKILL.md')) continue;
+          const stored = inside(root, file) ? await managedSkill(entry, file, mapping) : null;
+          if (inside(root, file) && !stored) continue;
+          const source = stored ? 'collection:' + collection.id : nativeSource(file);
+          const logicalId = stored?.manifest.skillId ?? entry.name;
+          occupied ||= logicalId === id;
+          entries.set(JSON.stringify([source, logicalId]), { entry, source, file, stored, logicalId });
         }
-        return { complete: true, occupied, matches: [] };
+        if (!entries.size) return { complete: true, occupied, matches: [] };
+        const selected = selection && JSON.stringify(JSON.parse(selection).slice(0, 2));
+        const exact = [...entries].filter(([, item]) => item.logicalId === id || item.entry.description === description).map(([key]) => key);
+        const shortlist = selected && entries.has(selected) ? [selected] :
+          entries.size === 1 ? [...entries.keys()] :
+            await selectCandidates?.({ id, description }, [...entries].map(([key, { entry, logicalId, source }]) =>
+              ({ key, id: logicalId, name: entry.name, description: entry.description, source })));
+        if (!Array.isArray(shortlist) && !exact.length) return { complete: false };
+        const keys = [...new Set([...(shortlist ?? []), ...exact])];
+        if (keys.some(key => !entries.has(key))) return { complete: false };
+        const matches = [];
+        for (const key of keys) {
+          signal?.throwIfAborted();
+          const { entry, file, source, stored } = entries.get(key);
+          const observed = await nativeCandidate(entry, file, collection, signal);
+          if (stored && stored.manifest.digest !== observed.manifest.digest) return { complete: false };
+          const candidate = stored ?? observed;
+          const applicable = await verifyApplicability({ id, description }, candidate);
+          if (typeof applicable !== 'boolean') return { complete: false };
+          if (applicable) {
+            if (!stored) put?.(sourceKey(source), { catalogPath: path.resolve(entry.path), file });
+            matches.push({ candidate, source, approved: true });
+          }
+        }
+        // Metadata shortlists permit positive reuse, but only a complete search proves absence.
+        return { complete: matches.length > 0 || keys.length === entries.size, occupied, matches };
       } catch (error) {
         if (signal?.aborted) throw error;
         return { complete: false };
       }
     },
-    async resolve(pin, scope) {
-      if (!pin.source?.startsWith('codex-skill:')) return null;
-      try {
-        const found = (await list(scope?.signal)).find(item => item.source === pin.source && item.entry.name === pin.id);
-        if (!found) return null;
-        const candidate = await nativeCandidate(found.entry, found.file, collection);
-        if (candidate.manifest.version !== pin.version || candidate.manifest.digest !== pin.digest) return null;
-        return { candidate, source: found.source, authorized: true };
-      } catch (error) {
-        if (scope?.signal?.aborted) throw error;
-        return null;
-      }
-    }
+    resolveExact,
+    async resolve(pin, scope) { return (await resolveExact(pin, scope)).value ?? null; }
   };
 }

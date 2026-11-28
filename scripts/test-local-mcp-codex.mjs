@@ -11,7 +11,7 @@ import { startLocalMcp } from './run-local-mcp.mjs';
 import { deliveryNames, exportTrust, newExportKey, publicDelivery, readPortableExport } from './local-mcp-artifacts.mjs';
 import { readWorkflowPageData } from './workflow-viewer.mjs';
 import { browserIdentity, confirmInTestBrowser, monthlyTimesheetModel } from '../tests/integrations/local-mcp-fixture.mjs';
-import { createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
+import { compileInteractive, createInteractiveHostContext, createSqliteInteractivePersistence, loadInteractiveProgram,
   start, complete, resume } from '@devcodex-labs/flowkit/interactive';
 import { artifactDigest } from '../src/shared/artifact-identity.mjs';
 import { canonicalBytes } from '../src/interactive/canonical.mjs';
@@ -20,6 +20,7 @@ import { openLocalSkillStore } from '../src/author/local-skill-store.mjs';
 import { createApiAgentAdapter, runApprovedCollectionWorkflow } from '../dist/host.mjs';
 import { localModel } from './local-mcp-model.mjs';
 import { createLocalCodexSkills } from './local-codex-skills.mjs';
+import { readPublishedGraphDocument } from './local-capability-graph.mjs';
 import { authorContractCases, verifyAuthorContractExport } from './test-author-contract-cases.mjs';
 
 const token = randomBytes(32).toString('hex');
@@ -38,6 +39,11 @@ const referenceMode = process.argv.includes('--reference') || !!fixtureDirectory
 const longTurnMs = 660000;
 const specIndex = process.argv.indexOf('--v45-spec');
 const v45Spec = specIndex !== -1;
+// The 140-node acceptance fixture needs time for authoring and a separate full review.
+const acceptanceTurnMs = v45Spec ? 1_200_000 : longTurnMs;
+const acceptanceTaskMs = v45Spec ? 420_000 : 150_000;
+const acceptanceToolSec = (v45Spec || layoutValidation || professional ? acceptanceTurnMs : 240_000) / 1000 + 30;
+const v45MaxTotalTokens = 128_000;
 const domainIndex = process.argv.indexOf('--contract-domain');
 const domain = domainIndex < 0 ? null : process.argv[domainIndex + 1];
 if (domainIndex >= 0 && (!Object.hasOwn(authorContractCases, domain) || !live || interactive || readOnly || referenceMode)) {
@@ -77,12 +83,12 @@ const professionalGoal = [
   'Agent 从工作流调用方获得 evidence，只读评估，不执行导出或调用外部工具。Agent 返回的 JSON 只含 decision。'
 ].join('\n');
 const goal = professional ? professionalGoal + (capabilityGraph ?
-  '\n在冻结提案前，查阅已授权 FlowKit 能力图谱的 workflow-authoring 指南，并把指南作为提案和独立复审的设计依据。' : '') :
-  v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。' :
+  '\n本轮是定义工作流候选。请从已授权 FlowKit 图谱选择能力 flowkit::define-workflow（Author or define a workflow），读取其 flowkit-doc-authoring 指南，并在冻结提案和独立复审中使用该指南。' : '') :
+  v45Spec ? '按完整的 V4.5 软件开发交付业务规格，起草可由独立宿主运行的 Interactive P2 工作流。保持原规格的 Schema 精确：只在内层 request 声明 additionalProperties: false，根 input 和 output 均省略 additionalProperties。' :
   contractCase ? contractCase.goal : readOnly ?
   '起草 Interactive P0-B 工单校验工作流，严格按 Host 提供的 read-ticket 与 check-ticket 契约编排。正常读取回执返回 ticketOutcome。工单找到后调用 check-ticket，校验通过则成功，否则失败。工单不存在时直接失败并跳过校验。只编排这两个回调，无外部写入。' : interactive ?
   '起草一个 Interactive P2 月度工时表校验工作流。外层并行必须全部通过，一个分支校验输入，另一分支在复核副本与复核原表之间选首个成功。Host 提供三个既有的只读布尔校验器 check-input、check-copy 和 check-original，分别对应输入、副本和原表。输入不通过时整体失败；任一复核通过即可继续，两个复核均不通过时整体失败。流程只编排这三个校验器。' :
-  '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。公开 contract.input 声明必填的 employeeId（string）、month（string）和 hours（number）。Host 的 check-input 只读校验这三个字段，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点。调用方从 Standard runArtifact 的 state.copyRef 读取结果，省略 contract.output。复核紧跟写入动作，write-copy 的普通错误通过编译器派生边直接走失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
+  '起草一个 Standard 月度工时表工作流，只编排既有 Host 回调。公开 contract.input 声明必填的 employeeId（string）、month（string）和 hours（number）。Host 的 check-input 只读校验这三个字段，检查 hours 是 0 到 744 的有限数字，并以布尔值返回。初检为 true 才执行 Host 的 write-copy，它生成独立副本且不改原表，并将副本引用写入 state.copyRef。随后执行 Host 的 check-copy，由此回调以布尔值校验字段、行数和工时总和。两个校验器返回 false 都走失败终点，复核为 true 才走成功终点。调用方从 Standard runArtifact 的 state.copyRef 读取结果，省略 contract.output。复核紧跟写入动作，write-copy 显式声明 onError 指向失败终点，控制信号继续抛出。回调内部逻辑由 Host 实现。';
 const base = path.resolve('.tmp');
 await mkdir(base, { recursive: true });
 const root = await mkdtemp(path.join(base, 'flowkit-codex-e2e-'));
@@ -98,15 +104,51 @@ if (nativeProfessional) {
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, 'SKILL.md'), nativeSkillBody);
 }
+const requestGraph = capabilityGraph && professional;
+const graphActivity = { matches: 0, reads: 0, reviews: new Map() };
+let liveAcceptanceModel;
+if (live && (capabilityGraph || v45Spec)) {
+  const workspace = path.join(root, 'model');
+  await mkdir(workspace);
+  const provider = openai ? 'openai' : 'codex';
+  liveAcceptanceModel = localModel({ provider, workspace, model: process.env.FLOWKIT_AUTHOR_MODEL,
+    apiKey: process.env.OPENAI_API_KEY, timeoutMs: professional || v45Spec ? acceptanceTaskMs : undefined,
+    ...(v45Spec ? { maxTotalTokens: v45MaxTotalTokens } : {}) });
+  const { request, createSession } = liveAcceptanceModel.execution;
+  liveAcceptanceModel.execution.request = async (body, options) => {
+    if (!body.flowkitCapabilityMatch) return request(body, options);
+    graphActivity.matches++;
+    const selection = await request(body, options);
+    console.log(JSON.stringify({ path: 'live-graph-model-selection', decision: selection.decision, ids: selection.ids }));
+    return selection;
+  };
+  liveAcceptanceModel.execution.createSession = async (...args) => {
+    const session = await createSession(...args);
+    const runAgentTask = session.runtime.runAgentTask.bind(session.runtime);
+    session.runtime.runAgentTask = async (prepared, ...context) => {
+      const { node, input, execution } = prepared.task;
+      if (capabilityGraph && node.id === 'semantic-review') graphActivity.reviews.set(execution.requestId, input.resourceSnapshot?.documents ?? []);
+      const result = await runAgentTask(prepared, ...context);
+      if (v45Spec) console.log(JSON.stringify({ path: 'live-v45-model-stage', stage: node.id, status: result.status,
+        failure: result.failure?.code, usage: result.usage, executionId: execution.requestId }));
+      return result;
+    };
+    return session;
+  };
+}
 const service = await startLocalMcp({
   listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports'),
   ...(nativeProfessional ? { codexSkillsWorkspace: cwd } : {}),
   ...(capabilityGraph ? { capabilityGraph: true } : {}),
-  ...(v45Spec || layoutValidation || professional ? { authorTaskTimeoutMs: 150000, authorTurnDurationMs: longTurnMs } : {}),
+  ...(v45Spec || layoutValidation || professional ? { authorTaskTimeoutMs: acceptanceTaskMs, authorTurnDurationMs: acceptanceTurnMs } : {}),
   ...(openai ? { authorProvider: 'openai' } : {}),
   ...(sourceKey ? { trustedExportKeys: [sourceKey.publicKey] } : {}),
 }, { credential: token, ...(readOnly ? { hostExecutionContracts: ticketContracts } : {}),
-  ...(live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }) });
+  ...(liveAcceptanceModel ? { modelBinding: liveAcceptanceModel } : live ? {} : { modelBinding: monthlyTimesheetModel({interactive}) }),
+  ...(live && capabilityGraph ? { readDocumentUrl(url, { signal } = {}) {
+    graphActivity.reads++;
+    return readPublishedGraphDocument(url, 90000, signal);
+  } } : {}) });
 
 async function verifyApprovedSkillRun(exported, saved) {
   const files = Object.fromEntries(await Promise.all(deliveryNames.map(async name =>
@@ -394,7 +436,7 @@ async function withAppServer(env, test) {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(method + ' timed out'));
-    }, live && method === 'mcpServer/tool/call' ? (v45Spec || professional ? 700000 : 250000) : 25000);
+    }, live && method === 'mcpServer/tool/call' ? (acceptanceToolSec + 10) * 1000 : 25000);
     pending.set(id, response => {
       pending.delete(id);
       clearTimeout(timer);
@@ -432,7 +474,7 @@ try {
   await mkdir(directEnv.CODEX_HOME);
   await writeFile(path.join(directEnv.CODEX_HOME,'config.toml'), '[mcp_servers.flowkit]\nurl = ' +
     JSON.stringify(service.url) + '\nbearer_token_env_var = "FLOWKIT_MCP_TOKEN"\nrequired = true\n' +
-    (v45Spec || layoutValidation || professional ? 'tool_timeout_sec = 690\n' : ''));
+    `tool_timeout_sec = ${acceptanceToolSec}\n`);
   let saved;
   await withAppServer(directEnv, async ({ flowkit, tool }) => {
     assert.ok(flowkit);
@@ -447,6 +489,7 @@ try {
       goal, ...(readOnly ? { executionMode: 'interactive-p0-b' } : interactive || contractCase || v45Spec ? { executionMode: 'interactive-p2' } : {}) });
     let candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'cli-plan',
       expectedStateVersion: draft.stateVersion, input: v45Input ?? goal,
+      ...(requestGraph ? { useCapabilityGraph: true } : {}),
       target: { name: professional ? 'flowkit-delivery-review' : v45Spec ? 'v45-software-delivery' : contractCase?.name ?? (readOnly ? 'ticket-review' : 'monthly-timesheet') } } });
     const shortStandard = !referenceMode && !readOnly && !interactive && !contractCase && !v45Spec;
     if (live && (professional || shortStandard) && candidate.status === 'needs-revision' && candidate.review.findings.length) {
@@ -465,6 +508,11 @@ try {
     const cookie = await browserIdentity(service);
     const preview = readWorkflowPageData(await (await fetch(candidate.candidate.previewUrl, { headers: { cookie } })).text());
     assert.equal(preview.candidateHash, identity.candidateHash);
+    if (v45Spec) {
+      const reference = await compileInteractive('examples/v45/software-delivery.workflow.js', { output: 'memory', featureStage: 'P2' });
+      assert.deepEqual(reference.diagnostics, []);
+      assert.equal(preview.graph.contract?.digest, reference.graphSnapshot.contract?.digest, 'V4.5 root Schema differs from the approved reference');
+    }
     assert.equal((await confirmInTestBrowser(candidate.candidate.previewUrl, cookie)).status, 200);
     await tool('flowkit_export_workflow', {...identity, candidateHash: 'sha256:' + '0'.repeat(64)}, true);
     const exported = await tool('flowkit_export_workflow', identity);
@@ -481,9 +529,10 @@ try {
     assert.equal(offline.graph.artifactHash, artifactDigest(await readFile(path.join(exported.directory, 'workflow.js'))));
     if (live) {
       const db = new DatabaseSync(path.join(root, 'state', 'author.sqlite'), { readOnly: true });
-      let receipt;
-      try { receipt = JSON.parse(db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(draft.id).payload).reviewReceipt; }
+      let reviewedDraft;
+      try { reviewedDraft = JSON.parse(db.prepare('SELECT payload FROM fk_author_drafts WHERE draft_id=?').get(draft.id).payload); }
       finally { db.close(); }
+      const receipt = reviewedDraft.reviewReceipt;
       assert.equal(receipt.candidateHash, identity.candidateHash);
       assert.equal(receipt.reviewPolicy, 'separate-pass');
       assert.equal(receipt.qualified, true);
@@ -492,10 +541,25 @@ try {
         [name, await readFile(path.join(exported.directory, name), 'utf8')])));
       const verified = readPortableExport(files, exportTrust([service.exportPublicKey])).candidate;
       assert.equal(verified.hash, identity.candidateHash);
-      if (capabilityGraph) {
+      if (requestGraph) {
         const evidence = verified.manifest.documents?.find(item => item.documentId === 'flowkit-doc-authoring');
         assert.ok(evidence?.revision && evidence.contentHash && evidence.source?.url, JSON.stringify(verified.manifest.documents));
-        console.log(JSON.stringify({ path: 'live-graph-author-document', ...evidence, candidateHash: verified.hash }));
+        assert.ok(graphActivity.matches > 0 && graphActivity.reads > 0);
+        assert.ok(reviewedDraft.plan.capabilityRequirements.includes('flowkit::define-workflow'));
+        assert.ok(reviewedDraft.resources.capabilities.nodes.some(item => item.capability.id === 'flowkit::define-workflow'));
+        const inPlan = reviewedDraft.plan.resourceRequirements.find(pin => pin.documentId === evidence.documentId);
+        assert.equal(inPlan?.revision, evidence.revision);
+        assert.equal(inPlan?.contentHash, evidence.contentHash);
+        const inReview = graphActivity.reviews.get(receipt.observation.executionId)?.find(item =>
+          item.evidence.documentId === evidence.documentId);
+        assert.deepEqual(inReview?.evidence, evidence);
+        assert.ok(inReview.text.trim());
+        console.log(JSON.stringify({ path: 'live-graph-author-document', ...evidence, candidateHash: verified.hash,
+          matches: graphActivity.matches, reads: graphActivity.reads }));
+      } else if (capabilityGraph) {
+        assert.deepEqual(verified.manifest.documents ?? [], []);
+        assert.deepEqual([graphActivity.matches, graphActivity.reads], [0, 0]);
+        console.log(JSON.stringify({ path: 'live-ordinary-with-graph-host', matches: graphActivity.matches, reads: graphActivity.reads }));
       }
       console.log(JSON.stringify({ path: 'live-author-review-signature', candidateHash: identity.candidateHash,
         reviewExecutionId: receipt.observation.executionId, reviewSubjectId: receipt.observation.subjectId,
@@ -506,6 +570,8 @@ try {
       await writeFile(path.join(root, 'export-public-key.txt'), service.exportPublicKey + '\n');
       console.log(JSON.stringify({ path: 'real-v45-author', ...identity, directory: exported.directory, nodes: offline.graph.nodes.length,
         graphDigest: offline.graph.graphDigest, artifactHash: offline.graph.artifactHash, sourceSpecHash: artifactDigest(v45Input),
+        modelProvider: 'codex', model: process.env.FLOWKIT_AUTHOR_MODEL || 'codex-default',
+        authorTaskTimeoutMs: acceptanceTaskMs, authorTurnDurationMs: acceptanceTurnMs, maxTotalTokensPerTask: v45MaxTotalTokens,
         exportPublicKeyFile: path.join(root, 'export-public-key.txt'), preapprovalRejected: true, wrongVersionRejected: true }));
     }
     if (interactive || readOnly) await runExport(exported.directory);

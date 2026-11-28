@@ -30,7 +30,9 @@ codex login status
 }
 ```
 
-本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制实际模型传输（默认 90000 毫秒），用 `authorTurnDurationMs` 控制 Author 回合（普通默认 240000，长文档默认 900000）。项目设计回合和资源读取另用 `designTurnDurationMs` 与 `resourceReadTimeoutMs`。这些配置使用正整数毫秒。Codex 客户端的 `tool_timeout_sec` 控制客户端等待，生成工作流的业务截止由业务方在执行时声明。
+本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制内置模型适配器的单次请求（默认 90000 毫秒），用 `authorTurnDurationMs` 控制持久化 Author 整轮（普通默认 240000，长文档默认 900000）。整轮剩余时间可缩短单次请求；外接模型绑定需要遵守宿主传入的取消信号，并管理自己的传输预算。项目设计回合和资源读取分别通过 `designTurnDurationMs` 与 `resourceReadTimeoutMs` 配置。这些值使用正整数毫秒。工作流运行期的业务截止由业务方在执行时声明。
+
+Codex 的 `tool_timeout_sec` 只控制客户端等待。客户端结束等待后，用原草稿 ID 调用 `flowkit_get_workflow_draft`。若已接单，查询会返回运行中的原轮次或它的结果；若返回对账要求，先走恢复入口。宿主可以用 Author SDK 显式取消轮次。模型时限、token 额度和请求字节限制分别生效，调整一个值仍需满足其余限制。
 
 ```powershell
 npm run mcp:local -- --config ./flowkit-mcp.local.json
@@ -61,13 +63,15 @@ bearer_token_env_var = "FLOWKIT_MCP_TOKEN"
 
 默认 Author 使用正式 Intent Runtime SDK，模型传输仍由本机 Host 控制。使用 OpenAI Responses 时，将服务配置中的 `authorProvider` 改为 `openai`，在服务环境中提供 `OPENAI_API_KEY` 和 `FLOWKIT_AUTHOR_MODEL`。操作仍使用同一个 MCP 入口。已有编译工作流由 SDK 或 Host 提供运行模型和授权。宿主角色、数据、业务回调、Task V2 资源预算及授权目录随 Host 配置传入。
 
-草稿若收到 `FKA_INTENT_BASELINE_REVIEW_REQUIRED`，请核对原请求与现有约束，再用新 turn ID 和 `reconfirmIntentBaseline: true` 提交复核后的输入。旧草稿的结构作为参考，候选仍需重新通过复审。已批准的 Workflow Skill 和 Run 回执按原身份读取。
+草稿若收到 `FKA_INTENT_BASELINE_REVIEW_REQUIRED`，请核对原请求与现有约束，再用新 turn ID 和 `reconfirmIntentBaseline: true` 提交复核后的输入。重确认时遇到模型失败或服务重启，可以继续使用新 turn ID 重确认。调用 Author SDK 时若收到 `FKA_INTENT_BASELINE_INVALID`，提供有效的 `baseline` 与 `baselineId`，或省略整对并使用草稿基线。约束在身份和语义一致时保留确认，实质变化后须重新确认。历史解释保留为参考，已批准的 Workflow Skill 和 Run 回执按原身份读取。
 
 原生模式保留工作区中普通 `SKILL.md` 的字节及可移植文本资源。专业节点通过当前 Codex 目录选择精确来源与摘要。复审读取精确正文作为证据，重开复审时重新检查授权和摘要。普通描述节点直接编排。`codexSkillsWorkspace` 启用时，本机连接由 Codex 提供目录，MCP 的集合分页和 Skills 扩展供独立非原生消费者使用。
 
 签名的三件导出可携带指向固定 Git 提交的 FlowKit 公开站点文档证据。接收端添加时仍核对来源、精确摘要和本地授权。文档是设计与复审的依据，批准的工作流只加载其实际运行所需的依赖。
 
-Graph 发现给出当前授权范围的建议。起草时 Host 首次读取实际使用的 Provider 文档，将 revision、来源和字节摘要交给 Author，随 Plan 和候选复审。交付继续从批准候选的导出或添加入口操作，继续 Interactive Run 仍需已有 Run 身份和其执行 Host。Graph 的匹配不会产生这些效果。
+使用 `flowkit_prepare_workflow` 时，普通起草省略 `turn.useCapabilityGraph`。需要 Graph 发现或查阅图谱文档的请求明确传 `true`。用户撤回时传 `false`，最新选择在失败和重启后继续生效。每个本机服务使用同一个 Graph 来源，启用本机 Provider 或由宿主提供外部绑定。
+
+Graph 发现给出当前授权范围的建议。Host 核对所需能力，并将实际使用的 Provider 文档正文交给 Plan 和复审，候选保存 revision、来源和字节摘要。如果新证据与已确认 Plan 不一致，需要重新复审。历史复审和跨宿主导入按原身份核验，可由受信宿主提供 `readHistoricalDocument` 读取精确字节。交付继续使用批准候选的导出或添加入口，继续 Interactive Run 使用原有 Run 身份和执行 Host。
 
 [Host 接入](./host-integration) · [Interactive 持久运行](./interactive)
 

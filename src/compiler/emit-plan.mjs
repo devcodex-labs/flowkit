@@ -1,10 +1,11 @@
-import { EXIT, forwardAnalysis } from './graph-algorithms.mjs';
+import { EXIT } from './graph-algorithms.mjs';
 
 class Crossing extends Error {}
 
 export function branchTargets(node) {
   if (node.type === 'condition') return node.branches.map(branch => branch.next);
   if (node.type === 'verification') return [node.onSuccess, node.onFailure];
+  if (node.type === 'action' && node.onError) return [node.next, node.onError];
   if (node.type === 'loop') return [node.onSuccess, node.onMaxExceeded];
   if (node.type === 'human' && node.onDecline) return [node.onApprove,node.onDecline];
   return [];
@@ -18,7 +19,7 @@ export function nextTarget(node) {
 export function createEmitPlan(analysis) {
   const { graph } = analysis;
   const contexts = new Map();
-  function context(key, forward, ids, entry, resolve) {
+  function context(key, forward, ids, entry, resolve, entries = []) {
     const allowed = new Set(ids);
     const visited = new Set();
     function sequence(raw, stop) {
@@ -64,24 +65,25 @@ export function createEmitPlan(analysis) {
       }
       return { kind: 'sequence', steps };
     }
+    const topological = () => ({ key, mode: 'topological', entry, ids,
+      order: forward.topologicalOrder.filter(id => allowed.has(id)), resolve, entries });
     let plan;
     try {
-      const body = sequence(entry, EXIT);
-      if (visited.size !== allowed.size) throw new Crossing();
-      plan = { key, mode: 'structured', entry, body, ids, resolve };
+      if (entries.length > 1) plan = topological();
+      else {
+        const body = sequence(entry, EXIT);
+        if (visited.size !== allowed.size) throw new Crossing();
+        plan = { key, mode: 'structured', entry, body, ids, resolve };
+      }
     } catch (error) {
       if (!(error instanceof Crossing)) throw error;
-      plan = { key, mode: 'topological', entry, ids,
-        order: forward.topologicalOrder.filter(id => allowed.has(id)), resolve };
+      plan = topological();
     }
     contexts.set(key, plan);
     return plan;
   }
   const rootIds = graph.forward.ids.filter(id => typeof id === 'string');
-  // Action failure skips the verification call, but still enters its one printed decision block.
-  const forward = graph.forward.edges.some(edge => edge.role === 'action-failure')
-    ? forwardAnalysis(rootIds, graph.forward.edges.filter(edge => edge.role !== 'action-failure'), graph.forward.entry) : graph.forward;
-  const root = context('root', forward, rootIds, graph.forward.entryTarget,
+  const root = context('root', graph.forward, rootIds, graph.forward.entryTarget,
     id => typeof id === 'string' ? graph.owners.get(id) ?? id : EXIT);
   for (const region of graph.regions.values()) if (region.kind === 'loop') {
     const ids = analysis.literal.definition.nodes.filter(node => region.members.has(node.id) && node.id !== region.body).map(node => node.id);
@@ -90,11 +92,12 @@ export function createEmitPlan(analysis) {
   }
   for (const region of graph.regions.values()) {
     const node=graph.byId.get(region.id);
-    if (node.type!=='human'||!node.onDecline) continue;
+    if (node.type!=='human') continue;
     const ids=analysis.literal.definition.nodes.filter(item=>region.members.has(item.id)).map(item=>item.id);
-    const edges=region.forward.edges.filter(edge=>edge.role!=='action-failure');
-    const forward=forwardAnalysis([region.id,...ids],edges,region.id);
-    context(node.id,forward,ids,node.onReject,id=>region.members.has(id)?id:EXIT);
+    if (!node.onDecline && !ids.some(id => graph.byId.get(id).onError)) continue;
+    const entries = node.onDecline ? [] : [...new Set([node.onReject,
+      ...[...region.entryTargets].filter(id => region.members.has(id))])];
+    context(node.id,region.forward,ids,node.onReject,id=>region.members.has(id)?id:EXIT,entries);
   }
   return { root, contexts, layouts: [...contexts.values()].map(({ key, mode }) => ({ key, mode })) };
 }

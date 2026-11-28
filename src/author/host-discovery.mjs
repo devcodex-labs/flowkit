@@ -73,6 +73,13 @@ export async function discoverPublication({ store, options, draftId, publication
       writeOp(current => { current.discovery = 'pending'; current.discoveryError = { code: 'FKA_MAPPING_PENDING', message: 'Host mapping CAS/readback did not confirm this operation' }; });
       return;
     }
+    if (discovery.observeMapping && await discovery.observeMapping({ ...scope, mapping,
+      files: Object.keys(op.plannedGeneration.files).filter(file => file.endsWith('/SKILL.md')) }) !== true) {
+      writeOp(current => { current.discovery = 'pending'; current.discoveryError = { code: 'FKA_DISCOVERY_PENDING',
+        message: 'Host did not discover the collection and every Skill in this generation' }; });
+      return;
+    }
+    if (stale()) { supersede(); return; }
     writeOp(current => { current.discovery = 'active'; current.mappingReceipt = mapping; delete current.discoveryError; });
   } catch (error) {
     // Retain saved data and exact owned paths. Never remove an orphan or downgrade a completed winner.

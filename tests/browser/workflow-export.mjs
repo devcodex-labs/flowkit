@@ -65,7 +65,7 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
     const roleSource = path.join(temporary, 'role.workflow.js');
     await writeFile(roleSource, `import { defineWorkflow, action, node, verification, terminal } from '@devcodex-labs/flowkit/dsl';
       export default defineWorkflow({ id:'role-review', name:'Role review', version:'1.0.0', nodes:[
-        action('prepare',{ name:'Prepare record', action:'prepare', next:'check' }),
+        action('prepare',{ name:'Prepare record', action:'prepare', next:'check', onError:'rejected' }),
         verification('check',{ name:'Review the submitted record', verifier:'check', onSuccess:'review', onFailure:'rejected' }),
         node('review',{ name:'Review record', description:'Review the approved record.', inputs:[], output:{type:'object'}, next:'done' }),
         terminal('done',{ name:'Done', status:'succeeded' }),
@@ -76,7 +76,7 @@ test('a signed V4.5 export works offline at four widths and two motion settings'
     const roleFiles = publicDelivery(roleCandidate,key);
     assert.equal(readPortableExport(roleFiles,exportTrust([key.publicKey])).candidate.hash,roleCandidate.hash);
     const roleDiagram = readWorkflowPageData(roleFiles['workflow.html']);
-    const failed = roleDiagram.graph.executionEdges.find(edge => edge.role==='action-failure');
+    const failed = roleDiagram.graph.referenceEdges.find(edge => edge.role==='action-error');
     assert.equal(failed?.from,'prepare');
     assert.equal(failed.to,'rejected');
     const failureLine = roleDiagram.layout.edges.find(edge => edge.edgeId===failed.edgeId);

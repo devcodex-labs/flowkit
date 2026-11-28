@@ -16,7 +16,7 @@
 
 声明 `onDecline` 时，Host 返回 `{ decision: 'approve' | 'revise' | 'decline', comment?: string | null }`。`approve` 继续，`revise` 进入修订并申请新的审核，`decline` 结束业务。进入同一 Human 的新审核有新的 `reviewDigest`。Interactive Host 需要校验审核摘要和审核主体。Standard 由提供 `runHuman` 的受信 Host 完成人员授权。
 
-三结果修订区允许 Agent、Action、Verification 和 Condition。首次准备可以从同一个 `onReject` 入口进入，且不消耗修订次数。区内 Verification 的 `onFailure` 和 Interactive Action 的 `onError` 可以直接指向 Human 的 `onDecline` 失败终点，此时不发出新的审批请求。其余路径须返回同一个 Human，区外只能从 `onReject` 进入修订区。
+三结果修订区允许 Agent、Action、Verification 和 Condition。首次准备可以从同一个 `onReject` 入口进入，且不消耗修订次数。区内 Verification 的 `onFailure` 和 Action 的 `onError` 可以直接指向 Human 的 `onDecline` 失败终点，此时不发出新的审批请求。其余路径须返回同一个 Human，区外只能从 `onReject` 进入修订区。
 
 修订超限进入失败终点并保留 `FK_R004`，显式拒绝直接走失败终点。通过普通回调提供布尔值会触发契约错误。
 

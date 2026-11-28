@@ -52,7 +52,7 @@ Host 接入的 `ApiHostOptions`、`IndependentAgentOptions` 和 `CompilationCach
 | Retries | 0–10整数联合 |
 | MaxIterations | 1–100整数联合 |
 | AgentOptions | `name`、`output` 必需。指令来源可用 `agent`、`skill`、`description` 或指令 `descriptionRefs`。适用限制见 [Agent 节点](/dsl/agent) |
-| ActionOptions | name/action 必需，支持 reads/writes/effect/next。Interactive 普通 Action 和子流程 Action 可声明 `onError`。 |
+| ActionOptions | name/action 必需，支持 writes/next。Standard 和 Interactive 普通 Action 可声明 `onError`。Interactive 额外支持 reads/effect，子流程 Action 也可声明 `onError`。 |
 | VerificationOptions | name/verifier必需，onSuccess/onFailure上下文决定 |
 | ParallelOptions | name、至少2项branches元组、join.strategy/next |
 | ConditionOptions | name、非空branches元组，每项when/next |

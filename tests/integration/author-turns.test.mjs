@@ -391,6 +391,107 @@ test('I2 S13/S71: same document revision with changed bytes between selection an
   assert.equal(f.calls.filter(call => call.prepared?.task.node.id.endsWith('-repair')).length, 0);
 });
 
+test('review-only reads and verifies the exact historical Graph document before independent review', async t => {
+  const bytes = Buffer.from('Original Graph guidance for this candidate.');
+  const url = 'https://fixture.invalid/history';
+  const pin = { kind: 'document', capabilityId: 'policy', documentId: 'guide', revision: '1', contentHash: artifactDigest(bytes), url };
+  let revision = '1';
+  let historicalBytes = bytes;
+  const reads = [];
+  const f = await setup(t, {
+    capabilityGraph: {
+      async getCapabilities() { return { meta: { revision, completeness: 'complete' }, items: [{ capability: { id: 'policy', documents: [{ id: 'guide', source: { type: 'url', url } }] } }] }; },
+      async resolve() { return { meta: { completeness: 'complete' }, unresolved: [], nodes: [{ capability: { id: 'policy' }, applicability: { status: 'applicable' } }] }; }
+    },
+    readDocumentUrl: async () => ({ url, bytes }),
+    async readHistoricalDocument(evidence, binding) {
+      reads.push({ evidence, binding });
+      return { bytes: historicalBytes, evidence };
+    }
+  });
+  replacePlan(f, plan => ({ ...plan, capabilityRequirements: ['policy'], resourceRequirements: [pin] }));
+  const ready = await advance(f, await f.start());
+  assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+  const [evidence] = ready.candidate.manifest.documents;
+  revision = '2';
+  const reviewed = await advance(f, ready, { turnId: 'historical-positive', kind: 'review-only' });
+  assert.equal(reviewed.status, 'candidate-ready', JSON.stringify(reviewed.diagnostics));
+  assert.deepEqual(reads[0].evidence, evidence);
+  assert.equal(reads[0].binding.candidateHash, ready.candidate.hash);
+  const review = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').at(-1);
+  assert.deepEqual(review.prepared.task.input.resourceSnapshot.documents, [{ evidence, text: bytes.toString() }]);
+  const reviews = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').length;
+  historicalBytes = Buffer.from('Different contents');
+  const refused = await advance(f, reviewed, { turnId: 'historical-negative', kind: 'review-only' });
+  assert.equal(refused.status, 'needs-clarification', JSON.stringify(refused.diagnostics));
+  assert.ok(refused.questions.some(question => question.id === 'historical-document'));
+  assert.equal(f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review').length, reviews);
+});
+
+test('external Graph discovery may omit an optional match but holds denied or unresolved required capabilities', async t => {
+  for (const status of ['no_match', 'denied', 'matched']) {
+    let opened = 0;
+    const resolved = [];
+    const f = await setup(t, {
+      async capabilityGraph() {
+        opened++;
+        return { async resolve({ ids }) {
+          resolved.push(ids);
+          return { meta: { completeness: 'partial' }, unresolved: ids, nodes: [] };
+        } };
+      },
+      async discoverCapabilities({ graph }) {
+        if (status === 'matched') {
+          await graph.resolve({ ids: ['provider::policy'] });
+          return { selection: { status, completeness: 'complete', ids: ['provider::policy'],
+            applicability: [{ id: 'provider::policy', status: 'applicable' }] } };
+        }
+        return { selection: { status, required: false } };
+      }
+    });
+    const result = await advance(f, await f.start(), { useCapabilityGraph: true });
+    if (status === 'no_match') {
+      assert.equal(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
+      assert.deepEqual(result.candidate.manifest.documents ?? [], []);
+    } else {
+      assert.notEqual(result.status, 'candidate-ready', JSON.stringify(result.diagnostics));
+      assert.ok(!result.candidate);
+    }
+    assert.equal(opened, status === 'matched' ? 1 : 0);
+    if (status === 'matched') {
+      assert.ok(resolved.length >= 2);
+      assert.ok(resolved.every(ids => ids.length === 1 && ids[0] === 'provider::policy'));
+    }
+  }
+});
+
+test('new Graph document evidence requires another review before a confirmed Plan can resume', async t => {
+  const id = 'provider::policy';
+  const url = 'https://fixture.invalid/plan-policy';
+  let revision = '1';
+  const text = () => 'Plan policy revision ' + revision;
+  const f = await setup(t, {
+    capabilityGraph: {
+      async resolve() { return { meta: { completeness: 'complete' }, unresolved: [], nodes: [{ capability: { id }, applicability: { status: 'applicable' } }] }; }
+    },
+    async discoverCapabilities() {
+      return { selection: { status: 'matched', completeness: 'complete', ids: [id], applicability: [{ id, status: 'applicable' }] },
+        documents: [{ text: text(), evidence: { capabilityId: id, documentId: 'guide', revision,
+          contentHash: artifactDigest(text()), source: { type: 'url', url } } }] };
+    }
+  });
+  replacePlan(f, plan => ({ ...plan, assumptions: [{ id: 'chosen', statement: 'Use the proposed delivery target', requiresConfirmation: true }] }));
+  const pending = await advance(f, await f.start(), { useCapabilityGraph: true });
+  assert.equal(pending.status, 'needs-clarification', JSON.stringify(pending.diagnostics));
+  assert.equal(pending.plan.resourceRequirements[0].revision, '1');
+  revision = '2';
+  const refused = await advance(f, pending, { confirmedPlanHash: pending.plan.planHash });
+  assert.equal(refused.status, 'needs-revision', JSON.stringify(refused.diagnostics));
+  assert.equal(refused.diagnostics[0].code, 'FKA_PLAN_REVIEW_REQUIRED');
+  assert.equal(refused.plan.planHash, pending.plan.planHash);
+  assert.ok(!f.calls.some(call => call.prepared?.task.node.id === 'semantic-review'));
+});
+
 test('I5 S141: a no-DSL update binds the old baseline, new explicit constraint and newly required document before review', async t => {
   const bytes = Buffer.from('Preserve the existing public API.');
   const pin = { kind: 'document', capabilityId: 'api-policy', documentId: 'guide', revision: '1', contentHash: artifactDigest(bytes), url: 'https://fixture.invalid/api-policy' };
@@ -553,12 +654,12 @@ test('P2 derives subflow controls from bundled node options and validates supple
     ['proposal', 'plan-repair', 'semantic-review']);
 });
 
-test('P0-B semantic review sees the emitted Action failure route in addition to the declared verification', async t => {
+test('P0-B semantic review sees only an explicitly declared Action error route', async t => {
   const f = await setup(t, { useNodeOptionsForNewDrafts: true });
   replacePlan(f, () => ({
     ...executableProposal,
     nodes: [
-      { id: 'work', kind: 'action', name: 'Work', options: { action: 'inspect', effect: 'read-only', next: 'check' } },
+      { id: 'work', kind: 'action', name: 'Work', options: { action: 'inspect', effect: 'read-only', next: 'check', onError: 'failed' } },
       { id: 'check', kind: 'verification', name: 'Check', options: { verifier: 'inspect-result', onSuccess: 'done', onFailure: 'failed' } },
       executableProposal.nodes[1],
       { id: 'failed', kind: 'terminal', name: 'Failed', options: { status: 'failed' } }
@@ -569,7 +670,7 @@ test('P0-B semantic review sees the emitted Action failure route in addition to 
   const calls = f.calls.filter(call => call.prepared?.task.node.id === 'semantic-review');
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].prepared.task.input.candidateDiff.compilerEvidence.actionRoutes,
-    [{ from: 'work', to: 'failed', role: 'action-failure' }]);
+    [{ from: 'work', to: 'failed', role: 'action-error' }]);
   assert.equal(Object.hasOwn(ready.diff.compilerEvidence, 'actionRoutes'), false);
 });
 

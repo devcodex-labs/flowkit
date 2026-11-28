@@ -159,11 +159,71 @@ test('I4 S32/S99/S100/S101/S128: durable cancellation fences first, retains the 
 test('I4 S93/S105: an ignored physical request outlives the logical deadline and close reports it until actual completion', async t => {
   const f = await setup(t, { budgetPolicy: { durationMs: 1000 } }); let release;
   const barrier = new Promise(resolve => { release = resolve; }); f.releases.push(release);
-  f.options.execution.request = async () => { await barrier; return structuredClone(intent); };
+  const realNow = Date.now.bind(Date);
+  let clockOffset = 0;
+  t.mock.method(Date, 'now', () => realNow() + clockOffset);
+  f.options.execution.request = async () => { clockOffset = -60_000; await barrier; return structuredClone(intent); };
   const draft = await f.start(), result = await advance(f, draft);
   assert.equal(result.status, 'needs-revision'); assert.ok(result.physicalOutstanding.length);
+  assert.equal(result.diagnostics[0].code, 'FKA_DEADLINE');
+  clockOffset = 0;
   const closing = await f.host.close({ mode: 'cancel', timeoutMs: 20 }); assert.equal(closing.closed, false); assert.equal(closing.outstanding, 1);
   release(); await until(async () => (await f.host.close({ mode: 'drain', timeoutMs: 20 })).closed);
+});
+
+test('a deadline crossed during commit authorization fences promotion and stays expired after a clock rollback and reopen', async t => {
+  const f = await setup(t);
+  const realNow = Date.now.bind(Date);
+  let wallTime;
+  t.mock.method(Date, 'now', () => wallTime ?? realNow());
+  const authorize = f.options.authorization.authorize;
+  f.options.authorization.authorize = async request => {
+    if (request.action === 'advance-commit') wallTime = turnRecord(f.file).budget.deadlineMs + 1;
+    return authorize(request);
+  };
+  const draft = await f.start();
+  const result = await advance(f, draft);
+  assert.equal(result.status, 'reconciliation-required', JSON.stringify(result.diagnostics));
+  assert.equal(result.diagnostics[0].code, 'FKA_DEADLINE');
+  assert.ok(!result.candidate);
+  const persisted = turnRecord(f.file);
+  assert.ok(persisted.preparedResultHash);
+  assert.equal(persisted.deadlineExpired, true);
+  assert.equal(persisted.result, undefined);
+  await f.host.close();
+  wallTime = persisted.budget.deadlineMs - 1;
+  const reopened = await createWorkflowAuthorHost(f.options);
+  f.hosts.push(reopened);
+  const recovered = await reopened.readDraft({ draftId: draft.id }, context);
+  const settled = await reopened.settleTurn({ draftId: draft.id, expectedStateVersion: recovered.stateVersion, turnId: 'turn',
+    decision: 'confirm-no-effect', evidenceRef: 'expired-turn-had-no-effect' }, context);
+  assert.equal(settled.retryRef, null);
+  assert.equal(settled.budget.deadlineMs, persisted.budget.deadlineMs);
+  assert.equal(f.calls.length, 4);
+});
+
+test('a retry first observed after expiry stays ineligible after a wall-clock rollback', async t => {
+  const f = await setup(t);
+  const realNow = Date.now.bind(Date);
+  let wallTime;
+  t.mock.method(Date, 'now', () => wallTime ?? realNow());
+  f.options.execution.request = async () => { throw new Error('Fixture model unavailable'); };
+  const draft = await f.start();
+  const failed = await advance(f, draft);
+  const proof = await f.host.settleTurn({ draftId: draft.id, expectedStateVersion: failed.stateVersion, turnId: 'turn',
+    decision: 'confirm-no-effect', evidenceRef: 'fixture-known-no-effect' }, context);
+  assert.ok(proof.retryRef);
+  const retry = { draftId: draft.id, expectedStateVersion: proof.stateVersion, turnId: 'turn',
+    kind: 'retry', retryRef: proof.retryRef, input: 'Inspect' };
+  wallTime = proof.budget.deadlineMs + 1;
+  await assert.rejects(f.host.advanceTurn(retry, context), { code: 'FKA_SETTLEMENT_INVALID' });
+  assert.equal(turnRecord(f.file).deadlineExpired, true);
+  await f.host.close();
+  wallTime = proof.budget.deadlineMs - 1;
+  const reopened = await createWorkflowAuthorHost(f.options);
+  f.hosts.push(reopened);
+  await assert.rejects(reopened.advanceTurn(retry, context), { code: 'FKA_SETTLEMENT_INVALID' });
+  assert.equal(turnRecord(f.file).attemptHistory, undefined);
 });
 
 test('I4 S33/S102/S104/S114: a persisted completed result survives a real candidate-commit fault and trusted settlement promotes it without rerunning', async t => {

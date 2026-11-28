@@ -313,7 +313,7 @@ test('document work is admitted early, persists verified sections and fences an 
   const rejectedHash = rejected.candidate.hash;
   const missing = await f.host.advanceTurn({ draftId: draft.id, expectedStateVersion: rejected.stateVersion,
     turnId: 'missing', kind: 'review-only', input: 'Review', candidateHash: rejectedHash }, context);
-  assert.equal(missing.status, 'needs-revision');
+  assert.equal(missing.status, 'needs-revision', JSON.stringify(missing.diagnostics));
   assert.match(JSON.stringify(missing.diagnostics), /reauthorize/i);
   await f.host.close();
   const { createWorkflowAuthorHost } = await import('../../dist/host.mjs');

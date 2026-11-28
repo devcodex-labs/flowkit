@@ -69,7 +69,9 @@ test('human default and multiple entry prefixes retain repair order before and a
 
 test('action failure writes an own undefined error and skips verification; shared non-action arrivals remain valid',async()=>{
   const result=await compile(["condition('c',{name:'C',branches:[{when:'mode === 1',next:'a'},{when:'mode === 2',next:'b'},{when:'true',next:'v'}]})",
-    action('a','v'),action('b','v'),"verification('v',{name:'V',verifier:'test',onSuccess:'done',onFailure:'failed'})",end(),end('failed')]);
+    "action('a',{name:'A',action:'a',next:'v',onError:'failed'})",
+    "action('b',{name:'B',action:'b',next:'v',onError:'failed'})",
+    "verification('v',{name:'V',verifier:'test',onSuccess:'done',onFailure:'failed'})",end(),end('failed')]);
   assert.equal(result.code.match(/\/\/ \[v\]/g).length,1);
   for(const mode of [1,2,3]) {
     let verified=0;

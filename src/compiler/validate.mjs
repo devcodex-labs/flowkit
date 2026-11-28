@@ -177,8 +177,7 @@ export function validateFields(literal, context) {
       stringArray('reads');
       stringArray('writes');
       if (present('onError')) {
-        if (!context.interactiveStage) emit('FK_C007', 'onError', 'Action onError requires Interactive execution');
-        else if (members.has(node.id)) emit('FK_C021', 'onError', 'Parallel leaf members cannot have onError');
+        if (members.has(node.id)) emit('FK_C021', 'onError', 'Parallel leaf members cannot have onError');
         else {
           successor('onError');
           if (node.onError === node.next) emit('FK_C007', 'onError', 'Action onError must differ from next');

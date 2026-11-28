@@ -139,7 +139,7 @@ function advanceExtended(view,event) {
     const next=event.kind==='external-passed'?record.metadata.next
       :event.kind==='loop-exhausted'?record.metadata.loop?.onMaxExceeded
       :['human-declined','human-revisions-exhausted'].includes(event.kind)?record.metadata.onDecline
-      :record.metadata.onError??record.metadata.onFailure;
+      :kind==='action'?record.metadata.onError:record.metadata.onFailure;
     return next
       ? proposal('apply-external',next+'::enter',{kind:'pop',expectedKind:kind,expectedNodeId:nodeId})
       : fail('FK_I_ACTION_FAILED');

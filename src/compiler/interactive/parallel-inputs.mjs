@@ -136,7 +136,7 @@ export function parallelInputDiagnostics(literal, graph, context, conditions) {
         } else {
           const success = afterStep(node, key, input);
           for (const edge of graph.outgoing.get(id)) {
-            const rejects = edge.path === '/onError' || edge.role === 'action-failure';
+            const rejects = edge.path === '/onError';
             enqueue(edge.to, rejects ? input : success);
           }
         }

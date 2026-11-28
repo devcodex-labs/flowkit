@@ -80,7 +80,7 @@ export function renderMermaid(analysis) {
     if (item.role === 'loop-exhausted') {
       text = `超过次数（第${graph.byId.get(graph.owners.get(item.from)).maxIterations}次失败不再修复）`; dashed = true;
     }
-    if (item.role === 'action-failure' || item.role === 'action-error') { text = '出错'; dashed = true; }
+    if (item.path === '/onError') { text = '出错'; dashed = true; }
     const enclosing=subflows.find(({id,members})=>members.has(item.from)&&graph.byId.get(id).join.next===item.to);
     edge(from,enclosing?join(enclosing.id):endpoint(item.to),text,dashed);
   }

@@ -204,12 +204,24 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     const nativeSkills = config.codexSkillsWorkspace === undefined ? undefined : await createLocalCodexSkills({
       workspace: config.codexSkillsWorkspace, root: path.join(dataDir, 'codex-skill-generations'),
       collection: collectionPlan.destination, get, put,
-      readManaged: id => binding.store.readActive(collectionId, id)
+      readManaged: (mapping, name) => {
+        const entry = binding.store.authorTransaction(state => {
+          const op = state.findPublication(mapping.operationId);
+          if (op?.snapshotHash !== mapping.snapshotHash || op.generation?.manifestHash !== mapping.manifestHash ||
+              op.generation?.generationId !== mapping.generationId) return null;
+          return op.collectionSnapshot?.skills.find(({ manifest }) => manifest.name === name && manifest.kind === 'professional');
+        });
+        return entry && binding.store.readVersion(collectionId, entry.manifest.skillId, entry.hash);
+      }
     });
     if (!dependencies.modelBinding && provider === 'codex') modelWorkspace = await mkdtemp(path.join(tmpdir(), 'flowkit-local-model-'));
     const model = dependencies.modelBinding ?? localModel({ provider, timeoutMs: config.authorTaskTimeoutMs,
       model: process.env[config.authorModelEnv ?? 'FLOWKIT_AUTHOR_MODEL'], apiKey: process.env.OPENAI_API_KEY, workspace: modelWorkspace });
     if (config.capabilityGraph !== undefined && typeof config.capabilityGraph !== 'boolean') throw new TypeError('capabilityGraph must be a boolean');
+    if (config.capabilityGraph && dependencies.capabilityGraph) throw new TypeError('Choose local or externally supplied Capability Graph');
+    if (config.capabilityGraph && (dependencies.discoverCapabilities || dependencies.matchCapability)) {
+      throw new TypeError('Configure discovery and matching with the same Capability Graph binding');
+    }
     if (config.capabilityGraph) localGraph = await createLocalCapabilityGraph(resourceReadTimeoutMs);
     const modelLayoutCalls = new Set();
     async function runLocalModel(operation, signal) {
@@ -681,8 +693,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     const professionalSkillCatalog = {
       collection: localProfessionalSkills.collection,
       async search(scope) {
-        if (nativeSkills) return nativeSkills.search(scope);
-        const local = await localProfessionalSkills.search(scope);
+        const local = await (nativeSkills ?? localProfessionalSkills).search(scope);
         const external = await dependencies.professionalSkillCatalog?.search(scope);
         if (!external) return local;
         if (local.complete !== true || external.complete !== true || !Array.isArray(external.matches) || external.denied) {
@@ -693,6 +704,17 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
           [JSON.stringify([match.source, match.candidate.hash]), match])).values()] };
       }
     };
+    async function resolveApprovedSkill(pin, scope) {
+      if (pin.source?.startsWith('codex-skill:')) {
+        const local = await nativeSkills?.resolveExact(pin, scope);
+        if (local && local.status !== 'unavailable') return local.value ?? null;
+      }
+      if (pin.source === skillSource) {
+        const candidate = binding.store.readProfessionalVersion(collectionId, pin.id, pin.version);
+        return candidate && { source: skillSource, authorized: true, candidate };
+      }
+      return dependencies.resolveRunProfessionalSkill?.(pin, scope);
+    }
     authorHost = await createWorkflowAuthorHost({ namespace, storageFile: storeFile, collectionIds: [collectionId], hostProfile,
       hostExecutionContracts: dependencies.hostExecutionContracts,
       discovery: nativeSkills?.discovery ?? dependencies.discovery,
@@ -702,22 +724,20 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       initialCapabilityIds: dependencies.initialCapabilityIds,
       initialDocuments: dependencies.initialDocuments,
       readDocumentUrl: dependencies.readDocumentUrl ?? localGraph?.readDocumentUrl,
+      readHistoricalDocument: dependencies.readHistoricalDocument,
       defaults: { project: workspaceId, executionMode: 'standard', includeSource: false }, useNodeOptionsForNewDrafts: true, capacity,
       professionalSkillCatalog,
       async resolveProfessionalSkill(pin, scope) {
-        if (pin.source?.startsWith('codex-skill:')) {
-          const resolved = await nativeSkills?.resolve(pin, scope);
-          if (!resolved) return null;
-          const text = resolved.candidate.files['SKILL.md'];
-          if (text.length > 24000) return null;
-          return { id: pin.id, version: pin.version, digest: pin.digest, source: pin.source, approved: true,
-            reviewMaterial: { text, contentHash: resolved.candidate.manifest.files['SKILL.md'] } };
+        const requested = { ...pin, source: pin.source ?? skillSource };
+        const exact = await resolveTrustedProfessionalPin(binding.store, requested, { collectionId, resolve: resolveApprovedSkill, scope });
+        if (!exact) {
+          if (requested.source === skillSource || requested.source.startsWith('codex-skill:')) return null;
+          return dependencies.resolveProfessionalSkill?.(pin, scope);
         }
-        if (pin.source !== undefined && pin.source !== skillSource) return dependencies.resolveProfessionalSkill?.(pin, scope);
-        const candidate = binding.store.readProfessionalVersion(collectionId, pin.id, pin.version);
-        if (!candidate || candidate.manifest.digest !== pin.digest) return null;
-        checkProfessionalSkill(candidate);
-        return { id: pin.id, version: pin.version, digest: pin.digest, source: skillSource, approved: true };
+        const text = exact.files['SKILL.md'];
+        if (requested.source.startsWith('codex-skill:') && text.length > 24000) return null;
+        return { id: exact.logicalId, version: exact.resolvedVersion, digest: exact.digest, source: exact.source, approved: true,
+          ...(requested.source.startsWith('codex-skill:') ? { reviewMaterial: { text, contentHash: artifactDigest(text) } } : {}) };
       },
       budgetPolicy: { durationMs: config.authorTurnDurationMs ?? 240000, maxRequests: 8,
         // The internal compile port returns a candidate with Program, Mermaid and GraphSnapshot.
@@ -1063,8 +1083,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       const candidate = binding.store.readVersion(scope.collectionId, scope.skillId, scope.candidateHash);
       if (!candidate) throw new Error('No approved Workflow Skill at the requested identity');
       const graph=checkCandidate(candidate);
-      const result=await dependencies.runWorkflow(scope, { candidate, store: binding.store,
-        ...(nativeSkills ? { resolveProfessionalSkill: nativeSkills.resolve } : {}) });
+      const result=await dependencies.runWorkflow(scope, { candidate, store: binding.store, resolveProfessionalSkill: resolveApprovedSkill });
       if (graph.mode==='standard' || !result?.runId || !dependencies.resolveRunViewer) return result;
       try {
         const view=await resolveRunBinding(result.runId);
@@ -1082,6 +1101,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     const mcp = createFlowkitHttpHandler(req => exact(req.headers.authorization, 'Bearer ' + credential) ?
       { ...binding, nativeSkillDiscovery: Boolean(nativeSkills), ...(runWorkflow ? { runWorkflow } : {}),
         workflowUi: { defaultCollectionId: collectionId, review: publicReview, export: exportCandidate, add, recover, present, authoringMaterials,
+        ...(dependencies.matchCapability && dependencies.capabilityGraph ? { matchCapability: dependencies.matchCapability } : {}),
         ...(localGraph ? { matchCapability: ({ goal }, _context, signal) => {
           const shared = signal ? AbortSignal.any([signal, layoutAbort.signal]) : layoutAbort.signal;
           return localGraph.match(goal, { signal: shared, request: (body, { signal: selected }) =>
@@ -1292,7 +1312,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
               signal: AbortSignal.timeout(resourceReadTimeoutMs) };
             for (const pin of draft.candidate.manifest.professionalSkills.filter(item => item.source)) {
               const resolved = await resolveTrustedProfessionalPin(binding.store, pin, { collectionId,
-                resolve: dependencies.resolveRunProfessionalSkill, scope }).catch(() => null);
+                resolve: resolveApprovedSkill, scope }).catch(() => null);
               if (!resolved) unavailable.push(`${pin.id} ${pin.version} (${pin.source})`);
             }
           }

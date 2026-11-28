@@ -17,7 +17,6 @@ export function analyzeGraph(literal, context) {
   const parallelOwners = new Map();
   const subflowBranches = new Map();
   const loops = new Map(nodes.filter(node => node.type === 'loop').map(node => [node.id, node]));
-  const loopBodies = new Set([...loops.values()].map(node => node.body));
   const report = (code, id, path, message) => {
     const pointer = `/nodes/${indices.get(id)}`;
     diagnostics.push(diagnostic(context.source, code, message, literal.locations.get(pointer + path) ?? literal.locations.get(pointer), id));
@@ -250,10 +249,6 @@ export function analyzeGraph(literal, context) {
   }
   for (const [id, owner] of parallelOwners) executionEdges.push({ from: id, to: byId.get(owner).join.next,
     role:repairJoin(owner)?'repair-return':'parallel-return',path:'' });
-  for (const node of nodes.filter(node => node.type === 'action' && node.next && !node.onError && !loopBodies.has(node.next))) {
-    const next = byId.get(node.next);
-    if (next.type === 'verification' && !parallelOwners.has(next.id)) executionEdges.push({ from: node.id, to: next.onFailure, role: 'action-failure', path: '/next' });
-  }
   const acyclic = executionEdges.filter(edge => edge.role !== 'repair-return');
   for (const edge of findBackEdges(ids, acyclic)) report('FK_C080', edge.from, edge.path, 'Cycle is not an agreed repair return');
   if (diagnostics.length) return { graph: null, diagnostics };

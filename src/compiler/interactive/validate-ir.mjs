@@ -211,9 +211,9 @@ export function validateInteractiveIR(ir) {
       || !Array.isArray(metadata.writes) || metadata.writes.some(key=>typeof key!=='string')
       || metadata.reads!==undefined && (!Array.isArray(metadata.reads) || metadata.reads.some(key=>typeof key!=='string'))
       || metadata.effect!==undefined && !['read-only','write'].includes(metadata.effect)
+      || metadata.onFailure!==undefined
       || metadata.onError!==undefined && (typeof metadata.onError!=='string' || metadata.onError===metadata.next
-        || metadata.onFailure!==undefined || metadata.parallelOwner!==undefined)
-      || (metadata.onFailure!==undefined && typeof metadata.onFailure!=='string'))) bad('Malformed Action metadata: '+id);
+        || metadata.parallelOwner!==undefined))) bad('Malformed Action metadata: '+id);
     if (record.kind==='verification' && (typeof metadata.verifier!=='string' || typeof metadata.next!=='string'
       || typeof metadata.onFailure!=='string')) bad('Malformed Verification metadata: '+id);
     if (record.kind==='verification' && metadata.loop) {

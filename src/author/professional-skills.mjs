@@ -61,7 +61,7 @@ export async function resolveTrustedProfessionalPin(store, pin, { collectionId, 
   const resolved = resolve ? await resolve(pin, scope) : readLocal && {
     source: pin.source, authorized: true, candidate: store.readProfessionalVersion(collectionId, pin.id, pin.version)
   };
-  if (resolved?.authorized !== true || !resolved.candidate || resolved.source !== pin.source) return null;
+  if (resolved?.authorized !== true || !resolved.candidate?.manifest || resolved.source !== pin.source) return null;
   const { candidate } = resolved;
   const { collectionId: origin, skillId, version, digest } = candidate.manifest;
   if ((candidate.manifest.format === 'codex-native' && !pin.source.startsWith('codex-skill:')) ||

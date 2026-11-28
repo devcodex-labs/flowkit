@@ -31,7 +31,9 @@ test('explicit Action onError uses a settled executor failure and keeps rollback
     && edge.to==='rollback-release' && edge.role==='action-error' && edge.origin==='declared'));
   assert.ok(compiled.graphSnapshot.executionEdges.some(edge=>edge.from==='deploy-canary'
     && edge.to==='collect-canary-metrics' && edge.role==='next'));
-  assert.ok((await compileArtifact(file)).diagnostics.some(item=>item.code==='FK_C007'&&item.nodeId==='deploy-canary'));
+  assert.equal(compiled.graphSnapshot.executionEdges.some(edge => edge.from === 'rollback-release' && edge.to === 'blocked'), false);
+  await writeFile(file, source.replaceAll(",effect:'read-only'", ''));
+  assert.deepEqual((await compileArtifact(file)).diagnostics, []);
   await writeFile(file,source.replace("onError:'rollback-release'","onError:'collect-canary-metrics'"));
   assert.ok((await p2()).diagnostics.some(item=>item.code==='FK_C007'));
   await writeFile(file,source);
@@ -114,9 +116,10 @@ test('explicit Action onError uses a settled executor failure and keeps rollback
       const frame=await complete({...submission,outcome:'failed',error},{},options);
       if (error.code===technical.code) {
         const {submission,operation}=await claim(frame,'rollback-release');
-        const deniedByPolicy={...error,code:'TARGET_ACCESS_DENIED',origin:'policy'};
-        await options.operationController.settle({...operation,effect:'no-effect',result:deniedByPolicy,evidenceHash:await targetHash()},auth);
-        const blocked=await complete({...submission,outcome:'failed',error:deniedByPolicy},{},options);
+        const prepareFailure={...error,code:'ROLLBACK_PREPARE_FAILED',message:'Rollback preparation failed before writing'};
+        await assert.rejects(complete({...submission,outcome:'failed',error:prepareFailure},{},options),{code:'FK_I_INVALID_OPERATION'});
+        await options.operationController.settle({...operation,effect:'no-effect',result:prepareFailure,evidenceHash:await targetHash()},auth);
+        const blocked=await complete({...submission,outcome:'failed',error:prepareFailure},{},options);
         assert.equal(blocked.status,'errored');
         assert.deepEqual(blocked.pending,[]);
       } else {

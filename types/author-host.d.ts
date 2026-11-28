@@ -74,6 +74,8 @@ export interface AuthorHostOptions {
     readMapping(scope: { namespace: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<AuthorDiscoveryMapping | null>;
     compareAndSetMapping(scope: { namespace: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal;
       expected: AuthorDiscoveryMapping | null; next: AuthorDiscoveryMapping | null; operationId: string }): Promise<unknown>;
+    observeMapping?(scope: { namespace: string; collectionId: string; requestContext: AuthorRequestContext; signal?: AbortSignal;
+      mapping: AuthorDiscoveryMapping; files: string[] }): Promise<boolean>;
     /** Host must keep new Run admission closed for this generation through cleanup. */
     readReferences?(scope: { namespace: string; collectionId: string; generationId: string; discoveryRoot: string; requestContext: AuthorRequestContext; signal?: AbortSignal }):
       Promise<{ generationId: string; evidenceRef: string; referenced: boolean; closedForNewRuns: boolean }>;
@@ -117,9 +119,17 @@ export interface AuthorHostOptions {
   initialDocuments?: object[];
   resolveImportSource?(input: { sourceRef: string; mode: 'new-collection' | 'migration' }, context: { requestContext: AuthorRequestContext; signal?: AbortSignal }): Promise<{ candidate: AuthorCandidate; sourceRef: string; issuer?: string }>;
   readDocumentUrl?(url: string, context: { requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<{ url: string; bytes: Uint8Array }>;
+  /** Explicit Host authorization for a historical pin. A missing result blocks that review. */
+  readHistoricalDocument?(pin: { capabilityId: string; documentId: string; revision: string; contentHash: string;
+    source: { type: 'url'; url: string } | { type: 'file'; path: string } },
+    context: { requestContext: AuthorRequestContext; signal: AbortSignal; candidateHash: string }):
+    Promise<{ bytes: Uint8Array; evidence: object } | null>;
   professionalSkillCatalog?: {
     collection(scope: AuthorProfessionalCatalogScope & { collectionId: string }): AuthorProfessionalCollection | null | Promise<AuthorProfessionalCollection | null>;
     search(scope: AuthorProfessionalCatalogScope & { id: string; description: string; collection: AuthorProfessionalCollection;
+      selection?: string;
+      selectCandidates?(need: { id: string; description: string },
+        entries: { key: string; id: string; name: string; description: string; source: string }[]): Promise<string[] | null>;
       verifyApplicability(need: { id: string; description: string }, candidate: AuthorProfessionalSkill): Promise<boolean | null> }): Promise<{
       complete?: boolean; denied?: boolean; occupied?: boolean; matches?: Array<{ candidate: AuthorProfessionalSkill; source: string; approved: true }> }>;
   };

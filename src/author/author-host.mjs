@@ -30,6 +30,8 @@ const requiredId = (value, label) => {
 const physicalExecutions = new Map();
 const NO_CHANGE = Symbol('no-change');
 const isTerminalDraft = draft => ['discarded', 'abandoned', 'saved', 'expired'].includes(draft.status);
+const turnDeadlineExpired = turn => turn.deadlineExpired === true || turn.failure?.code === 'FKA_DEADLINE' ||
+  Date.now() >= turn.budget.deadlineMs;
 
 function activeReviewRejection(draft) {
   if (!draft.candidate) return;
@@ -194,6 +196,7 @@ export async function createWorkflowAuthorHost(supplied) {
     if (value.candidate) checkCandidate(value.candidate);
     draft.intent = value.effectiveIntent; draft.plan = value.currentPlan ?? null; draft.resources = value.resourceSnapshot ?? null;
     if (result.intentBaseline !== undefined) draft.intentBaseline = result.intentBaseline;
+    if (turn.kind === 'authoring' && value.effectiveIntent) delete draft.intentBaselineReview;
     draft.coreIdentity = result.coreIdentity; draft.authorizedRequest = value.authorizedRequest; draft.baselineEvidence = value.baselineEvidence;
     draft.documentSource = value.documentSource; draft.documentRequest = value.documentRequest;
     draft.candidate = value.candidate ?? null; draft.diff = value.candidateDiff ?? null;
@@ -332,7 +335,7 @@ export async function createWorkflowAuthorHost(supplied) {
       const priorTurn = input.kind === 'retry' ? store.authorTransaction(state => state.readTurn(input.draftId, input.turnId)) : null;
       const fingerprint = hash({ request, choices: input.choices ?? {}, kind: priorTurn?.kind ?? input.kind ?? 'authoring', currentRequestContext,
         operation: initial.operation, target: { ...initial.target, ...input.target }, previousHash: initial.previousHash, hostProfile: options.hostProfile, coreIdentity: options.coreIdentity });
-      let turn, replay;
+      let turn, replay, retryExpired;
       store.authorTransaction(state => {
         const draft = state.readDraft(input.draftId);
         turn = state.readTurn(draft.id, input.turnId);
@@ -342,8 +345,17 @@ export async function createWorkflowAuthorHost(supplied) {
           if (input.kind !== 'retry' || turn.consumedRetryRefs && Object.hasOwn(turn.consumedRetryRefs, input.retryRef)) { replay = turn.result ?? view(draft, state); return; }
           assertUncommittedTurn(draft, turn);
           if (!input.retryRef || turn.retryRef !== input.retryRef || turn.retryStateVersion !== draft.stateVersion ||
-            input.expectedStateVersion !== draft.stateVersion || turn.physicalOutstanding || turn.status === 'running' ||
-            Date.now() >= turn.budget.deadlineMs) throw authorError('author-settlement', 'Retry requires its unconsumed, current no-effect settlement and remaining budget');
+            input.expectedStateVersion !== draft.stateVersion || turn.physicalOutstanding || turn.status === 'running') {
+            throw authorError('author-settlement', 'Retry requires its unconsumed, current no-effect settlement and remaining budget');
+          }
+          if (turnDeadlineExpired(turn)) {
+            if (!turn.deadlineExpired) {
+              turn.deadlineExpired = true;
+              state.writeTurn(turn);
+            }
+            retryExpired = true;
+            return;
+          }
           // Check before consuming the reference, in the same SQLite transaction that starts the attempt.
           if (physicalSlotUnavailable(state, draft)) throw authorError('author-busy', 'No physical Author execution slot is available');
           const attemptId = randomUUID();
@@ -401,15 +413,16 @@ export async function createWorkflowAuthorHost(supplied) {
         const awaitingAnswer = draft.status === 'needs-clarification' &&
           (request.input !== previousInput || draft.questions.some(({ id }) => id !== 'execution-mode' && id !== 'target-version'));
         const afterFailure = draft.status === 'failed' || draft.status === 'needs-revision';
+        const awaitingBaselineReview = !!draft.intentBaselineReview || draft.intentBaseline && draft.status === 'needs-revision' &&
+          draft.diagnostics.some(item => item.code === 'FKA_INTENT_BASELINE_REVIEW_REQUIRED');
         if (request.reconfirmIntentBaseline && (input.kind === 'review-only' || Object.hasOwn(request, 'baseline') ||
-            request.confirmedPlanHash || !draft.intentBaseline || draft.status !== 'needs-revision' ||
-            !draft.diagnostics.some(item => item.code === 'FKA_INTENT_BASELINE_REVIEW_REQUIRED'))) {
+            request.confirmedPlanHash || !awaitingBaselineReview)) {
           throw authorError('author-conflict', 'Only a draft awaiting Intent baseline review can reconfirm its baseline');
         }
         const rejection = input.kind === 'review-only' ? undefined : activeReviewRejection(draft);
         const reviewRevision = rejection ? select(rejection, ['candidateHash', 'findings']) :
           input.kind !== 'review-only' && !draft.candidate && (awaitingAnswer || afterFailure) ? lastTurn?.reviewRevision : undefined;
-        const clarifyingDraft = input.kind !== 'review-only' && draft.operation === 'create' && !draft.candidate &&
+        const clarifyingDraft = request.reconfirmIntentBaseline || input.kind !== 'review-only' && draft.operation === 'create' && !draft.candidate &&
           (awaitingAnswer || afterFailure) && typeof previousInput === 'string' && !request.confirmedPlanHash &&
           !Object.hasOwn(request, 'baseline') && !request.confirmedConstraintIds?.length &&
           !ownTurns.some(item => item.result?.candidate || Object.hasOwn(item.request ?? {}, 'baseline') ||
@@ -431,6 +444,8 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         turn = { draftId: draft.id, turnId: input.turnId, kind: input.kind ?? 'authoring', attemptId: randomUUID(), executionToken: randomUUID(),
           ownerId, baseContentHash: draft.contentHash, clarifyingDraft,
+          ...(input.kind === 'review-only' ? {} : { useCapabilityGraph: request.useCapabilityGraph ?? lastTurn?.useCapabilityGraph ??
+            lastTurn?.request.useCapabilityGraph ?? previous?.useCapabilityGraph }),
           ...(draftInputs ? { draftInputs, draftContextSnapshot, answeredQuestionIds } : {}),
           ...(reviewRevision ? { reviewRevision, reviewAuthorization: select({
             ...previous, ...lastTurn?.reviewAuthorization, ...lastTurn?.request
@@ -444,6 +459,7 @@ export async function createWorkflowAuthorHost(supplied) {
         state.writeTurn(turn);
         write(state, draft, draft.stateVersion);
       });
+      if (retryExpired) throw authorError('author-settlement', 'Retry requires its unconsumed, current no-effect settlement and remaining budget');
       if (replay) return replay;
       const controller = new AbortController();
       // Keep an awaited SDK turn alive even when a Host returns only a pending Promise.
@@ -527,14 +543,17 @@ export async function createWorkflowAuthorHost(supplied) {
           const current = state.readTurn(draft.id, turn.turnId);
           if (draft.activeExecution !== turn.executionToken || current.executionToken !== turn.executionToken) throw authorError('author-fenced', 'Core result was fenced before staging');
           current.preparedResult = authorInput(result, capacity.maxDraftBytes); current.preparedResultHash = hash(current.preparedResult);
-          if (!flight.pending.size) current.physicalOutstanding = false;
           draft.recoveryRef = { turnId: current.turnId, attemptId: current.attemptId, resultHash: current.preparedResultHash };
           state.writeTurn(current);
         });
-        await authorize('advance-commit', initial.collectionId, currentRequestContext, combined, { draftId: initial.id });
+        const commitAuthorization = authorize('advance-commit', initial.collectionId, currentRequestContext, combined, { draftId: initial.id });
+        track(commitAuthorization);
+        await during(combined, () => commitAuthorization);
         const response = mutate(input.draftId, undefined, (draft, state) => {
           const current = state.readTurn(draft.id, turn.turnId);
           if (draft.activeExecution !== turn.executionToken || current.executionToken !== turn.executionToken) throw authorError('author-fenced', 'Late result cannot change current content');
+          combined.throwIfAborted();
+          if (turnDeadlineExpired(current)) throw authorError('author-deadline', 'Turn deadline exhausted');
           if (!flight.pending.size) current.physicalOutstanding = false;
           return applyCoreResult(draft, state, current, current.preparedResult);
         });
@@ -544,21 +563,27 @@ export async function createWorkflowAuthorHost(supplied) {
         const recordFailure = compact => mutate(input.draftId, undefined, (draft, state) => {
           const current = state.readTurn(draft.id, turn.turnId);
           if (current.attemptId !== flight.attemptId || current.result) return NO_CHANGE;
-          const code = String(error.code ?? 'author-execution').slice(0, 64);
-          const message = compact ? String(error.message).slice(0, 192) : error.message;
+          const deadline = combined.aborted ? combined.reason === deadlineController.signal.reason :
+            error.code === 'FKA_DEADLINE' || turnDeadlineExpired(current);
+          if (deadline || turnDeadlineExpired(current)) current.deadlineExpired = true;
+          const code = deadline ? 'FKA_DEADLINE' : String(error.code ?? 'author-execution').slice(0, 64);
+          const failureMessage = deadline ? 'Turn deadline exhausted' : error.message;
+          const message = compact ? String(failureMessage).slice(0, 192) : failureMessage;
           const observed = Object.values(current.budget.reservations);
           const unknownWrite = observed.some(item => item.sideEffectStatus === 'unknown');
           const knownWrite = observed.some(item => item.sideEffectStatus === 'known');
           current.reconciliationRequired = unknownWrite || knownWrite || !!current.preparedResult || error.code === 'FKA_RECONCILIATION_REQUIRED';
           if (current.reconciliationRequired) draft.reconciliationRequired = true;
           if (draft.activeExecution === turn.executionToken) {
-            const deadline = Date.now() >= turn.budget.deadlineMs && !controller.signal.aborted && !signal?.aborted;
             draft.activeExecution = null; draft.status = current.reconciliationRequired ? 'reconciliation-required' : deadline ? 'needs-revision' : combined.aborted ? 'cancelled' : (error.outcome ??
               (['FKA_BUDGET_EXHAUSTED', 'FKA_REPAIR_EXHAUSTED', 'FKA_DEADLINE'].includes(error.code) ||
                 ['FKA_BUDGET_EXHAUSTED', 'FKA_DEADLINE'].includes(error.kind) ? 'needs-revision' : 'failed'));
             draft.reconciliationRequired = current.reconciliationRequired;
             draft.diagnostics = [{ code, message },
               ...(!compact && error.code === 'FKA_REPAIR_EXHAUSTED' ? error.repairDiagnostics ?? [] : [])];
+            if (code === 'FKA_INTENT_BASELINE_REVIEW_REQUIRED' && error.pendingIntentBaseline !== undefined) {
+              draft.intentBaselineReview = { baseline: error.pendingIntentBaseline };
+            }
             draft.questions = compact ? [] : error.questions ?? [];
             draft.reviewReceipt = null; draft.approvalReceipt = null;
           }
@@ -723,7 +748,8 @@ export async function createWorkflowAuthorHost(supplied) {
         else if (input.decision === 'confirm-no-effect' && observation.noEffect === true) {
           const budget = turn.budget;
           const abandoned = current.status === 'abandoned';
-          const remaining = Date.now() < budget.deadlineMs && budget.used.requests < budget.limits.maxRequests &&
+          if (turnDeadlineExpired(turn)) turn.deadlineExpired = true;
+          const remaining = !turn.deadlineExpired && budget.used.requests < budget.limits.maxRequests &&
             budget.used.toolCalls < budget.limits.maxToolCalls && budget.used.ioCalls < budget.limits.maxIoCalls && budget.used.bytes < budget.limits.maxBytes;
           turn.retryRef = remaining && !abandoned ? turn.retryRef ?? randomUUID() : null; turn.retryStateVersion = current.stateVersion + 1;
           turn.status = abandoned ? 'abandoned' : 'failed'; turn.reconciliationRequired = false; current.reconciliationRequired = false;

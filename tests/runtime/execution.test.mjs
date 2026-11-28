@@ -63,8 +63,8 @@ test('runtime prototype methods retain host this and business methods are not si
   assert.equal(Object.hasOwn(missing.error, 'phase'), false);
 });
 
-test('action catches attach error even for every falsy rejection and skip the verification call', async t => {
-  const f = await fixture(t, ["action('a',{name:'A',action:'save',next:'v'})",
+test('explicit Action onError attaches every falsy rejection and skips the verification call', async t => {
+  const f = await fixture(t, ["action('a',{name:'A',action:'save',next:'v',onError:'failed'})",
     "verification('v',{name:'V',verifier:'verify',onSuccess:'done',onFailure:'failed'})", end(), end('failed', 'failed')]);
   for (const error of [undefined, null, false, 0, '', new Error('save')]) {
     const result = await f.run(host({ runAction: async () => { throw error; }, runVerification: async () => assert.fail('Skipped') }));
@@ -75,16 +75,36 @@ test('action catches attach error even for every falsy rejection and skip the ve
 });
 
 test('uncaught errors, primitive rejection values and control markers retain identity without wrapping', async t => {
-  const direct = await fixture(t, ["action('a',{name:'A',action:'save',next:'done'})", end()]);
-  const catchable = await fixture(t, ["action('a',{name:'A',action:'save',next:'v'})",
+  const direct = await fixture(t, ["action('a',{name:'A',action:'save',next:'v'})",
+    "verification('v',{name:'V',verifier:'verify',onSuccess:'done',onFailure:'failed'})", end(), end('failed', 'failed')]);
+  const catchable = await fixture(t, ["action('a',{name:'A',action:'save',next:'v',onError:'failed'})",
     "verification('v',{name:'V',verifier:'verify',onSuccess:'done',onFailure:'failed'})", end(), end('failed', 'failed')]);
   for (const error of [undefined, null, 0, 'business', new Error('business'), { control: true, kind: 'custom' }]) {
-    const result = await settled(direct.run(host({ runAction: async () => { throw error; } })));
+    const result = await settled(direct.run(host({ runAction: async () => { throw error; }, runVerification: async () => assert.fail('Skipped') })));
     assert.equal(result.fulfilled, false); assert.equal(result.error, error);
   }
   const control = { control: true, kind: 'cancel' };
   const result = await settled(catchable.run(host({ runAction: async () => { throw control; }, runVerification: async () => assert.fail('Skipped') })));
   assert.equal(result.fulfilled, false); assert.equal(result.error, control);
+});
+
+test('a Human repair can enter mid-chain and follow an explicit Action error route on revision', async t => {
+  const f = await fixture(t, [
+    "action('start',{name:'Start',action:'start',next:'recover'})",
+    "human('approval',{name:'Approval',onApprove:'done',onReject:'repair',maxRevisions:1})",
+    "action('repair',{name:'Repair',action:'repair',next:'approval',onError:'recover'})",
+    "action('recover',{name:'Recover',action:'recover',next:'approval'})", end()
+  ]);
+  const events = [];
+  const failure = new Error('Repair failed');
+  let approvals = 0;
+  const result = await f.run(host({
+    async runAction(id) { events.push(id); if (id === 'repair') throw failure; },
+    async runHuman() { events.push('approval'); return ++approvals === 2; }
+  }));
+  assert.deepEqual(events, ['start', 'recover', 'approval', 'repair', 'recover', 'approval']);
+  assert.equal(result.terminal, 'done');
+  assert.equal(result.error, failure);
 });
 
 test('only an own ctx.error is returned and a replaced ctx.state remains the returned state', async t => {
@@ -195,13 +215,15 @@ test('parallel rejections keep native all first-rejection and any final-control 
 });
 
 test('trace hooks keep their own this while validation and action failures retain runtime outcomes', async t => {
-  const f = await fixture(t, ["action('a',{name:'A',action:'save',next:'v'})",
+  const f = await fixture(t, ["action('a',{name:'A',action:'save',next:'v',onError:'failed'})",
     "verification('v',{name:'V',verifier:'verify',onSuccess:'done',onFailure:'failed'})", end(), end('failed', 'failed')]);
   const events = [];
   const trace = { start(id) { assert.equal(this, trace); events.push([id, 'start']); }, end(id, _name, outcome) { assert.equal(this, trace); events.push([id, outcome]); } };
   const result = await f.run(host({ trace, runAction: async () => { throw 0; }, runVerification: async () => assert.fail('Skipped') }), {}, { trace: true });
   assert.equal(result.error, 0); assert.deepEqual(events, [['a', 'start'], ['a', 'error']]);
   events.length = 0;
-  await f.run(host({ trace, runAction: async () => {}, runVerification: async () => false }), {}, { trace: true });
+  const checked = await f.run(host({ trace, runAction: async () => {}, runVerification: async () => false }), {}, { trace: true });
+  assert.equal(checked.terminal, 'failed');
+  assert.equal(Object.hasOwn(checked, 'error'), false);
   assert.deepEqual(events, [['a', 'start'], ['a', 'ok'], ['v', 'start'], ['v', 'ok']]);
 });
