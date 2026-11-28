@@ -832,6 +832,83 @@ test('disconnecting a Design client preserves work and orderly Host stop records
   assert.equal(calls, 1);
 });
 
+test('local shutdown reports non-cooperative Design and Author work without releasing the service lease', { timeout: 25000 }, async t => {
+  const root = await ownedDirectory(t);
+  const config = { listen: { port: 0 }, dataDir: path.join(root, 'state'), exportDir: path.join(root, 'exports') };
+  const credential = 'test-noncooperative-shutdown-key';
+  const model = monthlyTimesheetModel();
+  const designEntered = Promise.withResolvers(), authorEntered = Promise.withResolvers();
+  const designRelease = Promise.withResolvers(), authorRelease = Promise.withResolvers();
+  let service, client, authorClient, pending, recovered;
+  const raw = model.execution.request;
+  model.execution.request = async (input, options) => {
+    if (input.flowkitIntent) {
+      authorEntered.resolve(options.signal);
+      await authorRelease.promise;
+    }
+    return raw(input, options);
+  };
+  model.planDesign = async ({ signal }) => {
+    designEntered.resolve(signal);
+    await designRelease.promise;
+    signal.throwIfAborted();
+  };
+  const connect = async active => {
+    const connection = new Client({ name: 'shutdown-test', version: '1.0.0' });
+    await connection.connect(new StreamableHTTPClientTransport(new URL(active.url), {
+      requestInit: { headers: { authorization: 'Bearer ' + credential } }
+    }));
+    return connection;
+  };
+  const input = { requestId: 'blocked-design', title: 'Design', materials: [{ id: 'one', title: 'One', content: 'Read' }] };
+  try {
+    service = await startLocalMcp(config, { credential, modelBinding: model });
+    client = await connect(service);
+    authorClient = await connect(service);
+    const opened = await authorClient.callTool({ name: 'flowkit_start_workflow', arguments: {
+      requestId: 'blocked-author', operation: 'create', goal: 'Inspect', executionMode: 'standard'
+    } });
+    const draft = JSON.parse(opened.content[0].text);
+    pending = authorClient.callTool({ name: 'flowkit_prepare_workflow', arguments: { turn: {
+      draftId: draft.id, turnId: 'blocked-turn', expectedStateVersion: draft.stateVersion, input: 'Inspect'
+    } } }).catch(error => error);
+    const started = await client.callTool({ name: 'flowkit_create_design_diagram', arguments: input });
+    assert.equal(JSON.parse(started.content[0].text).status, 'running');
+    const [designSignal, authorSignal] = await Promise.all([designEntered.promise, authorEntered.promise]);
+    const stopped = await service.close({ timeoutMs: 40 });
+    assert.equal(stopped.closed, false);
+    assert.ok(stopped.outstanding >= 2, JSON.stringify(stopped));
+    assert.equal(stopped.local.design, 1);
+    assert.equal(designSignal.aborted, true);
+    assert.equal(authorSignal.aborted, true);
+    await assert.rejects(fetch(service.url));
+    await assert.rejects(startLocalMcp(config, { credential, modelBinding: model }), /数据目录已被其他本机 MCP 服务占用/);
+    designRelease.resolve();
+    const stillAuthor = await service.close({ timeoutMs: 100 });
+    assert.equal(stillAuthor.closed, false);
+    await assert.rejects(startLocalMcp(config, { credential, modelBinding: model }), /数据目录已被其他本机 MCP 服务占用/);
+    authorRelease.resolve();
+    assert.deepEqual(await service.close(), { closed: true, outstanding: 0 });
+    recovered = await startLocalMcp(config, { credential, modelBinding: model });
+    const next = await connect(recovered);
+    try {
+      const result = await next.callTool({ name: 'flowkit_create_design_diagram', arguments: input });
+      const record = JSON.parse(result.content[0].text);
+      assert.equal(record.status, 'interrupted');
+      assert.equal(record.error.code, 'FKA_DESIGN_INTERRUPTED');
+      assert.ok(record.resumeToken);
+      const read = await next.callTool({ name: 'flowkit_get_workflow_draft', arguments: { draftId: draft.id } });
+      const observed = JSON.parse(read.content[0].text);
+      assert.equal(observed.candidate, undefined);
+    } finally { await next.close(); }
+  } finally {
+    designRelease.resolve(); authorRelease.resolve();
+    await Promise.allSettled([client?.close(), authorClient?.close(), pending]);
+    if (service) await service.close();
+    if (recovered) await recovered.close();
+  }
+});
+
 // The optional layout cutoff is the subject of this fixture, not the mandatory
 // Design deadline (covered separately above). Trigger its TimeoutError after
 // physical dispatch, instead of racing publication I/O against a 2-second turn.

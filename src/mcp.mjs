@@ -15,7 +15,7 @@ const minimumErrorText = JSON.stringify({ error: { code: responseLimitCode } });
 /** Bind one MCP connection to one authenticated Host scope and the existing Author services. */
 export function createFlowkitMcpServer({ namespace, collectionIds, store, authorHost, requestContext, authorize,
   resolveAuthoringInput, resolveCollectionPlan, applyCollectionPlan, runWorkflow, workflowUi, queueAuthoringTurn, nativeSkillDiscovery = false, limits = {} },
-  transportSignal = undefined) {
+  transportSignal = undefined, trackOperation = operation => operation) {
   if (typeof namespace !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(namespace) ||
     !Array.isArray(collectionIds) || collectionIds.some(value => typeof value !== 'string' || !value) ||
     typeof authorize !== 'function') throw new TypeError('MCP requires a Host-bound namespace, collections and authorization');
@@ -113,7 +113,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   function tool(name, description, schema, invoke, readOnlyHint = false, readAfterAuthorization) {
     const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
     server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
-      async (args, request) => {
+      trackOperation(async (args, request) => {
         const requestSignal = request.mcpReq.signal;
         const ctx = { ...request, signal: transportSignal ? AbortSignal.any([requestSignal, transportSignal]) : requestSignal };
         const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
@@ -143,7 +143,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         } catch (error) {
           return responseError(name,input,result,error);
         }
-      });
+      }));
   }
 
   if (!nativeSkillDiscovery) tool('flowkit_collection', 'Read one bounded page of approved collection metadata.', { collectionId: id,cursor:z.string().optional() },
@@ -342,7 +342,10 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       return resources;
     }
   };
-  if (!nativeSkillDiscovery) new SkillsExtension({ source, baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' } }).attach(server);
+  if (!nativeSkillDiscovery) new SkillsExtension({
+    source: Object.fromEntries(Object.entries(source).map(([name, operation]) => [name, trackOperation(operation)])),
+    baseUri, cacheHint: { ttlMs: 0, cacheScope: 'private' }
+  }).attach(server);
   return server;
 }
 
@@ -362,14 +365,34 @@ export function createFlowkitHttpHandler(resolveHost) {
     const onClose = () => { if (!response.writableFinished) disconnect.abort(); };
     response.once('close', onClose);
     if (response.destroyed) onClose();
-    const server = createFlowkitMcpServer(options, disconnect.signal);
+    // A disconnected transport may finish before a non-cooperative callback.
+    // The Host's HTTP handler remains outstanding until those callbacks settle.
+    const operations = new Set();
+    let accepting = true;
+    const trackOperation = operation => (...args) => {
+      if (!accepting) throw new Error('MCP connection is closed');
+      const pending = Promise.resolve().then(() => {
+        disconnect.signal.throwIfAborted();
+        return operation(...args);
+      });
+      operations.add(pending);
+      const settled = () => operations.delete(pending);
+      void pending.then(settled, settled);
+      return pending;
+    };
+    const server = createFlowkitMcpServer(options, disconnect.signal, trackOperation);
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try {
       await server.connect(transport);
       await transport.handleRequest(request, response);
     } finally {
-      response.off('close', onClose);
-      await server.close();
+      accepting = false;
+      if (!response.writableFinished) disconnect.abort();
+      try { await server.close(); }
+      finally {
+        await Promise.allSettled([...operations]);
+        response.off('close', onClose);
+      }
     }
   };
 }

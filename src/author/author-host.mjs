@@ -94,6 +94,7 @@ export async function createWorkflowAuthorHost(supplied) {
   const ownerId = randomUUID();
   const flights = new Map();
   const publications = new Map();
+  const closeBarriers = new Map();
   const terminalReceiptReserve = 2048;
   function checkRetention(usage) {
     if (usage.draftBytes + usage.activeExecutionDrafts * terminalReceiptReserve > capacity.maxRetainedDraftBytes ||
@@ -226,6 +227,7 @@ export async function createWorkflowAuthorHost(supplied) {
   async function discover(draftId, publicationId, context, signal) {
     const key = JSON.stringify([draftId, publicationId]);
     if (publications.has(key)) return publications.get(key).promise;
+    if (closing || closed) return;
     if (publications.size >= capacity.maxPhysicalExecutions) return;
     const controller = new AbortController(), combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const promise = discoverPublication({ store, options, draftId, publicationId, context, signal: combined, read, mutate, authorize });
@@ -339,6 +341,7 @@ export async function createWorkflowAuthorHost(supplied) {
       let turn, replay, retryExpired;
       store.authorTransaction(state => {
         beforeAdmission?.throwIfAborted();
+        if (closing || closed) throw authorError('author-closed', 'Author service is closing');
         const draft = state.readDraft(input.draftId);
         turn = state.readTurn(draft.id, input.turnId);
         if (turn) {
@@ -845,9 +848,19 @@ export async function createWorkflowAuthorHost(supplied) {
           try { return store.applyCollectionPlan(plan, approvalRef); } finally { collectionChange = null; }
         } };
     },
-    async close({ mode = 'drain', timeoutMs = 5000 } = {}) {
+    async close({ mode = 'drain', timeoutMs = 5000, waitFor } = {}) {
       if (closed) return { closed: true, outstanding: 0 };
       if (!['drain', 'cancel'].includes(mode)) throw new TypeError('Choose drain or cancel');
+      const deadline = performance.now() + positive(timeoutMs, 5000, 'close timeout');
+      if (waitFor !== undefined) {
+        if (typeof waitFor?.then !== 'function') throw new TypeError('Host close waitFor must be a promise');
+        if (!closeBarriers.has(waitFor)) {
+          const barrier = { status: 'pending' };
+          closeBarriers.set(waitFor, barrier);
+          Promise.resolve(waitFor).then(() => { barrier.status = 'fulfilled'; },
+            cause => { barrier.status = 'failed'; barrier.cause = cause; });
+        }
+      }
       closing = true;
       if (mode === 'cancel') for (const flight of flights.values()) {
         mutate(flight.draftId, undefined, (draft, state) => {
@@ -859,11 +872,20 @@ export async function createWorkflowAuthorHost(supplied) {
         flight.controller.abort(authorError('author-cancelled', 'Author Host closing'));
       }
       if (mode === 'cancel') for (const job of publications.values()) job.controller.abort(authorError('author-cancelled', 'Author discovery closing'));
-      const deadline = Date.now() + positive(timeoutMs, 5000, 'close timeout');
-      while ((flights.size || publications.size) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
-      if (flights.size || publications.size) return { closed: false, outstanding: flights.size + publications.size,
-        executions: [...flights.values()].map(({ draftId, turnId, attemptId, cleanupError }) => ({ draftId, turnId, attemptId, cleanupError })),
-        publications: [...publications.values()].map(({ draftId, publicationId }) => ({ draftId, publicationId })) };
+      const barriers = () => [...closeBarriers.values()].filter(item => item.status !== 'fulfilled');
+      const outstanding = () => flights.size + publications.size + barriers().length;
+      while (!closed && outstanding() && performance.now() < deadline) {
+        if (barriers().some(item => item.status === 'failed')) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(10, Math.max(1, deadline - performance.now()))));
+      }
+      if (closed) return { closed: true, outstanding: 0 };
+      if (outstanding()) {
+        const pending = barriers();
+        return { closed: false, outstanding: outstanding(),
+          executions: [...flights.values()].map(({ draftId, turnId, attemptId, cleanupError }) => ({ draftId, turnId, attemptId, cleanupError })),
+          publications: [...publications.values()].map(({ draftId, publicationId }) => ({ draftId, publicationId })),
+          ...(pending.length ? { hostDrains: pending.length, failedHostDrains: pending.filter(item => item.status === 'failed').length } : {}) };
+      }
       store.close(); closed = true;
       return { closed: true, outstanding: 0 };
     }

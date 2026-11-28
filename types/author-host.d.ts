@@ -176,6 +176,9 @@ export interface WorkflowAuthorHost {
   discard(input: { draftId: string; expectedStateVersion: number; candidateHash: string | null; purgeBody?: boolean; retentionPolicyRef?: string; generationId?: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   cancelTurn(input: { draftId: string; expectedStateVersion: number; turnId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   createMcpOptions(context?: AuthorRequestContext, bindings?: Pick<FlowkitMcpOptions, 'resolveAuthoringInput' | 'resolveCollectionPlan' | 'runWorkflow' | 'limits'>): FlowkitMcpOptions;
-  close(options?: { mode?: 'drain' | 'cancel'; timeoutMs?: number }): Promise<{ closed: boolean; outstanding: number }>;
+  /** Cancel/drain within an observation budget. waitFor resolves only after Host-owned store consumers settle; a rejected barrier blocks closure. */
+  close(options?: { mode?: 'drain' | 'cancel'; timeoutMs?: number; waitFor?: PromiseLike<void> }): Promise<{
+    closed: boolean; outstanding: number; hostDrains?: number; failedHostDrains?: number;
+  }>;
 }
 export function createWorkflowAuthorHost(options: AuthorHostOptions): Promise<WorkflowAuthorHost>;

@@ -209,12 +209,11 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
   const designOwner = context => authorIdentity([context.principalId, context.workspaceId, collectionId]);
   const closeStorage = async () => {
     if (storageClosed) return;
+    data.close();
+    await localGraph?.registry.close();
+    if (modelWorkspace) await rmdir(modelWorkspace);
+    releaseLease();
     storageClosed = true;
-    try {
-      data.close();
-      await localGraph?.registry.close();
-      if (modelWorkspace) await rmdir(modelWorkspace);
-    } finally { releaseLease(); }
   };
   try {
     const exportKey = get('export-key-v1') ?? insert('export-key-v1', newExportKey());
@@ -1397,25 +1396,61 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
       }
       return json(res, 404, { error: 'FlowKit endpoint not found' });
     }
-    server = createServer((req,res) => web(req,res).catch(error => {
-      if (!res.headersSent) json(res, 400, { error: error.message });
-      else res.end();
-    }));
+    const httpRequests = new Set();
+    let closing = false, hostDrain, storageCleanup;
+    server = createServer((req,res) => {
+      if (closing) return json(res, 503, { error: 'FlowKit service is closing' });
+      const pending = Promise.resolve().then(() => {
+        if (closing) {
+          if (!res.destroyed) json(res, 503, { error: 'FlowKit service is closing' });
+          return;
+        }
+        return web(req,res);
+      }).catch(error => {
+        if (res.destroyed || res.writableEnded) return;
+        if (!res.headersSent) json(res, 400, { error: error.message });
+        else res.end();
+      });
+      httpRequests.add(pending);
+      const settled = () => httpRequests.delete(pending);
+      void pending.then(settled, settled);
+    });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
     origin = 'http://' + host + ':' + server.address().port;
 
     return {
       url: origin + mcpPath, collectionId, operatorUrl: origin + '/operator/' + bootstrap, exportPublicKey: exportKey.publicKey,
-      async close() {
-        layoutAbort.abort();
-        if (server.listening) {
+      async close({ timeoutMs = 5000 } = {}) {
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new TypeError('Invalid close observation timeout');
+        const deadline = performance.now() + timeoutMs;
+        if (!hostDrain) {
+          closing = true;
+          // Stop admission before closing connections. Socket closure is not physical completion.
+          const listener = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
           server.closeAllConnections();
-          await new Promise(resolve => server.close(resolve));
+          layoutAbort.abort();
+          hostDrain = (async () => {
+            await listener;
+            // No further HTTP admission; wait for the consumers before the work they may have started.
+            await Promise.allSettled([...httpRequests]);
+            await Promise.allSettled([...Array.from(designRequests.values(), job => job.pending)]);
+            await Promise.allSettled([...layoutRequests.values()]);
+            await Promise.allSettled([...modelLayoutCalls]);
+          })();
         }
-        await Promise.allSettled([...Array.from(designRequests.values(), job => job.pending), ...layoutRequests.values(), ...modelLayoutCalls]);
-        const outcome = await authorHost.close({ mode: 'cancel' });
-        if (outcome.closed) await closeStorage();
-        return outcome;
+        // Author cancellation starts now, not after a potentially non-cooperative Design/HTTP job.
+        const outcome = await authorHost.close({ mode: 'cancel', waitFor: hostDrain,
+          timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) });
+        if (!outcome.closed) return { ...outcome, local: { http: httpRequests.size,
+          design: designRequests.size, layout: layoutRequests.size, model: modelLayoutCalls.size } };
+        // Cleanup is single-flight. A failed cleanup must not advertise a safely closed service.
+        storageCleanup ??= closeStorage();
+        let timer;
+        try {
+          const finished = await Promise.race([storageCleanup.then(() => true),
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), Math.max(1, deadline - performance.now())); })]);
+          return finished ? outcome : { closed: false, outstanding: 1, storageCleanup: true };
+        } finally { clearTimeout(timer); }
       }
     };
   } catch (error) {
@@ -1434,7 +1469,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.stdout.write(JSON.stringify({ url: service.url, collectionId: service.collectionId, operatorUrl: service.operatorUrl,
       exportPublicKey: service.exportPublicKey }) + '\n');
     const stop = async () => {
-      try { if (!(await service.close()).closed) process.exitCode = 1; }
+      try {
+        const outcome = await service.close();
+        if (!outcome.closed) {
+          process.stderr.write('FlowKit shutdown is draining: ' + JSON.stringify(outcome) + '\\n');
+          process.exitCode = 1;
+        }
+      }
       catch (error) { process.stderr.write(error.message + '\n'); process.exitCode = 1; }
     };
     process.once('SIGINT', stop);

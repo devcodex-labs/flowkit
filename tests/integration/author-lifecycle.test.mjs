@@ -171,6 +171,25 @@ test('I4 S93/S105: an ignored physical request outlives the logical deadline and
   release(); await until(async () => (await f.host.close({ mode: 'drain', timeoutMs: 20 })).closed);
 });
 
+test('Author close cancels immediately but keeps the store open until Host consumers settle', async t => {
+  const f = await setup(t);
+  const gate = Promise.withResolvers();
+  f.releases.push(gate.resolve);
+  const draft = await f.start();
+  const first = await f.host.close({ mode: 'cancel', timeoutMs: 15, waitFor: gate.promise });
+  assert.equal(first.closed, false);
+  assert.equal(first.outstanding, 1);
+  assert.equal(first.hostDrains, 1);
+  assert.equal((await f.host.readDraft({ draftId: draft.id }, context)).id, draft.id);
+  await assert.rejects(advance(f, draft), { code: 'FKA_CLOSED' });
+  const repeated = await f.host.close({ mode: 'cancel', timeoutMs: 15 });
+  assert.equal(repeated.closed, false);
+  assert.equal(repeated.hostDrains, 1);
+  gate.resolve();
+  const results = await Promise.all([f.host.close(), f.host.close()]);
+  assert.deepEqual(results, [{ closed: true, outstanding: 0 }, { closed: true, outstanding: 0 }]);
+});
+
 test('a deadline crossed during commit authorization fences promotion and stays expired after a clock rollback and reopen', async t => {
   const f = await setup(t);
   const realNow = Date.now.bind(Date);
