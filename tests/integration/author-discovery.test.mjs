@@ -45,6 +45,10 @@ test('I4 S117/S120/S121: durable exact paths, full-tree hashes and mapping readb
   assert.equal(recovered.generation.discoveryRoot, firstRoot); assert.equal(f.switches(), 1);
   assert.equal(recovered.generation.skills, undefined); assert.equal(recovered.collectionSnapshot, undefined);
   assert.deepEqual((await readdir(path.join(recovered.generation.directory, 'skills', 'inspect'))).sort(), ['SKILL.md', 'workflow.js', 'workflow.mmd']);
+  assert.deepEqual((await readdir(path.join(recovered.generation.directory, 'skills'))).sort(), ['inspect', 'team-workflows']);
+  assert.equal(await readFile(path.join(recovered.generation.directory, 'skills', 'team-workflows', 'SKILL.md'), 'utf8'),
+    f.store.readCollectionMetadata('team').collection.rootSkill);
+  await assert.rejects(readFile(path.join(recovered.generation.directory, 'SKILL.md')), { code: 'ENOENT' });
   const g = await setup(t, { noCas: true }), b = await approved(g, 'inspect');
   assert.equal((await g.host.publish(b.input, context)).discovery, 'pending'); assert.equal(g.switches(), 0);
 });
@@ -110,6 +114,6 @@ test('I4 S123/S124: cleanup retains referenced or modified generations and remov
   await assert.rejects(cleanup(), /user-owned/); assert.equal(f.mapping(), null); assert.equal(await readFile(user, 'utf8'), 'keep');
   await rm(user); const result = await cleanup(); assert.equal(result.status, 'saved');
   assert.equal((await f.host.publish(a.input, context)).discovery, 'removed'); assert.equal(f.mapping(), null);
-  await assert.rejects(readFile(path.join(saved.generation.directory, 'SKILL.md')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(saved.generation.directory, 'skills', 'team-workflows', 'SKILL.md')), { code: 'ENOENT' });
   assert.equal(f.store.readActive('team', a.ready.candidate.manifest.skillId).hash, a.ready.candidate.hash);
 });

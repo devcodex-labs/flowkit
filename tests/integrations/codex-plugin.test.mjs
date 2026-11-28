@@ -555,13 +555,15 @@ test('native discovery distinguishes an exact directory mapping from observation
   const generation = path.join(source, 'test-generation');
   const directory = path.join(generation, 'team-workflows');
   const child = path.join(directory, 'skills', 'check');
+  const entryDirectory = path.join(directory, 'skills', 'team-workflows');
   await mkdir(child, { recursive: true });
-  await writeFile(path.join(directory, 'SKILL.md'), 'Owned collection');
+  await mkdir(entryDirectory, { recursive: true });
+  await writeFile(path.join(entryDirectory, 'SKILL.md'), 'Owned collection');
   await writeFile(path.join(child, 'SKILL.md'), 'Owned child');
   const collection = { id: 'team', name: 'team-workflows', directory: 'team-workflows' };
   const mapping = { generationId: 'generation', discoveryRoot: generation, snapshotHash: 'snapshot',
     manifestHash: 'manifest', operationId: 'publish' };
-  const files = ['team-workflows/SKILL.md', 'team-workflows/skills/check/SKILL.md'];
+  const files = ['team-workflows/skills/team-workflows/SKILL.md', 'team-workflows/skills/check/SKILL.md'];
   const receipts = new Map();
   const skills = [];
   const create = () => createLocalCodexSkills({ workspace, root: source, collection,
@@ -572,7 +574,7 @@ test('native discovery distinguishes an exact directory mapping from observation
   const restored = await create();
   assert.deepEqual(await restored.discovery.readMapping(), mapping);
   const entry = (name, file) => ({ name, path: file, description: name, scope: 'repo', enabled: true });
-  skills.push(entry('team-workflows', path.join(directory, 'SKILL.md')));
+  skills.push(entry('team-workflows', path.join(entryDirectory, 'SKILL.md')));
   assert.equal(await restored.discovery.observeMapping({ mapping, files }), false);
   skills.push(entry('check', path.join(child, 'SKILL.md')));
   assert.equal(await restored.discovery.observeMapping({ mapping, files }), true);

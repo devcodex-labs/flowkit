@@ -248,6 +248,9 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           if (authorizeCollectionChange({ plan, planHash, approvalRef, previous }) !== true) {
             throw new Error('Host denied the collection plan');
           }
+          if (db.prepare('SELECT 1 FROM fk_author_active WHERE collection_id=? AND name=?').get(id, name)) {
+            throw new Error('The collection entry name is reserved; an active Skill already uses it');
+          }
           if (plan.operation === 'rename') rename.run(name, payload, id);
           else register.run(id, name, payload);
           return plan.destination;
@@ -266,6 +269,7 @@ export function openLocalSkillStore(file, authorizePublication, authorizeCollect
           }
           const currentHash = current.get(collectionId, skillId)?.candidate_hash ?? null;
           if (hash !== currentHash) {
+            if (registered.get(collectionId)?.name === name) throw new Error('The collection entry name is reserved');
             if (currentHash !== previousHash) throw new Error('Active workflow changed after review');
             const previous = currentHash && readCandidate(read.get(collectionId, skillId, currentHash));
             if (previous && previous.manifest.kind !== candidate.manifest.kind) throw new Error('Cannot replace a Skill with a different kind');

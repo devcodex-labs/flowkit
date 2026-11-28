@@ -2,18 +2,18 @@ import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, lstat, readdir, rename, open, realpath } from 'node:fs/promises';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
-import { collectionSkill } from './collections.mjs';
+import { collectionSkill, collectionRootSkillPath } from './collections.mjs';
 import { checkCandidate } from './standard-artifact.mjs';
 import { checkProfessionalSkill } from './professional-skills.mjs';
 import { validateSkillName } from './skill-document.mjs';
 
 const OWNER = '.flowkit-owner.json', MARKER = '.flowkit-generation.json';
 const text = value => JSON.stringify(value) + '\n';
-function bodies(snapshot) {
+export function collectionGenerationFiles(snapshot) {
   const { collection, skills } = snapshot;
   validateSkillName(collection.name);
   if (collection.directory !== collection.name || !collection.id || typeof collection.rootSkill !== 'string') throw new Error('Generation collection identity differs');
-  const result = { [collection.directory + '/SKILL.md']: collection.rootSkill };
+  const result = { [collectionRootSkillPath(collection)]: collection.rootSkill };
   for (const candidate of skills) {
     if (candidate.manifest.kind === 'professional') checkProfessionalSkill(candidate); else checkCandidate(candidate);
     if (candidate.manifest.collectionId !== collection.id) throw new Error('Generation Skill belongs to another collection');
@@ -35,8 +35,9 @@ const completeRecord = plan => ({ collectionId: plan.collectionId, files: plan.f
 /** Prepare every identity/path/hash before filesystem mutation. The caller durably stores this plan. */
 export function planCollectionGeneration(snapshot, hostOwnedRoot, { namespace, publicationId, operationId, generationId, snapshotHash }) {
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(generationId) || !namespace || !publicationId || !snapshotHash) throw new Error('Generation needs exact Host-owned scope and identity');
-  const root = realpathSync.native(hostOwnedRoot), files = Object.fromEntries(Object.entries(bodies(snapshot)).map(([name, body]) => [name, artifactDigest(body)]));
-  const entries = Object.values(bodies(snapshot));
+  const root = realpathSync.native(hostOwnedRoot), bodies = collectionGenerationFiles(snapshot);
+  const files = Object.fromEntries(Object.entries(bodies).map(([name, body]) => [name, artifactDigest(body)]));
+  const entries = Object.values(bodies);
   if (entries.length > 10000 || entries.reduce((size, body) => size + Buffer.byteLength(body), 0) > 128 * 1024 * 1024) throw new Error('Generation exceeds its file/byte capacity');
   const plan = { namespace, publicationId, operationId, generationId, collectionId: snapshot.collection.id, snapshotHash, root,
     staging: path.join(root, '.flowkit-stage-' + generationId), complete: path.join(root, 'flowkit-collection-' + generationId), files,
@@ -104,7 +105,7 @@ export async function materializeCollectionGeneration(snapshot, hostOwnedRoot, p
     const prior = await exists(plan.staging);
     if (prior) await inspect(plan.staging, plan, false);
     else { await mkdir(plan.staging); await writeExact(path.join(plan.staging, OWNER), text(ownerRecord(plan))); }
-    for (const [name, body] of Object.entries(bodies(snapshot))) {
+    for (const [name, body] of Object.entries(collectionGenerationFiles(snapshot))) {
       signal?.throwIfAborted(); await directories(plan.staging, name); await writeExact(path.join(plan.staging, name), body);
     }
     await writeExact(path.join(plan.staging, MARKER), text(completeRecord(plan)));

@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { artifactDigest, professionalSkillFileHashes } from '../src/shared/artifact-identity.mjs';
 import { validateSkillName } from '../src/author/skill-document.mjs';
+import { collectionRootSkillPath } from '../src/author/collections.mjs';
 import { readRegularResource } from '../src/runtime/task-resources.mjs';
 
 const inside = (root, file) => {
@@ -220,8 +221,11 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
         }
         const generation = await realpath(next.discoveryRoot);
         const target = await realpath(path.join(generation, collection.directory));
+        const rootSkill = path.join(generation, collectionRootSkillPath(collection));
         if (path.dirname(generation) !== root || path.dirname(target) !== generation ||
-            !(await lstat(path.join(target, 'SKILL.md'))).isFile()) throw new Error('Codex generation is outside the publication root');
+            !(await lstat(rootSkill)).isFile() || !inside(target, await realpath(rootSkill))) {
+          throw new Error('Codex generation is outside the publication root or missing its collection entry');
+        }
         put(receiptKey(target), next);
         const staged = path.join(path.dirname(skills), name + '.stage-' + randomUUID());
         await symlink(target, staged, process.platform === 'win32' ? 'junction' : 'dir');
@@ -251,7 +255,7 @@ export async function createLocalCodexSkills({ workspace, root, collection, get,
           if (typeof entry.description !== 'string' || !entry.description.trim()) return { complete: false };
           const file = await realpath(entry.path);
           if (!inside(cwd, file) && !inside(root, file)) continue;
-          if (mapping && file === path.join(mapping.target, 'SKILL.md')) continue;
+          if (mapping && file === path.join(path.dirname(mapping.target), collectionRootSkillPath(collection))) continue;
           const stored = inside(root, file) ? await managedSkill(entry, file, mapping) : null;
           if (inside(root, file) && !stored) continue;
           const source = stored ? 'collection:' + collection.id : nativeSource(file);

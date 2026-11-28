@@ -180,7 +180,7 @@ Standard Parallel 的成员各自只有一条通往汇合后节点的派生控�
 用户先核对候选目标、控制流和文件差异。Standard workflow 使用同一次编译的 `workflow.js` 与 `workflow.mmd`，与 `SKILL.md` 同目录。需要保留 DSL 时显式启用 `source/workflow.dsl.js`。Workflow Skill 与 Professional Skill 都出现在主集合的 `skills/` 目录下。集合逻辑 ID 在重命名时保持，旧版本继续保持原 Artifact 身份。
 独立复审未通过时，草稿的 `reviewRejection` 与 `reviewCandidate` 的 `rejection` 提供同一候选的具体发现。Host 用新 turnId 和动作附带的 `candidateHash` 发起 `review-only` 重审原候选，或发起 `authoring` 按发现修订。改稿沿用原草稿的用户请求、补答及明确授权的基线。评审查看声明节点、Mermaid 渲染标记及 Parallel 控制语义，用户批准仍需单独记录。
 
-宿主验证候选摘要与审批，发布完整版本并将获准的目录映射到发现位置。执行已有 Workflow Skill 时，宿主核对下载或本地文件与已批准 Artifact、固定资源版本和当前权限，再经 [runArtifact](/reference/sdk#runArtifact) 执行。Standard 运行无需安装 Author。
+宿主验证候选摘要与审批，发布完整版本并将获准的目录映射到发现位置。新集合采用平级目录：`<collection>/skills/<collection>/SKILL.md` 是独立集合主入口，`<collection>/skills/<name>/SKILL.md` 是独立 Workflow 或 Professional Skill，主入口名称保留。两种业务 Skill 不嵌套在主 Skill 内。主入口使用已连接的 FlowKit MCP 功能，不要求预装内部 Author Skill；Capability Graph 仍按需使用。文件生成和宿主实际发现是不同状态，原生适配器必须观察到对应条目才能报告发现成功。已有历史 generation 不被自动改写；不能按新布局安全重放的旧计划保留并等待对账。执行已有 Workflow Skill 时，宿主核对下载或本地文件与已批准 Artifact、固定资源版本和当前权限，再经 [runArtifact](/reference/sdk#runArtifact) 执行。Standard 运行无需安装 Author。
 
 ## 从业务目的到可执行交付
 

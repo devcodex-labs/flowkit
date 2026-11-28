@@ -427,6 +427,9 @@ test('collection previews keep two layers, scope Skill IDs, and reject name or m
   const { destination: first } = planNewCollection({}, [], free);
   assert.equal(first.directory, 'flowkit-workflows');
   assert.match(first.rootSkill, /\nname: flowkit-workflows\n/);
+  assert.match(first.rootSkill, /flowkit_start_workflow/);
+  assert.doesNotMatch(first.rootSkill, /flowkit-workflow-author/);
+  assert.throws(() => collectionSkill(first, { id: 'conflict', name: first.name }), /entry name is reserved/);
   const source = first;
   const { destination: copy } = planNewCollection({ source, name: 'team-copy' }, [first], free);
   assert.notEqual(copy.id, first.id);
@@ -552,8 +555,14 @@ test('approved collection generation exposes a two-layer tree and preserves prev
   grants.set('init', verifiedCollectionPlan(initial).planHash);
   store.applyCollectionPlan(initial, 'init');
   const empty = await stageCollectionForDiscovery(store, id, hostReadRoot);
-  assert.deepEqual((await readdir(empty.directory)).sort(), ['SKILL.md', 'skills']);
-  assert.deepEqual(await readdir(path.join(empty.directory, 'skills')), []);
+  assert.deepEqual(await readdir(empty.directory), ['skills']);
+  assert.deepEqual(await readdir(path.join(empty.directory, 'skills')), ['project-flows']);
+  assert.equal(await readFile(path.join(empty.directory, 'skills', 'project-flows', 'SKILL.md'), 'utf8'), initial.destination.rootSkill);
+  await assert.rejects(readFile(path.join(empty.directory, 'SKILL.md')), { code: 'ENOENT' });
+  const reserved = (await prepareStandardSkill({ ...options, collectionId: id, name: initial.destination.name })).candidate;
+  grants.set('reserved', reserved.hash);
+  await assert.rejects(publishStandardSkill(reserved, { reviewRef: 'reviewed', approvalRef: 'reserved', previousHash: null }, store), /entry name is reserved/);
+  assert.equal(store.readVersion(id, reserved.manifest.skillId, reserved.hash), null);
 
   const { candidate } = await prepareStandardSkill({ ...options, collectionId: id });
   await assert.rejects(publishStandardSkill(candidate, { reviewRef: 'reviewed', approvalRef: 'pending', previousHash: null }, store), /Host denied/);
@@ -562,11 +571,14 @@ test('approved collection generation exposes a two-layer tree and preserves prev
   const metadata = { id: 'review', name: 'review', description: 'Review project changes', version: '1.0.0', body: '# Review changes' };
   assert.throws(() => prepareProfessionalSkill(initial.destination,
     { ...metadata, resources: { 'references/skills/another.md': 'invalid' } }), /portable resource paths/);
+  assert.throws(() => prepareProfessionalSkill(initial.destination, { ...metadata, name: initial.destination.name }), /entry name is reserved/);
   const professional = prepareProfessionalSkill(initial.destination,
     { ...metadata, resources: { 'references/checklist.md': 'Review the public API.' } });
   grants.set('professional', professional.hash);
   await publishProfessionalSkill(professional, { reviewRef: 'reviewed', approvalRef: 'professional', previousHash: null }, store);
   const approved = await stageCollectionForDiscovery(store, id, hostReadRoot);
+  assert.deepEqual((await readdir(path.join(approved.directory, 'skills'))).sort(), ['project-flows', options.name, 'review'].sort());
+  assert.equal(await readFile(path.join(approved.directory, 'skills', 'project-flows', 'SKILL.md'), 'utf8'), initial.destination.rootSkill);
   const original = path.join(approved.directory, 'skills', options.name);
   const professionalDir = path.join(approved.directory, 'skills', 'review');
   assert.deepEqual((await readdir(original)).sort(), ['SKILL.md', 'workflow.js', 'workflow.mmd']);
@@ -588,8 +600,15 @@ test('approved collection generation exposes a two-layer tree and preserves prev
   assert.deepEqual(actions, []);
   assert.equal((await runApprovedCollectionWorkflow(store, identity, host)).terminal, 'done');
   assert.deepEqual(actions, ['inspect']);
-  assert.deepEqual(await readdir(path.join(empty.directory, 'skills')), []);
+  assert.deepEqual(await readdir(path.join(empty.directory, 'skills')), ['project-flows']);
 
+  const conflict = planCollectionRename({ id, name: 'review' }, [initial.destination], {
+    directoryOwner: () => null,
+    previewMigration: () => ({ expectedSnapshotHash: authorIdentity(store.readCollectionMetadata(id)), hostMapping: null, workflowReferences: [], mcpResources: [] })
+  });
+  grants.set('conflict', verifiedCollectionPlan(conflict).planHash);
+  assert.throws(() => store.applyCollectionPlan(conflict, 'conflict'), /entry name is reserved/);
+  assert.equal(store.readCollectionMetadata(id).collection.name, 'project-flows');
   const migrate = planCollectionRename({ id, name: 'team-flows' }, [initial.destination], {
     directoryOwner: () => null,
     previewMigration: () => ({ expectedSnapshotHash: authorIdentity(store.readCollectionMetadata(id)), hostMapping: ['project-flows', 'team-flows'], workflowReferences: [], mcpResources: [] })
@@ -599,7 +618,8 @@ test('approved collection generation exposes a two-layer tree and preserves prev
   const current = await stageCollectionForDiscovery(store, id, hostReadRoot);
   assert.equal(path.basename(current.directory), 'team-flows');
   assert.deepEqual(current.skills, approved.skills);
-  assert.match(await readFile(path.join(current.directory, 'SKILL.md'), 'utf8'), /name: team-flows/);
+  assert.match(await readFile(path.join(current.directory, 'skills', 'team-flows', 'SKILL.md'), 'utf8'), /name: team-flows/);
+  assert.equal(await readFile(path.join(approved.directory, 'skills', 'project-flows', 'SKILL.md'), 'utf8'), initial.destination.rootSkill);
   assert.equal(artifactDigest(await readFile(path.join(original, 'workflow.js'))), candidate.manifest.artifactHash);
   assert.deepEqual(store.readVersion(id, options.skillId, candidate.hash), candidate);
   assert.throws(() => store.applyCollectionPlan(migrate, 'rename'), /changed after review/);
