@@ -4,6 +4,10 @@ import { validateSkillName } from './skill-document.mjs';
 import { workflowExecutionModes } from '../interactive/protocol.mjs';
 import { authorIdentity } from './host-target.mjs';
 
+// Terminal lifecycle does not imply that the associated physical turn has settled.
+export const terminalDraftStatuses = Object.freeze(['discarded', 'abandoned', 'saved', 'expired']);
+export const isTerminalDraft = draft => terminalDraftStatuses.includes(draft.status);
+
 const constraintKinds = Object.freeze({ requirement: 'must', prohibition: 'must_not',
   precondition: 'precondition', preference: 'should' });
 const intentNodes = (nodes, parent = '/effective/intents') => nodes.flatMap((node, index) => {

@@ -25,7 +25,7 @@ Author 审查候选时，宿主的 `authorization.resolveApplicableSafetyPolicie
 | capabilityGraph / readDocumentUrl / resolveProfessionalSkill | 当前权限下发现和读取；专业 Skill 固定 id/version/digest/approved；Graph 不执行 Agent |
 | budgetPolicy | 缺省 300000ms、24 模型请求、32 工具、96 I/O、16MiB 总字节、256KiB 单响应；Host 可配置有限正值，429/5xx 重试也计数。也是长材料策略的共享基线 |
 | documentBudgetPolicy | 长材料回合继承已解析的 budgetPolicy；若普通 maxRequests 未显式提供，长材料默认 168 次。此对象仅覆盖明确给出的字段，undefined 继承，null、错误类型及未知字段拒绝 |
-| capacity | 必填有限正值：maxPhysicalExecutions、maxDrafts、maxDraftBytes、maxRetainedDraftBytes、maxReceiptBytes、maxTurnsPerDraft；maxPendingCandidates 默认 16。未知字段、null 和错误类型拒绝，不用静默默认值替代配置错误 |
+| capacity | 必填有限正值：maxPhysicalExecutions、maxDrafts、maxDraftBytes、maxRetainedDraftBytes、maxReceiptBytes、maxTurnsPerDraft；maxPendingCandidates 默认 16。maxDrafts 仅限制非终态活跃草稿，已保存/放弃/丢弃/过期历史不占新草稿名额；未物理结算轮次单独计数，终态不等于释放物理槽。历史字节、回执和版本仍受保留边界约束，不自动删除。未知字段、null 和错误类型拒绝 |
 | retention / discovery | 默认不自动删数据；发现需自有 root、readMapping、compareAndSetMapping。缺 CAS 可保存，但 discovery 保持 pending |
 
 每个业务调用独立传 `AuthorRequestContext={namespace,principalId,sessionId,workspaceId,authorizedCollections,authorizationSnapshotRef}`，由当前 Host 认证生成，不从模型参数补造或缓存上次 HTTP 身份。完整类型见[Host 类型](/reference/types#author-types)。

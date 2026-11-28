@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { artifactDigest } from '../shared/artifact-identity.mjs';
 import { during } from '../runtime/tasks.mjs';
 import { openLocalSkillStore } from './local-skill-store.mjs';
-import { startAuthorDraft } from './draft.mjs';
+import { startAuthorDraft, isTerminalDraft } from './draft.mjs';
 import { checkCandidate, reviewStandardCandidate, prepareImportedStandardSkill } from './standard-artifact.mjs';
 import { authorInput, authorTarget, authorIdentity as hash, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from './host-target.mjs';
 import { executeAuthorCore, rejectedReview } from './host-core.mjs';
@@ -29,7 +29,8 @@ const requiredId = (value, label) => {
 // Multiple connections in this process share observed physical ownership, never a TTL takeover.
 const physicalExecutions = new Map();
 const NO_CHANGE = Symbol('no-change');
-const isTerminalDraft = draft => ['discarded', 'abandoned', 'saved', 'expired'].includes(draft.status);
+const countsPendingCandidate = draft => !!draft && !isTerminalDraft(draft) && !draft.bodyPurged &&
+  !!draft.candidate && !draft.savedReceipt;
 const turnDeadlineExpired = turn => turn.deadlineExpired === true || turn.failure?.code === 'FKA_DEADLINE' ||
   Date.now() >= turn.budget.deadlineMs;
 
@@ -110,9 +111,18 @@ export async function createWorkflowAuthorHost(supplied) {
       throw authorError('author-capacity', 'Retained draft/receipt byte capacity reached; explicit Host retention decision required');
     }
   }
-  function physicalSlotUnavailable(state, draft, activeDrafts = state.activeDrafts(capacity.maxDrafts + 1)) {
-    const physical = activeDrafts.flatMap(item => state.turns(item.id)).filter(turn => turn.physicalOutstanding);
-    return Boolean(draft.activeExecution || physical.some(turn => turn.draftId === draft.id) || physical.length >= capacity.maxPhysicalExecutions);
+  function physicalSlotUnavailable(state, draft) {
+    const physical = state.physicalUsage(draft.id);
+    return Boolean(draft.activeExecution || physical.own || physical.total >= capacity.maxPhysicalExecutions);
+  }
+  function checkCandidateAdmission(state, draft) {
+    // Enforce the quota when a draft first acquires a pending candidate, not on
+    // updates or settlement of an already admitted candidate. This also covers
+    // concurrent completions and imports without evicting any existing receipt.
+    if (countsPendingCandidate(draft) && !countsPendingCandidate(state.readDraft(draft.id)) &&
+        state.pendingCandidateCount() >= capacity.maxPendingCandidates) {
+      throw authorError('author-capacity', 'Pending candidate capacity reached');
+    }
   }
   function view(draft, state) {
     const result = select(draft, ['id', 'status', 'collectionId', 'stateVersion', 'contentRevision', 'contentHash', 'goal', 'operation',
@@ -160,6 +170,7 @@ export async function createWorkflowAuthorHost(supplied) {
     if (jsonBytes(draft) + (draft.activeExecution ? terminalReceiptReserve : 0) > capacity.maxDraftBytes) {
       throw authorError('author-capacity', 'Draft byte capacity exceeded');
     }
+    checkCandidateAdmission(state, draft);
     state.writeDraft(draft, previous);
     checkRetention(state.usage());
   }
@@ -266,14 +277,13 @@ export async function createWorkflowAuthorHost(supplied) {
       // Authorization/import can suspend while close freezes admission.
       assertAdmission('start', signal);
       return store.authorTransaction(state => {
-        const drafts = state.activeDrafts(capacity.maxDrafts + 1);
         const replay = state.findStartRequest(input.requestId);
         if (replay) {
           if (replay.bodyPurged) throw authorError('author-expired', 'Start requestId is expired; it cannot create a new operation');
           if (replay.startFingerprint !== fingerprint) throw authorError('author-conflict', 'Start requestId has different material');
           return view(replay, state);
         }
-        if (drafts.filter(draft => !draft.bodyPurged).length >= capacity.maxDrafts) throw authorError('author-capacity', 'Retained draft capacity reached; Host retention decision required');
+        if (state.activeDraftCount() >= capacity.maxDrafts) throw authorError('author-capacity', 'Active draft capacity reached; finish or discard an active draft');
         const collection = store.readCollectionMetadata(input.collectionId, { limit: 1 })?.collection;
         const initial = startAuthorDraft(input.goal, { ...options.defaults, ...(collection ? { collectionName: collection.name } : {}), ...input.choices });
         const { previous, operation } = authorTarget(input, store);
@@ -310,6 +320,7 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         draft.contentHash = hash(content(draft));
         if (jsonBytes(draft) > capacity.maxDraftBytes) throw authorError('author-capacity', 'Draft byte capacity exceeded');
+        checkCandidateAdmission(state, draft);
         state.writeDraft(draft, null);
         checkRetention(state.usage());
         return view(draft, state);
@@ -402,8 +413,7 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         const ownTurns = state.turns(draft.id, capacity.maxTurnsPerDraft + 1);
         if (ownTurns.length >= capacity.maxTurnsPerDraft) throw authorError('author-capacity', 'Retained turn receipt capacity reached');
-        const all = state.activeDrafts(capacity.maxDrafts + 1);
-        if (physicalSlotUnavailable(state, draft, all) ||
+        if (physicalSlotUnavailable(state, draft) ||
           ownTurns.some(item => item.reconciliationRequired && !item.settlement)) {
           draft.pendingInputs ??= {};
           if (Object.keys(draft.pendingInputs).length >= 4 && !Object.hasOwn(draft.pendingInputs, input.turnId)) throw authorError('author-capacity', 'Pending input capacity reached');
@@ -416,7 +426,7 @@ export async function createWorkflowAuthorHost(supplied) {
         }
         if (draft.pendingInputs && Object.hasOwn(draft.pendingInputs, input.turnId) && draft.pendingInputs[input.turnId].fingerprint !== fingerprint) throw authorError('author-conflict', 'Pending input changed');
         if (draft.pendingInputs) { delete draft.pendingInputs[input.turnId]; draft.pendingTurnIds = Object.keys(draft.pendingInputs); }
-        if (all.filter(item => item.candidate && !item.savedReceipt && item.status !== 'discarded').length >= capacity.maxPendingCandidates && !draft.candidate) {
+        if (state.pendingCandidateCount() >= capacity.maxPendingCandidates && !countsPendingCandidate(draft)) {
           throw authorError('author-capacity', 'Pending candidate capacity reached');
         }
         if (typeof input.input !== 'string' || !input.input.trim()) throw new TypeError('Current input is required');

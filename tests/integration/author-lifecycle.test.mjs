@@ -370,13 +370,85 @@ test('I4 S49/S125/S126/S127/S129: default discard retains bodies; explicit unref
   const first = await f.start(), ready = await advance(f, first);
   const second = await f.start({ requestId: 'second', target: { name: 'second', description: 'Second', version: '1.0.0' } });
   await assert.rejects(advance(f, second), /Pending candidate capacity/);
+  await assert.rejects(f.start({ requestId: 'third' }), /Active draft capacity/);
   const discarded = await f.host.discard({ draftId: first.id, expectedStateVersion: ready.stateVersion, candidateHash: ready.candidate.hash }, context);
-  assert.ok(discarded.candidate); await assert.rejects(f.start({ requestId: 'third' }), /Retained draft capacity/);
+  assert.ok(discarded.candidate);
+  const third = await f.start({ requestId: 'third' });
+  assert.equal(third.status, 'draft');
+  assert.equal((await latest(f, first)).candidate.hash, ready.candidate.hash);
+  await assert.rejects(f.start({ requestId: 'fourth' }), /Active draft capacity/);
   const expired = await f.host.discard({ draftId: first.id, expectedStateVersion: discarded.stateVersion, candidateHash: ready.candidate.hash,
     purgeBody: true, retentionPolicyRef: 'owned-retention' }, context);
   assert.equal(expired.status, 'expired'); assert.equal(expired.candidate, undefined);
   await assert.rejects(f.start(), /expired/);
   await assert.rejects(advance(f, first), /expired/);
-  assert.equal((await f.start({ requestId: 'third' })).status, 'draft');
+  assert.equal((await f.start({ requestId: 'third' })).id, third.id);
+  await assert.rejects(f.start({ requestId: 'fourth' }), /Active draft capacity/);
   const next = await advance(f, second); assert.equal(next.status, 'candidate-ready');
+});
+
+test('saved draft history and publication replay do not exhaust the active draft quota', async t => {
+  const f = await setup(t, { capacity: { maxDrafts: 2, maxPendingCandidates: 1 } });
+  await f.register();
+  const saved = [];
+  for (let index = 0; index < 3; index++) {
+    const input = { requestId: 'historical-' + index, target: { name: 'historical-' + index, description: 'Inspect', version: '1.0.0' } };
+    const draft = await f.start(input);
+    const ready = await advance(f, draft, { turnId: 'historical-turn-' + index });
+    assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+    const binding = { draftId: draft.id, expectedStateVersion: ready.stateVersion, candidateHash: ready.candidate.hash,
+      previousHash: ready.previousHash, reviewRef: ready.reviewReceipt.reviewRef, approvalRef: 'approved-' + index };
+    f.approvals.set(binding.approvalRef, binding.candidateHash);
+    const approved = await f.host.recordApproval(binding, context);
+    const publication = { ...binding, expectedStateVersion: approved.stateVersion, publicationId: 'save-' + index };
+    const receipt = await f.host.publish(publication, context);
+    assert.equal(receipt.status, 'saved');
+    saved.push({ input, draft, receipt, publication });
+  }
+  const first = await f.start({ requestId: 'active-first' });
+  const second = await f.start({ requestId: 'active-second' });
+  await assert.rejects(f.start({ requestId: 'active-third' }), /Active draft capacity/);
+  const reopened = await fixture(f.file, { capacity: { maxDrafts: 2, maxPendingCandidates: 1 } });
+  f.hosts.push(reopened.host);
+  for (const item of saved) {
+    const replay = await reopened.start(item.input);
+    assert.equal(replay.id, item.draft.id);
+    assert.equal(replay.status, 'saved');
+    const receipt = await reopened.host.publish(item.publication, context);
+    assert.equal(receipt.candidateHash, item.receipt.candidateHash);
+    assert.equal(receipt.publicationId, item.receipt.publicationId);
+  }
+  assert.equal(reopened.calls.length, 0);
+  assert.equal(database(f.file, db => db.prepare('SELECT count(*) AS count FROM fk_author_versions').get().count), 3);
+  await f.host.discard({ draftId: first.id, expectedStateVersion: first.stateVersion, candidateHash: null }, context);
+  assert.equal((await reopened.start({ requestId: 'active-third' })).status, 'draft');
+  assert.equal((await latest(f, second)).status, 'draft');
+});
+
+test('an abandoned draft frees active admission but its real outstanding turn still blocks physical dispatch', async t => {
+  const f = await setup(t, { capacity: { maxDrafts: 1, maxPhysicalExecutions: 1 } });
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.releases.push(release.resolve);
+  const raw = f.options.execution.request;
+  f.options.execution.request = async input => { entered.resolve(); await release.promise; return raw(input); };
+  const draft = await f.start({ requestId: 'abandon-me' });
+  const running = advance(f, draft);
+  try {
+    await entered.promise;
+    await f.host.cancelTurn({ draftId: draft.id, expectedStateVersion: (await latest(f, draft)).stateVersion, turnId: 'turn' }, context);
+    await running;
+    await f.host.settleTurn({ draftId: draft.id, expectedStateVersion: (await latest(f, draft)).stateVersion,
+      turnId: 'turn', decision: 'abandon', evidenceRef: 'owned-test-abandonment' }, context);
+    assert.equal((await latest(f, draft)).status, 'abandoned');
+    assert.equal((await latest(f, draft)).physicalOutstanding.length, 1);
+    const next = await f.start({ requestId: 'new-after-abandon' });
+    const queued = await advance(f, next, { turnId: 'next' });
+    assert.equal(queued.outcome, 'blocked-by-inflight');
+    assert.equal(database(f.file, db => db.prepare("SELECT count(*) AS count FROM fk_author_turns WHERE draft_id=?").get(next.id).count), 0);
+    release.resolve();
+    await until(async () => !(await latest(f, draft)).physicalOutstanding.length);
+    const ready = await advance(f, next, { turnId: 'next' });
+    assert.equal(ready.status, 'candidate-ready', JSON.stringify(ready.diagnostics));
+    assert.equal((await latest(f, draft)).status, 'abandoned');
+  } finally { release.resolve(); await running; }
 });
