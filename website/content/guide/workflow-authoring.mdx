@@ -32,7 +32,7 @@ codex login status
 
 本机 MCP 作为 Host，可设 `authorTaskTimeoutMs` 控制内置模型适配器的单次请求（默认 90000 毫秒），用 `authorTurnDurationMs` 控制持久化 Author 整轮（普通默认 240000，长文档默认 900000）。整轮剩余时间可缩短单次请求；外接模型绑定需要遵守宿主传入的取消信号，并管理自己的传输预算。项目设计回合和资源读取分别通过 `designTurnDurationMs` 与 `resourceReadTimeoutMs` 配置。这些值使用正整数毫秒。工作流运行期的业务截止由业务方在执行时声明。
 
-Codex 的 `tool_timeout_sec` 只控制客户端等待。客户端结束等待后，用原草稿 ID 调用 `flowkit_get_workflow_draft`。若已接单，查询会返回运行中的原轮次或它的结果；若返回对账要求，先走恢复入口。宿主可以用 Author SDK 显式取消轮次。模型时限、token 额度和请求字节限制分别生效，调整一个值仍需满足其余限制。
+Codex 的 `tool_timeout_sec` 只控制客户端等待。请求取消或 HTTP 断开时，FlowKit 向接单前的宿主授权和独立能力查询传递取消信号。Author 轮次入库后由宿主继续执行，用原草稿 ID 调用 `flowkit_get_workflow_draft` 可查看原轮次或结果。若返回对账要求，先走恢复入口。宿主可以用 Author SDK 显式取消轮次。模型时限、token 额度和请求字节限制分别生效，调整一个值仍需满足其余限制。
 
 ```powershell
 npm run mcp:local -- --config ./flowkit-mcp.local.json

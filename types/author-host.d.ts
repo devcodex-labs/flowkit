@@ -160,7 +160,9 @@ export interface AuthorApprovalInput extends AuthorCandidateIdentity { expectedS
 export interface AuthorPublicationInput extends AuthorApprovalInput { publicationId: string }
 export interface WorkflowAuthorHost {
   start(input: AuthorStartInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
-  advanceTurn(input: AuthorTurnInput, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
+  /** An admission-only signal fences the initial authorization and transaction. */
+  advanceTurn(input: AuthorTurnInput, context: AuthorRequestContext, signal?: AbortSignal,
+    options?: { admissionSignal?: AbortSignal }): Promise<AuthorDraftView>;
   readDraft(input: { draftId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<AuthorDraftView>;
   readPublication(input: AuthorCandidateIdentity & { publicationId: string }, context: AuthorRequestContext, signal?: AbortSignal): Promise<{
     publicationId: string; draftId: string; candidateHash: string; status: string; discovery: string; isCurrent: boolean

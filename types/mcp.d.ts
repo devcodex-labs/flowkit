@@ -28,7 +28,7 @@ export interface FlowkitMcpOptions {
     Promise<{ destination: { id: string } }>;
   applyCollectionPlan?(plan: { destination: { id: string } }, approvalRef: string, context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
   runWorkflow?(scope: { namespace: string; collectionId: string; skillId: string; candidateHash: string; executionRef: string; requestContext: AuthorRequestContext; signal: AbortSignal }): Promise<unknown>;
-  queueAuthoringTurn?(input: AuthorTurnInput, context: AuthorRequestContext): Promise<AuthorDraftView>;
+  queueAuthoringTurn?(input: AuthorTurnInput, context: AuthorRequestContext, admissionSignal?: AbortSignal): Promise<AuthorDraftView>;
   nativeSkillDiscovery?: boolean;
   workflowUi?: {
     defaultCollectionId: string;

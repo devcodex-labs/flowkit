@@ -113,7 +113,9 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   function tool(name, description, schema, invoke, readOnlyHint = false, readAfterAuthorization) {
     const inputSchema = z.object(workflowUi ? { ...schema, collectionId: id.optional() } : schema).strict();
     server.registerTool(name, { description, inputSchema, annotations: { readOnlyHint } },
-      async (args, ctx) => {
+      async (args, request) => {
+        const requestSignal = request.mcpReq.signal;
+        const ctx = { ...request, signal: transportSignal ? AbortSignal.any([requestSignal, transportSignal]) : requestSignal };
         const input = workflowUi ? { ...args, collectionId: args.collectionId ?? workflowUi.defaultCollectionId } : args;
         const allowed = () => access(name, input.collectionId, ctx).then(() => true, () => false);
         if (!await allowed()) return toolError(accessDenied);
@@ -184,8 +186,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
   const sourceOptions = workflowUi?.authoringMaterials ? { sources: materialSources.optional() } : {};
   tool('flowkit_prepare_workflow', 'Compile a Host-selected planned input into a reviewable Workflow Skill candidate.',
     { collectionId: id, ...(workflowUi ? { inputRef: id.optional(), turn: turn.optional() } : { inputRef: id }), ...sourceOptions },
-    async ({ collectionId, inputRef, turn, sources }, ctx) => {
-      const signal = transportSignal ? AbortSignal.any([ctx.mcpReq.signal, transportSignal]) : ctx.mcpReq.signal;
+    async ({ collectionId, inputRef, turn, sources }, { signal }) => {
       signal.throwIfAborted();
       if (Boolean(inputRef) === Boolean(turn)) throw new Error('Provide exactly one inputRef or turn');
       if (inputRef && typeof resolveAuthoringInput !== 'function') throw new Error('Host AuthoringInput resolver is unavailable');
@@ -195,9 +196,9 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
       signal.throwIfAborted();
       // Once admitted, the shared turn outlives the client wait.
       if (workflowUi && queueAuthoringTurn && hasLongAuthorMaterials(input.contextSnapshot)) {
-        return draftView(await queueAuthoringTurn(input, requestContext));
+        return draftView(await queueAuthoringTurn(input, requestContext, signal));
       }
-      return draftView(await author().advanceTurn(input, requestContext));
+      return draftView(await author().advanceTurn(input, requestContext, undefined, { admissionSignal: signal }));
     });
   tool('flowkit_review_candidate', 'Read candidate review evidence, or the exact saved receipt when publicationId is supplied.',
     { collectionId: id, draftId: id, candidateHash: hash, previousHash: hash.nullable(), publicationId: id.optional() }, async ({ collectionId, ...input }, ctx) => {

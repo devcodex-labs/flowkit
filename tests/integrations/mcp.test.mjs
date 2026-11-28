@@ -161,29 +161,43 @@ test('HTTP tool errors expose only authorized effect classifications and bounded
   assert.equal(writes,2);
 });
 
-test('HTTP cancellation prevents unadmitted Author work and leaves admitted work available by draft ID', { timeout: 5000 }, async t => {
+function sendHttpTool(url, requestId, params) {
+  const outbound = httpRequest(url, { method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' } });
+  outbound.on('error', () => {});
+  outbound.end(JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/call', params }));
+  return outbound;
+}
+
+test('HTTP cancellation prevents unadmitted Author work and leaves admitted work available by draft ID', { timeout: 15000 }, async t => {
   const { dir, close } = await directory(t);
   const fixture = await fixtureOptions(path.join(dir, 'client-wait.sqlite'));
   close.push(fixture.close);
   const barrier = Promise.withResolvers();
   fixture.controls.barrier = barrier.promise;
-  const dispatched = Promise.withResolvers();
-  const invoke = fixture.options.authorHost.advanceTurn;
+  let dispatched = Promise.withResolvers();
+  const invoke = fixture.options.authorHost.advanceTurn, queue = fixture.options.queueAuthoringTurn;
   let active;
   fixture.options.authorHost = { ...fixture.options.authorHost, advanceTurn(...args) {
     active = invoke(...args);
     dispatched.resolve();
     return active;
   } };
+  fixture.options.queueAuthoringTurn = (...args) => {
+    active = queue(...args);
+    dispatched.resolve();
+    return active;
+  };
   const materialEntered = Promise.withResolvers(), releaseMaterial = Promise.withResolvers();
-  let holdMaterial = true;
+  let holdMaterial = true, longMaterial = false;
   fixture.options.workflowUi = { defaultCollectionId: 'test-collection', present: draft => draft,
     async authoringMaterials({ input }, _context, signal) {
       if (holdMaterial) {
         materialEntered.resolve(signal);
         await releaseMaterial.promise;
       }
-      return input;
+      return longMaterial ? { ...input, contextSnapshot: { materials: [{ id: 'long', title: 'Long',
+        content: 'A material line.\n'.repeat(1500) }] } } : input;
     }
   };
   const http = createServer(createFlowkitHttpHandler(() => fixture.options));
@@ -201,16 +215,12 @@ test('HTTP cancellation prevents unadmitted Author work and leaves admitted work
   const opened = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
     requestId: 'wait-draft', operation: 'create', goal: 'Inspect', executionMode: 'standard'
   } });
-  const { id } = JSON.parse(opened.content[0].text);
+  const { id, stateVersion } = JSON.parse(opened.content[0].text);
   const request = { name: 'flowkit_prepare_workflow', arguments: { inputRef: 'fixture-input-' + id } };
   const controller = new AbortController();
   try {
-    const body = JSON.stringify({ jsonrpc: '2.0', id: 'before-admission', method: 'tools/call', params: request });
-    const outbound = httpRequest(url, { method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' } });
-    outbound.on('error', () => {});
+    const outbound = sendHttpTool(url, 'before-admission', request);
     t.after(() => outbound.destroy());
-    outbound.end(body);
     const transportSignal = await materialEntered.promise;
     const disconnected = once(transportSignal, 'abort', { signal: t.signal });
     outbound.destroy();
@@ -220,6 +230,32 @@ test('HTTP cancellation prevents unadmitted Author work and leaves admitted work
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(active, undefined);
     assert.deepEqual(fixture.calls, []);
+
+    for (const queued of [false, true]) {
+      longMaterial = queued;
+      const entered = Promise.withResolvers(), authorize = Promise.withResolvers();
+      fixture.controls.authorize = async ({ action, signal }) => {
+        if (action !== 'advance') return;
+        entered.resolve(signal);
+        await authorize.promise;
+      };
+      const duringAuth = sendHttpTool(url, 'authorizing-' + queued, request);
+      try {
+        const signal = await entered.promise;
+        assert.ok(signal instanceof AbortSignal);
+        const abort = once(signal, 'abort', { signal: t.signal });
+        const denied = assert.rejects(active, { name: 'AbortError' });
+        duringAuth.destroy();
+        await abort;
+        authorize.resolve();
+        await denied;
+        assert.equal((await fixture.authorHost.readDraft({ draftId: id }, fixture.requestContext)).stateVersion, stateVersion);
+        assert.deepEqual(fixture.calls, []);
+      } finally { duringAuth.destroy(); authorize.resolve(); }
+    }
+    fixture.controls.authorize = null;
+    longMaterial = false;
+    dispatched = Promise.withResolvers();
 
     const second = await connect();
     const pending = assert.rejects(second.callTool(request, { signal: controller.signal }));
@@ -243,6 +279,34 @@ test('HTTP cancellation prevents unadmitted Author work and leaves admitted work
     assert.equal(fixture.calls.filter(call => call.intent).length, 1);
     assert.equal(fixture.calls.filter(call => call.prepared?.task.node.id === 'proposal').length, 1);
   } finally { releaseMaterial.resolve(); barrier.resolve(); }
+});
+
+test('HTTP disconnect reaches an in-flight standalone Capability Graph lookup', { timeout: 5000 }, async t => {
+  const { dir, close } = await directory(t);
+  const fixture = await fixtureOptions(path.join(dir, 'graph-wait.sqlite'));
+  close.push(fixture.close);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), stopped = Promise.withResolvers();
+  fixture.options.workflowUi = { defaultCollectionId: 'test-collection', async matchCapability(_input, _context, signal) {
+    entered.resolve(signal);
+    await release.promise;
+    stopped.resolve(signal.aborted);
+    signal.throwIfAborted();
+  } };
+  const http = createServer(createFlowkitHttpHandler(() => fixture.options));
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
+  close.push(() => new Promise(resolve => http.close(resolve)));
+  const url = new URL('http://127.0.0.1:' + http.address().port + '/mcp');
+  const outbound = sendHttpTool(url, 'graph', { name: 'flowkit_match_capability', arguments: { goal: 'Find a synthetic capability' } });
+  try {
+    const signal = await entered.promise;
+    assert.ok(signal instanceof AbortSignal);
+    const abort = once(signal, 'abort', { signal: t.signal });
+    outbound.destroy();
+    await abort;
+    release.resolve();
+    assert.equal(await stopped.promise, true);
+  } finally { outbound.destroy(); release.resolve(); }
 });
 
 test('real HTTP MCP authenticates requests and returns R-03 S03 clarification before preparing or publishing', async t => {

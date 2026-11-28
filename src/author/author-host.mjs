@@ -315,9 +315,10 @@ export async function createWorkflowAuthorHost(supplied) {
       return clone({ ...select(saved, ['publicationId', 'draftId', 'candidateHash', 'status', 'discovery']),
         isCurrent: currentActive === saved.candidateHash });
     },
-    async advanceTurn(input, currentRequestContext, signal, admitted) {
+    async advanceTurn(input, currentRequestContext, signal, { admissionSignal, admitted } = {}) {
       const initial = read(input.draftId);
-      await authorize('advance', initial.collectionId, currentRequestContext, signal, { draftId: initial.id });
+      const beforeAdmission = signal && admissionSignal ? AbortSignal.any([signal, admissionSignal]) : admissionSignal ?? signal;
+      await authorize('advance', initial.collectionId, currentRequestContext, beforeAdmission, { draftId: initial.id });
       requiredId(input.turnId, 'turnId');
       if ((input.baseline === undefined) !== (input.baselineId === undefined)) throw new TypeError('Intent baseline and ID must be supplied together');
       if (!['authoring', 'review-only', 'retry'].includes(input.kind ?? 'authoring')) throw new TypeError('Unknown Author turn kind');
@@ -337,6 +338,7 @@ export async function createWorkflowAuthorHost(supplied) {
         operation: initial.operation, target: { ...initial.target, ...input.target }, previousHash: initial.previousHash, hostProfile: options.hostProfile, coreIdentity: options.coreIdentity });
       let turn, replay, retryExpired;
       store.authorTransaction(state => {
+        beforeAdmission?.throwIfAborted();
         const draft = state.readDraft(input.draftId);
         turn = state.readTurn(draft.id, input.turnId);
         if (turn) {
@@ -825,9 +827,10 @@ export async function createWorkflowAuthorHost(supplied) {
       return { namespace: options.namespace, collectionIds: [...options.collectionIds], authorHost: publicHost,
         requestContext, store, resolveAuthoringInput: bindings.resolveAuthoringInput ?? options.resolveAuthoringInput,
         resolveCollectionPlan: bindings.resolveCollectionPlan, runWorkflow: bindings.runWorkflow, limits: bindings.limits,
-        queueAuthoringTurn(input, context) {
+        queueAuthoringTurn(input, context, admissionSignal) {
           return new Promise((resolve, reject) => {
-            host.advanceTurn(authorInput(input, policy.maxBytes), authorInput(context, policy.maxBytes), undefined, resolve)
+            host.advanceTurn(authorInput(input, policy.maxBytes), authorInput(context, policy.maxBytes), undefined,
+              { admissionSignal, admitted: resolve })
               .then(resolve, reject);
           });
         },
@@ -866,7 +869,8 @@ export async function createWorkflowAuthorHost(supplied) {
     }
   };
   publicHost = Object.freeze(Object.fromEntries(Object.entries(host).map(([name, method]) => [name,
-    ['createMcpOptions', 'close'].includes(name) ? method : async (input, context, signal) =>
-      method(authorInput(input, policy.maxBytes), authorInput(context, policy.maxBytes), signal)])));
+    ['createMcpOptions', 'close'].includes(name) ? method : async (input, context, signal, advanceOptions) =>
+      method(authorInput(input, policy.maxBytes), authorInput(context, policy.maxBytes), signal,
+        name === 'advanceTurn' ? { admissionSignal: advanceOptions?.admissionSignal } : undefined)])));
   return publicHost;
 }

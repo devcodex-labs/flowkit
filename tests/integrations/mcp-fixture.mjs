@@ -14,7 +14,7 @@ import { isControlSignal } from '../../src/index.mjs';
 
 export async function fixtureOptions(file, collectionId = 'test-collection', namespace = 'test-project') {
   let authorized = true;
-  const approved = new Map(), calls = [], controls = { barrier: null, intentGap: null, reviewFindings: [], recordWrite: null };
+  const approved = new Map(), calls = [], controls = { barrier: null, intentGap: null, reviewFindings: [], recordWrite: null, authorize: null };
   const requestContext = { namespace, principalId: 'fixture-user', sessionId: 'fixture-session', workspaceId: path.dirname(file), authorizedCollections: [collectionId], authorizationSnapshotRef: 'fixture-permissions-v1' };
   const hostProfile = { id:'fixture-host',digest:artifactDigest('fixture host profile') };
   const sourceText = `import {defineWorkflow,action,terminal} from '@devcodex-labs/flowkit/dsl';
@@ -38,7 +38,10 @@ export default defineWorkflow({id:'demo',version:'1.0.0',name:'Demo',nodes:[acti
       return ports.request({ intent });
     } },
       runtime: { validateResult: () => [], runAgentTask: prepared => ports.request({ prepared }) } }; } },
-    authorization: { authorize: async ({ requestContext: context }) => authorized && context.principalId !== 'denied',
+    authorization: { async authorize(request) {
+        await controls.authorize?.(request);
+        return authorized && request.requestContext.principalId !== 'denied';
+      },
       resolveApplicableSafetyPolicies: () => [],
       async observeReview({ task, result }) { return calls.some(call => call.prepared?.task.execution.requestId === task.execution.requestId) && result.result.passed ?
         { passed: true, subjectId: 'fixture-executor', executionId: task.execution.requestId } : null; },
