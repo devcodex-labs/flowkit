@@ -12,7 +12,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { buildCodexMarketplace } from '../../scripts/build-codex-plugin.mjs';
 import { exportTrust, newExportKey, publicDelivery, readPortableExport } from '../../scripts/local-mcp-artifacts.mjs';
 import { createLocalCodexSkills } from '../../scripts/local-codex-skills.mjs';
-import { startLocalMcp } from '../../scripts/run-local-mcp.mjs';
+import { runModelInSlot, startLocalMcp } from '../../scripts/run-local-mcp.mjs';
 import { localModel } from '../../scripts/local-mcp-model.mjs';
 import { defaultLayout, readWorkflowPageData } from '../../scripts/workflow-viewer.mjs';
 import { generateLayout } from '../../scripts/workflow-viewer/auto-layout.mjs';
@@ -36,6 +36,49 @@ async function ownedDirectory(t) {
   });
   return root;
 }
+
+test('local model queue cancellation does not release an outstanding physical slot', { timeout: 10000 }, async () => {
+  const active = new Set();
+  const runningController = new AbortController();
+  const waitingController = new AbortController();
+  const reason = new Error('cancel queued request');
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const run = (operation, signal) => runModelInSlot(operation, signal, active, 1);
+  let waiting, observed, next, timer;
+  let queuedDispatches = 0, nextDispatches = 0;
+  const running = run(() => { entered(); return gate; }, runningController.signal);
+  try {
+    await started;
+    assert.equal(active.size, 1);
+    waiting = run(() => { queuedDispatches++; return 'unexpected'; }, waitingController.signal);
+    observed = assert.rejects(waiting, error => error === reason);
+    await new Promise(setImmediate);
+    waitingController.abort(reason);
+    const cancelled = await Promise.race([observed.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 2000); })]);
+    assert.equal(cancelled, true, 'Queued cancellation must settle before the active transport releases its slot');
+    runningController.abort(new Error('non-cooperative transport remains outstanding'));
+    assert.equal(active.size, 1);
+    next = run(() => { nextDispatches++; return 'next'; }, new AbortController().signal);
+    await new Promise(setImmediate);
+    assert.equal(queuedDispatches, 0);
+    assert.equal(nextDispatches, 0);
+    release('first');
+    assert.equal(await running, 'first');
+    await observed;
+    assert.equal(await next, 'next');
+    assert.equal(nextDispatches, 1);
+    assert.equal(active.size, 0);
+    await assert.rejects(run(() => assert.fail('Must not dispatch an already cancelled request'),
+      AbortSignal.abort(reason)), error => error === reason);
+  } finally {
+    clearTimeout(timer);
+    release('first');
+    await Promise.allSettled([running, waiting, observed, next]);
+  }
+});
 
 test('Codex marketplace contains a pure FlowKit MCP plugin and a credential reference', async t => {
   const root = await ownedDirectory(t);

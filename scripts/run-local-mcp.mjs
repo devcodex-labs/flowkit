@@ -10,6 +10,7 @@ import { createWorkflowAuthorHost } from '../dist/host.mjs';
 import { checkProfessionalSkill, planProfessionalSkills, resolveTrustedProfessionalPin } from '../src/author/professional-skills.mjs';
 import { collectDesignSections, mergeDesignSections, packDesignScope, planDesignCanvas, projectDesignLayoutGraph } from './workflow-viewer/project-design.mjs';
 import { createFlowkitHttpHandler } from '../src/mcp.mjs';
+import { during } from '../src/runtime/tasks.mjs';
 import { planNewCollection } from '../src/author/collections.mjs';
 import { authorIdentity, isNewerWorkflowVersion, sameSignedWorkflowOrigin } from '../src/author/host-target.mjs';
 import { checkCandidate, rebindImportedCandidate } from '../src/author/standard-artifact.mjs';
@@ -87,6 +88,20 @@ function acquireServiceLease(dataDir) {
   return () => {
     if (!released) { released = true; lease.close(); }
   };
+}
+
+/** Cancel a waiting request without releasing a slot held by a real transport. */
+export async function runModelInSlot(operation, signal, activeCalls, limit) {
+  while (activeCalls.size >= limit) {
+    const available = Promise.race(activeCalls);
+    await during(signal, () => available);
+  }
+  signal.throwIfAborted();
+  const request = Promise.resolve().then(operation);
+  const settled = request.then(() => undefined, () => undefined);
+  activeCalls.add(settled);
+  try { return await request; }
+  finally { activeCalls.delete(settled); }
 }
 
 export async function startLocalMcp(config, dependencies = {}) {
@@ -224,15 +239,7 @@ async function bindLocalMcp({ config, dependencies, host, port, mcpPath, namespa
     }
     if (config.capabilityGraph) localGraph = await createLocalCapabilityGraph(resourceReadTimeoutMs);
     const modelLayoutCalls = new Set();
-    async function runLocalModel(operation, signal) {
-      while (modelLayoutCalls.size >= capacity.maxPhysicalExecutions) await Promise.race(modelLayoutCalls);
-      signal.throwIfAborted();
-      const request = Promise.resolve().then(operation);
-      const settled = request.then(() => undefined, () => undefined);
-      modelLayoutCalls.add(settled);
-      try { return await request; }
-      finally { modelLayoutCalls.delete(settled); }
-    }
+    const runLocalModel = (operation, signal) => runModelInSlot(operation, signal, modelLayoutCalls, capacity.maxPhysicalExecutions);
     const planLayout = input => runLocalModel(() => model.planLayout(input), input.signal);
     const selectedLayoutKey = hash => 'preview-layout-selection:' + viewerHash + ':' + hash;
     const baseLayoutRevision = hash => artifactDigest(JSON.stringify(['layout-initial', viewerHash, hash]));
