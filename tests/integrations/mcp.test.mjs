@@ -69,6 +69,14 @@ test('real MCP stdio client reaches the same Author and scoped approved Skill re
   const prepared = await client.callTool({ name: 'flowkit_prepare_workflow', arguments: { collectionId: 'test-collection', inputRef: 'fixture-input-' + draft.id } });
   assert.equal(prepared.isError, undefined, JSON.stringify(prepared));
   assert.equal(JSON.parse(prepared.content[0].text).status, 'candidate-ready');
+  const startTool = (await client.listTools()).tools.find(item => item.name === 'flowkit_start_workflow');
+  assert.ok(Object.hasOwn(startTool.inputSchema.properties, 'includeSource'));
+  const withSource = await client.callTool({ name: 'flowkit_start_workflow', arguments: {
+    collectionId: 'test-collection', requestId: 'fixture-start-with-source', operation: 'create',
+    goal: 'Create a review workflow retaining the source', includeSource: true
+  } });
+  assert.equal(withSource.isError, undefined, JSON.stringify(withSource));
+  assert.equal(JSON.parse(withSource.content[0].text).choices.includeSource, true);
 });
 
 test('stdio reports a write awaiting reconciliation and does not duplicate it after reopening', async t => {

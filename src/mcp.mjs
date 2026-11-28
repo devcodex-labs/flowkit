@@ -164,7 +164,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
     targetRef: z.union([z.object({ collectionId: id, skillId: id, baseArtifactHash: hash, baseVersion: id }).strict(),
       z.object({ sourceRef: id, mode: z.enum(['new-collection', 'migration']) }).strict()]).optional(),
     executionMode: z.enum(workflowExecutionModes).optional(),
-    includeSource: z.boolean().optional()
+    ...(workflowUi ? {} : { includeSource: z.boolean().optional() })
   }, async ({ collectionId, goal, requestId, operation, targetRef, executionMode, includeSource }, ctx) => draftView(await author().start({ collectionId,
     goal, requestId, operation, ...(operation === 'import' ? { importSource: targetRef } : { targetRef }), choices: { collectionName: catalog(collectionId).collection.name,
       ...(executionMode ? { executionMode } : {}), ...(workflowUi ? { includeSource: false } :
@@ -271,7 +271,7 @@ export function createFlowkitMcpServer({ namespace, collectionIds, store, author
         ...(workflowUi.relayout ? { layoutRevision: hash.optional() } : {}) },
       (input, ctx) => workflowUi.export(input, requestContext, ctx.signal));
     tool('flowkit_add_workflow', 'Add a verified candidate or inspect the supported destinations for an external workflow.',
-      { collectionId: id, requestId: id, sourceRef: id, candidateHash: hash.optional(), approvalRef: id.optional(),
+      { collectionId: id, requestId: id, sourceRef: id, candidateHash: hash.optional(),
         destination: z.enum(['flowkit','codex']).optional() }, (input, ctx) => workflowUi.add(input, requestContext, ctx.signal));
     return server;
   }

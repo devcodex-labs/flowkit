@@ -47,7 +47,7 @@ export interface FlowkitMcpOptions {
     export(input: { collectionId: string; draftId: string; candidateHash: string } &
       ({ layoutRevision?: string; exportReceipt?: never } | { layoutRevision?: never; exportReceipt: string }),
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
-    add(input: { collectionId: string; requestId: string; sourceRef: string; candidateHash?: string; approvalRef?: string; destination?: 'flowkit' | 'codex' },
+    add(input: { collectionId: string; requestId: string; sourceRef: string; candidateHash?: string; destination?: 'flowkit' | 'codex' },
       context?: AuthorRequestContext, signal?: AbortSignal): Promise<unknown>;
   };
   limits?: { pageSize?: number; maxResourceBytes?: number; maxResponseBytes?: number;maxMetadataEntries?:number };

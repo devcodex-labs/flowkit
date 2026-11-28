@@ -1312,13 +1312,28 @@ test('local MCP pins a validated model layout, confirms the candidate and replay
   const unauthorized = await fetch(service.url, { method: 'POST', headers: { authorization: 'Bearer wrong' } });
   assert.equal(unauthorized.status, 401);
   assert.equal(unauthorized.headers.get('connection'), 'close');
-  assert.ok((await client.listTools()).tools.some(item => item.name === 'flowkit_add_workflow'));
+  const availableTools = (await client.listTools()).tools;
+  assert.equal(Object.hasOwn(availableTools.find(item => item.name === 'flowkit_start_workflow').inputSchema.properties, 'includeSource'), false);
+  assert.equal(Object.hasOwn(availableTools.find(item => item.name === 'flowkit_add_workflow').inputSchema.properties, 'approvalRef'), false);
+  async function assertUnsupported(name, args, field) {
+    let result;
+    try { result = await client.callTool({ name, arguments: args }); }
+    catch (error) {
+      assert.match(String(error.message), new RegExp(field));
+      return;
+    }
+    assert.equal(result.isError, true, JSON.stringify(result));
+    assert.match(JSON.stringify(result.content), new RegExp(field));
+  }
   assert.equal(client.getServerCapabilities().resources, undefined);
   const collection = await tool('flowkit_collection', {});
   assert.equal(collection.collection.name, 'flowkit-workflows');
   assert.equal(Object.hasOwn(collection.collection, 'rootSkill'), false);
-  const draft = await tool('flowkit_start_workflow', { operation: 'create', requestId: 'monthly-start',
-    goal: '校验月度工时输入，写入副本并二次校验，失败结束。', includeSource: true });
+  const startRequest = { operation: 'create', requestId: 'monthly-start',
+    goal: '校验月度工时输入，写入副本并二次校验，失败结束。' };
+  await assertUnsupported('flowkit_start_workflow', { ...startRequest, includeSource: true }, 'includeSource');
+  await assertUnsupported('flowkit_start_workflow', { ...startRequest, includeSource: false }, 'includeSource');
+  const draft = await tool('flowkit_start_workflow', startRequest);
   const candidate = await tool('flowkit_prepare_workflow', { turn: { draftId: draft.id, turnId: 'monthly-prepare',
     expectedStateVersion: draft.stateVersion, input: '首次准备月度工时', target: { name: 'monthly-timesheet' } } });
   assert.equal(candidate.status, 'candidate-ready', JSON.stringify(candidate));
@@ -1363,7 +1378,8 @@ test('local MCP pins a validated model layout, confirms the candidate and replay
     assert.deepEqual(calls, failedAt === 'check-input' ? ['check-input'] : ['check-input', 'write-copy', 'check-copy']);
   }
   const addRequest = { requestId: 'add-monthly', sourceRef: draft.id, candidateHash: args.candidateHash };
-  assert.equal((await tool('flowkit_add_workflow', { ...addRequest, approvalRef: 'caller-supplied-approval' })).status, 'rejected');
+  await assertUnsupported('flowkit_add_workflow', { ...addRequest, approvalRef: 'caller-supplied-approval' }, 'approvalRef');
+  assert.equal((await tool('flowkit_collection', {})).skills.length, 0);
   const readyToAdd = await tool('flowkit_add_workflow', addRequest);
   assert.equal(readyToAdd.status, 'rejected');
   assert.equal((await tool('flowkit_collection', {})).skills.length, 0);
